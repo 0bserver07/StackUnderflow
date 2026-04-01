@@ -1,0 +1,198 @@
+import {
+  IconHash,
+  IconCurrencyDollar,
+  IconTerminal2,
+  IconMessageCircle,
+  IconDatabase,
+  IconCpu,
+  IconArrowDownRight,
+  IconArrowUpRight,
+  IconClockHour4,
+  IconUser,
+  IconRobot,
+  IconTool,
+  IconMessage,
+  IconCalendar,
+} from '@tabler/icons-react'
+import type { DashboardStats } from '../../types/api'
+import StatsCards from '../analytics/StatsCards'
+import TokenUsageChart from '../charts/TokenUsageChart'
+import DailyCostChart from '../charts/DailyCostChart'
+import ModelDistributionChart from '../charts/ModelDistributionChart'
+import HourlyPatternChart from '../charts/HourlyPatternChart'
+import ErrorDistributionChart from '../charts/ErrorDistributionChart'
+import ToolUsageChart from '../charts/ToolUsageChart'
+import ToolUsageBarChart from '../charts/ToolUsageBarChart'
+import CommandToolDistChart from '../charts/CommandToolDistChart'
+import InterruptionRateChart from '../charts/InterruptionRateChart'
+import ErrorRateChart from '../charts/ErrorRateChart'
+import ErrorCategoryChart from '../charts/ErrorCategoryChart'
+
+interface OverviewTabProps {
+  stats: DashboardStats
+}
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toLocaleString()
+}
+
+function formatCost(cost: number): string {
+  return `$${cost.toFixed(4)}`
+}
+
+interface MiniStatCardProps {
+  icon: React.ReactNode
+  label: string
+  value: string
+  sublabel?: string
+  color?: string
+}
+
+function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-400' }: MiniStatCardProps) {
+  return (
+    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-800">
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className={color}>{icon}</span>
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+      </div>
+      <div className="text-lg font-bold text-gray-100">{value}</div>
+      {sublabel && <div className="text-[10px] text-gray-500 mt-0.5">{sublabel}</div>}
+    </div>
+  )
+}
+
+export default function OverviewTab({ stats }: OverviewTabProps) {
+  if (!stats?.overview) return null
+
+  const tokens = stats.overview.total_tokens ?? { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
+  const totalTokens = tokens.input + tokens.output + tokens.cache_read + tokens.cache_creation
+  const interactions = stats.user_interactions ?? { user_commands_analyzed: 0, avg_tools_per_command: 0 }
+  const dateRange = stats.overview.date_range ?? { start: '', end: '' }
+  const modelsUsed = stats.models ?? {}
+  const messageTypes = stats.overview.message_types ?? {}
+
+  const userMessages = messageTypes['user'] ?? 0
+  const assistantMessages = messageTypes['assistant'] ?? 0
+  const toolUseMessages = messageTypes['tool_use'] ?? 0
+  const toolResultMessages = messageTypes['tool_result'] ?? 0
+
+  return (
+    <div className="space-y-6">
+      {/* Primary stats from existing StatsCards component */}
+      <StatsCards stats={stats} />
+
+      {/* Extended stat cards grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <MiniStatCard
+          icon={<IconArrowDownRight size={14} />}
+          label="Input Tokens"
+          value={formatNumber(tokens.input)}
+          color="text-indigo-400"
+        />
+        <MiniStatCard
+          icon={<IconArrowUpRight size={14} />}
+          label="Output Tokens"
+          value={formatNumber(tokens.output)}
+          color="text-emerald-400"
+        />
+        <MiniStatCard
+          icon={<IconDatabase size={14} />}
+          label="Cache Read"
+          value={formatNumber(tokens.cache_read)}
+          color="text-amber-400"
+        />
+        <MiniStatCard
+          icon={<IconDatabase size={14} />}
+          label="Cache Creation"
+          value={formatNumber(tokens.cache_creation)}
+          color="text-orange-400"
+        />
+        <MiniStatCard
+          icon={<IconHash size={14} />}
+          label="Total Tokens"
+          value={formatNumber(totalTokens)}
+          color="text-gray-400"
+        />
+        <MiniStatCard
+          icon={<IconCurrencyDollar size={14} />}
+          label="Total Cost"
+          value={formatCost(stats.overview.total_cost ?? 0)}
+          color="text-green-400"
+        />
+        <MiniStatCard
+          icon={<IconTerminal2 size={14} />}
+          label="Commands Analyzed"
+          value={formatNumber(interactions.user_commands_analyzed)}
+          color="text-cyan-400"
+        />
+        <MiniStatCard
+          icon={<IconMessageCircle size={14} />}
+          label="Total Messages"
+          value={formatNumber(stats.overview.total_messages ?? 0)}
+          color="text-violet-400"
+        />
+        <MiniStatCard
+          icon={<IconClockHour4 size={14} />}
+          label="Avg Tools/Cmd"
+          value={(interactions.avg_tools_per_command ?? 0).toFixed(1)}
+          color="text-blue-400"
+        />
+        <MiniStatCard
+          icon={<IconCpu size={14} />}
+          label="Models Used"
+          value={String(Object.keys(modelsUsed).length)}
+          sublabel={Object.keys(modelsUsed).slice(0, 2).join(', ')}
+          color="text-pink-400"
+        />
+        <MiniStatCard
+          icon={<IconUser size={14} />}
+          label="User Messages"
+          value={formatNumber(userMessages)}
+          color="text-indigo-400"
+        />
+        <MiniStatCard
+          icon={<IconRobot size={14} />}
+          label="Assistant Messages"
+          value={formatNumber(assistantMessages)}
+          color="text-emerald-400"
+        />
+        <MiniStatCard
+          icon={<IconTool size={14} />}
+          label="Tool Use"
+          value={formatNumber(toolUseMessages)}
+          color="text-amber-400"
+        />
+        <MiniStatCard
+          icon={<IconMessage size={14} />}
+          label="Tool Results"
+          value={formatNumber(toolResultMessages)}
+          color="text-cyan-400"
+        />
+        <MiniStatCard
+          icon={<IconCalendar size={14} />}
+          label="Date Range"
+          value={dateRange.start ? `${dateRange.start.slice(5)}` : 'N/A'}
+          sublabel={dateRange.end ? `to ${dateRange.end.slice(5)}` : ''}
+          color="text-gray-400"
+        />
+      </div>
+
+      {/* Charts section - 2 column grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <TokenUsageChart dailyStats={stats.daily_stats ?? {}} />
+        <DailyCostChart dailyStats={stats.daily_stats ?? {}} />
+        <ToolUsageChart toolStats={stats.tools?.usage_counts ?? {}} />
+        <ToolUsageBarChart toolStats={stats.tools?.usage_counts ?? {}} />
+        <ModelDistributionChart modelStats={stats.models ?? {}} />
+        <HourlyPatternChart hourlyPattern={stats.hourly_pattern ?? { messages: {}, tokens: {} }} />
+        <CommandToolDistChart toolCountDist={stats.user_interactions?.tool_count_distribution ?? {}} />
+        <InterruptionRateChart dailyStats={stats.daily_stats ?? {}} />
+        <ErrorDistributionChart errorCategories={stats.errors?.by_category ?? {}} />
+        <ErrorRateChart dailyStats={stats.daily_stats ?? {}} />
+        <ErrorCategoryChart errorCategories={stats.errors?.by_category ?? {}} />
+      </div>
+    </div>
+  )
+}

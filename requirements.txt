@@ -1,0 +1,14 @@
+# Core dependencies
+python-dotenv>=1.0.0
+click>=8.0.0
+
+# Local server dependencies
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+uvloop>=0.17.0;sys_platform!='win32'
+winloop>=0.1.8;sys_platform=='win32'
+httpx>=0.24.0
+python-multipart>=0.0.6
+
+# JSON parsing optimization
+orjson>=3.9.0

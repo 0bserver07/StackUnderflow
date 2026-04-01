@@ -1,0 +1,107 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stackunderflow"
+version = "0.2.0"
+description = "A local-first knowledge base for your AI coding sessions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "StackUnderflow Contributors" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "click>=8.0.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.24.0",
+    "uvloop>=0.17.0;sys_platform!='win32'",
+    "winloop>=0.1.8;sys_platform=='win32'",
+    "python-multipart>=0.0.6",
+    "orjson>=3.9.0",
+]
+
+[project.optional-dependencies]
+share = ["boto3>=1.26.0"]
+
+[project.scripts]
+stackunderflow = "stackunderflow.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/0bserver07/StackUnderflow"
+Repository = "https://github.com/0bserver07/StackUnderflow"
+Issues = "https://github.com/0bserver07/StackUnderflow/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["stackunderflow"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "stackunderflow-site/",
+    "stackunderflow-ui/",
+    "tests/",
+    ".github/",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+    "venv/",
+    "htmlcov/",
+    ".pytest_cache/",
+    "__pycache__/",
+    "build/",
+    "dist/",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "S", "B", "A", "C4", "T10", "T20"]
+ignore = [
+    "S324",  # Insecure hash functions - MD5 is used for cache keys, not security
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["T201", "S101"]
+"test_*.py" = ["T201", "S101"]
+"*_test.py" = ["T201", "S101"]
+# Long regex patterns and SQL strings
+"stackunderflow/services/tag_service.py" = ["E501"]
+"stackunderflow/services/social_service.py" = ["E501"]
+
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+exclude = [
+    "venv/",
+    "htmlcov/",
+    "tests/",
+    "setup.py",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "dateutil.*",
+    "dotenv",
+    "fastapi.*",
+    "uvicorn.*",
+    "orjson",
+    "psutil",
+]
+ignore_missing_imports = true

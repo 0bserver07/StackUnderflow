@@ -1,0 +1,4832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StackUnderflow - Shared Dashboard</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-XXXXXXXXXX', {
+            page_path: '/share/' + window.location.pathname.split('/').pop()
+        });
+    </script>
+    
+    <!-- Chart.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- All styles will be inlined here during share creation -->
+    <style>
+        * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+}
+
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem 2rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    position: relative;
+    min-height: 100px;
+}
+
+.header-content {
+    max-width: 1600px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.header-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Special alignment for overview page where we have 2 lines */
+.header-brand-with-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-logo {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 0px;
+    border-radius: 8px;
+}
+
+/* Larger logo for overview page to match both text lines */
+.header-brand-with-info .header-logo {
+    width: 54px;
+    height: 54px;
+    flex-shrink: 0;
+    align-self: center; /* Center vertically with the text block */
+}
+
+.header h1 {
+    font-size: 1.75rem;
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+}
+
+.brand-name {
+    font-weight: 600;
+    font-size: 1.75rem;
+    letter-spacing: -0.02em;
+}
+
+.header-subtitle {
+    font-weight: 400;
+    font-size: 1.1rem;
+    opacity: 0.85;
+    margin-left: 0.25rem;
+}
+
+.brand-name::after {
+    content: "";
+    display: inline-block;
+    width: 1px;
+    height: 0.5em;
+    background: rgba(255, 255, 255, 0.3);
+    margin: 0 0.6rem;
+    vertical-align: middle;
+}
+
+.header p {
+    font-size: 0.9rem;
+    opacity: 0.85;
+    margin: 0;
+    font-weight: 400;
+}
+
+#project-info {
+    margin-left: 4.5rem; /* Align with the text, not the logo */
+}
+
+/* In overview page, project-info is nested differently */
+.header-brand-with-info #project-info {
+    margin-left: 0;
+    margin-top: 0.25rem;
+}
+
+.header-brand-with-info h1 {
+    line-height: 1.2;
+    margin-bottom: 0;
+}
+
+.container {
+    max-width: 1600px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+
+/* Overview Cards */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+/* Force 3-column layout when there are exactly 6 cards on larger screens */
+@media (min-width: 1024px) {
+    .stats-grid:has(.stat-card:nth-child(6)):not(:has(.stat-card:nth-child(7))) {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Force 2-column layout on medium screens */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Single column on small screens */
+@media (max-width: 767px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.stat-card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.stat-card h3 {
+    color: #666;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 0.5rem;
+}
+
+.stat-card .value {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #667eea;
+}
+
+.stat-card .subtext {
+    font-size: 0.9rem;
+    color: #999;
+    margin-top: 0.5rem;
+}
+
+.stat-card .breakdown {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.stat-card .breakdown span {
+    display: inline-block;
+    margin: 0.2rem;
+    padding: 0.2rem 0.5rem;
+    background: #f0f0f0;
+    border-radius: 15px;
+}
+
+
+/* Charts Section */
+.charts-section {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+.chart-container {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    min-height: 450px;
+    display: flex;
+    flex-direction: column;
+}
+
+.chart-container canvas {
+    flex: 1;
+    max-height: 320px;
+}
+
+.chart-container h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: #333;
+}
+
+.chart-subtitle {
+    font-size: 0.9rem;
+    color: #666;
+    margin-bottom: 1rem;
+    position: relative;
+}
+
+.chart-subtitle .separator {
+    margin: 0 0.5rem;
+    color: #ccc;
+}
+
+.chart-subtitle .token-input {
+    color: #667eea;
+    font-weight: 500;
+}
+
+.chart-subtitle .token-output {
+    color: #764ba2;
+    font-weight: 500;
+}
+
+.chart-subtitle .token-cache {
+    color: #48bb78;
+    font-weight: 500;
+}
+
+.chart-subtitle .tooltip-info-icon {
+    font-size: 0.8rem;
+    color: #999;
+    cursor: help;
+    margin-left: 0.25rem;
+    display: inline-block;
+    vertical-align: baseline;
+}
+
+.chart-subtitle .tooltip-info-icon:hover {
+    color: #667eea;
+}
+
+
+/* Messages Table Specific Styles (removing duplicates) */
+/* Column widths for message table */
+.message-table th:nth-child(1), 
+.message-table td:nth-child(1) { width: 120px; } /* Type */
+.message-table th:nth-child(2), 
+.message-table td:nth-child(2) { width: 35%; max-width: 500px; } /* Message */
+.message-table th:nth-child(3), 
+.message-table td:nth-child(3) { width: 150px; } /* Timestamp */
+.message-table th:nth-child(4), 
+.message-table td:nth-child(4) { width: 100px; } /* Model */
+.message-table th:nth-child(5), 
+.message-table td:nth-child(5) { width: 120px; } /* Tokens */
+.message-table th:nth-child(6), 
+.message-table td:nth-child(6) { width: 100px; } /* Session */
+.message-table th:nth-child(7), 
+.message-table td:nth-child(7) { width: auto; } /* Tools */
+
+/* Type badges */
+.type-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: lowercase;
+}
+
+.type-badge.user {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+
+.type-badge.assistant {
+    background: #e8f5e9;
+    color: #388e3c;
+}
+
+.type-badge.task {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+
+.type-badge.tool-result {
+    background: #fff3e0;
+    color: #f57c00;
+}
+
+.type-badge.summary {
+    background: #f3e5f5;
+    color: #6a1b9a;
+}
+
+.type-badge.compact_summary {
+    background: #e8eaf6;
+    color: #3f51b5;
+}
+
+/* Message content - see consolidated definition below (line 363) */
+
+/* Session ID */
+.session-id {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #666;
+    cursor: pointer;
+    position: relative;
+}
+
+.session-id:hover {
+    color: #667eea;
+}
+
+.session-id:hover::after {
+    content: attr(data-full-id);
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    background: #333;
+    color: white;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    z-index: 10;
+    margin-bottom: 0.2rem;
+}
+
+/* Tools */
+.tools-list {
+    display: flex;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+}
+
+.tool-chip {
+    background: #f0f0f0;
+    padding: 0.1rem 0.4rem;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    color: #666;
+}
+
+/* Tokens */
+.tokens {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #666;
+    white-space: nowrap;
+}
+
+
+/* Message detail modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    overflow-y: auto;
+}
+
+.modal-content {
+    background: white;
+    margin: 2rem auto;
+    padding: 2rem;
+    max-width: 800px;
+    border-radius: 10px;
+    position: relative;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: #666;
+}
+
+.modal-close:hover {
+    color: #333;
+}
+
+/* Modal navigation */
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.modal-navigation {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.modal-nav-btn {
+    padding: 0.25rem 0.75rem;
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background-color 0.2s;
+}
+
+.modal-nav-btn:hover:not(:disabled) {
+    background: #e0e0e0;
+}
+
+.modal-nav-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.modal-position {
+    font-size: 0.875rem;
+    color: #666;
+    white-space: nowrap;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.detail-label {
+    font-weight: 600;
+    color: #666;
+}
+
+.detail-value {
+    color: #333;
+}
+
+.detail-content {
+    background: #f8f8f8;
+    padding: 1rem;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    font-family: monospace;
+    font-size: 0.9rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.detail-tools {
+    margin-top: 1rem;
+}
+
+.detail-tool {
+    background: #f0f0f0;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 6px;
+}
+
+.detail-tool-name {
+    font-weight: 600;
+    color: #667eea;
+    margin-bottom: 0.5rem;
+}
+
+.detail-tool-input {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #666;
+    white-space: pre-wrap;
+}
+
+/* Error indicator */
+.error-indicator {
+    color: #d32f2f;
+    font-weight: bold;
+}
+
+/* Message content styling */
+.message-content {
+    max-width: 500px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    cursor: pointer;
+}
+
+.message-content:hover {
+    color: #667eea;
+}
+
+/* Table layout fixes */
+.message-table {
+    table-layout: fixed;
+}
+
+.message-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 0; /* Force respect of percentage widths */
+}
+
+
+/* Error Indicator */
+.error-indicator {
+    color: #e53e3e;
+    font-weight: bold;
+    margin-right: 0.25rem;
+}
+
+.message-content .error-indicator {
+    font-size: 1.1em;
+}
+
+/* Loading */
+.loading {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
+}
+
+/* Tab Styles */
+.tabs-container {
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-top: 2rem;
+    overflow: hidden;
+}
+
+.tab-nav {
+    display: flex;
+    background: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.tab-button {
+    flex: 1;
+    padding: 1rem 2rem;
+    background: none;
+    border: none;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+}
+
+.tab-button:hover {
+    background: #e9ecef;
+    color: #333;
+}
+
+.tab-button.active {
+    color: #667eea;
+    background: white;
+}
+
+.tab-button.active::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #667eea;
+}
+
+.tab-content {
+    display: none;
+    padding: 2rem;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Remove margins from sections when in tabs */
+.tabs-container .user-commands-section,
+.tabs-container .messages-section {
+    margin-top: 0 !important;
+    box-shadow: none;
+    background: none;
+    padding: 0;
+}
+
+/* JSONL Viewer Specific Styles */
+.jsonl-viewer {
+    height: 600px;
+    overflow-y: auto;
+}
+
+.jsonl-controls {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+/* JSONL Table Styles */
+.jsonl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+/* Sticky header for JSONL table */
+.jsonl-table th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: #f8f9fa;
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.jsonl-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+}
+
+.jsonl-table tr {
+    cursor: pointer;
+}
+
+.jsonl-table tr:hover {
+    background: #f8f9fa;
+}
+
+.line-number {
+    font-weight: 600;
+    color: #666;
+    width: 60px;
+}
+
+/* Type badge duplicate removed - using definition from line 164 */
+
+.type-user {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+
+.type-assistant {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+
+.type-summary {
+    background: #fff3e0;
+    color: #f57c00;
+}
+
+.content-preview {
+    max-width: 600px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #444;
+}
+
+
+/* Shared Tooltip Styles */
+.tooltip-dark {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 0.75rem;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    display: none;
+}
+
+/* Tooltip positioning variants */
+.tooltip-dark.position-below {
+    margin-top: 0.5rem;
+}
+
+.tooltip-dark.position-above {
+    bottom: 100%;
+    margin-bottom: 0.5rem;
+    transform: translateX(-50%);
+    left: 50%;
+}
+
+.tooltip-dark.position-right {
+    left: 100%;
+    margin-left: 0.5rem;
+}
+
+.tooltip-dark.position-left {
+    right: 100%;
+    margin-right: 0.5rem;
+}
+
+/* Info icon style */
+.tooltip-info-icon {
+    cursor: help;
+    color: #999;
+    font-size: 0.8rem;
+    font-weight: normal;
+    margin-left: 0.25rem;
+    position: relative;
+    display: inline-block;
+}
+
+/* ========================================
+ * UTILITY CLASSES (Phase 1)
+ * ======================================== */
+
+/* Typography Utilities */
+.text-sm { font-size: 0.85rem; }
+.text-base { font-size: 0.9rem; }
+.text-lg { font-size: 1rem; }
+.text-muted { color: #666; }
+.text-secondary { color: #999; }
+.text-white-95 { color: rgba(255, 255, 255, 0.95); }
+.opacity-90 { opacity: 0.9; }
+.text-sm-muted { font-size: 0.9rem; color: #666; }
+
+/* Spacing Utilities */
+.mb-0 { margin-bottom: 0; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-4 { margin-bottom: 1rem; }
+.mt-8 { margin-top: 2rem; }
+.p-2 { padding: 0.5rem; }
+.p-4 { padding: 1rem; }
+.px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+
+/* Layout Utilities */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-4 { gap: 1rem; }
+
+/* Common flex patterns */
+.flex-center { 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+}
+.flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* ========================================
+ * COMPONENT STYLES
+ * ======================================== */
+
+/* Header Buttons Container */
+.header-controls {
+    position: absolute;
+    right: 2rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* Button Styles */
+.btn-header {
+    padding: 0.4rem 0.9rem;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: none; /* Hidden by default, shown when data loads */
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.btn-header:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Export button styles */
+.btn-export {
+    padding: 0.4rem 0.8rem;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-left: 0.5rem;
+}
+
+.btn-export:hover {
+    background: #5a67d8;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Tooltip Width Classes */
+.tooltip-sm { width: 280px; }
+
+/* ========================================
+ * UNIFIED TABLE SYSTEM
+ * ======================================== */
+
+/* Table Container - Single unified class for all tables */
+.table-container {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    max-width: 1400px;
+    margin: 2rem auto;
+}
+
+/* Table Header Layout */
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.table-header h2 {
+    font-size: 1.5rem;
+    color: #333;
+    margin: 0;
+}
+
+.table-info {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+/* Table Controls */
+.table-controls {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Filter Groups */
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.filter-group label {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.9rem;
+}
+
+.filter-group input,
+.filter-group select {
+    padding: 0.4rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.filter-search {
+    width: 200px;
+}
+
+.filter-select-wide {
+    min-width: 300px;
+    max-width: 600px;
+}
+
+/* Row Jump Controls */
+.row-jump {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.row-jump input {
+    width: 80px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.row-jump button {
+    padding: 0.25rem 0.75rem;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+.row-jump button:hover {
+    background: #f0f0f0;
+}
+
+/* Table Wrapper */
+.table-wrapper {
+    overflow-x: visible;
+    overflow-y: visible;
+    /* max-height: 600px; - removed to disable scrolling */
+    margin-bottom: 1rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+}
+
+/* Base Table Styles */
+table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.data-table th {
+    background: #f8f8f8;
+    text-align: left;
+    padding: 0.75rem;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e0e0e0;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+/* Sortable columns */
+.data-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding-right: 1.5rem;
+}
+
+.data-table th.sortable:hover {
+    background: #f0f0f0;
+}
+
+/* Sort indicators */
+.data-table th.sortable::after {
+    content: ' ↕';
+    color: #ccc;
+    font-size: 0.8em;
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.data-table th.sort-asc::after {
+    content: ' ↑';
+    color: #667eea;
+}
+
+.data-table th.sort-desc::after {
+    content: ' ↓';
+    color: #667eea;
+}
+
+/* Table cells */
+.data-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+}
+
+.data-table tr:hover {
+    background: #f8f9fa;
+}
+
+/* Pagination */
+.table-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.table-pagination button {
+    padding: 0.5rem 1rem;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.table-pagination button:hover:not(:disabled) {
+    background: #667eea;
+    color: white;
+    border-color: #667eea;
+}
+
+.table-pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.page-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.page-info input {
+    width: 60px;
+    padding: 0.3rem;
+    text-align: center;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+/* Loading States */
+.table-loading {
+    text-align: center;
+    padding: 3rem;
+    color: #666;
+}
+
+/* Empty States */
+.table-empty {
+    text-align: center;
+    padding: 3rem;
+    color: #999;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 4rem;
+    color: #999;
+}
+
+.empty-state h2 {
+    color: #666;
+    margin-bottom: 1rem;
+}
+
+/* Metadata Display */
+.metadata-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.metadata-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.metadata-label {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.85rem;
+}
+
+.metadata-value {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.metadata-value.mono {
+    font-family: monospace;
+}
+
+/* Utility Classes */
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+    </style>
+</head>
+<body>
+    <!-- Same structure as local dashboard -->
+    <div class="header">
+        <div class="header-content">
+            <div class="header-brand-with-info">
+                <a href="https://stackunderflow.dev" target="_blank" style="text-decoration: none;">
+                    <img src="/static/images/logo.png" alt="StackUnderflow Logo" class="header-logo" style="cursor: pointer;">
+                </a>
+                <div>
+                    <h1>
+                        <a href="https://stackunderflow.dev" target="_blank" style="text-decoration: none; color: inherit;">
+                            <span class="brand-name" style="cursor: pointer;">StackUnderflow</span>
+                        </a>
+                        <span class="header-subtitle">StackUnderflow</span>
+                    </h1>
+                    <div id="project-info">
+                        <div class="project-name-display" style="font-size: 1.1rem; color: rgba(255, 255, 255, 0.9);">
+                            <span id="project-info-text" style="font-weight: 500;">Shared Analytics Dashboard</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container" id="dashboard-container">
+        <!-- Overview Stats -->
+        <div class="stats-grid" id="overview-stats">
+            <!-- Stats will be populated by JavaScript -->
+        </div>
+        
+        <!-- Charts Section -->
+        <div class="charts-section">
+            <!-- Chart containers will be populated by JavaScript -->
+        </div>
+        
+        <!-- Tables will be added dynamically by JavaScript -->
+    </div>
+    
+    <footer style="text-align: center; padding: 2rem 0; color: #666; background: #f8f9fa; margin-top: 3rem;">
+        <p>Created with <a href="https://stackunderflow.dev" style="color: #667eea;">StackUnderflow</a> - Analytics for Claude Code</p>
+    </footer>
+    
+    <script>
+        // Share data will be injected here by Cloudflare Pages Function
+        // SHARE_DATA_INJECTION
+        
+        // All necessary JavaScript will be inlined here during share creation
+        // This includes utility functions, chart rendering, etc.
+        // === constants.js ===
+// Constants for StackUnderflow
+
+// User interruption patterns
+const USER_INTERRUPTION_PREFIX = '[Request interrupted by user for tool use]';
+const USER_INTERRUPTION_API_ERROR = 'API Error: Request was aborted.';
+const USER_INTERRUPTION_PATTERNS = [
+  USER_INTERRUPTION_PREFIX,
+  USER_INTERRUPTION_API_ERROR
+];
+
+// Pagination defaults
+const DEFAULT_MESSAGES_PER_PAGE = 20;
+const DEFAULT_COMMANDS_PER_PAGE = 20;
+
+// Chart colors
+const CHART_COLORS = {
+  primary: '#667eea',
+  secondary: '#764ba2',
+  success: '#48bb78',
+  warning: '#ed8936',
+  danger: '#f56565',
+  info: '#4299e1'
+};
+
+// Claude logs location info
+const CLAUDE_LOGS_TOOLTIP = `<div class="example">
+    <strong>Example:</strong><br>
+    Project: /Users/john/dev/myapp<br>
+    Logs at: ~/.claude/projects/-Users-john-dev-myapp/
+</div>`;
+
+// Export for use in other scripts
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    USER_INTERRUPTION_PREFIX,
+    USER_INTERRUPTION_API_ERROR,
+    USER_INTERRUPTION_PATTERNS,
+    DEFAULT_MESSAGES_PER_PAGE,
+    DEFAULT_COMMANDS_PER_PAGE,
+    CHART_COLORS,
+    CLAUDE_LOGS_TOOLTIP
+  };
+}
+
+// === utils.js ===
+// Utility functions for StackUnderflow
+
+// Format large numbers with K/M suffixes
+function formatNumber(num) {
+  if (num === 0) {return '0';}
+  if (num < 1000) {return num.toString();}
+  if (num < 1000000) {return (num / 1000).toFixed(1) + 'K';}
+  return (num / 1000000).toFixed(1) + 'M';
+}
+
+// Format token counts as input/output
+function formatTokens(tokens) {
+  // User messages don't have token counts
+  if (tokens.input === 0 && tokens.output === 0) {
+    return '-';
+  }
+  const input = formatNumber(tokens.input);
+  const output = formatNumber(tokens.output);
+  return `${input}/${output}`;
+}
+
+// Format timestamp with full date and time
+function formatTimestamp(timestamp) {
+  if (!timestamp) {return 'N/A';}
+  const date = new Date(timestamp);
+    
+  // Show full date and time in local timezone
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
+// Format model name
+function formatModelName(model) {
+  return model || '-';
+}
+
+// Format date to short format
+function formatDate(dateStr) {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Truncate content for table display
+function truncateContent(content) {
+  const maxLength = 200;
+  const maxLineLength = 80;
+    
+  // First, check if any line is too long (handles the box-drawing character case)
+  const lines = content.split('\n');
+  let truncated = false;
+    
+  const processedLines = lines.map(line => {
+    // Check for very long unbroken strings
+    if (line.length > maxLineLength && !line.includes(' ')) {
+      truncated = true;
+      return line.substring(0, maxLineLength) + '...';
+    }
+    return line;
+  });
+    
+  let result = processedLines.join('\n');
+    
+  // Then apply overall length limit
+  if (result.length > maxLength) {
+    result = result.substring(0, maxLength) + '...';
+    truncated = true;
+  }
+    
+  return result;
+}
+
+// Debounce function for rate limiting
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+// Check if a message is an interruption
+function isInterruptionMessage(content) {
+  return USER_INTERRUPTION_PATTERNS.some(pattern => content.startsWith(pattern));
+}
+
+// Tooltip utility functions
+function showTooltip(tooltipId) {
+  const tooltip = document.getElementById(tooltipId);
+  if (tooltip) {
+    tooltip.style.display = 'block';
+  }
+}
+
+function hideTooltip(tooltipId) {
+  const tooltip = document.getElementById(tooltipId);
+  if (tooltip) {
+    tooltip.style.display = 'none';
+  }
+}
+
+// Initialize standard hover tooltips
+function initHoverTooltip(triggerId, tooltipId) {
+  const trigger = document.getElementById(triggerId);
+  const tooltip = document.getElementById(tooltipId);
+    
+  if (!trigger || !tooltip) {return;}
+    
+  trigger.addEventListener('mouseenter', () => showTooltip(tooltipId));
+  trigger.addEventListener('mouseleave', () => hideTooltip(tooltipId));
+}
+
+// Create dynamic tooltip with both click and hover
+function createDynamicTooltip(targetElement, content, options = {}) {
+  // Remove any existing tooltip
+  const existingTooltip = targetElement.querySelector('.tooltip-dark');
+  if (existingTooltip) {
+    existingTooltip.remove();
+  }
+    
+  // Create tooltip element
+  const tooltip = document.createElement('div');
+  tooltip.className = 'tooltip-dark';
+  tooltip.style.position = 'absolute';
+  tooltip.innerHTML = content;
+    
+  // Set positioning
+  const position = options.position || 'top-right';
+  switch(position) {
+  case 'top-right':
+    tooltip.style.top = '20px';
+    tooltip.style.right = '0';
+    break;
+  case 'top-left':
+    tooltip.style.top = '20px';
+    tooltip.style.left = '-10px';
+    break;
+  default:
+    tooltip.style.top = '20px';
+    tooltip.style.left = '0';
+  }
+    
+  // Set width if specified
+  if (options.width) {
+    tooltip.style.width = options.width;
+  }
+    
+  targetElement.style.position = 'relative';
+  targetElement.appendChild(tooltip);
+    
+  // Event handlers
+  let hideTimeout;
+  const showFn = () => {
+    clearTimeout(hideTimeout);
+    tooltip.style.display = 'block';
+  };
+    
+  const hideFn = () => {
+    hideTimeout = setTimeout(() => {
+      tooltip.style.display = 'none';
+    }, options.delay || 100);
+  };
+    
+  // Add both click and hover listeners
+  targetElement.addEventListener('click', showFn);
+  targetElement.addEventListener('mouseenter', showFn);
+  targetElement.addEventListener('mouseleave', hideFn);
+    
+  return tooltip;
+}
+
+// Copy text to clipboard with UI feedback
+function copyToClipboard(text, event) {
+  if (event) {
+    event.stopPropagation();
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    // Show brief feedback
+    const original = event ? event.target.textContent : '';
+    if (event && event.target) {
+      event.target.textContent = 'Copied!';
+      setTimeout(() => {
+        event.target.textContent = original;
+      }, 1000);
+    }
+  });
+}
+
+// Get content preview for JSONL line
+function getJsonlContentPreview(line) {
+  if (line.type === 'summary') {
+    return line.summary || 'Summary';
+  }
+    
+  if (line.message && line.message.content) {
+    const content = line.message.content;
+    if (Array.isArray(content) && content.length > 0) {
+      const firstItem = content[0];
+      if (firstItem.type === 'text') {
+        return firstItem.text || '';
+      } else if (firstItem.type === 'tool_use') {
+        return `Tool: ${firstItem.name}`;
+      } else if (firstItem.type === 'tool_result') {
+        const preview = firstItem.content || '';
+        // Handle different types of content
+        if (typeof preview === 'string') {
+          return preview.substring(0, 100) + (preview.length > 100 ? '...' : '');
+        } else if (typeof preview === 'boolean') {
+          return String(preview);
+        } else if (typeof preview === 'object') {
+          return JSON.stringify(preview).substring(0, 100) + '...';
+        } else {
+          return String(preview);
+        }
+      }
+    } else if (typeof content === 'string') {
+      return content;
+    }
+  }
+    
+  return 'No content';
+}
+
+// Format date range for display (refactored to accept parameters)
+function formatDateRange(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  return `${start.toLocaleDateString()} - ${end.toLocaleDateString()}`;
+}
+
+// Export for use in other scripts
+// Highlight a table row temporarily
+// This function only manipulates the passed DOM element, no document access needed
+function highlightRow(row, duration = 1500) {
+  if (row) {
+    row.style.backgroundColor = '#ffffcc';
+    setTimeout(() => {
+      row.style.backgroundColor = '';
+    }, duration);
+  }
+}
+
+// Format file size in human-readable format
+function formatFileSize(bytes) {
+  if (bytes === 0) {return '0 Bytes';}
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Format duration in human-readable format
+function formatDuration(seconds) {
+  if (seconds < 60) {return `${seconds}s`;}
+  if (seconds < 3600) {return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;}
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
+// Generic table sorting function
+function sortTableData(data, sortColumn, sortDirection, columnConfig) {
+  data.sort((a, b) => {
+    let aVal, bVal;
+        
+    // If custom value extractor provided for this column, use it
+    if (columnConfig && columnConfig[sortColumn]) {
+      const extractor = columnConfig[sortColumn];
+      aVal = extractor(a);
+      bVal = extractor(b);
+    } else {
+      // Default: just get the property value
+      aVal = a[sortColumn] || '';
+      bVal = b[sortColumn] || '';
+    }
+        
+    // Compare values
+    if (aVal < bVal) {return sortDirection === 'asc' ? -1 : 1;}
+    if (aVal > bVal) {return sortDirection === 'asc' ? 1 : -1;}
+    return 0;
+  });
+    
+  return data;
+}
+
+// Navigate to a specific row in a paginated table
+function goToRowInPaginatedTable(config) {
+  const { inputId, dataArray, itemsPerPage, navigateFunction, tbodySelector } = config;
+    
+  const input = document.getElementById(inputId);
+  const rowNum = parseInt(input.value);
+  if (!rowNum || rowNum < 1) {return;}
+    
+  const index = rowNum - 1;
+  if (index >= dataArray.length) {
+    alert(`Row ${rowNum} does not exist. Total rows: ${dataArray.length}`);
+    return;
+  }
+    
+  // Calculate which page this row is on
+  const page = Math.floor(index / itemsPerPage) + 1;
+    
+  // Go to that page
+  navigateFunction(page);
+    
+  // Highlight the row briefly
+  setTimeout(() => {
+    const rows = document.querySelectorAll(`${tbodySelector} tr`);
+    const rowIndex = index % itemsPerPage;
+    highlightRow(rows[rowIndex]);
+  }, 100);
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    copyToClipboard,
+    createDynamicTooltip,
+    debounce,
+    escapeHtml,
+    formatDate,
+    formatDateRange,
+    formatDuration,
+    formatFileSize,
+    formatNumber,
+    formatTokens,
+    formatTimestamp,
+    formatModelName,
+    isInterruptionMessage,
+    showTooltip,
+    hideTooltip,
+    highlightRow,
+    initHoverTooltip,
+    getJsonlContentPreview,
+    truncateContent,
+    sortTableData,
+    goToRowInPaginatedTable,
+    exportToCSV,
+    downloadCSV
+  };
+}
+
+// Export data to CSV format
+function exportToCSV(data, headers) {
+  // Create CSV header row
+  const csvHeaders = headers.map(h => `"${h}"`).join(',');
+    
+  // Create CSV data rows
+  const csvRows = data.map(row => {
+    return row.map(cell => {
+      // Escape quotes and wrap in quotes
+      const cellStr = String(cell || '').replace(/"/g, '""');
+      return `"${cellStr}"`;
+    }).join(',');
+  });
+    
+  // Combine header and rows
+  return [csvHeaders, ...csvRows].join('\n');
+}
+
+// Download CSV file
+function downloadCSV(csvContent, filename) {
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+    
+  if (navigator.msSaveBlob) { // IE 10+
+    navigator.msSaveBlob(blob, filename);
+  } else {
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+}
+
+// === stats.js ===
+// Statistics functions for StackUnderflow
+// This module contains pure data processing and calculation functions
+// extracted from dashboard.html for better organization and reusability
+
+// Date and Time Calculations
+function calculateDateRange(statistics) {
+  const start = new Date(statistics.overview.date_range.start);
+  const end = new Date(statistics.overview.date_range.end);
+  const days = Math.floor((end - start) / (24 * 60 * 60 * 1000));
+  return `${days} days`;
+}
+
+function calculateDaysInclusive(statistics) {
+  const start = new Date(statistics.overview.date_range.start);
+  const end = new Date(statistics.overview.date_range.end);
+  // Add 1 to make it inclusive (e.g., Jun 26 to Jun 28 = 3 days)
+  const days = Math.floor((end - start) / (24 * 60 * 60 * 1000)) + 1;
+  return days;
+}
+
+// Tool Usage Statistics
+function calculateTotalToolCalls(statistics) {
+  // Sum up all tool usage counts
+  let total = 0;
+  if (statistics.tools && statistics.tools.usage_counts) {
+    for (const count of Object.values(statistics.tools.usage_counts)) {
+      total += count;
+    }
+  }
+  return total;
+}
+
+function calculateDistinctTools(statistics) {
+  // Count unique tools used
+  if (statistics.tools && statistics.tools.usage_counts) {
+    return Object.keys(statistics.tools.usage_counts).length;
+  }
+  return 0;
+}
+
+// Cache Statistics
+function calculateCacheEfficiency(statistics) {
+  const created = statistics.overview.total_tokens.cache_creation || 0;
+  const read = statistics.overview.total_tokens.cache_read || 0;
+  if (created === 0) {return 0;}
+  return Math.min(100, Math.round((read / created) * 100));
+}
+
+function formatCostSaved(statistics) {
+  if (!statistics.cache) {return '0 units';}
+  const saved = statistics.cache.cost_saved_base_units;
+  if (saved === 0) {return '0 units';}
+  if (saved < 0) {
+    return `−${formatNumber(Math.abs(saved))} units`;
+  }
+  return `${formatNumber(saved)}`;
+}
+
+// Token Analysis
+function calculateHourlyTokens(allMessages) {
+  const hourlyInput = new Array(24).fill(0);
+  const hourlyOutput = new Array(24).fill(0);
+    
+  allMessages.forEach(msg => {
+    if (msg.timestamp) {
+      try {
+        const hour = new Date(msg.timestamp).getHours();
+        hourlyInput[hour] += msg.tokens.input || 0;
+        hourlyOutput[hour] += msg.tokens.output || 0;
+      } catch (e) {
+        // Skip invalid timestamps
+      }
+    }
+  });
+    
+  return {
+    input: hourlyInput,
+    output: hourlyOutput
+  };
+}
+
+// Generate data for the entire project duration with adaptive bucketing (max 60 points)
+function generateProjectDurationData(allMessages, maxDataPoints = 60) {
+  // Get date range
+  const timestamps = allMessages
+    .filter(m => m.timestamp)
+    .map(m => new Date(m.timestamp));
+    
+  if (timestamps.length === 0) {
+    return { labels: [], counts: [], inputTokens: [], outputTokens: [], sparseLabels: [] };
+  }
+    
+  const minDate = new Date(Math.min(...timestamps));
+  const maxDate = new Date(Math.max(...timestamps));
+  const totalDuration = maxDate - minDate;
+    
+  // Calculate optimal bucket size to stay under maxDataPoints
+  const hourMs = 60 * 60 * 1000;
+  const totalHours = Math.ceil(totalDuration / hourMs);
+  const hoursPerBucket = Math.ceil(totalHours / maxDataPoints);
+  const bucketSize = hoursPerBucket * hourMs;
+    
+  // Determine date format based on bucket size
+  let dateFormat;
+  const dayMs = 24 * hourMs;
+  if (bucketSize < 4 * hourMs) {
+    // Hourly or sub-4-hour buckets
+    dateFormat = { month: 'short', day: 'numeric', hour: 'numeric', hour12: true };
+  } else if (bucketSize < dayMs) {
+    // 4-hour to daily buckets
+    dateFormat = { month: 'short', day: 'numeric', hour: 'numeric', hour12: true };
+  } else if (bucketSize < 7 * dayMs) {
+    // Daily to weekly buckets
+    dateFormat = { month: 'short', day: 'numeric' };
+  } else {
+    // Weekly or larger buckets
+    dateFormat = { year: 'numeric', month: 'short', day: 'numeric' };
+  }
+    
+  // Create buckets
+  const buckets = [];
+  let currentTime = new Date(minDate);
+  currentTime.setMinutes(0, 0, 0);
+    
+  // Align to bucket boundaries
+  if (bucketSize >= dayMs) {
+    currentTime.setHours(0);
+  }
+    
+  while (currentTime <= maxDate) {
+    buckets.push({
+      start: new Date(currentTime),
+      end: new Date(currentTime.getTime() + bucketSize),
+      count: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    });
+    currentTime = new Date(currentTime.getTime() + bucketSize);
+  }
+    
+  // Fill buckets with data
+  allMessages.forEach(msg => {
+    if (msg.timestamp) {
+      const msgDate = new Date(msg.timestamp);
+            
+      // Find the appropriate bucket
+      for (const bucket of buckets) {
+        if (msgDate >= bucket.start && msgDate < bucket.end) {
+          bucket.count++;
+          bucket.inputTokens += msg.tokens.input || 0;
+          bucket.outputTokens += msg.tokens.output || 0;
+          break;
+        }
+      }
+    }
+  });
+    
+  // Create labels
+  const labels = buckets.map(bucket => {
+    // For multi-day buckets, show range
+    if (bucketSize >= dayMs && bucket.end - bucket.start > dayMs) {
+      const startStr = bucket.start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const endStr = new Date(bucket.end - 1).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return `${startStr} - ${endStr}`;
+    }
+    return bucket.start.toLocaleString('en-US', dateFormat);
+  });
+    
+  // Create sparse labels for display
+  const sparseLabels = [];
+  const dataPointCount = buckets.length;
+    
+  if (dataPointCount <= 15) {
+    // Show all labels if 15 or fewer data points
+    sparseLabels.push(...labels);
+  } else {
+    // Smart labeling to show ~10-15 labels
+    const labelInterval = Math.ceil(dataPointCount / 12);
+        
+    buckets.forEach((bucket, index) => {
+      if (index === 0 || index === dataPointCount - 1) {
+        // Always show first and last
+        sparseLabels[index] = labels[index];
+      } else if (index % labelInterval === 0) {
+        // Show at intervals
+        sparseLabels[index] = labels[index];
+      } else {
+        sparseLabels[index] = '';
+      }
+    });
+  }
+    
+  return {
+    labels: labels,
+    counts: buckets.map(b => b.count),
+    inputTokens: buckets.map(b => b.inputTokens),
+    outputTokens: buckets.map(b => b.outputTokens),
+    sparseLabels: sparseLabels,
+    bucketSize: bucketSize,
+    bucketCount: buckets.length
+  };
+}
+
+// Data Generation
+function generateHourlyData(allMessages) {
+  // Get date range
+  const timestamps = allMessages
+    .filter(m => m.timestamp)
+    .map(m => new Date(m.timestamp));
+    
+  if (timestamps.length === 0) {
+    return { labels: [], counts: [], inputTokens: [], outputTokens: [] };
+  }
+    
+  const minDate = new Date(Math.min(...timestamps));
+  const maxDate = new Date(Math.max(...timestamps));
+    
+  // Create hourly buckets
+  const hourlyBuckets = new Map();
+  let currentHour = new Date(minDate);
+  currentHour.setMinutes(0, 0, 0);
+    
+  while (currentHour <= maxDate) {
+    const key = currentHour.toISOString();
+    hourlyBuckets.set(key, {
+      count: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    });
+    currentHour = new Date(currentHour.getTime() + 60 * 60 * 1000); // Add 1 hour
+  }
+    
+  // Fill buckets with data
+  allMessages.forEach(msg => {
+    if (msg.timestamp) {
+      const msgDate = new Date(msg.timestamp);
+      const hourKey = new Date(msgDate);
+      hourKey.setMinutes(0, 0, 0);
+      const key = hourKey.toISOString();
+            
+      if (hourlyBuckets.has(key)) {
+        const bucket = hourlyBuckets.get(key);
+        bucket.count++;
+        bucket.inputTokens += msg.tokens.input || 0;
+        bucket.outputTokens += msg.tokens.output || 0;
+      }
+    }
+  });
+    
+  // Convert to arrays
+  const sortedEntries = Array.from(hourlyBuckets.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    
+  // Limit to last 48 hours for readability
+  const last48Hours = sortedEntries.slice(-48);
+    
+  return {
+    labels: last48Hours.map(([timestamp]) => {
+      const date = new Date(timestamp);
+      return date.toLocaleString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        hour: 'numeric',
+        hour12: true
+      });
+    }),
+    counts: last48Hours.map(([, data]) => data.count),
+    inputTokens: last48Hours.map(([, data]) => data.inputTokens),
+    outputTokens: last48Hours.map(([, data]) => data.outputTokens)
+  };
+}
+
+function buildChronologicalData(allMessages, originalCommandDetails, currentJsonlData) {
+  const chronologicalData = [];
+    
+  // Add all messages
+  if (allMessages && allMessages.length > 0) {
+    chronologicalData.push(...allMessages);
+  }
+    
+  // Add all commands
+  if (originalCommandDetails && originalCommandDetails.length > 0) {
+    chronologicalData.push(...originalCommandDetails);
+  }
+    
+  // Add all JSONL entries if loaded
+  if (currentJsonlData && currentJsonlData.length > 0) {
+    chronologicalData.push(...currentJsonlData);
+  }
+    
+  // Sort by timestamp (oldest first)
+  chronologicalData.sort((a, b) => {
+    const aTime = a.timestamp || '';
+    const bTime = b.timestamp || '';
+    return aTime.localeCompare(bTime);
+  });
+    
+  return chronologicalData;
+}
+
+// Calculate daily costs from raw messages in local timezone
+function calculateDailyCosts(allMessages) {
+  const dailyData = {};
+    
+  // Group messages by local date
+  allMessages.forEach(msg => {
+    if (msg.timestamp) {
+      const localDate = new Date(msg.timestamp);
+      const dateKey = localDate.toLocaleDateString('en-CA'); // YYYY-MM-DD format in local time
+            
+      if (!dailyData[dateKey]) {
+        dailyData[dateKey] = {
+          messages: 0,
+          tokens: { input: 0, output: 0, cache_creation: 0, cache_read: 0 },
+          models: {}
+        };
+      }
+            
+      dailyData[dateKey].messages++;
+            
+      // Accumulate tokens
+      for (const [key, value] of Object.entries(msg.tokens || {})) {
+        dailyData[dateKey].tokens[key] = (dailyData[dateKey].tokens[key] || 0) + value;
+      }
+            
+      // Track tokens by model for cost calculation
+      if (msg.type === 'assistant' && msg.model && msg.model !== 'N/A') {
+        const model = msg.model;
+        if (!dailyData[dateKey].models[model]) {
+          dailyData[dateKey].models[model] = {
+            tokens: { input: 0, output: 0, cache_creation: 0, cache_read: 0 },
+            count: 0
+          };
+        }
+        dailyData[dateKey].models[model].count++;
+        for (const [key, value] of Object.entries(msg.tokens || {})) {
+          dailyData[dateKey].models[model].tokens[key] = 
+                        (dailyData[dateKey].models[model].tokens[key] || 0) + value;
+        }
+      }
+    }
+  });
+    
+  // Calculate costs for each day
+  const result = {};
+  for (const [date, data] of Object.entries(dailyData)) {
+    let totalCost = 0;
+    const modelCosts = {};
+        
+    // Use PricingUtils if available
+    if (window.PricingUtils && window.PricingUtils.calculateCost) {
+      for (const [model, modelData] of Object.entries(data.models)) {
+        const costBreakdown = window.PricingUtils.calculateCost(modelData.tokens, model);
+        modelCosts[model] = costBreakdown;
+        totalCost += costBreakdown.total_cost;
+      }
+    }
+        
+    result[date] = {
+      messages: data.messages,
+      tokens: data.tokens,
+      cost: {
+        total: totalCost,
+        by_model: modelCosts
+      }
+    };
+  }
+    
+  return result;
+}
+
+// Calculate total project cost
+function calculateTotalProjectCost(allMessages) {
+  if (!allMessages || !window.PricingUtils) {
+    return null;
+  }
+    
+  // Handle case where messages might be wrapped in an object
+  if (!Array.isArray(allMessages)) {
+    console.warn('calculateTotalProjectCost: messages is not an array, attempting to extract');
+    if (allMessages.messages && Array.isArray(allMessages.messages)) {
+      allMessages = allMessages.messages;
+    } else {
+      console.error('calculateTotalProjectCost: Unable to extract messages array');
+      return null;
+    }
+  }
+    
+  let totalCost = 0;
+  const modelCosts = {};
+    
+  // Group tokens by model
+  allMessages.forEach(msg => {
+    if (msg.type === 'assistant' && msg.model && msg.model !== 'N/A') {
+      if (!modelCosts[msg.model]) {
+        modelCosts[msg.model] = {
+          input: 0,
+          output: 0,
+          cache_creation: 0,
+          cache_read: 0
+        };
+      }
+            
+      modelCosts[msg.model].input += msg.tokens.input || 0;
+      modelCosts[msg.model].output += msg.tokens.output || 0;
+      modelCosts[msg.model].cache_creation += msg.tokens.cache_creation || 0;
+      modelCosts[msg.model].cache_read += msg.tokens.cache_read || 0;
+    }
+  });
+    
+  // Calculate costs for each model
+  for (const [model, tokens] of Object.entries(modelCosts)) {
+    const costs = window.PricingUtils.calculateCost(tokens, model);
+    totalCost += costs.total_cost;
+  }
+    
+  return totalCost;
+}
+
+// Generate daily token data for the last N days
+function generateDailyTokenData(allMessages, maxDays = 30) {
+  const dailyData = {};
+    
+  // Group messages by local date
+  allMessages.forEach(msg => {
+    if (msg.timestamp) {
+      const localDate = new Date(msg.timestamp);
+      const dateKey = localDate.toLocaleDateString('en-CA'); // YYYY-MM-DD format in local time
+            
+      if (!dailyData[dateKey]) {
+        dailyData[dateKey] = {
+          input: 0,
+          output: 0,
+          cache_creation: 0,
+          cache_read: 0
+        };
+      }
+            
+      // Accumulate tokens
+      dailyData[dateKey].input += msg.tokens.input || 0;
+      dailyData[dateKey].output += msg.tokens.output || 0;
+      dailyData[dateKey].cache_creation += msg.tokens.cache_creation || 0;
+      dailyData[dateKey].cache_read += msg.tokens.cache_read || 0;
+    }
+  });
+    
+  // Sort dates and limit to last N days
+  const sortedDates = Object.keys(dailyData).sort();
+  const datesToShow = sortedDates.slice(-maxDays);
+    
+  // Create arrays for Chart.js
+  const labels = [];
+  const inputTokens = [];
+  const outputTokens = [];
+    
+  datesToShow.forEach(date => {
+    // Parse date as local midnight to avoid timezone shifts
+    const [year, month, day] = date.split('-').map(Number);
+    const localDate = new Date(year, month - 1, day); // month is 0-indexed
+    labels.push(localDate.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric' 
+    }));
+        
+    inputTokens.push(dailyData[date].input);
+    outputTokens.push(dailyData[date].output);
+  });
+    
+  return {
+    labels,
+    inputTokens,
+    outputTokens,
+    dailyData: datesToShow.map(date => dailyData[date])
+  };
+}
+
+// Export all functions as StatsModule
+const StatsModule = {
+  // Date and Time Calculations
+  calculateDateRange,
+  calculateDaysInclusive,
+    
+  // Tool Usage Statistics
+  calculateTotalToolCalls,
+  calculateDistinctTools,
+    
+  // Cache Statistics
+  calculateCacheEfficiency,
+  formatCostSaved,
+    
+  // Token Analysis
+  calculateHourlyTokens,
+    
+  // Data Generation
+  generateHourlyData,
+  generateDailyTokenData,
+  generateProjectDurationData,
+  buildChronologicalData,
+  calculateDailyCosts,
+    
+  // Cost Calculations
+  calculateTotalProjectCost
+};
+
+// Make available globally for browser usage
+if (typeof window !== 'undefined') {
+  window.StatsModule = StatsModule;
+}
+
+// Export for module usage
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = StatsModule;
+}
+
+// === stats-cards.js ===
+// Stats cards module - shared between dashboard.html and share-viewer.js
+
+window.StatsCardsModule = {
+  displayOverviewStats: function(statistics) {
+    const overview = statistics.overview;
+    const messageTypes = overview.message_types;
+        
+    const statsHTML = `
+            <div class="stat-card">
+                <h3>User Commands</h3>
+                <div class="value">${statistics.user_interactions ? statistics.user_interactions.user_commands_analyzed : 0}</div>
+                <div class="breakdown">
+                    <span>${statistics.user_interactions ? statistics.user_interactions.avg_tokens_per_command.toFixed(1) : '0.0'} tokens/cmd</span>
+                    <span>${(() => {
+                        if (!statistics.user_interactions) return '0 books';
+                        const totalWords = statistics.user_interactions.user_commands_analyzed * 
+                                         statistics.user_interactions.avg_tokens_per_command * 
+                                         3 / 4;  // tokens to words (3/4 ratio)
+                        const books = totalWords / 60000;  // 60k words per book
+                        return books >= 1 ? `${books.toFixed(1)} books` : `${books.toFixed(2)} books`;
+                    })()}
+                        <span class="tooltip-info-icon"
+                              onmouseover="showTooltip('books-tooltip')" 
+                              onmouseout="hideTooltip('books-tooltip')">ⓘ
+                            <div id="books-tooltip" class="tooltip-dark position-below tooltip-sm">
+                                The number of books you could've written.
+                                Assuming 60k words/book.
+                            </div>
+                        </span>
+                    </span>
+                    <span>${StatsModule.calculateDaysInclusive(statistics)} days</span>
+                    ${(() => {
+                        // Show context info if there are compact summaries
+                        const compactSummaryCount = messageTypes.compact_summary || 0;
+                        if (compactSummaryCount > 0 && statistics.user_interactions) {
+                            const commandsPerContext = Math.floor(statistics.user_interactions.user_commands_analyzed / compactSummaryCount);
+                            return `<span>${commandsPerContext} cmds/full context</span>`;
+                        }
+                        return '';
+                    })()}
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>User Interruption Rate
+                    <span class="tooltip-info-icon"
+                          onmouseover="showTooltip('interruption-tooltip')" 
+                          onmouseout="hideTooltip('interruption-tooltip')">ⓘ</span>
+                    <div id="interruption-tooltip" class="tooltip-dark position-below tooltip-sm">
+                        <div style="font-size: 0.75rem; opacity: 0.9;">
+                            % of instructions led to tool operations that needed manual intervention.
+                        </div>
+                    </div>
+                </h3>
+                <div class="value">${statistics.user_interactions.interruption_rate || 0}%</div>
+                <div class="subtext">${statistics.user_interactions.commands_followed_by_interruption || 0} of ${statistics.user_interactions.non_interruption_commands || 0} commands</div>
+            </div>
+            
+            ${statistics.user_interactions ? `
+            <div class="stat-card">
+                <h3>Steps per command</h3>
+                <div class="value">${statistics.user_interactions.avg_steps_per_command}</div>
+                <div class="breakdown">
+                    <span>${statistics.user_interactions.avg_tools_per_command} tools/cmd</span>
+                    <span>Longest chain: ${Math.max(...(statistics.user_interactions.command_details || []).map(cmd => cmd.assistant_steps || 0))} steps</span>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Tool Use Rate
+                    <span class="tooltip-info-icon"
+                          onmouseover="showTooltip('tools-required-tooltip')" 
+                          onmouseout="hideTooltip('tools-required-tooltip')">ⓘ</span>
+                    <div id="tools-required-tooltip" class="tooltip-dark position-below tooltip-sm">
+                        <div style="margin-bottom: 0.5rem;">Only actual user commands (not interruptions) are counted.</div>
+                        <div style="margin-bottom: 0.25rem;">This is the number tools AI actually uses (not the tools it intends to use), before task completion or user interruption.</div>
+                    </div>
+                </h3>
+                <div class="value">${statistics.user_interactions.percentage_requiring_tools}%</div>
+                <div class="subtext">${statistics.user_interactions.commands_requiring_tools} of ${statistics.user_interactions.non_interruption_commands} commands</div>
+                <div class="breakdown">
+                    <span>${StatsModule.calculateDistinctTools(statistics)} tools</span>
+                    <span>${StatsModule.calculateTotalToolCalls(statistics).toLocaleString()} tool calls</span>
+                    ${statistics.user_interactions.search_tool_percentage !== undefined ? 
+                        `<span>${statistics.user_interactions.search_tool_percentage}% search</span>` : 
+                        ''
+                    }
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Project Cost
+                    <span class="tooltip-info-icon"
+                          onmouseover="showTooltip('total-cost-tooltip')" 
+                          onmouseout="hideTooltip('total-cost-tooltip')">ⓘ</span>
+                    <div id="total-cost-tooltip" class="tooltip-dark position-below tooltip-sm">
+                        <div style="font-size: 0.85rem; line-height: 1.4;">
+                            What you would've paid if you were using the Claude API directly.
+                        </div>
+                        <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 0.5rem;">
+                            Based on current token prices from LiteLLM
+                        </div>
+                    </div>
+                </h3>
+                <div class="value">
+                    ${(() => {
+    // Use pre-calculated total cost from statistics
+    const totalCost = statistics.overview.total_cost;
+    if (totalCost !== null && totalCost !== undefined) {
+      return window.PricingUtils ? window.PricingUtils.formatCost(totalCost) : `$${totalCost.toFixed(2)}`;
+    }
+    return '$0.00';
+  })()}
+                </div>
+                <div class="breakdown">
+                    <span>Total tokens: ${formatNumber(overview.total_tokens.input + overview.total_tokens.output)}</span>
+                    <span>Input: ${formatNumber(overview.total_tokens.input)}</span>
+                    <span>Output: ${formatNumber(overview.total_tokens.output)}</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Prompt cache read
+                    <span class="tooltip-info-icon"
+                          onmouseover="showTooltip('cache-stats-tooltip')" 
+                          onmouseout="hideTooltip('cache-stats-tooltip')">ⓘ</span>
+                    <div id="cache-stats-tooltip" class="tooltip-dark position-below tooltip-sm">
+                        <div style="margin-bottom: 0.5rem;"><strong>Hit Rate:</strong> % of assistant messages using cached content</div>
+                        <div><strong>Cost Saved:</strong> Calculated as (Read × 0.9) - (Created × 0.25) in base token units. Cache creation costs 25% more, but reading costs 90% less.</div>
+                    </div>
+                </h3>
+                <div class="value">${formatNumber(overview.total_tokens.cache_read)}</div>
+                <div class="breakdown">
+                    <span>${overview.total_messages.toLocaleString()} total messages</span>
+                    <span>Created: ${formatNumber(overview.total_tokens.cache_creation)}</span>
+                    <span>Cache hit rate: ${statistics.cache ? statistics.cache.hit_rate : 0}%</span>
+                </div>
+            </div>
+            ` : ''}
+        `;
+        
+    document.getElementById('overview-stats').innerHTML = statsHTML;
+  }
+};
+
+// Helper function - copied from main dashboard
+function formatNumber(num) {
+  if (!num) {return '0';}
+  if (num >= 1000000) {return (num / 1000000).toFixed(1) + 'M';}
+  if (num >= 1000) {return (num / 1000).toFixed(1) + 'K';}
+  return num.toLocaleString();
+}
+
+// === message-modal.js ===
+/**
+ * Message Modal Module
+ * Handles modal functionality for message details
+ */
+
+// Set up modal event handlers
+document.addEventListener('DOMContentLoaded', function() {
+  // Create modal HTML if it doesn't exist (for shared views)
+  if (!document.getElementById('message-modal')) {
+    const modalHTML = `
+            <div id="message-modal" class="modal">
+                <div class="modal-content">
+                    <span class="modal-close">&times;</span>
+                    <div class="modal-header">
+                        <h2 id="modal-title" style="margin-bottom: 0;">Message Details</h2>
+                        <div class="modal-navigation">
+                            <button id="modal-prev-btn" class="modal-nav-btn" onclick="navigateMessage(-1)">← Previous</button>
+                            <span id="modal-position" class="modal-position">1 of 100</span>
+                            <button id="modal-next-btn" class="modal-nav-btn" onclick="navigateMessage(1)">Next →</button>
+                        </div>
+                    </div>
+                    <div id="modal-body">
+                        <!-- Details will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        `;
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+  }
+    
+  // Modal close button handler
+  const closeButton = document.querySelector('.modal-close');
+  if (closeButton) {
+    closeButton.addEventListener('click', () => {
+      document.getElementById('message-modal').style.display = 'none';
+    });
+  }
+    
+  // Click outside modal to close
+  window.addEventListener('click', (event) => {
+    const modal = document.getElementById('message-modal');
+    if (event.target === modal) {
+      modal.style.display = 'none';
+    }
+  });
+    
+  // Keyboard navigation for modal
+  document.addEventListener('keydown', (event) => {
+    const modal = document.getElementById('message-modal');
+    if (modal && modal.style.display === 'block') {
+      if (event.key === 'Escape') {
+        modal.style.display = 'none';
+      }
+    }
+  });
+});
+
+// === charts.js ===
+// Chart functions for StackUnderflow
+// This module contains all chart initialization and configuration
+//
+// IMPORTANT: Chart Time Range Behavior
+// =====================================
+// Charts in the dashboard display data with different time ranges:
+//
+// 1. LAST 30 DAYS ONLY (will show empty/zeros for inactive projects):
+//    - Token Usage Over Time (tokens-chart) - shows daily token usage for last 30 days
+//    - Daily Cost Breakdown (daily-cost-chart) - shows daily costs for last 30 days
+//
+// 2. ALL-TIME DATA (will show historical data even for old projects):
+//    - Tool Usage (tools-chart) - shows total usage counts for all tools
+//    - Token Usage by Hour (hourly-tokens-chart) - shows hourly patterns across all time
+//    - User Interactions (interruption-rate-chart) - shows command complexity distribution
+//    - Model Usage (model-usage-chart) - shows token usage by model across all time
+//    - Error Distribution (error-distribution-chart) - shows error categories across all time
+//
+// 3. DYNAMIC TIME RANGE (shows data from first to last activity):
+//    - Command Complexity Over Time (command-complexity-chart) - adapts to project duration
+//    - Tool Usage Trends (tool-trends-chart) - adapts to project duration
+//
+// For projects inactive for >30 days, the "Last 30 Days" charts will appear empty
+// while the "All-Time" and "Dynamic" charts will still show historical data.
+
+// Chart instances storage
+let chartInstances = {
+  tokens: null,
+  tools: null,
+  hourlyTokens: null,
+  userInteractions: null,
+  modelUsage: null,
+  errorDistribution: null,
+  commandComplexity: null,
+  commandLength: null,
+  toolTrends: null,
+  dailyCost: null,
+  dailyInterruption: null
+};
+
+// Store full statistics for date range updates
+let fullStatistics = null;
+
+// Date range pickers
+let tokenDatePicker = null;
+let costDatePicker = null;
+
+// Main chart initialization function
+async function initializeCharts(statistics) {
+  // Store full statistics for date range updates
+  fullStatistics = statistics;
+  
+  // Load dynamic pricing before initializing cost charts
+  if (window.PricingUtils && !window.PricingUtils.PRICING_LOAD_ATTEMPTED) {
+    await window.PricingUtils.loadDynamicPricing();
+  }
+  
+  // Initialize date range pickers for 30-day charts
+  initializeDatePickers(statistics);
+    
+  // (Messages over time chart removed)
+    
+  // Token usage over time - LAST 30 DAYS ONLY
+  // Note: This chart will show empty/zero values for projects inactive >30 days
+  renderTokenChart(); // Use the new render function
+    
+  // Tool usage - ALL-TIME DATA
+  // Note: Shows cumulative tool usage across entire project history
+  const toolsData = Object.entries(statistics.tools.usage_counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+    
+  chartInstances.tools = new Chart(document.getElementById('tools-chart'), {
+    type: 'bar',
+    data: {
+      labels: toolsData.map(([tool]) => tool),
+      datasets: [{
+        label: 'Usage Count',
+        data: toolsData.map(([, count]) => count),
+        backgroundColor: '#667eea'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        x: {
+          beginAtZero: true
+        }
+      }
+    }
+  });
+    
+  // (Activity by hour chart removed)
+    
+  // Token usage by hour - ALL-TIME DATA
+  // Note: Shows aggregated hourly patterns across entire project history
+  const hourlyPattern = statistics.hourly_pattern || {};
+  const hourlyTokenData = hourlyPattern.tokens || {};
+  
+  // Extract hourly token arrays
+  const inputTokensByHour = [];
+  const outputTokensByHour = [];
+  
+  for (let hour = 0; hour < 24; hour++) {
+    const hourData = hourlyTokenData[hour] || {};
+    inputTokensByHour.push(hourData.input || 0);
+    outputTokensByHour.push(hourData.output || 0);
+  }
+    
+  chartInstances.hourlyTokens = new Chart(document.getElementById('hourly-tokens-chart'), {
+    type: 'bar',
+    data: {
+      labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+      datasets: [
+        {
+          label: 'Input Tokens',
+          data: inputTokensByHour,
+          backgroundColor: '#667eea'
+        },
+        {
+          label: 'Output Tokens',
+          data: outputTokensByHour,
+          backgroundColor: '#764ba2'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true },
+        y: { 
+          stacked: true,
+          beginAtZero: true
+        }
+      },
+      plugins: {
+        legend: {
+          position: 'bottom'
+        }
+      }
+    }
+  });
+    
+  // User interactions chart (if data available)
+  if (statistics.user_interactions && statistics.user_interactions.tool_count_distribution) {
+    const distributionData = Object.entries(statistics.user_interactions.tool_count_distribution)
+      .sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+        
+    // Get commands with 0 tools
+    const zeroToolCommands = distributionData.find(([count]) => count === '0')?.[1] || 0;
+        
+    // Filter out zero tools and create data for tools >= 1
+    const filteredData = distributionData.filter(([count]) => parseInt(count) > 0);
+        
+    // Find the max number of tools to set x-axis range
+    const maxTools = filteredData.length > 0 
+      ? Math.max(...filteredData.map(([count]) => parseInt(count)))
+      : 0;
+        
+    // Skip chart if no data
+    // if (maxTools === 0 || filteredData.length === 0) {
+    //   const chartElement = document.getElementById('user-interactions-chart');
+    //   if (chartElement && chartElement.parentElement) {
+    //     chartElement.parentElement.style.display = 'none';
+    //   }
+    //   return;
+    // }
+        
+    // Create labels for x-axis (1 to max tools)
+    const labels = Array.from({length: maxTools}, (_, i) => (i + 1).toString());
+        
+    // Calculate total non-interruption commands
+    const totalCommands = Object.values(statistics.user_interactions.tool_count_distribution)
+      .reduce((sum, count) => sum + count, 0);
+        
+    // Create data array as percentages
+    const data = new Array(maxTools).fill(0);
+    filteredData.forEach(([toolCount, commandCount]) => {
+      const index = parseInt(toolCount) - 1; // Adjust index since we start from 1
+      if (index >= 0) {
+        data[index] = (commandCount / totalCommands * 100);
+      }
+    });
+        
+    // Update the chart title to show total N
+    const chartContainer = document.getElementById('user-interactions-chart').parentElement;
+    const chartTitle = chartContainer.querySelector('h2');
+    chartTitle.innerHTML = `User Command Analysis <span style="font-size: 0.9rem; color: #666; font-weight: normal;">(N=${totalCommands})</span>`;
+        
+    // Add info text about zero tools
+    const infoText = document.createElement('div');
+    infoText.style.textAlign = 'center';
+    infoText.style.marginTop = '-15px';
+    infoText.style.marginBottom = '10px';
+    infoText.style.fontSize = '0.9rem';
+    infoText.style.color = '#666';
+    const zeroToolPercentage = ((zeroToolCommands / totalCommands) * 100).toFixed(1);
+    infoText.textContent = `${zeroToolPercentage}% of commands used 0 tools`;
+    chartContainer.insertBefore(infoText, chartContainer.querySelector('canvas'));
+        
+    chartInstances.userInteractions = new Chart(document.getElementById('user-interactions-chart'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Commands',
+          data: data,
+          backgroundColor: '#667eea',
+          borderColor: '#5a67d8',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            title: {
+              display: true,
+              text: 'Number of Tools Used'
+            },
+            ticks: {
+              stepSize: 1
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Percentage of Commands'
+            },
+            beginAtZero: true,
+            ticks: {
+              callback: function(value) {
+                return value.toFixed(1) + '%';
+              }
+            }
+          }
+        },
+        plugins: {
+          legend: {
+            display: false
+          },
+          tooltip: {
+            callbacks: {
+              title: function(context) {
+                const tools = context[0].label;
+                return tools === '1' ? '1 tool' : `${tools} tools`;
+              },
+              label: function(context) {
+                const percentage = context.parsed.y;
+                const toolCount = parseInt(context.label);
+                const commandCount = filteredData.find(([count]) => parseInt(count) === toolCount)?.[1] || 0;
+                return [
+                  `${percentage.toFixed(1)}% of commands`,
+                  `(${commandCount} commands)`
+                ];
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+    
+    
+  // Model usage pie chart
+  if (statistics.user_interactions && statistics.user_interactions.model_distribution) {
+    const modelData = Object.entries(statistics.user_interactions.model_distribution)
+      .filter(([model, count]) => model && model !== 'N/A' && count > 0)
+      .sort((a, b) => b[1] - a[1]);
+        
+    if (modelData.length > 0) {
+      // Check if <synthetic> tag appears in model names
+      const hasSyntheticTag = modelData.some(([model]) => model.includes('<synthetic>'));
+            
+      const colors = [
+        '#667eea', '#48bb78', '#ed8936', '#e53e3e', '#38b2ac', 
+        '#d69e2e', '#805ad5', '#3182ce', '#dd6b20', '#319795'
+      ];
+            
+      chartInstances.modelUsage = new Chart(document.getElementById('model-usage-chart'), {
+        type: 'pie',
+        data: {
+          labels: modelData.map(([model]) => model),
+          datasets: [{
+            data: modelData.map(([_, count]) => count),
+            backgroundColor: colors.slice(0, modelData.length),
+            borderWidth: 2,
+            borderColor: '#fff'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: {
+                padding: 15,
+                font: {
+                  size: 12
+                }
+              }
+            },
+            tooltip: {
+              callbacks: {
+                afterLabel: function(context) {
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const percentage = ((context.parsed / total) * 100).toFixed(1);
+                  return `${percentage}% of commands`;
+                }
+              }
+            }
+          }
+        }
+      });
+            
+      // Show tooltip icon if synthetic tag is present
+      if (hasSyntheticTag) {
+        const tooltipIcon = document.getElementById('synthetic-tooltip-icon');
+        if (tooltipIcon) {
+          tooltipIcon.style.display = 'inline';
+        }
+      }
+    } else {
+      // Hide the chart container if no data
+      document.getElementById('model-usage-chart').parentElement.style.display = 'none';
+    }
+  } else {
+    // Hide the chart container if no data
+    document.getElementById('model-usage-chart').parentElement.style.display = 'none';
+  }
+    
+  // Error Distribution Chart
+  if (statistics.errors && statistics.errors.by_category) {
+    const errorData = Object.entries(statistics.errors.by_category)
+      .filter(([category, count]) => category !== 'User Interruption' && count > 0)
+      .sort((a, b) => b[1] - a[1]);
+        
+    if (errorData.length > 0) {
+      const colors = [
+        '#e53e3e', '#ed8936', '#d69e2e', '#48bb78', '#38b2ac',
+        '#3182ce', '#667eea', '#805ad5', '#d53f8c', '#718096'
+      ];
+            
+      // Ensure we have enough colors
+      const backgroundColors = [];
+      for (let i = 0; i < errorData.length; i++) {
+        backgroundColors.push(colors[i % colors.length]);
+      }
+            
+      chartInstances.errorDistribution = new Chart(document.getElementById('error-distribution-chart'), {
+        type: 'doughnut',
+        data: {
+          labels: errorData.map(([category]) => category),
+          datasets: [{
+            data: errorData.map(([_, count]) => count),
+            backgroundColor: backgroundColors,
+            borderWidth: 2,
+            borderColor: '#fff'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: {
+            padding: {
+              left: 10,
+              right: 10,
+              top: 0,
+              bottom: 10
+            }
+          },
+          plugins: {
+            legend: {
+              position: 'right',
+              align: 'center',  // Center vertically instead of top
+              labels: {
+                padding: 6,  // More compact
+                font: {
+                  size: 10  // Smaller font
+                },
+                boxWidth: 10,  // Smaller color box
+                usePointStyle: true,  // Use circle instead of rectangle
+                generateLabels: function(chart) {
+                  const data = chart.data;
+                  const total = data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                    
+                  return data.labels.map((label, i) => {
+                    const value = data.datasets[0].data[i];
+                    const percentage = ((value / total) * 100).toFixed(1);
+                    // Truncate long labels more aggressively
+                    const maxLength = 20;
+                    const displayLabel = label.length > maxLength ? 
+                      label.substring(0, maxLength - 3) + '...' : label;
+                    return {
+                      text: `${displayLabel} (${percentage}%)`,
+                      fillStyle: data.datasets[0].backgroundColor[i],
+                      strokeStyle: '#fff',  // Use white border for legend items
+                      lineWidth: data.datasets[0].borderWidth,
+                      hidden: false,
+                      index: i
+                    };
+                  });
+                }
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const value = context.parsed;
+                  const percentage = ((value / total) * 100).toFixed(1);
+                  return `${context.label}: ${value} errors (${percentage}%)`;
+                }
+              }
+            },
+            title: {
+              display: true,
+              text: `Total Errors: ${statistics.errors.total} (${(statistics.errors.rate * 100).toFixed(1)}% of all messages)`,
+              font: {
+                size: 14
+              },
+              padding: {
+                top: 0,
+                bottom: 15  // Reduced gap
+              }
+            }
+          }
+        }
+      });
+    } else {
+      // Hide the chart container if no data
+      document.getElementById('error-distribution-chart').parentElement.style.display = 'none';
+    }
+  } else {
+    // Hide the chart container if no data
+    document.getElementById('error-distribution-chart').parentElement.style.display = 'none';
+  }
+    
+  // Command complexity over time
+  createCommandComplexityChart(statistics);
+  
+  // Command length over time
+  createCommandLengthChart(statistics);
+    
+  // Tool usage trends
+  createToolTrendsChart(statistics);
+  
+  // Daily Cost Breakdown with date picker
+  renderCostChart();
+  
+  // Interruption Rate Chart
+  createInterruptionRateChart(statistics);
+  
+  // Error Rate Chart
+  createErrorRateChart(statistics);
+}
+
+// Create command complexity over time chart - DYNAMIC TIME RANGE
+// Note: This chart adapts to show data from first to last project activity,
+// making it suitable for viewing historical data from inactive projects
+function createCommandComplexityChart(statistics) {
+  // Get non-interruption commands
+  const commandDetails = statistics.user_interactions.command_details || [];
+  const nonInterruptionCommands = commandDetails.filter(cmd => !cmd.is_interruption);
+    
+  if (nonInterruptionCommands.length === 0) {
+    // Hide chart if no data
+    document.getElementById('command-complexity-chart').parentElement.style.display = 'none';
+    return;
+  }
+    
+  // Sort commands by timestamp
+  const sortedCommands = nonInterruptionCommands.sort((a, b) => 
+    new Date(a.timestamp) - new Date(b.timestamp)
+  );
+  
+  // Get time range
+  const startTime = new Date(sortedCommands[0].timestamp);
+  const endTime = new Date(sortedCommands[sortedCommands.length - 1].timestamp);
+  const totalDuration = endTime - startTime;
+  const totalDays = totalDuration / (24 * 60 * 60 * 1000);
+  
+  // Determine interval: 4 hours if < 10 days, otherwise daily
+  const useHourlyInterval = totalDays < 10;
+  const intervalMs = useHourlyInterval ? 4 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  
+  // Create buckets using Map to preserve order
+  const buckets = new Map();
+  
+  // Helper to get bucket key
+  const getBucketKey = (date) => {
+    if (useHourlyInterval) {
+      // Round to nearest 4-hour interval
+      const hours = Math.floor(date.getHours() / 4) * 4;
+      date.setHours(hours, 0, 0, 0);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hours).padStart(2, '0')}`;
+    } else {
+      // Daily bucket
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+  };
+  
+  // Group commands into buckets
+  sortedCommands.forEach(cmd => {
+    const cmdDate = new Date(cmd.timestamp);
+    const bucketKey = getBucketKey(cmdDate);
+    
+    if (!buckets.has(bucketKey)) {
+      buckets.set(bucketKey, {
+        commands: [],
+        timestamp: bucketKey
+      });
+    }
+    
+    buckets.get(bucketKey).commands.push(cmd);
+  });
+  
+  // Sort bucket keys and calculate cumulative averages
+  const sortedBucketKeys = Array.from(buckets.keys()).sort();
+  
+  let totalCommands = 0;
+  let totalTools = 0;
+  let totalSteps = 0;
+  
+  const bucketData = sortedBucketKeys.map(bucketKey => {
+    const bucket = buckets.get(bucketKey);
+    
+    // Add commands from this bucket to cumulative totals
+    bucket.commands.forEach(cmd => {
+      totalCommands++;
+      totalTools += cmd.tools_used || 0;
+      totalSteps += cmd.assistant_steps || 0;
+    });
+    
+    // Parse bucket timestamp for display
+    let displayTime;
+    if (useHourlyInterval) {
+      const [year, month, day, hour] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day, hour);
+    } else {
+      const [year, month, day] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day);
+    }
+    
+    return {
+      time: displayTime,
+      cumulativeAvgTools: totalCommands > 0 ? totalTools / totalCommands : 0,
+      cumulativeAvgSteps: totalCommands > 0 ? totalSteps / totalCommands : 0,
+      totalCommands: totalCommands,
+      bucketCommands: bucket.commands.length
+    };
+  });
+  
+  // Limit to last 60 data points
+  const limitedBucketData = bucketData.slice(-60);
+    
+  // Format labels based on interval type
+  const formatLabel = (date) => {
+    if (useHourlyInterval) {
+      // For 4-hour intervals, show date and time
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true
+      });
+    } else {
+      // For daily intervals, just show date
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    }
+  };
+    
+  // Convert to arrays for Chart.js (already filtered by activity)
+  const labels = limitedBucketData.map(d => formatLabel(d.time));
+  const avgTools = limitedBucketData.map(d => d.cumulativeAvgTools);
+  const avgSteps = limitedBucketData.map(d => d.cumulativeAvgSteps);
+    
+  // Create sparse labels to avoid clutter
+  const sparseLabels = labels.map((label, index) => {
+    if (labels.length <= 15) {
+      // Show all labels if we have few data points
+      return label;
+    } else {
+      // For many data points, show every Nth label
+      const step = Math.ceil(labels.length / 15);
+      if (index % step === 0 || index === labels.length - 1) {
+        return label;
+      }
+      return '';
+    }
+  });
+    
+  // Calculate min/max for better scaling
+  const allValues = [...avgTools, ...avgSteps];
+  const minValue = Math.min(...allValues);
+  const maxValue = Math.max(...allValues);
+  const range = maxValue - minValue;
+    
+  // Calculate smart bounds
+  let yMin, yMax;
+  if (range < 2) {
+    // For very small ranges, add fixed padding
+    yMin = Math.max(0, minValue - 1);
+    yMax = maxValue + 1;
+  } else {
+    // For larger ranges, add percentage padding
+    const padding = range * 0.2; // 20% padding
+    yMin = Math.max(0, minValue - padding);
+    yMax = maxValue + padding;
+  }
+    
+  // Create the Command Complexity chart
+  chartInstances.commandComplexity = makeDynamicIntervalChart({
+    canvasId: 'command-complexity-chart',
+    labels:   sparseLabels,
+    datasets: [
+      { label: 'avg. tools/cmd', data: avgTools,
+        ...withColor('blue'),  tension: 0.3, pointRadius: 2, pointHoverRadius: 5, yAxisID: 'y' },
+      { label: 'avg. steps/cmd', data: avgSteps,
+        ...withColor('amber'), tension: 0.3, pointRadius: 2, pointHoverRadius: 5, yAxisID: 'y' }
+    ],
+    yScales: {
+      y: {
+        type: 'linear', position: 'left',
+        beginAtZero: false, min: yMin, max: yMax,
+        ticks: { precision: 1 },
+        title: { display: true, text: 'Average Count' }
+      }
+    },
+    tooltipExtra: {
+      afterTitle(ctx) {
+        const d = limitedBucketData[ctx[0].dataIndex];
+        return [
+          `Total commands: ${d.totalCommands}`,
+          `Commands in period: ${d.bucketCommands}`
+        ];
+      },
+      label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`
+    },
+    optionOverrides: {
+      plugins: { legend: { position: 'top' } }
+    },
+    limitedBucketData: limitedBucketData,
+    useHourlyInterval: useHourlyInterval
+  });
+}
+
+// Create command length chart - DYNAMIC TIME RANGE
+function createCommandLengthChart(statistics) {
+  // Get command details sorted by timestamp
+  const commandDetails = statistics.user_interactions.command_details || [];
+  const nonInterruptionCommands = commandDetails.filter(cmd => !cmd.is_interruption);
+  
+  if (nonInterruptionCommands.length === 0) {
+    // Hide chart if no data
+    document.getElementById('command-length-chart').parentElement.style.display = 'none';
+    return;
+  }
+  
+  // Sort by timestamp
+  const sortedCommands = nonInterruptionCommands.sort((a, b) => 
+    new Date(a.timestamp) - new Date(b.timestamp)
+  );
+  
+  // Get time range
+  const startTime = new Date(sortedCommands[0].timestamp);
+  const endTime = new Date(sortedCommands[sortedCommands.length - 1].timestamp);
+  const totalDuration = endTime - startTime;
+  const totalDays = totalDuration / (24 * 60 * 60 * 1000);
+  
+  // Determine interval
+  const useHourlyInterval = totalDays < 10;
+  
+  // Create buckets using Map to preserve order
+  const buckets = new Map();
+  
+  // Helper to get bucket key
+  const getBucketKey = (date) => {
+    if (useHourlyInterval) {
+      // Round to nearest 4-hour interval
+      const hours = Math.floor(date.getHours() / 4) * 4;
+      date.setHours(hours, 0, 0, 0);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hours).padStart(2, '0')}`;
+    } else {
+      // Daily bucket
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+  };
+  
+  // Group commands into buckets
+  sortedCommands.forEach(cmd => {
+    const cmdDate = new Date(cmd.timestamp);
+    const bucketKey = getBucketKey(cmdDate);
+    
+    if (!buckets.has(bucketKey)) {
+      buckets.set(bucketKey, {
+        commands: [],
+        timestamp: bucketKey
+      });
+    }
+    
+    buckets.get(bucketKey).commands.push(cmd);
+  });
+  
+  // Sort bucket keys and calculate averages
+  const sortedBucketKeys = Array.from(buckets.keys()).sort();
+  
+  const bucketData = sortedBucketKeys.map(bucketKey => {
+    const bucket = buckets.get(bucketKey);
+    
+    // Calculate average tokens for this bucket
+    const totalTokens = bucket.commands.reduce((sum, cmd) => sum + (cmd.estimated_tokens || 0), 0);
+    const avgTokens = bucket.commands.length > 0 ? totalTokens / bucket.commands.length : 0;
+    
+    // Parse bucket timestamp for display
+    let displayTime;
+    if (useHourlyInterval) {
+      const [year, month, day, hour] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day, hour);
+    } else {
+      const [year, month, day] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day);
+    }
+    
+    return {
+      time: displayTime,
+      avgTokens: avgTokens,
+      commandCount: bucket.commands.length,
+      timestamp: bucketKey  // Add timestamp for makeDynamicIntervalChart
+    };
+  });
+  
+  // Limit to last 60 data points
+  const limitedBucketData = bucketData.slice(-60);
+  
+  // Format labels based on interval type
+  const formatLabel = (date) => {
+    if (useHourlyInterval) {
+      // For 4-hour intervals, show date and time
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true
+      });
+    } else {
+      // For daily intervals, just show date
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    }
+  };
+  
+  // Create sparse labels to avoid clutter
+  const labels = limitedBucketData.map(d => formatLabel(d.time));
+  const sparseLabels = labels.map((label, index) => {
+    if (labels.length <= 15) {
+      // Show all labels if we have few data points
+      return label;
+    } else {
+      // For many data points, show every Nth label
+      const step = Math.ceil(labels.length / 15);
+      if (index % step === 0 || index === labels.length - 1) {
+        return label;
+      }
+      return '';
+    }
+  });
+  
+  // Extract average token lengths
+  const avgTokens = limitedBucketData.map(d => d.avgTokens);
+  
+  // Find min/max for Y-axis
+  const allTokens = avgTokens.filter(v => v !== null && v !== 0);
+  const minTokens = Math.min(...allTokens);
+  const maxTokens = Math.max(...allTokens);
+  
+  // Y-axis range with padding
+  let yMin = 0;
+  let yMax = 50; // Default max
+  
+  if (allTokens.length > 0) {
+    const range = maxTokens - minTokens;
+    if (range < 10) {
+      // Small range - use tighter bounds
+      yMin = Math.max(0, minTokens - 5);
+      yMax = maxTokens + 5;
+    } else {
+      // Larger range - use percentage padding
+      const padding = range * 0.2;
+      yMin = Math.max(0, minTokens - padding);
+      yMax = maxTokens + padding;
+    }
+  }
+  
+  // Create the Command Length chart
+  chartInstances.commandLength = makeDynamicIntervalChart({
+    canvasId: 'command-length-chart',
+    labels: sparseLabels,
+    datasets: [
+      { 
+        label: 'avg. tokens/cmd', 
+        data: avgTokens,
+        ...withColor('blue'), 
+        tension: 0.3, 
+        pointRadius: 2, 
+        pointHoverRadius: 5
+      }
+    ],
+    yScales: {
+      y: {
+        type: 'linear',
+        position: 'left',
+        beginAtZero: false,
+        min: yMin,
+        max: yMax,
+        ticks: { precision: 0 },
+        title: { display: true, text: 'Average Tokens' }
+      }
+    },
+    tooltipExtra: {
+      afterTitle(ctx) {
+        const d = limitedBucketData[ctx[0].dataIndex];
+        return [
+          `Commands in period: ${d.commandCount}`,
+          `Average tokens: ${d.avgTokens.toFixed(1)}`
+        ];
+      },
+      label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}`
+    },
+    optionOverrides: {
+      plugins: { legend: { display: false } }
+    },
+    limitedBucketData: limitedBucketData,
+    useHourlyInterval: useHourlyInterval
+  });
+}
+
+// Create tool usage trends chart - DYNAMIC TIME RANGE
+// Note: This chart adapts to show data from first to last project activity,
+// making it suitable for viewing historical data from inactive projects
+function createToolTrendsChart(statistics) {
+  // Get command details sorted by timestamp
+  const commandDetails = statistics.user_interactions.command_details || [];
+  const nonInterruptionCommands = commandDetails.filter(cmd => !cmd.is_interruption);
+    
+  if (nonInterruptionCommands.length === 0) {
+    // Hide chart if no data
+    document.getElementById('tool-trends-chart').parentElement.style.display = 'none';
+    return;
+  }
+    
+  // Sort by timestamp
+  const sortedCommands = nonInterruptionCommands.sort((a, b) => 
+    new Date(a.timestamp) - new Date(b.timestamp)
+  );
+    
+  // Count tool usage across all commands to find top tools
+  const toolCounts = {};
+  sortedCommands.forEach(cmd => {
+    if (cmd.tool_names && Array.isArray(cmd.tool_names)) {
+      cmd.tool_names.forEach(toolName => {
+        toolCounts[toolName] = (toolCounts[toolName] || 0) + 1;
+      });
+    }
+  });
+    
+  // Get top tools excluding "Unknown"
+  const topTools = Object.entries(toolCounts)
+    .filter(([toolName]) => toolName !== 'Unknown')
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([toolName]) => toolName);
+    
+  // Get time range
+  const startTime = new Date(sortedCommands[0].timestamp);
+  const endTime = new Date(sortedCommands[sortedCommands.length - 1].timestamp);
+  const totalDuration = endTime - startTime;
+  const totalDays = totalDuration / (24 * 60 * 60 * 1000);
+    
+  // Determine interval: 4 hours if < 10 days, otherwise daily
+  const useHourlyInterval = totalDays < 10;
+  const intervalMs = useHourlyInterval ? 4 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    
+  // Create buckets
+  const buckets = new Map();
+    
+  // Helper to get bucket key
+  const getBucketKey = (date) => {
+    if (useHourlyInterval) {
+      const hours = Math.floor(date.getHours() / 4) * 4;
+      date.setHours(hours, 0, 0, 0);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hours).padStart(2, '0')}`;
+    } else {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+  };
+    
+  // Group commands into buckets
+  sortedCommands.forEach(cmd => {
+    const cmdDate = new Date(cmd.timestamp);
+    const bucketKey = getBucketKey(cmdDate);
+        
+    if (!buckets.has(bucketKey)) {
+      buckets.set(bucketKey, {
+        commands: [],
+        timestamp: bucketKey
+      });
+    }
+        
+    buckets.get(bucketKey).commands.push(cmd);
+  });
+    
+  // Sort bucket keys and calculate cumulative averages per tool
+  const sortedBucketKeys = Array.from(buckets.keys()).sort();
+    
+  // Track cumulative counts
+  let totalCommands = 0;
+  const cumulativeToolCounts = {};
+  topTools.forEach(tool => {
+    cumulativeToolCounts[tool] = 0;
+  });
+    
+  const bucketData = sortedBucketKeys.map(bucketKey => {
+    const bucket = buckets.get(bucketKey);
+        
+    // Update cumulative counts
+    bucket.commands.forEach(cmd => {
+      totalCommands++;
+      if (cmd.tool_names && Array.isArray(cmd.tool_names)) {
+        cmd.tool_names.forEach(toolName => {
+          if (cumulativeToolCounts.hasOwnProperty(toolName)) {
+            cumulativeToolCounts[toolName]++;
+          }
+        });
+      }
+    });
+        
+    // Calculate cumulative average for each tool
+    const toolData = {};
+    topTools.forEach(tool => {
+      toolData[tool] = totalCommands > 0 ? cumulativeToolCounts[tool] / totalCommands : 0;
+    });
+        
+    // Parse bucket timestamp
+    let displayTime;
+    if (useHourlyInterval) {
+      const [year, month, day, hour] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day, hour);
+    } else {
+      const [year, month, day] = bucketKey.split('-').map(Number);
+      displayTime = new Date(year, month - 1, day);
+    }
+        
+    return {
+      timestamp: displayTime,
+      toolData: toolData,
+      totalCommands: totalCommands,
+      commandsInPeriod: bucket.commands.length
+    };
+  });
+    
+  // Limit to last 60 data points
+  const limitedBucketData = bucketData.slice(-60);
+    
+  // Format labels
+  const formatLabel = (date) => {
+    if (useHourlyInterval) {
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true
+      });
+    } else {
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    }
+  };
+    
+  // Create labels array
+  const labels = limitedBucketData.map(d => formatLabel(d.timestamp));
+    
+  // Create sparse labels to avoid clutter
+  const sparseLabels = labels.map((label, index) => {
+    if (labels.length <= 15) {
+      return label;
+    } else {
+      const step = Math.ceil(labels.length / 15);
+      if (index % step === 0 || index === labels.length - 1) {
+        return label;
+      }
+      return '';
+    }
+  });
+    
+  // Define colors for each tool
+  const toolColors = {
+    'Read': '#667eea',
+    'Edit': '#48bb78',
+    'Write': '#ed8936',
+    'Bash': '#e53e3e',
+    'Grep': '#9f7aea',
+    'Task': '#38b2ac',
+    'MultiEdit': '#f687b3',
+    'TodoWrite': '#fc8181',
+    'LS': '#63b3ed',
+    'Glob': '#fbd38d'
+  };
+    
+  // Create datasets for each tool
+  const datasets = topTools.map(toolName => {
+    const data = limitedBucketData.map(bucket => bucket.toolData[toolName]);
+        
+    return {
+      label: toolName,
+      data: data,
+      borderColor: toolColors[toolName] || '#718096',
+      backgroundColor: 'transparent',
+      tension: 0.3,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 2
+    };
+  });
+    
+  // Create the Tool Usage Trends chart
+  chartInstances.toolTrends = makeDynamicIntervalChart({
+    canvasId: 'tool-trends-chart',
+    labels:   sparseLabels,
+    datasets,               // your pre-built per-tool dataset array
+    yScales: {
+      y: {
+        type: 'linear', position: 'left', beginAtZero: true,
+        ticks: { callback: v => v.toFixed(2) },
+        title: { display: true, text: 'Average Uses per Command' }
+      }
+    },
+    tooltipExtra: {
+      afterTitle(ctx) {
+        const b = limitedBucketData[ctx[0].dataIndex];
+        return [
+          `Total commands: ${b.totalCommands}`,
+          `Commands in period: ${b.commandsInPeriod}`
+        ];
+      },
+      label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)} / cmd`
+    },
+    limitedBucketData: limitedBucketData,
+    useHourlyInterval: useHourlyInterval
+  });
+}
+
+// Create interruption rate trend chart
+function createInterruptionRateChart(statistics) {
+  const interactionDetails = statistics.user_interactions?.command_details || [];
+  const nonInterruptionCommands = interactionDetails.filter(cmd => !cmd.is_interruption && cmd.timestamp);
+  
+  if (nonInterruptionCommands.length > 0) {
+    // Sort by timestamp
+    const sortedCommands = nonInterruptionCommands.sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+    
+    // Get time range
+    const startTime = new Date(sortedCommands[0].timestamp);
+    const endTime = new Date(sortedCommands[sortedCommands.length - 1].timestamp);
+    const totalDuration = endTime - startTime;
+    const totalDays = totalDuration / (24 * 60 * 60 * 1000);
+    
+    // Determine interval: 4 hours if < 10 days, otherwise daily
+    const useHourlyInterval = totalDays < 10;
+    
+    // Create time buckets
+    const buckets = new Map();
+    
+    // Helper to get bucket key
+    const getBucketKey = (date) => {
+      if (useHourlyInterval) {
+        const hours = Math.floor(date.getHours() / 4) * 4;
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hours).padStart(2, '0')}`;
+      } else {
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      }
+    };
+    
+    // Group commands into buckets
+    sortedCommands.forEach(cmd => {
+      const cmdDate = new Date(cmd.timestamp);
+      const bucketKey = getBucketKey(cmdDate);
+      
+      if (!buckets.has(bucketKey)) {
+        buckets.set(bucketKey, {
+          commands: 0,
+          interrupted: 0
+        });
+      }
+      
+      buckets.get(bucketKey).commands++;
+      if (cmd.followed_by_interruption) {
+        buckets.get(bucketKey).interrupted++;
+      }
+    });
+    
+    // Sort bucket keys and calculate data
+    const sortedBucketKeys = Array.from(buckets.keys()).sort();
+    const bucketData = sortedBucketKeys.map(bucketKey => {
+      const bucket = buckets.get(bucketKey);
+      return {
+        timestamp: bucketKey,
+        commands: bucket.commands,
+        interrupted: bucket.interrupted,
+        rate: bucket.commands > 0 ? (bucket.interrupted / bucket.commands) * 100 : 0
+      };
+    });
+    
+    // Limit to last 60 data points
+    const limitedBucketData = bucketData.slice(-60);
+    
+    // Format labels
+    const formatLabel = (timestamp) => {
+      let date;
+      if (useHourlyInterval) {
+        const [year, month, day, hour] = timestamp.split('-').map(Number);
+        date = new Date(year, month - 1, day, hour);
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric',
+          hour: 'numeric',
+          hour12: true
+        });
+      } else {
+        const [year, month, day] = timestamp.split('-').map(Number);
+        date = new Date(year, month - 1, day);
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric' 
+        });
+      }
+    };
+    
+    // Create arrays for chart
+    const labels = limitedBucketData.map(d => formatLabel(d.timestamp));
+    const interruptionRates = limitedBucketData.map(d => d.rate);
+    const userCommands = limitedBucketData.map(d => d.commands);
+    const interruptedCommands = limitedBucketData.map(d => d.interrupted);
+    
+    // Create sparse labels
+    const sparseLabels = labels.map((label, index) => {
+      if (labels.length <= 15) {
+        return label;
+      } else {
+        const step = Math.ceil(labels.length / 15);
+        if (index % step === 0 || index === labels.length - 1) {
+          return label;
+        }
+        return '';
+      }
+    });
+    
+    chartInstances.interruptionRate = makeDynamicIntervalChart({
+      canvasId: 'interruption-rate-trend-chart',
+      labels:   sparseLabels,
+      datasets: [
+        { label: 'Interruption Rate (%)', data: interruptionRates,
+          ...withColor('red'),    tension: 0.1, yAxisID: 'y-rate' },
+        { label: 'User Commands', data: userCommands,
+          ...withColor('blue'),   tension: 0.1, yAxisID: 'y-count', hidden: true },
+        { label: 'Interrupted Commands', data: interruptedCommands,
+          ...withColor('orange'), tension: 0.1, yAxisID: 'y-count', hidden: true }
+      ],
+      yScales: {
+        'y-rate': {
+          type: 'linear', position: 'left', beginAtZero: true,
+          max: Math.max(100, Math.ceil(Math.max(...interruptionRates) * 1.1)),
+          ticks: { callback: v => v + '%' },
+          title: { display: true, text: 'Interruption Rate (%)' }
+        },
+        'y-count': {
+          type: 'linear', position: 'right', beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Command Count' }
+        }
+      },
+      tooltipExtra: {
+        afterLabel(ctx) {
+          if (ctx.datasetIndex !== 0) {return '';}
+          const i = ctx.dataIndex;
+          return `${interruptedCommands[i]} of ${userCommands[i]} commands interrupted`;
+        }
+      },
+      limitedBucketData: limitedBucketData,
+      useHourlyInterval: useHourlyInterval
+    });
+  } else {
+    // Hide the chart container if no data
+    const chartElement = document.getElementById('interruption-rate-trend-chart');
+    if (chartElement && chartElement.parentElement) {
+      chartElement.parentElement.style.display = 'none';
+    }
+  }
+}
+
+// Create error rate chart
+function createErrorRateChart(statistics) {
+  const assistantDetails = statistics.errors.assistant_details || [];
+  const assistantMessages = assistantDetails.filter(msg => msg.timestamp);
+  
+  if (assistantMessages.length > 0) {
+    // Get time range
+    const sortedMessages = assistantMessages.sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+    const startTime = new Date(sortedMessages[0].timestamp);
+    const endTime = new Date(sortedMessages[sortedMessages.length - 1].timestamp);
+    const totalDuration = endTime - startTime;
+    const totalDays = totalDuration / (24 * 60 * 60 * 1000);
+    
+    // Determine interval: 4 hours if < 10 days, otherwise daily
+    const useHourlyInterval = totalDays < 10;
+    
+    // Create time buckets
+    const buckets = new Map();
+    
+    // Helper to get bucket key
+    const getBucketKey = (date) => {
+      if (useHourlyInterval) {
+        const hours = Math.floor(date.getHours() / 4) * 4;
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hours).padStart(2, '0')}`;
+      } else {
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      }
+    };
+    
+    // Group messages into buckets
+    sortedMessages.forEach(msg => {
+      const msgDate = new Date(msg.timestamp);
+      const bucketKey = getBucketKey(msgDate);
+      
+      if (!buckets.has(bucketKey)) {
+        buckets.set(bucketKey, {
+          assistantMessages: 0,
+          errors: 0
+        });
+      }
+      
+      buckets.get(bucketKey).assistantMessages++;
+      if (msg.is_error) {
+        buckets.get(bucketKey).errors++;
+      }
+    });
+    
+    // Sort bucket keys and calculate data
+    const sortedBucketKeys = Array.from(buckets.keys()).sort();
+    const bucketData = sortedBucketKeys.map(bucketKey => {
+      const bucket = buckets.get(bucketKey);
+      return {
+        timestamp: bucketKey,
+        assistantMessages: bucket.assistantMessages,
+        errors: bucket.errors,
+        rate: bucket.assistantMessages > 0 ? (bucket.errors / bucket.assistantMessages) * 100 : 0
+      };
+    });
+    
+    // Limit to last 60 data points
+    const limitedBucketData = bucketData.slice(-60);
+    
+    // Format labels
+    const formatLabel = (timestamp) => {
+      let date;
+      if (useHourlyInterval) {
+        const [year, month, day, hour] = timestamp.split('-').map(Number);
+        date = new Date(year, month - 1, day, hour);
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric',
+          hour: 'numeric',
+          hour12: true
+        });
+      } else {
+        const [year, month, day] = timestamp.split('-').map(Number);
+        date = new Date(year, month - 1, day);
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric' 
+        });
+      }
+    };
+    
+    // Create arrays for chart
+    const labels = limitedBucketData.map(d => formatLabel(d.timestamp));
+    const errorRates = limitedBucketData.map(d => d.rate);
+    const errorCounts = limitedBucketData.map(d => d.errors);
+    const assistantCounts = limitedBucketData.map(d => d.assistantMessages);
+    
+    // Create sparse labels
+    const sparseLabels = labels.map((label, index) => {
+      if (labels.length <= 15) {
+        return label;
+      } else {
+        const step = Math.ceil(labels.length / 15);
+        if (index % step === 0 || index === labels.length - 1) {
+          return label;
+        }
+        return '';
+      }
+    });
+    
+    chartInstances.errorRate = makeDynamicIntervalChart({
+      canvasId: 'error-rate-trend-chart',
+      labels: sparseLabels,
+      datasets: [
+        { 
+          label: 'Error Rate (%)', 
+          data: errorRates,
+          ...withColor('red'), 
+          tension: 0.1, 
+          yAxisID: 'y-rate' 
+        },
+        { 
+          label: 'Errors', 
+          data: errorCounts,
+          ...withColor('orange'), 
+          tension: 0.1, 
+          yAxisID: 'y-count', 
+          hidden: true 
+        },
+        { 
+          label: 'Assistant Messages', 
+          data: assistantCounts,
+          ...withColor('blue'), 
+          tension: 0.1, 
+          yAxisID: 'y-count', 
+          hidden: true 
+        }
+      ],
+      yScales: {
+        'y-rate': {
+          type: 'linear', 
+          position: 'left', 
+          beginAtZero: true,
+          max: Math.max(10, Math.ceil(Math.max(...errorRates) * 1.1)),
+          ticks: { callback: v => v.toFixed(1) + '%' },
+          title: { display: true, text: 'Error Rate (%)' }
+        },
+        'y-count': {
+          type: 'linear', 
+          position: 'right', 
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Message Count' }
+        }
+      },
+      tooltipExtra: {
+        afterLabel(ctx) {
+          if (ctx.datasetIndex !== 0) {return '';}
+          const i = ctx.dataIndex;
+          return `${errorCounts[i]} of ${assistantCounts[i]} assistant messages had errors`;
+        }
+      },
+      limitedBucketData: limitedBucketData,
+      useHourlyInterval: useHourlyInterval
+    });
+  } else {
+    // Hide the chart container if no data
+    const chartElement = document.getElementById('error-rate-trend-chart');
+    if (chartElement && chartElement.parentElement) {
+      chartElement.parentElement.style.display = 'none';
+    }
+  }
+}
+
+// Initialize date range pickers for 30-day charts
+function initializeDatePickers(statistics) {
+  // Get min/max dates from the data
+  const dateRange = statistics.overview.date_range;
+  let minDate = null;
+  let maxDate = new Date();
+  
+  if (dateRange && dateRange.start) {
+    minDate = new Date(dateRange.start);
+  }
+  
+  // Initialize token chart date picker
+  tokenDatePicker = new DateRangePicker({
+    containerId: 'token-date-picker',
+    minDate: minDate,
+    maxDate: maxDate,
+    defaultDays: 30,
+    maxDays: window.maxDateRangeDays || 30,
+    onRangeChange: (range) => {
+      renderTokenChart(range.startDate, range.endDate);
+    }
+  });
+  
+  // Initialize cost chart date picker
+  costDatePicker = new DateRangePicker({
+    containerId: 'cost-date-picker',
+    minDate: minDate,
+    maxDate: maxDate,
+    defaultDays: 30,
+    maxDays: window.maxDateRangeDays || 30,
+    onRangeChange: (range) => {
+      renderCostChart(range.startDate, range.endDate);
+    }
+  });
+}
+
+// Render token usage chart with date range support
+function renderTokenChart(startDate, endDate) {
+  if (!fullStatistics || !fullStatistics.daily_stats) {return;}
+  
+  const dailyStats = fullStatistics.daily_stats;
+  const allDates = Object.keys(dailyStats).sort();
+  
+  // If no date range specified, use last 30 days
+  if (!startDate || !endDate) {
+    const today = new Date();
+    endDate = today.toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(today);
+    thirtyDaysAgo.setDate(today.getDate() - 29);
+    startDate = thirtyDaysAgo.toISOString().split('T')[0];
+  }
+  
+  // Filter data to the selected range
+  const filteredDates = allDates.filter(date => date >= startDate && date <= endDate);
+  
+  // Prepare data for the chart
+  const labels = [];
+  const inputTokens = [];
+  const outputTokens = [];
+  const cacheCreationTokens = [];
+  const cacheReadTokens = [];
+  
+  filteredDates.forEach(date => {
+    const data = dailyStats[date];
+    // Parse the date string directly to avoid timezone issues
+    const [year, month, day] = date.split('-');
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthName = monthNames[parseInt(month) - 1];
+    labels.push(`${monthName} ${parseInt(day)}`);
+    
+    const tokens = data.tokens || {};
+    inputTokens.push(tokens.input || 0);
+    outputTokens.push(tokens.output || 0);
+    cacheCreationTokens.push(tokens.cache_creation || 0);
+    cacheReadTokens.push(tokens.cache_read || 0);
+  });
+  
+  // Destroy existing chart if it exists
+  if (chartInstances.tokens) {
+    chartInstances.tokens.destroy();
+  }
+  
+  // Create the token usage chart
+  chartInstances.tokens = new Chart(document.getElementById('tokens-chart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Input Tokens',
+          data: inputTokens,
+          backgroundColor: '#667eea',
+          stack: 'tokens'
+        },
+        {
+          label: 'Output Tokens',
+          data: outputTokens,
+          backgroundColor: '#764ba2',
+          stack: 'tokens'
+        },
+        {
+          label: 'Cache Creation',
+          data: cacheCreationTokens,
+          backgroundColor: '#48bb78',
+          stack: 'tokens',
+          hidden: true  // Hide by default
+        },
+        {
+          label: 'Cache Read',
+          data: cacheReadTokens,
+          backgroundColor: '#38b2ac',
+          stack: 'tokens',
+          hidden: true  // Hide by default
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          stacked: true,
+          ticks: {
+            maxRotation: 45,
+            minRotation: 45
+          }
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          ticks: {
+            callback: function(value) {
+              if (value >= 1000000) {
+                return (value / 1000000).toFixed(1) + 'M';
+              } else if (value >= 1000) {
+                return (value / 1000).toFixed(0) + 'K';
+              }
+              return value;
+            }
+          },
+          title: {
+            display: true,
+            text: 'Tokens'
+          }
+        }
+      },
+      plugins: {
+        legend: {
+          position: 'bottom'
+        },
+        tooltip: {
+          callbacks: {
+            title: function(context) {
+              const index = context[0].dataIndex;
+              const date = filteredDates[index];
+              const [year, month, day] = date.split('-');
+              const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                'July', 'August', 'September', 'October', 'November', 'December'];
+              const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+              // Create date at noon to avoid timezone issues
+              const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), 12);
+              const dayName = dayNames[dateObj.getDay()];
+              const monthName = monthNames[parseInt(month) - 1];
+              return `${dayName}, ${monthName} ${parseInt(day)}, ${year}`;
+            },
+            label: function(context) {
+              const value = context.parsed.y;
+              const label = context.dataset.label;
+              return `${label}: ${value.toLocaleString()}`;
+            },
+            footer: function(tooltipItems) {
+              let total = 0;
+              tooltipItems.forEach(item => {
+                total += item.parsed.y;
+              });
+              return `Total: ${total.toLocaleString()}`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+// Render cost chart with date range support
+function renderCostChart(startDate, endDate) {
+  if (!fullStatistics || !fullStatistics.daily_stats) {return;}
+  
+  // Check if pricing is available
+  const pricingError = window.PricingUtils ? window.PricingUtils.getPricingError() : null;
+  const chartContainer = document.getElementById('daily-cost-chart');
+  
+  if (pricingError && chartContainer) {
+    // Show error message instead of chart
+    const chartParent = chartContainer.parentElement;
+    chartParent.innerHTML = `
+      <h2>Daily Cost Breakdown</h2>
+      <div style="text-align: center; padding: 3rem; color: #666;">
+        <p style="font-size: 1.1rem; margin-bottom: 1rem;">${pricingError}</p>
+        <button onclick="PricingUtils.refreshPricing().then(() => refreshData())" 
+                style="padding: 0.5rem 1rem; background: #667eea; color: white; border: none; 
+                       border-radius: 4px; cursor: pointer;">
+          Try Again
+        </button>
+      </div>
+    `;
+    return;
+  }
+  
+  const dailyStats = fullStatistics.daily_stats;
+  const allDates = Object.keys(dailyStats).sort();
+  
+  // If no date range specified, use last 30 days
+  if (!startDate || !endDate) {
+    const today = new Date();
+    endDate = today.toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(today);
+    thirtyDaysAgo.setDate(today.getDate() - 29);
+    startDate = thirtyDaysAgo.toISOString().split('T')[0];
+  }
+  
+  // Filter data to the selected range
+  const filteredDates = allDates.filter(date => date >= startDate && date <= endDate);
+  
+  // Make sure the chart container is visible
+  document.getElementById('daily-cost-chart').parentElement.style.display = '';
+  
+  // Prepare data for the chart
+  const labels = [];
+  const inputCosts = [];
+  const outputCosts = [];
+  const cacheCosts = [];
+  
+  filteredDates.forEach(date => {
+    const data = dailyStats[date];
+    // Parse the date string directly to avoid timezone issues
+    const [year, month, day] = date.split('-');
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthName = monthNames[parseInt(month) - 1];
+    labels.push(`${monthName} ${parseInt(day)}`);
+    
+    const cost = data.cost || { total: 0 };
+    
+    // Calculate component costs
+    let dayInputCost = 0;
+    let dayOutputCost = 0;
+    let dayCacheCost = 0;
+    
+    if (cost.by_model) {
+      Object.values(cost.by_model).forEach(modelCost => {
+        dayInputCost += modelCost.input_cost || 0;
+        dayOutputCost += modelCost.output_cost || 0;
+        dayCacheCost += (modelCost.cache_creation_cost || 0) + (modelCost.cache_read_cost || 0);
+      });
+    }
+    
+    inputCosts.push(dayInputCost);
+    outputCosts.push(dayOutputCost);
+    cacheCosts.push(dayCacheCost);
+  });
+  
+  // Calculate total project cost from ALL data (not just selected range)
+  let projectTotalCost = 0;
+  allDates.forEach(date => {
+    const data = dailyStats[date];
+    projectTotalCost += (data.cost && data.cost.total) || 0;
+  });
+  
+  // Update the total cost text
+  // const totalCostElement = document.getElementById('total-cost-text');
+  // if (totalCostElement) {
+  //   const finalTotal = projectTotalCost;
+  //   if (finalTotal < 0.01) {
+  //     totalCostElement.textContent = `Total pay-as-you-go cost = $${finalTotal.toFixed(4)}`;
+  //   } else if (finalTotal < 1) {
+  //     totalCostElement.textContent = `Total pay-as-you-go cost = $${finalTotal.toFixed(3)}`;
+  //   } else {
+  //     totalCostElement.textContent = `Total pay-as-you-go cost = $${finalTotal.toFixed(2)}`;
+  //   }
+  // }
+  
+  // Destroy existing chart if it exists
+  if (chartInstances.dailyCost) {
+    chartInstances.dailyCost.destroy();
+  }
+  
+  // Create the cost chart
+  chartInstances.dailyCost = new Chart(document.getElementById('daily-cost-chart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Input Tokens',
+          data: inputCosts,
+          backgroundColor: '#667eea',
+          stack: 'cost'
+        },
+        {
+          label: 'Output Tokens',
+          data: outputCosts,
+          backgroundColor: '#764ba2',
+          stack: 'cost'
+        },
+        {
+          label: 'Cache Operations',
+          data: cacheCosts,
+          backgroundColor: '#48bb78',
+          stack: 'cost'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: {
+        padding: {
+          bottom: 20,
+          left: 10,
+          right: 10
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: {
+            maxRotation: 45,
+            minRotation: 45
+          }
+        },
+        y: {
+          stacked: true,
+          position: 'left',
+          ticks: {
+            callback: function(value) {
+              if (value < 0.01) {
+                return '$' + value.toFixed(4);
+              } else if (value < 1) {
+                return '$' + value.toFixed(3);
+              } else {
+                return '$' + value.toFixed(2);
+              }
+            }
+          },
+          title: {
+            display: true,
+            text: 'Daily Cost (USD)'
+          }
+        }
+      },
+      plugins: {
+        legend: {
+          position: 'top'
+        },
+        tooltip: {
+          callbacks: {
+            title: function(context) {
+              const index = context[0].dataIndex;
+              const date = filteredDates[index];
+              const [year, month, day] = date.split('-').map(Number);
+              const localDate = new Date(year, month - 1, day);
+              return localDate.toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              });
+            },
+            afterTitle: function(context) {
+              const index = context[0].dataIndex;
+              const date = filteredDates[index];
+              const data = dailyStats[date];
+              return `Messages: ${data.messages}`;
+            },
+            label: function(context) {
+              const value = context.parsed.y;
+              const label = context.dataset.label;
+              if (value < 0.01) {
+                return `${label}: $${value.toFixed(4)}`;
+              } else if (value < 1) {
+                return `${label}: $${value.toFixed(3)}`;
+              } else {
+                return `${label}: $${value.toFixed(2)}`;
+              }
+            },
+            footer: function(tooltipItems) {
+              let total = 0;
+              tooltipItems.forEach(item => {
+                total += item.parsed.y;
+              });
+              if (total < 0.01) {
+                return `Total: $${total.toFixed(4)}`;
+              } else if (total < 1) {
+                return `Total: $${total.toFixed(3)}`;
+              } else {
+                return `Total: $${total.toFixed(2)}`;
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+// === share-viewer.js ===
+// Share viewer - renders the shared dashboard data
+let sharedCommands = []; // Store commands for modal access
+let filteredCommands = []; // Store filtered commands
+let sharedSortColumn = 'timestamp';
+let sharedSortDirection = 'desc';
+let sharedCurrentPage = 1;
+let sharedCommandsPerPage = 20; // Default, can be changed by user
+let sharedTotalPages = 1;
+
+document.addEventListener('DOMContentLoaded', function() {
+  if (!window.SHARE_DATA) {
+    document.getElementById('dashboard-container').innerHTML = '<div class="error">No share data available</div>';
+    return;
+  }
+    
+  const data = window.SHARE_DATA;
+  console.log('Share data loaded:', {
+    hasStatistics: !!data.statistics,
+    statisticsKeys: data.statistics ? Object.keys(data.statistics) : [],
+    chartsCount: data.charts ? data.charts.length : 0,
+    userCommandsCount: data.user_commands ? data.user_commands.length : 0,
+    messagesCount: data.messages ? data.messages.length : 0
+  });
+  
+  // Display project name in header
+  if (data.project_name) {
+    const projectInfoEl = document.getElementById('project-info-text');
+    if (projectInfoEl) {
+      projectInfoEl.textContent = data.project_name;
+    }
+    // Also update the page title
+    document.title = `${data.project_name} - StackUnderflow`;
+  }
+    
+  // Render statistics
+  if (data.statistics && Object.keys(data.statistics).length > 0) {
+    renderStatistics(data.statistics);
+  }
+    
+  // Render charts
+  if (data.charts && data.charts.length > 0) {
+    renderCharts(data.charts);
+  }
+    
+  // Render tables if available
+  if (data.user_commands && data.user_commands.length > 0) {
+    renderUserCommands(data.user_commands);
+  }
+    
+  if (data.messages && data.messages.length > 0) {
+    renderMessages(data.messages);
+  }
+});
+
+function renderStatistics(stats) {
+  if (!stats || !stats.overview) {return;}
+  
+  // Check if we have the StatsCardsModule available
+  if (window.StatsCardsModule && window.StatsCardsModule.displayOverviewStats) {
+    // Use the shared module
+    window.StatsCardsModule.displayOverviewStats(stats);
+  } else {
+    // Fallback: render a simple message if module not available
+    const container = document.getElementById('overview-stats');
+    container.innerHTML = '<div class="error">Stats module not loaded</div>';
+  }
+}
+
+function renderCharts(chartsData) {
+  if (!chartsData || chartsData.length === 0) {return;}
+    
+  const container = document.querySelector('.charts-section');
+    
+  chartsData.forEach(chart => {
+    const chartContainer = document.createElement('div');
+    chartContainer.className = 'chart-container';
+    
+    // Check if this is the old PNG format or new configuration format
+    if (chart.image) {
+      // Legacy PNG format
+      chartContainer.innerHTML = `
+            <h2>${getChartTitle(chart.name)}</h2>
+            <img src="data:image/png;base64,${chart.image}" alt="${chart.name}" style="width: 100%; height: auto;">
+        `;
+    } else if (chart.type && chart.data) {
+      // New interactive chart format
+      chartContainer.innerHTML = `
+            <h2>${getChartTitle(chart.name)}</h2>
+            <canvas id="${chart.id || chart.name}"></canvas>
+        `;
+      container.appendChild(chartContainer);
+      
+      // Create Chart.js instance
+      const canvas = chartContainer.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Create new chart with the provided configuration
+      new Chart(ctx, {
+        type: chart.type,
+        data: chart.data,
+        options: chart.options
+      });
+      
+      return; // Skip the appendChild below since we already did it
+    }
+    
+    container.appendChild(chartContainer);
+  });
+}
+
+function renderUserCommands(commands) {
+  // Store commands globally for modal access
+  sharedCommands = commands;
+  filteredCommands = [...commands]; // Initialize filtered commands
+  
+  const container = document.getElementById('dashboard-container');
+  const section = document.createElement('div');
+  section.className = 'user-commands-section table-section-wide';
+  
+  // Calculate interruption counts
+  const interruptions = commands.filter(cmd => 
+    isInterruptionMessage(cmd.user_message)
+  ).length;
+  const regularCommands = commands.length - interruptions;
+  
+  // Calculate averages
+  const totalSteps = commands.reduce((sum, cmd) => sum + (cmd.assistant_steps || 0), 0);
+  const avgSteps = commands.length > 0 ? (totalSteps / commands.length).toFixed(1) : 0;
+  const commandsWithTools = commands.filter(cmd => (cmd.tools_used || 0) > 0).length;
+  const percentageWithTools = commands.length > 0 ? Math.round((commandsWithTools / commands.length) * 100) : 0;
+  
+  section.innerHTML = `
+        <h2>User Commands (${commands.length})</h2>
+        <div class="table-header">
+            <div>
+                <div id="commands-summary" class="table-summary">
+                    <div style="display: flex; flex-direction: column; gap: 0.25rem; width: 100%;">
+                        <div style="font-size: 0.9rem; color: #666;">
+                            <strong>${commands.length}</strong> total
+                            (<strong>${regularCommands}</strong> commands, <strong>${interruptions}</strong> interruptions)
+                        </div>
+                        <div style="font-size: 0.9rem; color: #666;">
+                            ${percentageWithTools}% use tools
+                            • Avg ${avgSteps} steps/command
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="table-controls">
+                <div class="filter-group">
+                    <input type="text" id="commands-search" placeholder="Search commands..." 
+                        oninput="filterSharedCommands()" class="filter-input-search">
+                </div>
+                <div class="filter-group">
+                    <select id="commands-per-page" onchange="updateCommandsPerPage()">
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="table-wrapper">
+            <table class="data-table" id="shared-commands-table">
+                <thead>
+                    <tr>
+                        <th style="width: 35%;" onclick="sortSharedTable('user_message')" class="sortable">User Command</th>
+                        <th style="width: 15%;" onclick="sortSharedTable('timestamp')" class="sortable">Timestamp</th>
+                        <th style="width: 10%;" onclick="sortSharedTable('model')" class="sortable">Model</th>
+                        <th style="width: 8%; text-align: center;" onclick="sortSharedTable('assistant_steps')" class="sortable">Steps</th>
+                        <th style="width: 8%; text-align: center;" onclick="sortSharedTable('tools_used')" class="sortable">Tools</th>
+                        <th style="width: 8%; text-align: center;" onclick="sortSharedTable('followed_by_interruption')" class="sortable">Interrupted</th>
+                        <th style="width: 16%;" class="no-sort">Tool Names</th>
+                    </tr>
+                </thead>
+                <tbody id="shared-commands-table-body">
+                    <!-- Commands will be rendered here -->
+                </tbody>
+            </table>
+        </div>
+        <div class="table-pagination" id="commands-pagination" style="display: none;">
+            <button onclick="changeCommandsPage(-1)" id="commands-prev-btn">Previous</button>
+            <div class="page-info">
+                Page <input type="number" id="commands-page-input" value="1" onchange="goToCommandsPage()">
+                of <span id="commands-total-pages">1</span>
+            </div>
+            <button onclick="changeCommandsPage(1)" id="commands-next-btn">Next</button>
+            <div class="row-jump">
+                <label>Go to row:</label>
+                <input type="number" id="commands-row-input" 
+                    placeholder="Row #" onkeypress="if(event.key==='Enter') goToCommandRow()">
+                <button onclick="goToCommandRow()">Go</button>
+            </div>
+        </div>
+    `;
+  container.appendChild(section);
+  
+  // Sort by timestamp descending (newest first) initially
+  // Don't use sortSharedTable as it might toggle direction
+  // Just sort directly and display
+  if (window.sortTableData) {
+    const columnConfig = {
+      'timestamp': (cmd) => cmd.timestamp || ''
+    };
+    window.sortTableData(filteredCommands, 'timestamp', 'desc', columnConfig);
+  } else {
+    // Fallback inline sort
+    filteredCommands.sort((a, b) => {
+      const aVal = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bVal = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bVal - aVal; // desc order (newest first)
+    });
+  }
+  displaySharedCommands();
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('dashboard-container');
+  const section = document.createElement('div');
+  section.className = 'messages-section';
+  section.innerHTML = `
+        <h2>All Messages (${messages.length})</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Type</th>
+                        <th>Model</th>
+                        <th>Timestamp</th>
+                        <th>Tokens</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${messages.slice(0, 100).map((msg, i) => `
+                        <tr>
+                            <td>${i + 1}</td>
+                            <td>${msg.type || 'unknown'}</td>
+                            <td>${msg.model || '-'}</td>
+                            <td>${formatTimestamp(msg.timestamp)}</td>
+                            <td>${msg.tokens || 0}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        ${messages.length > 100 ? '<p class="note">Showing first 100 messages</p>' : ''}
+    `;
+  container.appendChild(section);
+}
+
+// Helper functions
+function formatNumber(num) {
+  if (!num) {return '0';}
+  if (num >= 1000000) {return (num / 1000000).toFixed(1) + 'M';}
+  if (num >= 1000) {return (num / 1000).toFixed(1) + 'K';}
+  return num.toLocaleString();
+}
+
+// Note: These helper functions are now provided by the StatsModule and stats-cards.js
+// Keep calculateDuration as it's used elsewhere in this file
+function calculateDuration(stats) {
+  if (!stats.overview) {return 0;}
+  const start = new Date(stats.overview.first_message_time);
+  const end = new Date(stats.overview.last_message_time);
+  return Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+function getChartTitle(name) {
+  const titles = {
+    'user-interactions': 'User Command Analysis',
+    'userInteractionsChart': 'User Command Analysis',
+    'command-complexity': 'Command Complexity Over Time',
+    'commandComplexityChart': 'Command Complexity Over Time',
+    'command-length': 'Command Length Over Time',
+    'commandLengthChart': 'Command Length Over Time',
+    'tool-usage': 'Tool Usage',
+    'toolsChart': 'Tool Usage',
+    'tool-trends': 'Tool Usage Trends',
+    'toolTrendsChart': 'Tool Usage Trends',
+    'error-rate-trend': 'Error Rate Over Time', 
+    'errorRateTrendChart': 'Error Rate Over Time',
+    'error-distribution': 'Error Type Distribution',
+    'errorDistributionChart': 'Error Type Distribution',
+    'model-usage': 'Model Usage Distribution',
+    'modelUsageChart': 'Model Usage Distribution',
+    'token-usage': 'Token Usage',
+    'tokensChart': 'Token Usage',
+    'daily-cost': 'Daily Cost Breakdown',
+    'dailyCostChart': 'Daily Cost Breakdown',
+    'hourly-tokens': 'Token Usage by Hour',
+    'hourlyTokensChart': 'Token Usage by Hour'
+  };
+  return titles[name] || name;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatTimestamp(timestamp) {
+  if (!timestamp) {return '-';}
+  const date = new Date(timestamp);
+  
+  // Show full date and time in local timezone (matching original dashboard format)
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
+// Helper function to check if a message is an interruption
+function isInterruptionMessage(message) {
+  if (!message) {return false;}
+  const lowerMsg = message.toLowerCase();
+  return lowerMsg.includes('[request interrupted by user') || 
+         lowerMsg.includes('[user interrupted]') ||
+         lowerMsg.includes('request was interrupted');
+}
+
+// Helper function to format model names
+function formatModelName(model) {
+  if (!model) {return '';}
+  // Remove common prefixes
+  return model.replace(/^(claude-|anthropic\/)/, '');
+}
+
+// Filter shared commands based on search
+function filterSharedCommands() {
+  const searchTerm = document.getElementById('commands-search').value.toLowerCase();
+  
+  if (!searchTerm) {
+    filteredCommands = [...sharedCommands];
+  } else {
+    filteredCommands = sharedCommands.filter(cmd => {
+      return cmd.user_message.toLowerCase().includes(searchTerm) ||
+             (cmd.tool_names && cmd.tool_names.some(tool => tool.toLowerCase().includes(searchTerm)));
+    });
+  }
+  
+  sharedCurrentPage = 1; // Reset to first page when filtering
+  displaySharedCommands();
+}
+
+// Sort shared commands table
+function sortSharedTable(column) {
+  // Toggle sort direction if clicking the same column
+  if (sharedSortColumn === column) {
+    sharedSortDirection = sharedSortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    sharedSortColumn = column;
+    sharedSortDirection = 'desc'; // Default to descending for new column
+  }
+  
+  // Use sortTableData from utils if available, otherwise implement inline
+  if (window.sortTableData) {
+    const columnConfig = {
+      'user_message': (cmd) => cmd.user_message || '',
+      'timestamp': (cmd) => cmd.timestamp || '',
+      'model': (cmd) => cmd.model || '',
+      'assistant_steps': (cmd) => cmd.assistant_steps || 0,
+      'tools_used': (cmd) => cmd.tools_used || 0,
+      'followed_by_interruption': (cmd) => cmd.followed_by_interruption ? 1 : 0
+    };
+    
+    window.sortTableData(filteredCommands, sharedSortColumn, sharedSortDirection, columnConfig);
+  } else {
+    // Fallback inline sort
+    filteredCommands.sort((a, b) => {
+      let aVal = a[sharedSortColumn] || '';
+      let bVal = b[sharedSortColumn] || '';
+      
+      // For timestamp column, convert to Date objects for proper comparison
+      if (sharedSortColumn === 'timestamp') {
+        aVal = aVal ? new Date(aVal).getTime() : 0;
+        bVal = bVal ? new Date(bVal).getTime() : 0;
+      }
+      
+      if (aVal < bVal) {return sharedSortDirection === 'asc' ? -1 : 1;}
+      if (aVal > bVal) {return sharedSortDirection === 'asc' ? 1 : -1;}
+      return 0;
+    });
+  }
+  
+  sharedCurrentPage = 1; // Reset to first page when sorting
+  displaySharedCommands();
+}
+
+// Display filtered and sorted commands with pagination
+function displaySharedCommands() {
+  const tbody = document.getElementById('shared-commands-table-body');
+  if (!tbody) {return;}
+  
+  // Calculate pagination
+  sharedTotalPages = Math.ceil(filteredCommands.length / sharedCommandsPerPage);
+  
+  // Ensure current page is valid
+  if (sharedCurrentPage > sharedTotalPages) {sharedCurrentPage = sharedTotalPages;}
+  if (sharedCurrentPage < 1) {sharedCurrentPage = 1;}
+  
+  // Get commands for current page
+  const startIndex = (sharedCurrentPage - 1) * sharedCommandsPerPage;
+  const endIndex = startIndex + sharedCommandsPerPage;
+  const pageCommands = filteredCommands.slice(startIndex, endIndex);
+  
+  tbody.innerHTML = pageCommands.map((cmd, index) => {
+    // Find original index for showCommandDetail
+    const originalIndex = sharedCommands.indexOf(cmd);
+    
+    // Format tool names display
+    let toolNamesDisplay = '';
+    if (cmd.tool_names && cmd.tool_names.length > 0) {
+      // Count occurrences of each tool
+      const toolCounts = {};
+      cmd.tool_names.forEach(tool => {
+        // Handle both string and object cases
+        const toolName = typeof tool === 'string' ? tool : (tool.name || 'Unknown');
+        toolCounts[toolName] = (toolCounts[toolName] || 0) + 1;
+      });
+      
+      // Get unique tools in order of first appearance
+      const uniqueTools = [];
+      const seen = new Set();
+      cmd.tool_names.forEach(tool => {
+        const toolName = typeof tool === 'string' ? tool : (tool.name || 'Unknown');
+        if (!seen.has(toolName)) {
+          seen.add(toolName);
+          uniqueTools.push(toolName);
+        }
+      });
+      
+      if (uniqueTools.length <= 3) {
+        // Show all tools with counts if repeated
+        toolNamesDisplay = uniqueTools.map(tool => {
+          const count = toolCounts[tool];
+          return count > 1 ? `${tool}(${count})` : tool;
+        }).join(', ');
+      } else {
+        // Show first 3 tools with counts and "+N more"
+        const firstThree = uniqueTools.slice(0, 3).map(tool => {
+          const count = toolCounts[tool];
+          return count > 1 ? `${tool}(${count})` : tool;
+        }).join(', ');
+        const moreCount = uniqueTools.length - 3;
+        toolNamesDisplay = `${firstThree}, <span style="color: #667eea;">+${moreCount} more</span>`;
+      }
+    } else {
+      toolNamesDisplay = '<span style="color: #999;">-</span>';
+    }
+    
+    return `
+      <tr onclick="showCommandDetail(${originalIndex})" style="cursor: pointer;">
+          <td style="overflow: hidden; max-width: 300px;">
+              <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: break-all;" 
+                   title="${escapeHtml(cmd.user_message)}">
+                  ${escapeHtml(cmd.user_message_truncated || cmd.user_message)}
+              </div>
+          </td>
+          <td style="font-size: 0.9rem;">${formatTimestamp(cmd.timestamp)}</td>
+          <td style="font-size: 0.85rem;">
+              ${cmd.model && cmd.model !== 'N/A' ? 
+    formatModelName(cmd.model) : 
+    '<span style="color: #999;">-</span>'}
+          </td>
+          <td style="text-align: center;">${cmd.assistant_steps || 0}</td>
+          <td style="text-align: center;">
+              ${cmd.tools_used > 0 ? 
+    `<span style="color: #667eea; font-weight: bold;">${cmd.tools_used}</span>` : 
+    '<span style="color: #999;">0</span>'}
+          </td>
+          <td style="text-align: center;">
+              ${cmd.followed_by_interruption ? 
+    '<span style="color: #d32f2f; font-weight: bold;" title="This command was followed by a user interruption">Yes</span>' : 
+    '<span style="color: #999;">-</span>'}
+          </td>
+          <td style="font-size: 0.85rem;">
+              ${toolNamesDisplay}
+          </td>
+      </tr>
+    `;
+  }).join('');
+  
+  // Update summary with filtered count
+  const summaryEl = document.getElementById('commands-summary');
+  if (summaryEl) {
+    // Find or create the filter status element
+    let filterStatus = summaryEl.querySelector('.filter-status');
+    if (!filterStatus) {
+      filterStatus = document.createElement('div');
+      filterStatus.className = 'filter-status';
+      filterStatus.style.cssText = 'font-size: 0.85rem; color: #888; margin-top: 0.25rem;';
+      summaryEl.appendChild(filterStatus);
+    }
+    
+    // Update or hide the filter status
+    if (filteredCommands.length !== sharedCommands.length) {
+      filterStatus.textContent = `Showing ${filteredCommands.length} of ${sharedCommands.length} commands`;
+      filterStatus.style.display = 'block';
+    } else {
+      filterStatus.style.display = 'none';
+    }
+  }
+  
+  // Update pagination controls
+  updatePaginationControls();
+}
+
+// Show detailed view of a command
+function showCommandDetail(index) {
+  const cmd = sharedCommands[index];
+  if (!cmd) {return;}
+  
+  // Count tool occurrences
+  const toolCounts = {};
+  if (cmd.tool_names && cmd.tool_names.length > 0) {
+    cmd.tool_names.forEach(tool => {
+      toolCounts[tool] = (toolCounts[tool] || 0) + 1;
+    });
+  }
+  
+  // Create formatted list
+  const toolsList = Object.entries(toolCounts)
+    .sort((a, b) => b[1] - a[1]) // Sort by count descending
+    .map(([tool, count]) => {
+      const countText = count > 1 ? `<span style="color: #667eea; font-weight: bold;">(${count}x)</span>` : '';
+      return `<div style="padding: 0.5rem 0; border-bottom: 1px solid #eee;">
+                <span style="font-size: 1rem;">${tool}</span> ${countText}
+              </div>`;
+    })
+    .join('');
+  
+  // Use the existing modal
+  const modal = document.getElementById('message-modal');
+  const modalTitle = document.getElementById('modal-title');
+  const modalBody = document.getElementById('modal-body');
+  
+  modalTitle.textContent = 'User Command Details';
+  
+  // Hide navigation for commands in share viewer
+  const modalNav = document.querySelector('.modal-navigation');
+  if (modalNav) {
+    modalNav.style.display = 'none';
+  }
+  
+  // Trim each line while preserving line breaks
+  const trimmedMessage = cmd.user_message
+    .split('\n')
+    .map(line => line.trim())
+    .join('\n')
+    .trim();
+  
+  modalBody.innerHTML = `
+    <div style="margin-bottom: 1rem;">
+      <div class="detail-content" style="margin-top: 0.5rem; white-space: pre-wrap; word-wrap: break-word;">
+        ${escapeHtml(trimmedMessage)}
+      </div>
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <strong>Timestamp:</strong> ${formatTimestamp(cmd.timestamp)}
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <strong>Assistant Steps:</strong> ${cmd.assistant_steps}
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <strong>Total Tool Calls:</strong> ${cmd.tools_used}
+    </div>
+    ${cmd.tools_used > 0 ? `
+      <div style="margin-bottom: 1rem;">
+        <strong>Tools Used:</strong>
+      </div>
+      <div style="max-height: 400px; overflow-y: auto;">
+        ${toolsList}
+      </div>
+    ` : ''}
+  `;
+  
+  modal.style.display = 'block';
+}
+
+// Update pagination controls visibility and state
+function updatePaginationControls() {
+  const paginationEl = document.getElementById('commands-pagination');
+  const totalPagesEl = document.getElementById('commands-total-pages');
+  const pageInputEl = document.getElementById('commands-page-input');
+  const prevBtn = document.getElementById('commands-prev-btn');
+  const nextBtn = document.getElementById('commands-next-btn');
+  
+  if (filteredCommands.length > sharedCommandsPerPage) {
+    paginationEl.style.display = 'flex';
+    totalPagesEl.textContent = sharedTotalPages;
+    pageInputEl.value = sharedCurrentPage;
+    
+    // Update button states
+    prevBtn.disabled = sharedCurrentPage === 1;
+    nextBtn.disabled = sharedCurrentPage === sharedTotalPages;
+  } else {
+    paginationEl.style.display = 'none';
+  }
+}
+
+// Adapter functions to work with shared view state
+function changeCommandsPage(delta) {
+  const newPage = sharedCurrentPage + delta;
+  if (newPage >= 1 && newPage <= sharedTotalPages) {
+    sharedCurrentPage = newPage;
+    displaySharedCommands();
+  }
+}
+
+function goToCommandsPage() {
+  const pageInput = document.getElementById('commands-page-input');
+  const page = parseInt(pageInput.value);
+  
+  if (!isNaN(page) && page >= 1 && page <= sharedTotalPages) {
+    sharedCurrentPage = page;
+    displaySharedCommands();
+  } else {
+    pageInput.value = sharedCurrentPage;
+  }
+}
+
+function updateCommandsPerPage() {
+  const select = document.getElementById('commands-per-page');
+  sharedCommandsPerPage = parseInt(select.value);
+  sharedCurrentPage = 1;
+  displaySharedCommands();
+}
+
+function goToCommandRow() {
+  // Reuse utility function if available
+  if (window.goToRowInPaginatedTable) {
+    window.goToRowInPaginatedTable({
+      inputId: 'commands-row-input',
+      dataArray: filteredCommands,
+      itemsPerPage: sharedCommandsPerPage,
+      navigateFunction: (page) => {
+        sharedCurrentPage = page;
+        displaySharedCommands();
+      },
+      tbodySelector: '#shared-commands-table-body'
+    });
+  }
+}
+
+// Make functions globally accessible for onclick handlers
+window.filterSharedCommands = filterSharedCommands;
+window.sortSharedTable = sortSharedTable;
+window.showCommandDetail = showCommandDetail;
+window.changeCommandsPage = changeCommandsPage;
+window.goToCommandsPage = goToCommandsPage;
+window.updateCommandsPerPage = updateCommandsPerPage;
+window.goToCommandRow = goToCommandRow;
+
+    </script>
+</body>
+</html>

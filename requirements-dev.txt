@@ -1,0 +1,22 @@
+# Development dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# Performance monitoring
+psutil>=5.9.0
+
+# Linters and formatters
+ruff>=0.1.0
+mypy>=1.5.0
+
+# Type stubs
+types-python-dateutil
+types-psutil
+
+# Building and publishing
+build>=1.0.0
+twine>=4.0.0

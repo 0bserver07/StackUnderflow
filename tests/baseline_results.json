@@ -1,0 +1,407 @@
+{
+  "message_count": 202,
+  "total_tokens": {
+    "input": 652,
+    "output": 19443,
+    "cache_creation": 301119,
+    "cache_read": 5238726
+  },
+  "message_types": {
+    "assistant": 90,
+    "user": 109,
+    "summary": 3
+  },
+  "user_interactions": {
+    "real_user_messages": 14,
+    "user_commands_analyzed": 13,
+    "commands_requiring_tools": 13,
+    "commands_without_tools": 0,
+    "percentage_requiring_tools": 100.0,
+    "total_tools_used": 96,
+    "total_assistant_steps": 90,
+    "avg_tools_per_command": 7.38,
+    "avg_tools_when_used": 7.38,
+    "avg_steps_per_command": 6.92,
+    "percentage_steps_with_tools": 100.0,
+    "tool_count_distribution": {
+      "16": 1,
+      "7": 3,
+      "3": 1,
+      "1": 2,
+      "2": 2,
+      "13": 1,
+      "21": 1,
+      "11": 1,
+      "5": 1
+    },
+    "command_details": [
+      {
+        "user_message": "<command-message>init is analyzing your codebase\u2026</command-message>\n                      <command-name>init</command-name>\n                      <command-args></command-args>\n                        ...",
+        "timestamp": "2025-06-08T10:47:08.446Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 5,
+        "tools_used": 16,
+        "tool_names": [
+          "LS",
+          "Read",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Glob",
+          "Read",
+          "Glob",
+          "Write"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "ok, now write the program using the instruction in README.md",
+        "timestamp": "2025-06-08T10:51:13.940Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 8,
+        "tools_used": 7,
+        "tool_names": [
+          "TodoWrite",
+          "TodoWrite",
+          "Write",
+          "TodoWrite",
+          "Write",
+          "TodoWrite",
+          "Edit"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "create a conda environment to run this. name it aie[xxx] with [xxx] being the python version, e.g. 311 for python 3.11",
+        "timestamp": "2025-06-08T10:54:06.691Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 4,
+        "tools_used": 3,
+        "tool_names": [
+          "Bash",
+          "Bash",
+          "Edit"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "conda activate aie311",
+        "timestamp": "2025-06-08T10:54:51.629Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 2,
+        "tools_used": 1,
+        "tool_names": [
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "which conda environment am i in?",
+        "timestamp": "2025-06-08T10:55:14.673Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 2,
+        "tools_used": 1,
+        "tool_names": [
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "conda activate aie311",
+        "timestamp": "2025-06-08T10:55:45.824Z",
+        "session_id": "ba79134d-b6e9-4867-af0c-6941038c9e4b",
+        "assistant_steps": 3,
+        "tools_used": 2,
+        "tool_names": [
+          "Bash",
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "create a jupyter notebook file so that i can test each step of the way",
+        "timestamp": "2025-06-08T11:00:11.669Z",
+        "session_id": "d3ad4cdc-5657-435d-98fa-0035d53e383d",
+        "assistant_steps": 7,
+        "tools_used": 7,
+        "tool_names": [
+          "TodoWrite",
+          "Read",
+          "Read",
+          "TodoWrite",
+          "Write",
+          "Edit",
+          "TodoWrite"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "help me find models where the embeddings have more diverse values",
+        "timestamp": "2025-06-08T11:15:05.935Z",
+        "session_id": "d3ad4cdc-5657-435d-98fa-0035d53e383d",
+        "assistant_steps": 14,
+        "tools_used": 13,
+        "tool_names": [
+          "TodoWrite",
+          "WebSearch",
+          "Write",
+          "TodoWrite",
+          "Bash",
+          "Bash",
+          "Bash",
+          "TodoWrite",
+          "NotebookEdit",
+          "NotebookEdit",
+          "NotebookEdit",
+          "NotebookEdit",
+          "TodoWrite"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "it doesn't sound quite like music. you know, music should have overlapping and multiple things playing at the same time",
+        "timestamp": "2025-06-08T11:29:45.457Z",
+        "session_id": "d3ad4cdc-5657-435d-98fa-0035d53e383d",
+        "assistant_steps": 8,
+        "tools_used": 7,
+        "tool_names": [
+          "TodoWrite",
+          "Read",
+          "Write",
+          "TodoWrite",
+          "Bash",
+          "Write",
+          "TodoWrite"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "all of texts now sound the same",
+        "timestamp": "2025-06-08T11:39:02.317Z",
+        "session_id": "d3ad4cdc-5657-435d-98fa-0035d53e383d",
+        "assistant_steps": 22,
+        "tools_used": 21,
+        "tool_names": [
+          "TodoWrite",
+          "Bash",
+          "Write",
+          "TodoWrite",
+          "Bash",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Read",
+          "Edit",
+          "Edit",
+          "Bash",
+          "Write",
+          "Bash",
+          "TodoWrite"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "python diverse_musical_ai.py",
+        "timestamp": "2025-06-08T11:48:19.091Z",
+        "session_id": "d3ad4cdc-5657-435d-98fa-0035d53e383d",
+        "assistant_steps": 11,
+        "tools_used": 11,
+        "tool_names": [
+          "Edit",
+          "Bash",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Edit",
+          "Bash",
+          "Write",
+          "Bash",
+          "Write",
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "push to github",
+        "timestamp": "2025-06-10T12:36:23.208Z",
+        "session_id": "fed8ce56-bc79-401f-a83e-af084253362f",
+        "assistant_steps": 2,
+        "tools_used": 5,
+        "tool_names": [
+          "Bash",
+          "Bash",
+          "Bash",
+          "Bash",
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": true
+      },
+      {
+        "user_message": "[Request interrupted by user for tool use]",
+        "timestamp": "2025-06-10T12:36:51.863Z",
+        "session_id": "fed8ce56-bc79-401f-a83e-af084253362f",
+        "assistant_steps": 0,
+        "tools_used": 0,
+        "tool_names": [],
+        "has_tools": false,
+        "model": "N/A",
+        "is_interruption": true,
+        "followed_by_interruption": false
+      },
+      {
+        "user_message": "continue",
+        "timestamp": "2025-06-10T12:37:02.253Z",
+        "session_id": "fed8ce56-bc79-401f-a83e-af084253362f",
+        "assistant_steps": 2,
+        "tools_used": 2,
+        "tool_names": [
+          "Bash",
+          "Bash"
+        ],
+        "has_tools": true,
+        "model": "claude-sonnet-4-20250514",
+        "is_interruption": false,
+        "followed_by_interruption": false
+      }
+    ],
+    "interruption_rate": 7.7,
+    "non_interruption_commands": 13,
+    "commands_followed_by_interruption": 1,
+    "tool_interruption_rates": {
+      "16": {
+        "rate": 0.0,
+        "total_commands": 1,
+        "interrupted_commands": 0
+      },
+      "7": {
+        "rate": 0.0,
+        "total_commands": 3,
+        "interrupted_commands": 0
+      },
+      "3": {
+        "rate": 0.0,
+        "total_commands": 1,
+        "interrupted_commands": 0
+      },
+      "1": {
+        "rate": 0.0,
+        "total_commands": 2,
+        "interrupted_commands": 0
+      },
+      "2": {
+        "rate": 0.0,
+        "total_commands": 2,
+        "interrupted_commands": 0
+      },
+      "13": {
+        "rate": 0.0,
+        "total_commands": 1,
+        "interrupted_commands": 0
+      },
+      "21": {
+        "rate": 0.0,
+        "total_commands": 1,
+        "interrupted_commands": 0
+      },
+      "11": {
+        "rate": 0.0,
+        "total_commands": 1,
+        "interrupted_commands": 0
+      },
+      "5": {
+        "rate": 100.0,
+        "total_commands": 1,
+        "interrupted_commands": 1
+      }
+    },
+    "model_distribution": {
+      "claude-sonnet-4-20250514": 13
+    }
+  },
+  "cache_stats": {
+    "total_created": 301119,
+    "total_read": 5238726,
+    "messages_with_cache_read": 86,
+    "messages_with_cache_created": 90,
+    "assistant_messages": 90,
+    "hit_rate": 95.6,
+    "efficiency": 100,
+    "tokens_saved": 4937607,
+    "cost_saved_base_units": 4338454.65,
+    "break_even_achieved": true,
+    "cache_roi": 1639.8
+  },
+  "error_count": 0,
+  "sessions": 4,
+  "date_range": {
+    "start": "2025-06-08T10:47:08.446Z",
+    "end": "2025-06-10T12:37:28.376Z"
+  },
+  "tool_usage": {
+    "Bash": 25,
+    "Write": 11,
+    "Edit": 19,
+    "TodoWrite": 17,
+    "Read": 6,
+    "NotebookEdit": 4,
+    "WebSearch": 1,
+    "Glob": 12,
+    "LS": 1
+  },
+  "models": {},
+  "message_details": {
+    "user_count": 109,
+    "assistant_count": 90,
+    "summary_count": 3,
+    "tool_result_count": 95
+  }
+}

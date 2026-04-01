@@ -1,0 +1,427 @@
+/* StackUnderflow Landing Page Styles */
+:root {
+    --primary-color: #667eea;
+    --secondary-color: #764ba2;
+    --text-dark: #333;
+    --text-light: #666;
+    --bg-light: #f8f9fa;
+    --border-color: #e0e0e0;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    color: var(--text-dark);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+/* Header - Dashboard Style */
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem 2rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    position: relative;
+    min-height: 100px;
+}
+
+.header-content {
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+.header-main {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-brand-with-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-logo {
+    width: 48px;
+    height: 48px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.header-logo:hover {
+    transform: scale(1.05);
+}
+
+.brand-name {
+    font-size: 2rem;
+    font-weight: 700;
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.brand-name:hover {
+    opacity: 0.9;
+}
+
+.header-subtitle {
+    font-size: 1rem;
+    font-weight: 400;
+    opacity: 0.9;
+    margin-left: 1rem;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 2rem;
+    display: flex;
+    align-items: baseline;
+}
+
+/* Header Navigation */
+.header-nav {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: white;
+    text-decoration: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+
+.nav-link:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.nav-icon {
+    width: 18px;
+    height: 18px;
+}
+
+/* Compact Install Section */
+.install-compact {
+    background: var(--bg-light);
+    padding: 2rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.install-header {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.install-header h2 {
+    font-size: 2rem;
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+
+.install-header p {
+    color: var(--text-light);
+    font-size: 1.1rem;
+}
+
+.install-methods {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.install-option {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.install-label {
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.install-option code {
+    background: #f4f4f4;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.95rem;
+    color: #d73a49;
+}
+
+.install-divider {
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+/* Hero Section */
+.hero {
+    padding: 4rem 0;
+    text-align: center;
+    background: var(--bg-light);
+}
+
+.hero h2 {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+    color: var(--primary-color);
+}
+
+.hero p {
+    font-size: 1.25rem;
+    color: var(--text-light);
+    margin-bottom: 2rem;
+}
+
+.cta-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.btn {
+    padding: 0.75rem 2rem;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--secondary-color);
+    transform: translateY(-2px);
+}
+
+.btn-secondary {
+    background: white;
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+}
+
+.btn-secondary:hover {
+    background: var(--primary-color);
+    color: white;
+}
+
+
+/* Gallery Section */
+.gallery {
+    padding: 4rem 0;
+    background: var(--bg-light);
+}
+
+.gallery h2 {
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.gallery > .container > p {
+    text-align: center;
+    color: var(--text-light);
+    margin-bottom: 3rem;
+}
+
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 2rem;
+}
+
+.gallery-item {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.gallery-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
+
+.gallery-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+}
+
+.gallery-item h3 {
+    color: var(--primary-color);
+    margin: 0;
+}
+
+.gallery-item .date {
+    font-size: 0.85rem;
+    color: #999;
+}
+
+.gallery-item .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-light);
+    margin-top: 1rem;
+}
+
+.gallery-item .stats span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+    cursor: default;
+    vertical-align: middle;
+}
+
+/* Fix alignment for speaking head emoji */
+.gallery-item .stats span:first-child {
+    position: relative;
+    top: -1px;
+}
+
+.gallery-item .stats span:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Featured projects */
+.gallery-item.featured {
+    border-color: #fbbf24;
+    background: #fffbeb;
+}
+
+.featured-indicator {
+    display: inline-block;
+    background: #fbbf24;
+    color: #78350f;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+/* Commands count styling */
+.gallery-item .stats span.with-commands {
+    color: #0369a1;
+    font-weight: 600;
+    background: #e0f2fe;
+}
+
+.gallery-item .stats span.with-commands:hover {
+    background: #dbeafe;
+}
+
+/* Highlight high costs */
+.gallery-item .stats span.high-cost {
+    color: #dc2626;
+    font-weight: 600;
+}
+
+/* Highlight high interruption rates */
+.gallery-item .stats span.high-interruption {
+    color: #ea580c;
+    font-weight: 600;
+}
+
+.loading {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-light);
+}
+
+/* Footer */
+footer {
+    background: #2d2d2d;
+    color: #f8f8f2;
+    padding: 2rem 0;
+    text-align: center;
+}
+
+footer a {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .header-main {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .header-nav {
+        margin-top: 1rem;
+    }
+    
+    .nav-link {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.9rem;
+    }
+    
+    .hero h2 {
+        font-size: 2rem;
+    }
+    
+    .cta-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .gallery-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .install-methods {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .install-option {
+        flex-direction: column;
+        text-align: center;
+        width: 100%;
+        max-width: 400px;
+    }
+    
+    .install-divider {
+        display: none;
+    }
+}
