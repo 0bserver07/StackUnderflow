@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
 import {
   IconSearch,
   IconRefresh,
@@ -26,10 +25,8 @@ type SortMode = 'recent' | 'tools' | 'has_code'
 
 function QAItem({
   qa,
-  onClick,
 }: {
   qa: QAPair
-  onClick: () => void
 }) {
   const questionPreview = qa.question_text.length > 200
     ? qa.question_text.slice(0, 200) + '...'
@@ -39,9 +36,8 @@ function QAItem({
     : qa.answer_text
 
   return (
-    <button
-      onClick={onClick}
-      className="w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors"
+    <div
+      className="w-full px-4 py-3 border-b border-gray-800"
     >
       <div className="mb-1.5">
         <p className="text-sm text-gray-200 font-medium line-clamp-2">
@@ -76,7 +72,7 @@ function QAItem({
           <TimeAgo timestamp={qa.timestamp} />
         </span>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -104,7 +100,6 @@ function sortQAPairs(pairs: QAPair[], mode: SortMode): QAPair[] {
 }
 
 export default function QATab({ projectName }: QATabProps) {
-  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [sortMode, setSortMode] = useState<SortMode>('recent')
@@ -214,7 +209,6 @@ export default function QATab({ projectName }: QATabProps) {
               <QAItem
                 key={qa.id}
                 qa={qa}
-                onClick={() => navigate(`/project/${projectName}/qa/${qa.id}`)}
               />
             ))}
           </div>

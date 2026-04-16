@@ -137,7 +137,6 @@ export interface DashboardData {
   is_reindexing: boolean
   config: {
     messages_initial_load: number
-    enable_memory_monitor: boolean
     max_date_range_days: number
   }
 }
@@ -457,54 +456,3 @@ export interface ModelPricing {
   cache_creation_cost_per_token?: number
 }
 
-// ---------------------------------------------------------------------------
-// Curriculum types for Modal-powered learning
-// ---------------------------------------------------------------------------
-
-export interface CurriculumExercise {
-  type: 'practice' | 'quiz' | 'challenge'
-  prompt: string
-  hints?: string[]
-}
-
-export interface CurriculumLesson {
-  id: string
-  title: string
-  topic: string
-  difficulty: 'beginner' | 'intermediate' | 'advanced'
-  why_needed: string
-  concepts: string[]
-  exercises: CurriculumExercise[]
-  estimated_minutes: number
-}
-
-export interface Curriculum {
-  summary: string
-  skill_gaps: string[]
-  lessons: CurriculumLesson[]
-  recommended_order: string[]
-  quick_wins: string[]
-  generated_at?: string
-  source?: 'modal' | 'local'
-  model?: string
-  error?: string
-}
-
-export interface CurriculumStatus {
-  modal_available: boolean
-  mode: 'modal' | 'local'
-  deploy_command?: string
-}
-
-export interface ErrorExercise {
-  error_type: string
-  explanation: string
-  exercise?: {
-    scenario: string
-    task: string
-    expected_approach: string
-    common_mistakes: string[]
-  }
-  quick_reference?: string
-  source?: 'modal' | 'local'
-}

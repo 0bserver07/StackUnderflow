@@ -117,7 +117,6 @@ async def get_dashboard_data(timezone_offset: int = 0):
         "is_reindexing": deps.is_reindexing,
         "config": {
             "messages_initial_load": deps.config.get("messages_initial_load"),
-            "enable_memory_monitor": deps.config.get("enable_memory_monitor"),
             "max_date_range_days": deps.config.get("max_date_range_days"),
         },
     }

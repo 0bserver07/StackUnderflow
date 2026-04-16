@@ -15,9 +15,6 @@ import type {
   Bookmark,
   RelatedResponse,
   PricingData,
-  Curriculum,
-  CurriculumStatus,
-  ErrorExercise,
 } from '../types/api'
 
 const BASE = '/api'
@@ -243,25 +240,3 @@ export async function getSessionBookmarks(sessionId: string): Promise<BookmarkLi
   return fetchJson(`${BASE}/bookmarks/session/${encodeURIComponent(sessionId)}`)
 }
 
-// Curriculum (Modal-powered learning)
-export async function getCurriculum(options?: {
-  focus?: string
-  difficulty?: 'beginner' | 'intermediate' | 'advanced'
-  refresh?: boolean
-}): Promise<Curriculum> {
-  const params = new URLSearchParams()
-  if (options?.focus) params.set('focus', options.focus)
-  if (options?.difficulty) params.set('difficulty', options.difficulty)
-  if (options?.refresh) params.set('refresh', 'true')
-
-  const query = params.toString()
-  return fetchJson(`${BASE}/curriculum${query ? `?${query}` : ''}`)
-}
-
-export async function getCurriculumStatus(): Promise<CurriculumStatus> {
-  return fetchJson(`${BASE}/curriculum/status`)
-}
-
-export async function getExerciseForError(errorCategory: string): Promise<ErrorExercise> {
-  return fetchJson(`${BASE}/curriculum/exercise/${encodeURIComponent(errorCategory)}`)
-}

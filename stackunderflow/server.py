@@ -28,16 +28,13 @@ from stackunderflow.routes import (
     qa,
     search,
     sessions,
-    social,
     tags,
 )
-from stackunderflow.services.agent_simulation_service import AgentSimulationService
 from stackunderflow.services.bookmark_service import BookmarkService
 from stackunderflow.services.pricing_service import PricingService
 from stackunderflow.services.qa_service import QAService
 from stackunderflow.services.related_service import RelatedService
 from stackunderflow.services.search_service import SearchService
-from stackunderflow.services.social_service import SocialService
 from stackunderflow.services.tag_service import TagService
 
 # Load environment variables
@@ -74,8 +71,6 @@ async def _lifespan(_app: FastAPI):
         ("qa_service", QAService, {}),
         ("bookmark_service", BookmarkService, {}),
         ("pricing_service", PricingService, {}),
-        ("social_service", SocialService, {}),
-        ("agent_sim_service", AgentSimulationService, {}),
     ]
     for name, cls, kw in _svc_inits:
         try:
@@ -121,14 +116,15 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-# Add CORS middleware
+# Add CORS middleware — allow configured port and common dev-server ports
+_server_port = config.get("port")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-        "http://localhost:3000",  # vite dev server
-        "http://127.0.0.1:3000",
+        f"http://localhost:{_server_port}",
+        f"http://127.0.0.1:{_server_port}",
+        "http://localhost:5175",  # vite dev server
+        "http://127.0.0.1:5175",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -150,7 +146,6 @@ app.include_router(search.router)
 app.include_router(qa.router)
 app.include_router(tags.router)
 app.include_router(bookmarks.router)
-app.include_router(social.router)
 app.include_router(misc.router)
 
 

@@ -78,13 +78,9 @@ class Settings:
     auto_browser                 = _Opt(True,  "AUTO_BROWSER")
     max_date_range_days          = _Opt(30,    "MAX_DATE_RANGE_DAYS")
     messages_initial_load        = _Opt(500,   "MESSAGES_INITIAL_LOAD")
-    enable_memory_monitor        = _Opt(False, "ENABLE_MEMORY_MONITOR")
     enable_background_processing = _Opt(True,  "ENABLE_BACKGROUND_PROCESSING")
     cache_warm_on_startup        = _Opt(3,     "CACHE_WARM_ON_STARTUP")
     log_level                    = _Opt("INFO","LOG_LEVEL")
-    share_base_url               = _Opt("https://stackunderflow.dev", "SHARE_BASE_URL")
-    share_api_url                = _Opt("https://stackunderflow.dev", "SHARE_API_URL")
-    share_enabled                = _Opt(True,  "SHARE_ENABLED")
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 
@@ -106,10 +102,6 @@ class Settings:
         data = _load()
         data.pop(key, None)
         _save(data)
-
-    # backward-compat aliases
-    set = persist
-    unset = remove
 
     def _load_config_file(self) -> dict[str, Any]:
         return _load()

@@ -4,7 +4,6 @@ import Header from './components/layout/Header'
 import ChatDrawer from './components/layout/ChatDrawer'
 import Overview from './pages/Overview'
 import ProjectDashboard from './pages/ProjectDashboard'
-import QADetailPage from './pages/QADetailPage'
 
 function AppLayout() {
   const [chatOpen, setChatOpen] = useState(false)
@@ -16,7 +15,6 @@ function AppLayout() {
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/project/:name" element={<ProjectDashboard />} />
-          <Route path="/project/:name/qa/:qaId" element={<QADetailPage />} />
         </Routes>
       </main>
       <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)} />

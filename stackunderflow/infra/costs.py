@@ -7,11 +7,8 @@ known tokens — no regex involved.
 
 from __future__ import annotations
 
-import logging
 from enum import Enum, auto
 from typing import Any
-
-_log = logging.getLogger(__name__)
 
 
 class _Family(Enum):
@@ -93,10 +90,6 @@ def _identify(model_id: str) -> _Family:
             return _Family.HAIKU_3
 
     return _FALLBACK
-
-
-def _get_rates(family: _Family) -> tuple[float, float, float, float]:
-    return _RATES.get(family, _RATES[_FALLBACK])
 
 
 # ── dynamic pricing overlay ──────────────────────────────────────────────────
@@ -188,6 +181,4 @@ def get_model_pricing(model: str) -> dict[str, float] | None:
     }
 
 
-calculate_cost = compute_cost
-format_cost = format_dollars
 RATE_CARD = {mid: get_model_pricing(mid) for mid in _CANONICAL_IDS}

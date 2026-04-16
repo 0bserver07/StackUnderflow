@@ -73,7 +73,6 @@ class TestServerEndpointStructure:
             assert "/api/recent-projects" in routes
             assert "/api/projects" in routes  # New comprehensive projects endpoint
             assert "/api/pricing" in routes
-            assert "/api/share-enabled" in routes
     
     def test_shared_deps_exist(self):
         """Test that shared deps module has required state."""

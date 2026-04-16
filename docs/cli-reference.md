@@ -197,13 +197,9 @@ stackunderflow --version
 | `cache_max_mb_per_project` | int | 500 | Max MB per project |
 | `messages_initial_load` | int | 500 | Initial messages to load |
 | `max_date_range_days` | int | 30 | Max days for date range |
-| `enable_memory_monitor` | bool | false | Show memory usage |
 | `enable_background_processing` | bool | true | Process stats in background |
 | `cache_warm_on_startup` | int | 3 | Projects to preload |
 | `log_level` | str | INFO | Logging level |
-| `share_base_url` | str | https://stackunderflow.dev | Share base URL |
-| `share_api_url` | str | https://stackunderflow.dev | Share API URL |
-| `share_enabled` | bool | true | Enable sharing |
 
 ## Environment Variables
 

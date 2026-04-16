@@ -26,12 +26,12 @@ Opens your browser at `http://localhost:8081` with a dashboard of your Claude Co
 
 - **Analytics dashboard** — token usage, cost breakdown, model distribution, error patterns, hourly activity
 - **Session viewer** — browse individual JSONL session files with conversation replay, sub-agent grouping, per-session cost
-- **Full-text search** — search across all sessions with filters for date, model, and role
-- **Q&A extraction** — automatically identifies question-answer pairs from conversations
-- **Auto-tagging** — classifies sessions by language, framework, and topic
-- **Bookmarks** — save and organize important conversations
+- **Full-text search** — across all sessions, with filters for date, model, and role
+- **Q&A pair detection** — heuristic extraction of question-answer pairs based on text patterns and follow-up cues
+- **Auto-tagging** — tags sessions by language, framework, and topic using keyword and pattern matching
+- **Related sessions** — surfaces other sessions with overlapping tags, tools, and project
+- **Bookmarks** — save and organise important conversations
 - **Incremental backups** — `stackunderflow backup create` snapshots `~/.claude/` with hard-linked `rsync --link-dest` (use `backup auto` on macOS for daily scheduling)
-- **Session sharing** — create shareable links (opt-in, privacy-first)
 - **Multi-project** — switch between projects, view cross-project statistics
 - **Legacy project recovery** — pre-January 2026 Claude Code stored prompts in `~/.claude/history.jsonl` instead of per-project JSONL files. StackUnderflow auto-detects these old projects and surfaces them from that file (prompts and timestamps only — token/model data wasn't stored locally in the old format).
 
@@ -115,12 +115,11 @@ stackunderflow/
     data.py       #   stats, dashboard-data, messages, refresh
     sessions.py   #   JSONL file browsing and content
     search.py     #   full-text search
-    qa.py         #   Q&A extraction and browsing
+    qa.py         #   Q&A pair browsing
     tags.py       #   auto-tags and manual tagging
     bookmarks.py  #   bookmark CRUD
-    social.py     #   agents, discussions, votes, simulation
-    misc.py       #   pricing, share, related, health, static
-  services/       # search, Q&A, tags, bookmarks, pricing, social, curriculum
+    misc.py       #   pricing, related, health, static
+  services/       # search, Q&A, tags, bookmarks, related, pricing
   deps.py         # shared state (cache, config, services)
   server.py       # thin shell — app creation, middleware, lifespan
   settings.py     # env → file → default config resolution (descriptor-based)
@@ -148,10 +147,9 @@ StackUnderflow processes all your Claude Code logs locally.
 - Backups (opt-in) are written to `~/.stackunderflow/backups/` unencrypted — protect this directory like you would your `~/.claude/`
 
 **What leaves your machine (only if you enable it):**
-- **Sharing** (opt-in) — uploads a conversation summary to stackunderflow.dev. Raw conversations are never sent unless you explicitly share them.
 - **Pricing** — fetches model cost data from a public GitHub source (no user data sent)
 
-No telemetry, no tracking, no crash reports.
+No telemetry, no tracking, no crash reports. No sharing.
 
 ## Contributing
 
