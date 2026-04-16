@@ -33,6 +33,7 @@ Opens your browser at `http://localhost:8081` with a dashboard of your Claude Co
 - **Incremental backups** — `stackunderflow backup create` snapshots `~/.claude/` with hard-linked `rsync --link-dest` (use `backup auto` on macOS for daily scheduling)
 - **Session sharing** — create shareable links (opt-in, privacy-first)
 - **Multi-project** — switch between projects, view cross-project statistics
+- **Legacy project recovery** — pre-January 2026 Claude Code stored prompts in `~/.claude/history.jsonl` instead of per-project JSONL files. StackUnderflow auto-detects these old projects and surfaces them from that file (prompts and timestamps only — token/model data wasn't stored locally in the old format).
 
 ## Using as a Library
 
@@ -134,20 +135,29 @@ The pipeline is designed for multiple sources. Currently supports Claude Code (J
 
 ## Privacy
 
-StackUnderflow processes all your Claude Code logs locally:
-- Log parsing, search indexing, and analytics happen on your machine
-- No telemetry or tracking
-- Optional features that contact external services:
-  - **Sharing** (opt-in) — uploads a summary to stackunderflow.dev
-  - **Pricing** — fetches model costs from a public GitHub source
-- Your raw conversations are never sent anywhere unless you explicitly share them
+StackUnderflow processes all your Claude Code logs locally.
+
+**What it reads on your machine:**
+- `~/.claude/projects/<slug>/*.jsonl` — per-project conversation logs (new format)
+- `~/.claude/history.jsonl` — centralized prompt history (legacy format, pre-January 2026)
+- `~/.claude/settings*.json` — only via the `backup` command, for snapshots
+
+**What it does with that data:**
+- Parsing, search indexing, and analytics run locally — nothing is uploaded
+- A cache is written to `~/.stackunderflow/` (hot analytics + config)
+- Backups (opt-in) are written to `~/.stackunderflow/backups/` unencrypted — protect this directory like you would your `~/.claude/`
+
+**What leaves your machine (only if you enable it):**
+- **Sharing** (opt-in) — uploads a conversation summary to stackunderflow.dev. Raw conversations are never sent unless you explicitly share them.
+- **Pricing** — fetches model cost data from a public GitHub source (no user data sent)
+
+No telemetry, no tracking, no crash reports.
 
 ## Contributing
 
 ```bash
 # Install with dev dependencies
-pip install -e .
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 
 # Run tests
 python -m pytest tests/stackunderflow/ -v

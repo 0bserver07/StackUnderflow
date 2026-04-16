@@ -35,6 +35,18 @@ dependencies = [
 
 [project.optional-dependencies]
 share = ["boto3>=1.26.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "psutil>=5.9.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "types-python-dateutil",
+    "types-psutil",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
 
 [project.scripts]
 stackunderflow = "stackunderflow.cli:cli"
