@@ -25,7 +25,11 @@ class RawEntry(NamedTuple):
 
 
 def scan(log_dir: str) -> list[RawEntry]:
-    """Read every ``*.jsonl`` file under *log_dir* (recursively) and return raw entries."""
+    """Read every ``*.jsonl`` file under *log_dir* (recursively) and return raw entries.
+
+    For old-format projects that have no per-project JSONL files, falls
+    back to reading from the centralized ``~/.claude/history.jsonl``.
+    """
     base = Path(log_dir)
     if not base.is_dir():
         _log.warning("Log directory does not exist: %s", log_dir)
@@ -33,6 +37,16 @@ def scan(log_dir: str) -> list[RawEntry]:
 
     # Collect all JSONL files at any depth
     files = sorted(base.rglob("*.jsonl"), key=lambda p: p.name)
+
+    if not files:
+        # Legacy project — try history.jsonl
+        from .history_reader import entries_for_slug
+        slug = base.name
+        legacy = entries_for_slug(slug)
+        if legacy:
+            _log.info("Using history.jsonl for legacy project %s (%d entries)", slug, len(legacy))
+        return legacy
+
     continuations = _detect_continuations(files, base)
 
     entries: list[RawEntry] = []

@@ -50,10 +50,15 @@ def _base_dir() -> Path:
 def _project_path_to_slug(project_dir: str) -> str:
     """Convert an absolute project path to the slug Claude Code uses.
 
-    Claude replaces every ``/`` with ``-``, producing e.g.
-    ``/Users/me/code/app`` → ``-Users-me-code-app``.
+    Claude replaces ``/`` and ``_`` with ``-``, producing e.g.
+    ``/Users/me/code/my_app`` → ``-Users-me-code-my-app``.
     """
-    return os.path.abspath(project_dir).rstrip(os.sep).replace(os.sep, "-")
+    return (
+        os.path.abspath(project_dir)
+        .rstrip(os.sep)
+        .replace(os.sep, "-")
+        .replace("_", "-")
+    )
 
 
 def _candidate_dirs(slug: str) -> list[str]:
@@ -74,7 +79,7 @@ def locate_logs(project_dir: str) -> str | None:
     slug = _project_path_to_slug(project_dir)
     for name in _candidate_dirs(slug):
         target = root / name
-        if target.is_dir() and _contains_logs(target):
+        if target.is_dir() and (_contains_logs(target) or _is_legacy_project(target)):
             return str(target)
     return None
 
@@ -82,6 +87,11 @@ def locate_logs(project_dir: str) -> str | None:
 def _contains_logs(d: Path) -> bool:
     """True if directory has at least one .jsonl file (non-recursive)."""
     return any(True for _ in d.glob("*.jsonl"))
+
+
+def _is_legacy_project(d: Path) -> bool:
+    """True if directory is an old-format project (no JSONL, but has cache marker)."""
+    return (d / ".continuation_cache.json").exists() and not _contains_logs(d)
 
 
 # ── inventory ────────────────────────────────────────────────────────────────
@@ -92,7 +102,7 @@ def enumerate_projects() -> list[tuple[str, str]]:
         return []
     out: list[tuple[str, str]] = []
     for child in root.iterdir():
-        if child.is_dir() and _contains_logs(child):
+        if child.is_dir() and (_contains_logs(child) or _is_legacy_project(child)):
             out.append((_humanise(child.name), str(child)))
     return out
 
@@ -106,20 +116,21 @@ def _scan_projects() -> Iterator[ProjectInfo]:
         if not child.is_dir():
             continue
         logs = list(child.glob("*.jsonl"))
-        if not logs:
-            continue
-        stat_results = [f.stat() for f in logs]
-        byte_total = sum(s.st_size for s in stat_results)
-        mod_times = [s.st_mtime for s in stat_results]
-        yield ProjectInfo(
-            dir_name=child.name,
-            log_path=str(child),
-            file_count=len(logs),
-            total_size_mb=round(byte_total / (1 << 20), 2),
-            last_modified=max(mod_times),
-            first_seen=min(mod_times),
-            display_name=child.name,
-        )
+        if logs:
+            stat_results = [f.stat() for f in logs]
+            byte_total = sum(s.st_size for s in stat_results)
+            mod_times = [s.st_mtime for s in stat_results]
+            yield ProjectInfo(
+                dir_name=child.name,
+                log_path=str(child),
+                file_count=len(logs),
+                total_size_mb=round(byte_total / (1 << 20), 2),
+                last_modified=max(mod_times),
+                first_seen=min(mod_times),
+                display_name=child.name,
+            )
+        elif _is_legacy_project(child):
+            yield _legacy_project_info(child)
 
 
 def project_metadata() -> list[dict]:
@@ -142,6 +153,46 @@ def check_project(project_dir: str) -> tuple[bool, str]:
     if lp is None:
         return False, f"No Claude logs for: {project_dir}"
     return True, f"Logs at: {lp}"
+
+
+def _legacy_project_info(child: Path) -> ProjectInfo:
+    """Build ProjectInfo for an old-format project using history.jsonl data."""
+    from datetime import datetime as _dt
+    from stackunderflow.pipeline.history_reader import entries_for_slug
+
+    entries = entries_for_slug(child.name)
+    if entries:
+        epochs: list[float] = []
+        for e in entries:
+            ts = e.payload.get("timestamp", "")
+            if isinstance(ts, str) and ts:
+                try:
+                    epochs.append(_dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    pass
+            elif isinstance(ts, (int, float)) and ts:
+                epochs.append(ts / 1000 if ts > 1e12 else ts)
+        if epochs:
+            return ProjectInfo(
+                dir_name=child.name,
+                log_path=str(child),
+                file_count=len(entries),
+                total_size_mb=0.0,
+                last_modified=max(epochs),
+                first_seen=min(epochs),
+                display_name=child.name,
+            )
+    # Fallback: use the directory's own mtime
+    st = child.stat()
+    return ProjectInfo(
+        dir_name=child.name,
+        log_path=str(child),
+        file_count=0,
+        total_size_mb=0.0,
+        last_modified=st.st_mtime,
+        first_seen=st.st_mtime,
+        display_name=child.name,
+    )
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
