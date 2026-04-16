@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from ..infra.costs import RATE_CARD as DEFAULT_CLAUDE_PRICING
 
@@ -16,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 class PricingService:
     """Service for managing dynamic model pricing with caching."""
+
+    # Pricing older than this is considered stale even if the last refresh
+    # didn't explicitly fail. 7 days is long enough to absorb intermittent
+    # LiteLLM outages but short enough that a real stagnation is visible.
+    STALE_THRESHOLD = timedelta(days=7)
 
     def __init__(self):
         self.cache_dir = Path.home() / ".stackunderflow" / "cache"
@@ -26,7 +32,7 @@ class PricingService:
         # Ensure cache directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_pricing(self) -> dict[str, any]:
+    def get_pricing(self) -> dict[str, Any]:
         """
         Get pricing with intelligent cache and fallback logic.
 
@@ -49,7 +55,7 @@ class PricingService:
                     "pricing": cache_data["pricing"],
                     "source": "cache",
                     "timestamp": cache_data["timestamp"],
-                    "is_stale": False,
+                    "is_stale": self._is_beyond_stale_threshold(cache_data.get("timestamp")),
                 }
             else:
                 # Cache is stale, try to refresh
@@ -65,7 +71,8 @@ class PricingService:
                         "is_stale": False,
                     }
                 else:
-                    # Failed to fetch, use stale cache
+                    # Failed to fetch - surface staleness (refresh failed OR
+                    # cached data exceeds STALE_THRESHOLD, whichever applies).
                     return {
                         "pricing": cache_data["pricing"],
                         "source": "cache",
@@ -86,12 +93,13 @@ class PricingService:
                     "is_stale": False,
                 }
             else:
-                # No cache and can't fetch - use defaults
+                # No cache and can't fetch - use hardcoded defaults.
+                # These can drift from Anthropic's real rates, so flag stale.
                 return {
                     "pricing": DEFAULT_CLAUDE_PRICING,
                     "source": "default",
                     "timestamp": datetime.now(UTC).isoformat(),
-                    "is_stale": False,
+                    "is_stale": True,
                 }
 
     def force_refresh(self) -> bool:
@@ -129,7 +137,7 @@ class PricingService:
         except OSError as e:
             logger.info(f"Error saving pricing cache: {e}")
 
-    def _is_cache_valid(self, timestamp_str: str) -> bool:
+    def _is_cache_valid(self, timestamp_str: str | None) -> bool:
         """Check if cache timestamp is within valid duration."""
         if not timestamp_str:
             return False
@@ -141,8 +149,27 @@ class PricingService:
         except (ValueError, AttributeError):
             return False
 
+    def _is_beyond_stale_threshold(self, timestamp_str: str | None) -> bool:
+        """True if the cached timestamp is older than STALE_THRESHOLD.
+
+        A missing/unparseable timestamp is treated as stale — we can't prove
+        freshness, so we warn.
+        """
+        if not timestamp_str:
+            return True
+        try:
+            cache_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return True
+        return (datetime.now(UTC) - cache_time) >= self.STALE_THRESHOLD
+
     def _fetch_from_litellm(self) -> dict | None:
-        """Fetch latest pricing from LiteLLM GitHub."""
+        """Fetch latest pricing from LiteLLM GitHub.
+
+        A failure here (network, parse, schema) means downstream callers will
+        fall back to a cached or hardcoded rate card. We emit a WARNING so
+        operators can notice rather than silently serving stale numbers.
+        """
         try:
             # Set a timeout for the request
             with urllib.request.urlopen(self.litellm_url, timeout=10) as response:
@@ -152,7 +179,11 @@ class PricingService:
             return self._transform_litellm_to_claude(litellm_data)
 
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, Exception) as e:
-            logger.info(f"Error fetching pricing from LiteLLM: {e}")
+            logger.warning(
+                "Failed to refresh pricing from LiteLLM (%s); pricing may be stale: %s",
+                self.litellm_url,
+                e,
+            )
             return None
 
     def _transform_litellm_to_claude(self, litellm_data: dict) -> dict:

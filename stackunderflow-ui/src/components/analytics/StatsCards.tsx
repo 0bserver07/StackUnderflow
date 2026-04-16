@@ -9,7 +9,9 @@ import {
   IconDatabase,
   IconAlertTriangle,
 } from '@tabler/icons-react'
+import { useQuery } from '@tanstack/react-query'
 import type { DashboardStats } from '../../types/api'
+import { getPricing } from '../../services/api'
 
 interface StatsCardsProps {
   stats: DashboardStats
@@ -27,19 +29,29 @@ function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`
 }
 
+function daysSince(isoTimestamp: string | undefined): number | null {
+  if (!isoTimestamp) return null
+  const then = new Date(isoTimestamp).getTime()
+  if (Number.isNaN(then)) return null
+  const diffMs = Date.now() - then
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))
+}
+
 interface StatCardProps {
   icon: React.ReactNode
   label: string
   value: string
   sublabel?: string
+  badge?: React.ReactNode
 }
 
-function StatCard({ icon, label, value, sublabel }: StatCardProps) {
+function StatCard({ icon, label, value, sublabel, badge }: StatCardProps) {
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
         <span className="text-gray-400">{icon}</span>
         <span className="text-xs text-gray-400 uppercase tracking-wider">{label}</span>
+        {badge}
       </div>
       <div className="text-2xl font-bold text-gray-100">{value}</div>
       {sublabel && <div className="text-xs text-gray-500 mt-1">{sublabel}</div>}
@@ -48,6 +60,15 @@ function StatCard({ icon, label, value, sublabel }: StatCardProps) {
 }
 
 export default function StatsCards({ stats }: StatsCardsProps) {
+  // Pricing data is used only to surface a "stale pricing" indicator; a
+  // failed fetch should never hide the dashboard, so errors are swallowed.
+  const { data: pricing } = useQuery({
+    queryKey: ['pricing'],
+    queryFn: getPricing,
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  })
+
   if (!stats?.overview) return null
 
   const tokens = stats.overview.total_tokens ?? { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
@@ -60,6 +81,24 @@ export default function StatsCards({ stats }: StatsCardsProps) {
   }
   const dateRange = stats.overview.date_range ?? { start: '', end: '' }
   const modelsCount = stats.models ? Object.keys(stats.models).length : 0
+
+  const isPricingStale = pricing?.is_stale === true
+  const pricingAgeDays = daysSince(pricing?.timestamp)
+  const staleTooltip = pricingAgeDays != null
+    ? `Pricing data is ${pricingAgeDays} day${pricingAgeDays === 1 ? '' : 's'} old — last refresh may have failed`
+    : 'Pricing data could not be refreshed — costs may be out of date'
+  const staleBadge = isPricingStale ? (
+    <span
+      title={staleTooltip}
+      className="inline-flex items-center gap-1 ml-auto text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5"
+    >
+      <IconAlertTriangle size={10} />
+      stale
+    </span>
+  ) : null
+  const costSublabel = isPricingStale
+    ? `${dateRange.start} - ${dateRange.end} · pricing may be outdated`
+    : `${dateRange.start} - ${dateRange.end}`
 
   // Compute interruption rate from daily stats
   const dailyEntries = stats.daily_stats ? Object.values(stats.daily_stats) : []
@@ -89,7 +128,8 @@ export default function StatsCards({ stats }: StatsCardsProps) {
         icon={<IconCurrencyDollar size={18} />}
         label="Total Cost"
         value={formatCost(stats.overview.total_cost ?? 0)}
-        sublabel={`${dateRange.start} - ${dateRange.end}`}
+        sublabel={costSublabel}
+        badge={staleBadge}
       />
       <StatCard
         icon={<IconTerminal2 size={18} />}

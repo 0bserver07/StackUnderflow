@@ -11,6 +11,7 @@ import type {
   TagBrowseResponse,
   BookmarkListResponse,
   Bookmark,
+  PricingData,
 } from '../types/api'
 
 const BASE = '/api'
@@ -157,4 +158,9 @@ export async function reindexQA(): Promise<Record<string, unknown>> {
 
 export async function reindexTags(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/tags/reindex`, { method: 'POST' })
+}
+
+// Pricing
+export async function getPricing(): Promise<PricingData> {
+  return fetchJson(`${BASE}/pricing`)
 }

@@ -1,5 +1,12 @@
 # Codex Adapter Specification
 
+> **Status: Proposal / RFC — not implemented.**
+> This document describes a possible future architecture for adding OpenAI
+> Codex as a second data source. **No code in this repository implements
+> any of the classes or modules described below.** The current pipeline
+> reads only Claude Code JSONL logs. Treat this file as a design sketch
+> open to discussion, not a roadmap commitment.
+
 Adds OpenAI Codex (CLI coding agent) as a second data source alongside Claude Code.
 
 ## 1. Data Sources

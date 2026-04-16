@@ -1,6 +1,6 @@
 # StackUnderflow
 
-A local-first knowledge base for your AI coding sessions. Browse, search, and analyze conversations from Claude Code — with planned support for Codex and other coding agents.
+A local-first knowledge base for your AI coding sessions. Browse, search, and analyse conversations from Claude Code.
 
 [Quickstart](#quickstart) | [Features](#features) | [Configuration](#configuration) | [Architecture](#architecture) | [Contributing](#contributing)
 
@@ -128,9 +128,9 @@ stackunderflow/
 stackunderflow-ui/  # React + TypeScript + Tailwind frontend
 ```
 
-### Source adapters (planned)
+### Source adapters
 
-The pipeline is designed for multiple sources. Currently supports Claude Code (JSONL logs under `~/.claude/projects/`). A Codex adapter spec is available at [docs/codex-adapter-spec.md](docs/codex-adapter-spec.md).
+Currently supports Claude Code only — JSONL logs under `~/.claude/projects/` plus the legacy `~/.claude/history.jsonl` for pre-January-2026 sessions. A proposal sketch for adding OpenAI Codex (`~/.codex/`) lives at [docs/codex-adapter-spec.md](docs/codex-adapter-spec.md); it is an unimplemented RFC, not a roadmap commitment.
 
 ## Privacy
 
