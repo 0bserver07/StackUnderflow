@@ -60,7 +60,6 @@ packages = ["stackunderflow"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "stackunderflow-site/",
     "stackunderflow-ui/",
     "tests/",
     ".github/",

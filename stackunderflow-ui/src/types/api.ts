@@ -420,25 +420,6 @@ export interface BookmarkListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Related sessions types
-// ---------------------------------------------------------------------------
-
-export interface RelatedSession {
-  session_id: string
-  project: string
-  score: number
-  shared_tags: string[]
-  preview: string
-  timestamp: string
-}
-
-export interface RelatedResponse {
-  session_id: string
-  related: RelatedSession[]
-  count: number
-}
-
-// ---------------------------------------------------------------------------
 // Pricing types
 // ---------------------------------------------------------------------------
 

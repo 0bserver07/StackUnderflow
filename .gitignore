@@ -1,26 +1,13 @@
 # env files
 .env
-.env.stackunderflow.dev
-.env.stackunderflow.dev.example
+.env.local
 
 # Dev files
 CLAUDE.md
 docs/specs.md
-docs/stackunderflow-distribution-plan.md
-docs/dashboard-html-structure.md
-docs/README-ADMIN.md
 start*.sh
 
-graphs/*
-uploads/*
-fake-r2/*
-data/*
 .log/
-
-
-
-scripts/clean_r2.py
-
 
 tests/baseline_phase2.json
 

@@ -20,16 +20,11 @@ tests/
 │   ├── test_cli.py                    # CLI command tests (19 tests)
 │   ├── test_server.py                 # API endpoint tests (24 tests)
 │   ├── test_performance.py            # Performance benchmarks (9 tests)
-│   ├── test_processor_data_verification.py  # Data validation tests (13 tests)
-│   ├── test_processor_optimization_correctness.py  # Optimization tests (6 tests)
-│   └── test_share.py                  # Share functionality tests (8 tests)
-├── stackunderflow-site/
-│   └── test_admin.py                  # Admin panel tests (22 tests)
+│   ├── test_processor_data_verification.py  # Data validation tests
+│   └── test_processor_optimization_correctness.py  # Optimization tests
 ├── mock-data/                         # Test data files
 │   └── *.jsonl                        # Sample Claude log files
 └── baseline_results.json              # Expected results for regression testing
-
-Total: 160 collected (158 passing, 2 skipped)
 ```
 
 ### What Each Test Suite Covers
@@ -118,13 +113,6 @@ Total: 160 collected (158 passing, 2 skipped)
 - Verifies optimizations don't break functionality
 - Compares optimized vs baseline results
 - Ensures data integrity
-
-#### Admin Tests (`tests/stackunderflow-site/`)
-
-**test_admin.py** (22 tests):
-- Admin helper functions
-- OAuth authentication endpoints
-- Gallery and share management API
 
 ### Test Data
 - `tests/mock-data/` - Contains sample JSONL files from real Claude sessions

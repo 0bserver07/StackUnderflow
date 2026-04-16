@@ -1,4 +1,4 @@
-"""Miscellaneous routes: pricing, related, health, favicon, assets, ollama proxy."""
+"""Miscellaneous routes: pricing, health, favicon, assets, ollama proxy."""
 
 import os
 
@@ -52,57 +52,6 @@ async def refresh_pricing():
             return JSONResponse({"status": "error", "message": "Failed to fetch pricing from LiteLLM"}, status_code=500)
     except Exception as e:
         return JSONResponse({"error": f"Failed to refresh pricing: {str(e)}"}, status_code=500)
-
-
-# ── Related sessions ──────────────────────────────────────────────────────────
-
-@router.get("/api/related/{session_id}")
-async def get_related_sessions(session_id: str, limit: int = 5):
-    """Get sessions related to a given session based on shared tags, project, and tools.
-
-    Args:
-        session_id: The session ID to find related sessions for
-        limit: Maximum number of results (default 5, max 20)
-
-    Returns:
-        JSON with related sessions list sorted by similarity score
-    """
-    if deps.related_service is None:
-        return JSONResponse(
-            {"error": "Related service is not available. It failed to initialize on startup."},
-            status_code=503,
-        )
-    try:
-        limit = min(max(1, limit), 20)
-
-        # Get messages from cache if available (needed for tool/project info)
-        messages = None
-        if deps.current_log_path:
-            memory_result = deps.cache.fetch(deps.current_log_path)
-            if memory_result:
-                messages, _ = memory_result
-            else:
-                cached_messages = deps.cache.load_messages(deps.current_log_path)
-                if cached_messages:
-                    messages = cached_messages
-
-        related = deps.related_service.find_related(
-            session_id=session_id,
-            messages=messages,
-            limit=limit,
-        )
-
-        return JSONResponse({
-            "session_id": session_id,
-            "related": related,
-            "count": len(related),
-        })
-    except Exception as e:
-        deps.logger.error(f"Error finding related sessions: {e}")
-        return JSONResponse(
-            {"error": f"Failed to find related sessions: {str(e)}"},
-            status_code=500,
-        )
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

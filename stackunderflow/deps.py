@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from stackunderflow.services.bookmark_service import BookmarkService
     from stackunderflow.services.pricing_service import PricingService
     from stackunderflow.services.qa_service import QAService
-    from stackunderflow.services.related_service import RelatedService
     from stackunderflow.services.search_service import SearchService
     from stackunderflow.services.tag_service import TagService
 
@@ -48,4 +47,3 @@ tag_service: TagService | None = None
 qa_service: QAService | None = None
 bookmark_service: BookmarkService | None = None
 pricing_service: PricingService | None = None
-related_service: RelatedService | None = None

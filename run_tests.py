@@ -77,8 +77,6 @@ def run_tests(args):
             cmd.append("tests/stackunderflow/test_processor_data_verification.py")
         elif args.module == "performance":
             cmd.append("tests/stackunderflow/test_performance.py")
-        elif args.module == "admin":
-            cmd.append("tests/stackunderflow-site/test_admin.py")
         else:
             print(f"{Colors.RED}Unknown module: {args.module}{Colors.ENDC}")
             return False
@@ -236,8 +234,8 @@ Examples:
     )
     
     # Test selection
-    parser.add_argument("-m", "--module", 
-                        choices=["processor", "stats", "memory_cache", "verification", "performance", "admin"],
+    parser.add_argument("-m", "--module",
+                        choices=["processor", "stats", "memory_cache", "verification", "performance"],
                         help="Run tests for specific module")
     parser.add_argument("-f", "--file", 
                         help="Run specific test file")

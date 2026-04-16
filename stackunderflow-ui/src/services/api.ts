@@ -6,15 +6,11 @@ import type {
   DashboardData,
   Message,
   QAListResponse,
-  QADetailResponse,
   SearchResponse,
   TagCloudResponse,
   TagBrowseResponse,
-  SessionTags,
   BookmarkListResponse,
   Bookmark,
-  RelatedResponse,
-  PricingData,
 } from '../types/api'
 
 const BASE = '/api'
@@ -39,12 +35,6 @@ export async function setProjectByDir(dirName: string): Promise<SetProjectRespon
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dir_name: dirName }),
   })
-}
-
-export async function getCurrentProject() {
-  return fetchJson<{ status: string; project_path?: string; log_path?: string; log_dir_name?: string }>(
-    `${BASE}/project`
-  )
 }
 
 // Dashboard
@@ -89,10 +79,6 @@ export async function getQAList(params: {
   return fetchJson(`${BASE}/qa?${searchParams}`)
 }
 
-export async function getQADetail(qaId: string): Promise<QADetailResponse> {
-  return fetchJson(`${BASE}/qa/${encodeURIComponent(qaId)}`)
-}
-
 // Search
 export async function searchMessages(params: {
   q: string
@@ -121,24 +107,6 @@ export async function getTagCloud(): Promise<TagCloudResponse> {
   return fetchJson(`${BASE}/tags`)
 }
 
-export async function getSessionTags(sessionId: string): Promise<SessionTags> {
-  return fetchJson(`${BASE}/tags/session/${encodeURIComponent(sessionId)}`)
-}
-
-export async function addManualTag(sessionId: string, tag: string) {
-  return fetchJson(`${BASE}/tags/session/${encodeURIComponent(sessionId)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag }),
-  })
-}
-
-export async function removeManualTag(sessionId: string, tag: string) {
-  return fetchJson(`${BASE}/tags/session/${encodeURIComponent(sessionId)}/${encodeURIComponent(tag)}`, {
-    method: 'DELETE',
-  })
-}
-
 export async function browseTag(tag: string): Promise<TagBrowseResponse> {
   return fetchJson(`${BASE}/tags/browse/${encodeURIComponent(tag)}`)
 }
@@ -150,21 +118,7 @@ export async function getBookmarks(tag?: string, sortBy = 'created_at'): Promise
   return fetchJson(`${BASE}/bookmarks?${params}`)
 }
 
-export async function addBookmark(data: {
-  session_id: string
-  title: string
-  message_index?: number
-  notes?: string
-  tags?: string[]
-}): Promise<Bookmark> {
-  return fetchJson(`${BASE}/bookmarks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-}
-
-export async function removeBookmark(bookmarkId: string) {
+export async function removeBookmark(bookmarkId: string): Promise<Bookmark | unknown> {
   return fetchJson(`${BASE}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
     method: 'DELETE',
   })
@@ -178,29 +132,6 @@ export async function updateBookmark(bookmarkId: string, data: { title?: string;
   })
 }
 
-export async function toggleBookmark(data: { session_id: string; title?: string; message_index?: number }) {
-  return fetchJson(`${BASE}/bookmarks/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-}
-
-// Related sessions
-export async function getRelatedSessions(sessionId: string, limit = 5): Promise<RelatedResponse> {
-  return fetchJson(`${BASE}/related/${encodeURIComponent(sessionId)}?limit=${limit}`)
-}
-
-// Pricing
-export async function getPricing(): Promise<PricingData> {
-  return fetchJson(`${BASE}/pricing`)
-}
-
-// Health
-export async function healthCheck(): Promise<{ status: string }> {
-  return fetchJson(`${BASE}/health`)
-}
-
 // Refresh
 export async function refreshData(timezoneOffset = 0) {
   return fetchJson(`${BASE}/refresh`, {
@@ -210,22 +141,14 @@ export async function refreshData(timezoneOffset = 0) {
   })
 }
 
-// Global Stats
+// Global stats (cross-project overview)
 export async function getGlobalStats(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/global-stats`)
 }
 
-// Reindex endpoints
+// Reindex (manual cache rebuilds)
 export async function reindexSearch(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/search/reindex`, { method: 'POST' })
-}
-
-export async function getSearchStats(): Promise<Record<string, unknown>> {
-  return fetchJson(`${BASE}/search/stats`)
-}
-
-export async function getQAStats(): Promise<Record<string, unknown>> {
-  return fetchJson(`${BASE}/qa/stats`)
 }
 
 export async function reindexQA(): Promise<Record<string, unknown>> {
@@ -235,8 +158,3 @@ export async function reindexQA(): Promise<Record<string, unknown>> {
 export async function reindexTags(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/tags/reindex`, { method: 'POST' })
 }
-
-export async function getSessionBookmarks(sessionId: string): Promise<BookmarkListResponse> {
-  return fetchJson(`${BASE}/bookmarks/session/${encodeURIComponent(sessionId)}`)
-}
-
