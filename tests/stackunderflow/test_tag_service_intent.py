@@ -151,6 +151,27 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:ops", tags)
 
+    def test_multi_intent_build_and_fix(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [
+                _msg("Add a new /users endpoint"),
+                _msg("Wait, there's an error — can you fix it?"),
+            ],
+        )
+        self.assertIn("intent:build", tags)
+        self.assertIn("intent:fix", tags)
+
+    def test_intents_are_sorted_in_output(self):
+        # auto_tag_session returns sorted tags; intents should slot alphabetically
+        # within the overall list without breaking sort order.
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Fix the bug and add a test")],
+        )
+        intent_tags = [t for t in tags if t.startswith("intent:")]
+        self.assertEqual(intent_tags, sorted(intent_tags))
+
 
 if __name__ == "__main__":
     unittest.main()
