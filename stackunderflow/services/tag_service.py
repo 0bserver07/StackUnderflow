@@ -346,6 +346,9 @@ class TagService:
         for topic, color in TOPIC_COLORS.items():
             metadata[topic] = {"color": color, "category": "topic"}
 
+        for intent, color in INTENT_COLORS.items():
+            metadata[intent] = {"color": color, "category": "intent"}
+
         for tool, color in TOOL_COLORS.items():
             metadata[tool] = {"color": color, "category": "tool"}
 

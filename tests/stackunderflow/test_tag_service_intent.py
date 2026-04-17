@@ -173,5 +173,41 @@ class TestIntentDetection(unittest.TestCase):
         self.assertEqual(intent_tags, sorted(intent_tags))
 
 
+class TestIntentMetadata(unittest.TestCase):
+    """Tag metadata must expose the 'intent' category for all 6 intent tags."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.svc = _IsolatedTagService(Path(self._tmp.name))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_all_intents_have_metadata(self):
+        metadata = self.svc._build_tag_metadata()
+        for intent in [
+            "intent:build",
+            "intent:fix",
+            "intent:explore",
+            "intent:refactor",
+            "intent:test",
+            "intent:ops",
+        ]:
+            self.assertIn(intent, metadata, f"{intent} missing from metadata")
+            self.assertEqual(metadata[intent]["category"], "intent")
+            self.assertTrue(metadata[intent]["color"].startswith("#"))
+
+    def test_tag_cloud_reports_intent_category(self):
+        # Index a session with a clear build intent
+        self.svc.index_project([
+            {"session_id": "s1", "content": "Add a new feature", "tools": []},
+        ])
+        cloud = self.svc.get_tag_cloud()
+        intent_entries = [t for t in cloud["tags"] if t["name"] == "intent:build"]
+        self.assertEqual(len(intent_entries), 1)
+        self.assertEqual(intent_entries[0]["category"], "intent")
+        self.assertEqual(intent_entries[0]["count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
