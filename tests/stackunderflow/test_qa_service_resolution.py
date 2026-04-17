@@ -133,5 +133,40 @@ class TestClassifyResolution(unittest.TestCase):
         self.assertEqual(_classify_resolution(followup_count=1, has_code=False), ("open", 1))
 
 
+class TestExtractionAttachesResolution(_TempDBTestCase):
+    """extract_qa_pairs produces resolution_status and loop_count on each pair."""
+
+    def test_code_answer_no_followup_is_resolved(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "How do I read a file in Python?"),
+            _msg("assistant", "Use open():\n```python\nopen('x.txt').read()\n```"),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "resolved")
+        self.assertEqual(pairs[0]["loop_count"], 0)
+
+    def test_two_followups_is_looped(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "How do I fix the ImportError?"),
+            _msg("assistant", "Try `pip install foo`:\n```bash\npip install foo\n```"),
+            _msg("user", "That doesn't work, still getting the error"),
+            _msg("assistant", "Try `pip install foo --upgrade`:\n```bash\npip install foo --upgrade\n```"),
+            _msg("user", "Still not working, same traceback"),
+            _msg("assistant", "Let's check the Python version:\n```bash\npython --version\n```"),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "looped")
+        self.assertGreaterEqual(pairs[0]["loop_count"], 2)
+
+    def test_non_code_no_followup_is_open(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "What is Python?"),
+            _msg("assistant", "Python is a programming language."),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "open")
+        self.assertEqual(pairs[0]["loop_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

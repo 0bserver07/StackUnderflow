@@ -328,6 +328,7 @@ class QAService:
             answer_parts = []
             all_answer_msgs = []
             num_attempts = 0
+            followup_count = 0
             session_id = msg.get("session_id", "")
             timestamp = msg.get("timestamp", "")
             model = "N/A"
@@ -362,6 +363,7 @@ class QAService:
                     if _is_followup(next_content):
                         # This is a continuation - include it as context
                         answer_parts.append(f"\n---\n[Follow-up]: {next_content}")
+                        followup_count += 1
                         j += 1
                         continue
                     else:
@@ -378,6 +380,11 @@ class QAService:
 
                 qa_id = _generate_qa_id(session_id, timestamp, question_text)
 
+                resolution_status, loop_count = _classify_resolution(
+                    followup_count=followup_count,
+                    has_code=bool(code_snippets),
+                )
+
                 qa_pairs.append({
                     "id": qa_id,
                     "session_id": session_id,
@@ -389,6 +396,8 @@ class QAService:
                     "timestamp": timestamp,
                     "model": model,
                     "num_attempts": max(1, num_attempts),
+                    "resolution_status": resolution_status,
+                    "loop_count": loop_count,
                 })
 
             # Move to the next unprocessed message
