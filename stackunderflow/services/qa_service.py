@@ -662,6 +662,8 @@ class QAService:
                     "timestamp": row["timestamp"],
                     "model": row["model"],
                     "num_attempts": row["num_attempts"],
+                    "resolution_status": row["resolution_status"],
+                    "loop_count": row["loop_count"],
                     "question_snippet": row["question_snippet"],
                     "answer_snippet": row["answer_snippet"],
                 })
@@ -708,6 +710,8 @@ class QAService:
                 "timestamp": row["timestamp"],
                 "model": row["model"],
                 "num_attempts": row["num_attempts"],
+                "resolution_status": row["resolution_status"],
+                "loop_count": row["loop_count"],
                 "created_at": row["created_at"],
             }
         finally:

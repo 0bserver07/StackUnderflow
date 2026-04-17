@@ -209,5 +209,32 @@ class TestIndexPersistsResolution(_TempDBTestCase):
         self.assertGreaterEqual(row["loop_count"], 2)
 
 
+class TestListAndGetExposeResolution(_TempDBTestCase):
+    """list_qa and get_qa_by_id return the resolution fields in their payloads."""
+
+    def _seed_one_resolved(self):
+        self.svc.index_project("p1", [
+            _msg("user", "How do I X?"),
+            _msg("assistant", "Try:\n```py\nprint('hello world')\n```"),
+        ])
+
+    def test_list_qa_includes_resolution_fields(self):
+        self._seed_one_resolved()
+        result = self.svc.list_qa(project="p1")
+        self.assertEqual(len(result["results"]), 1)
+        row = result["results"][0]
+        self.assertEqual(row["resolution_status"], "resolved")
+        self.assertEqual(row["loop_count"], 0)
+
+    def test_get_qa_by_id_includes_resolution_fields(self):
+        self._seed_one_resolved()
+        result = self.svc.list_qa(project="p1")
+        qa_id = result["results"][0]["id"]
+        pair = self.svc.get_qa_by_id(qa_id)
+        self.assertIsNotNone(pair)
+        self.assertEqual(pair["resolution_status"], "resolved")
+        self.assertEqual(pair["loop_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
