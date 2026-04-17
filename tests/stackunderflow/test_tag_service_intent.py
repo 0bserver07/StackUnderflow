@@ -209,5 +209,27 @@ class TestIntentMetadata(unittest.TestCase):
         self.assertEqual(intent_entries[0]["count"], 1)
 
 
+class TestIntentBrowse(unittest.TestCase):
+    """get_sessions_by_tag('intent:build') returns matching sessions."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.svc = _IsolatedTagService(Path(self._tmp.name))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_browse_by_intent_tag(self):
+        self.svc.index_project([
+            {"session_id": "s1", "content": "Add a login page", "tools": []},
+            {"session_id": "s2", "content": "Fix the crash on logout", "tools": []},
+        ])
+        build_sessions = self.svc.get_sessions_by_tag("intent:build")
+        fix_sessions = self.svc.get_sessions_by_tag("intent:fix")
+        self.assertEqual([s["session_id"] for s in build_sessions], ["s1"])
+        self.assertEqual([s["session_id"] for s in fix_sessions], ["s2"])
+        self.assertEqual(build_sessions[0]["source"], ["auto"])
+
+
 if __name__ == "__main__":
     unittest.main()
