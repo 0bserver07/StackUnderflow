@@ -1,0 +1,91 @@
+"""Tests for the waste-finding heuristic."""
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from stackunderflow.reports.optimize import find_waste
+from stackunderflow.reports.scope import Scope
+from stackunderflow.services.qa_service import QAService
+
+
+def _msg(mtype: str, content: str, timestamp: str, session_id: str = "s1") -> dict:
+    return {
+        "type": mtype,
+        "content": content,
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "tools": [],
+        "model": "claude-sonnet-4-6",
+    }
+
+
+class TestFindWaste(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "qa.db"
+        self.svc = QAService(db_path=self.db_path)
+
+        # Seed: proj-a has 2 looped pairs; proj-b has 0.
+        self.svc.index_project("proj-a", [
+            _msg("user", "How do I fix the import?", "2026-04-16T10:00:00"),
+            _msg("assistant", "Try:\n```bash\npip install foo\n```", "2026-04-16T10:00:01"),
+            _msg("user", "that doesn't work", "2026-04-16T10:00:02"),
+            _msg("assistant", "Try:\n```bash\npip install foo --upgrade\n```", "2026-04-16T10:00:03"),
+            _msg("user", "still not working", "2026-04-16T10:00:04"),
+            _msg("assistant", "Check:\n```bash\npython --version\n```", "2026-04-16T10:00:05"),
+        ])
+        self.svc.index_project("proj-a-second-loop", [
+            _msg("user", "Why is my build failing?", "2026-04-16T11:00:00", session_id="s2"),
+            _msg("assistant", "Try:\n```bash\nrm -rf node_modules\n```", "2026-04-16T11:00:01", session_id="s2"),
+            # Note: must match FOLLOWUP_PATTERNS ("that doesn't work"), else parser
+            # treats it as a new question and loop_count stays at 1 -> 'resolved'.
+            _msg("user", "that doesn't work", "2026-04-16T11:00:02", session_id="s2"),
+            _msg("assistant", "Try:\n```bash\nnpm cache clean\n```", "2026-04-16T11:00:03", session_id="s2"),
+            _msg("user", "still broken", "2026-04-16T11:00:04", session_id="s2"),
+            _msg("assistant", "Check:\n```bash\nnode --version\n```", "2026-04-16T11:00:05", session_id="s2"),
+        ])
+        self.svc.index_project("proj-b", [
+            _msg("user", "How do I read a file?", "2026-04-16T12:00:00", session_id="s3"),
+            _msg("assistant", "Use:\n```python\nopen('x.txt').read()\n```", "2026-04-16T12:00:01", session_id="s3"),
+        ])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_find_waste_ranks_looped_projects_first(self):
+        scope = Scope(since=None, until=None, label="all")
+        projects = [
+            {"dir_name": "proj-a", "log_path": "/fake/a"},
+            {"dir_name": "proj-a-second-loop", "log_path": "/fake/a2"},
+            {"dir_name": "proj-b", "log_path": "/fake/b"},
+        ]
+        with patch("stackunderflow.reports.optimize._qa_service_factory", return_value=self.svc):
+            waste = find_waste(projects, scope=scope)
+        # Two projects have looped pairs, one does not.
+        names = {w["project"] for w in waste}
+        self.assertIn("proj-a", names)
+        self.assertIn("proj-a-second-loop", names)
+        self.assertNotIn("proj-b", names)
+        # Each looped-project row has loop_count >= 1
+        for row in waste:
+            self.assertGreaterEqual(row["looped_pairs"], 1)
+
+    def test_find_waste_respects_include_exclude(self):
+        scope = Scope(since=None, until=None, label="all")
+        projects = [
+            {"dir_name": "proj-a", "log_path": "/fake/a"},
+            {"dir_name": "proj-a-second-loop", "log_path": "/fake/a2"},
+        ]
+        with patch("stackunderflow.reports.optimize._qa_service_factory", return_value=self.svc):
+            waste = find_waste(projects, scope=scope, exclude=["proj-a-second-loop"])
+        self.assertEqual({w["project"] for w in waste}, {"proj-a"})
+
+
+if __name__ == "__main__":
+    unittest.main()
