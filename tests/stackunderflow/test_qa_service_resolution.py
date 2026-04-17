@@ -9,6 +9,7 @@ the list_qa filter.
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from stackunderflow.services.qa_service import QAService
+from stackunderflow.services.qa_service import QAService, _classify_resolution  # noqa: E402
 
 
 def _msg(mtype: str, content: str, session_id: str = "s1", timestamp: str = "2026-04-16T10:00:00") -> dict:
@@ -54,9 +55,6 @@ class TestSchemaHasResolutionColumns(_TempDBTestCase):
             conn.close()
         self.assertIn("resolution_status", cols)
         self.assertIn("loop_count", cols)
-
-
-import sqlite3
 
 
 class TestLegacyDBMigration(unittest.TestCase):
@@ -112,9 +110,6 @@ class TestLegacyDBMigration(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["resolution_status"], "open")
         self.assertEqual(row["loop_count"], 0)
-
-
-from stackunderflow.services.qa_service import _classify_resolution
 
 
 class TestClassifyResolution(unittest.TestCase):
@@ -240,19 +235,20 @@ class TestListQAResolutionFilter(_TempDBTestCase):
     """list_qa(resolution_status=...) restricts results correctly."""
 
     def _seed_mixed(self):
+        code_answer = "A:\n```py\nprint('hello world')\n```"
         # resolved — code answer, no follow-ups
         self.svc.index_project("p1", [
             _msg("user", "Q1?", timestamp="2026-04-01T10:00:00"),
-            _msg("assistant", "A1:\n```py\nprint('hello world')\n```", timestamp="2026-04-01T10:00:01"),
+            _msg("assistant", code_answer, timestamp="2026-04-01T10:00:01"),
         ])
         # looped — 2 follow-ups
         self.svc.index_project("p2", [
             _msg("user", "Q2?", session_id="s2", timestamp="2026-04-02T10:00:00"),
-            _msg("assistant", "A2a:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:01"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:01"),
             _msg("user", "that doesn't work", session_id="s2", timestamp="2026-04-02T10:00:02"),
-            _msg("assistant", "A2b:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:03"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:03"),
             _msg("user", "still not working", session_id="s2", timestamp="2026-04-02T10:00:04"),
-            _msg("assistant", "A2c:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:05"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:05"),
         ])
         # open — no code, no follow-ups
         self.svc.index_project("p3", [
@@ -293,9 +289,11 @@ class TestRouteFilter(unittest.TestCase):
     """GET /api/qa?resolution_status=... reaches the service layer."""
 
     def setUp(self):
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
         import stackunderflow.deps as deps
+        from stackunderflow.routes import qa as qa_route
 
         self._tmp = tempfile.TemporaryDirectory()
         db_path = Path(self._tmp.name) / "qa.db"
@@ -310,9 +308,6 @@ class TestRouteFilter(unittest.TestCase):
         ])
 
         # Build a minimal app with just the qa router mounted.
-        from fastapi import FastAPI
-        from stackunderflow.routes import qa as qa_route
-
         self._app = FastAPI()
         self._app.include_router(qa_route.router)
         self.client = TestClient(self._app)
