@@ -558,6 +558,33 @@ def status_cmd(fmt: str):
         click.echo(render_status_line(today=today, month=month))
 
 
+_EXPORT_FORMATS = ("csv", "json")
+
+
+@cli.command("export")
+@click.option("-p", "--period", default="30days")
+@click.option("-f", "--format", "fmt", type=click.Choice(_EXPORT_FORMATS), default="csv")
+@click.option("--project", "include", multiple=True)
+@click.option("--exclude", "exclude", multiple=True)
+def export_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+    """Export aggregated data as CSV or JSON."""
+    try:
+        scope = parse_period(period)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    projects = list_projects()
+    report = build_report(
+        projects,
+        scope=scope,
+        include=list(include) or None,
+        exclude=list(exclude) or None,
+    )
+    if fmt == "json":
+        click.echo(render_json(report))
+    else:
+        click.echo(render_csv(report), nl=False)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
