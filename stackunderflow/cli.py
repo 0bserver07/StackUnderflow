@@ -18,8 +18,6 @@ from typing import Any
 
 import click
 
-from . import __version__
-from .settings import Settings
 from stackunderflow.infra.discovery import project_metadata as list_projects
 from stackunderflow.reports.aggregate import build_report
 from stackunderflow.reports.optimize import find_waste
@@ -30,6 +28,9 @@ from stackunderflow.reports.render import (
     render_text,
 )
 from stackunderflow.reports.scope import parse_period
+
+from . import __version__
+from .settings import Settings
 
 _STATE_DIR = Path.home() / ".stackunderflow"
 
