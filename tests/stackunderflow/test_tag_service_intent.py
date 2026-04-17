@@ -116,6 +116,20 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:refactor", tags)
 
+    def test_test_intent_from_pytest_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Write a pytest for the new endpoint")],
+        )
+        self.assertIn("intent:test", tags)
+
+    def test_test_intent_from_coverage_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("We need coverage on the dedup branch")],
+        )
+        self.assertIn("intent:test", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
