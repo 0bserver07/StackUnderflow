@@ -150,5 +150,40 @@ class TestExportCommand(unittest.TestCase):
         self.assertEqual(parsed["total_messages"], 500)
 
 
+class TestOptimizeCommand(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_optimize_shows_looped_projects(self):
+        waste = [
+            {"project": "alpha", "looped_pairs": 5, "sample_questions": ["How do I fix X?", "Why is Y broken?"]},
+            {"project": "beta", "looped_pairs": 2, "sample_questions": ["What does Z mean?"]},
+        ]
+        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+             patch("stackunderflow.cli.find_waste", return_value=waste):
+            result = self.runner.invoke(cli, ["optimize"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("alpha", result.output)
+        self.assertIn("5", result.output)  # looped_pairs count
+        self.assertIn("How do I fix X?", result.output)
+
+    def test_optimize_no_waste_message(self):
+        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+             patch("stackunderflow.cli.find_waste", return_value=[]):
+            result = self.runner.invoke(cli, ["optimize"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("No looped", result.output)
+
+    def test_optimize_json_format(self):
+        waste = [{"project": "alpha", "looped_pairs": 5, "sample_questions": ["Q?"]}]
+        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+             patch("stackunderflow.cli.find_waste", return_value=waste):
+            result = self.runner.invoke(cli, ["optimize", "--format", "json"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        parsed = json.loads(result.output)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["project"], "alpha")
+
+
 if __name__ == "__main__":
     unittest.main()
