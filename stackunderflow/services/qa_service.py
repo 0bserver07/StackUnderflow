@@ -173,9 +173,24 @@ class QAService:
                     timestamp TEXT,
                     model TEXT,
                     num_attempts INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    resolution_status TEXT NOT NULL DEFAULT 'open',
+                    loop_count INTEGER NOT NULL DEFAULT 0
                 )
             """)
+
+            # Idempotent migration for databases created before resolution_status existed.
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()
+            }
+            if "resolution_status" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE qa_pairs ADD COLUMN resolution_status TEXT NOT NULL DEFAULT 'open'"
+                )
+            if "loop_count" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE qa_pairs ADD COLUMN loop_count INTEGER NOT NULL DEFAULT 0"
+                )
 
             # FTS5 for full-text search within Q&A
             conn.execute("""
@@ -223,6 +238,7 @@ class QAService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_project ON qa_pairs(project)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_timestamp ON qa_pairs(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_session ON qa_pairs(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_resolution ON qa_pairs(resolution_status)")
 
             conn.commit()
         finally:
