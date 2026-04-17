@@ -56,5 +56,63 @@ class TestSchemaHasResolutionColumns(_TempDBTestCase):
         self.assertIn("loop_count", cols)
 
 
+import sqlite3
+
+
+class TestLegacyDBMigration(unittest.TestCase):
+    """A database created before this feature migrates cleanly on reopen."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "legacy.db"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _create_legacy_schema(self):
+        """Create the pre-resolution qa_pairs schema exactly as it existed."""
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("""
+            CREATE TABLE qa_pairs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                question_text TEXT NOT NULL,
+                answer_text TEXT NOT NULL,
+                code_snippets TEXT DEFAULT '[]',
+                tools_used TEXT DEFAULT '[]',
+                timestamp TEXT,
+                model TEXT,
+                num_attempts INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            """INSERT INTO qa_pairs (id, session_id, project, question_text, answer_text, created_at)
+               VALUES ('legacy1', 's1', 'p1', 'Q?', 'A', '2026-01-01T00:00:00')"""
+        )
+        conn.commit()
+        conn.close()
+
+    def test_migration_preserves_existing_rows_and_adds_columns(self):
+        self._create_legacy_schema()
+
+        # Re-opening should trigger the idempotent migration.
+        svc = QAService(db_path=self.db_path)
+
+        conn = svc._get_conn()
+        try:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()}
+            row = conn.execute("SELECT * FROM qa_pairs WHERE id = 'legacy1'").fetchone()
+        finally:
+            conn.close()
+
+        self.assertIn("resolution_status", cols)
+        self.assertIn("loop_count", cols)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["resolution_status"], "open")
+        self.assertEqual(row["loop_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
