@@ -89,6 +89,21 @@ ignore = [
 "*_test.py" = ["T201", "S101"]
 # Long regex patterns and SQL strings
 "stackunderflow/services/tag_service.py" = ["E501"]
+# rsync backup uses subprocess with constrained args, not user input
+"stackunderflow/cli.py" = ["S603", "S607"]
+# FTS queries use parameterised values; the f-string only assembles the
+# fixed `column = ?` skeleton from a hardcoded clause list
+"stackunderflow/services/qa_service.py" = ["S608"]
+"stackunderflow/services/search_service.py" = ["S608"]
+# Pricing service fetches a single hardcoded https URL from LiteLLM
+"stackunderflow/services/pricing_service.py" = ["S310"]
+# `assert _cache is not None` is type-narrowing after a conditional init,
+# not a runtime invariant we rely on
+"stackunderflow/pipeline/history_reader.py" = ["S101"]
+# `T = type(...)` is the conventional name for a type variable
+"stackunderflow/settings.py" = ["N806"]
+# `isinstance(x, (int, float))` is more readable than `int | float` here
+"stackunderflow/infra/discovery.py" = ["UP038"]
 
 
 [tool.mypy]

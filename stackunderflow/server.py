@@ -4,11 +4,10 @@ FastAPI application for StackUnderflow Local Mode
 """
 
 import asyncio
+import importlib.metadata
 import logging
 import os
 from contextlib import asynccontextmanager
-
-import importlib.metadata
 
 from dotenv import load_dotenv
 from fastapi import FastAPI

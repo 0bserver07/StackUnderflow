@@ -189,7 +189,7 @@ async def refresh_data(request: dict):
             "refresh_time_ms": ms,
         })
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error refreshing data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing data: {str(e)}") from e
 
 
 async def refresh_all_projects(request: dict):

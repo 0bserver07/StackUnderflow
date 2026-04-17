@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +111,7 @@ def _assign_sessions(entries: list[dict]) -> list[tuple[dict, str]]:
 
 def _epoch_ms_to_iso(ts_ms: int) -> str:
     """Convert epoch milliseconds to ISO 8601 string."""
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
 
 
 def _to_raw_entry(entry: dict, session_id: str) -> RawEntry:

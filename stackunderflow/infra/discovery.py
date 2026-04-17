@@ -158,6 +158,7 @@ def check_project(project_dir: str) -> tuple[bool, str]:
 def _legacy_project_info(child: Path) -> ProjectInfo:
     """Build ProjectInfo for an old-format project using history.jsonl data."""
     from datetime import datetime as _dt
+
     from stackunderflow.pipeline.history_reader import entries_for_slug
 
     entries = entries_for_slug(child.name)

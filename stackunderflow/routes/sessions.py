@@ -1,6 +1,7 @@
 """Session / JSONL file browsing routes."""
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import stackunderflow.deps as deps
 from stackunderflow.infra.costs import compute_cost
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 # Get JSONL files for current project
@@ -76,8 +78,9 @@ async def get_jsonl_files(project: str | None = None):
                                     last_timestamp = last_data.get("timestamp")
                                 except (json.JSONDecodeError, ValueError):
                                     pass
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("Metadata extraction failed for %s: %s", f, exc)
+                # fall through with whatever defaults we have
 
             # Convert timestamps to unix time if available
             created_time = stat.st_ctime
@@ -118,7 +121,7 @@ async def get_jsonl_files(project: str | None = None):
                         continue
                     try:
                         obj = _oj.loads(raw_line)
-                    except Exception:
+                    except Exception:  # noqa: S112 -- per-line JSON parse in hot path; logging would be too noisy
                         continue
                     line_type = obj.get("type", "")
                     if line_type in ("user", "human"):
@@ -165,8 +168,8 @@ async def get_jsonl_files(project: str | None = None):
                                     1 for blk in content
                                     if isinstance(blk, dict) and blk.get("type") == "tool_use"
                                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("Token/tool aggregation failed for %s: %s", f, exc)
 
             # Compute estimated cost from token counts + model
             estimated_cost = 0.0
@@ -204,7 +207,7 @@ async def get_jsonl_files(project: str | None = None):
 
         return JSONResponse(files_with_metadata)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading log files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading log files: {str(e)}") from e
 
 
 # Get JSONL file content
@@ -309,4 +312,4 @@ async def get_jsonl_content(file: str, project: str | None = None):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}") from e
