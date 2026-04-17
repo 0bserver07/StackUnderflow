@@ -88,6 +88,20 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:fix", tags)
 
+    def test_explore_intent_from_explain_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Can you explain how the cache warming works?")],
+        )
+        self.assertIn("intent:explore", tags)
+
+    def test_explore_intent_from_how_does_phrase(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("How does the dedup step decide what's a duplicate?")],
+        )
+        self.assertIn("intent:explore", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
