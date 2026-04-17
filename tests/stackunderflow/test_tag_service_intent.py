@@ -5,7 +5,6 @@ was trying to do in a session (build, fix, explore, refactor, test, ops).
 These tests exercise pattern matching, metadata exposure, and the tag cloud.
 """
 
-import json
 import os
 import sys
 import tempfile
