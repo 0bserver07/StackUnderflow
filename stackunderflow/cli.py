@@ -585,6 +585,41 @@ def export_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
         click.echo(render_csv(report), nl=False)
 
 
+@cli.command("optimize")
+@click.option("-p", "--period", default="30days")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
+@click.option("--project", "include", multiple=True)
+@click.option("--exclude", "exclude", multiple=True)
+def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+    """Find wasted spend: sessions where the assistant had to retry repeatedly."""
+    try:
+        scope = parse_period(period)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    projects = list_projects()
+    waste = find_waste(
+        projects,
+        scope=scope,
+        include=list(include) or None,
+        exclude=list(exclude) or None,
+    )
+
+    if fmt == "json":
+        click.echo(render_json(waste))
+        return
+
+    if not waste:
+        click.echo(f"No looped Q&A pairs found in {scope.label}.")
+        return
+
+    click.echo(f"Waste report — {scope.label}")
+    click.echo("")
+    for row in waste:
+        click.echo(f"  {row['project']}: {row['looped_pairs']} looped pair(s)")
+        for q in row["sample_questions"]:
+            click.echo(f"    - {q}")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
