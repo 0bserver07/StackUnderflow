@@ -142,7 +142,9 @@ INTENT_PATTERNS = [
     # test — writing or running tests
     (r"\b(test|tests|testing|tested|unit test|integration test|pytest|jest|vitest|mocha|jasmine|rspec|assert|asserts|asserting|mock|mocking|mocked|spec|specs|coverage|tdd)\b", "intent:test"),
     # ops — deployment, config, infra
-    (r"\b(deploy|deploying|deployed|deployment|ci/cd|ci\b|cd\b|github actions|gitlab ci|jenkins|docker|dockerfile|kubernetes|k8s|terraform|ansible|helm|\.env|env var|environment variable|nginx|caddy|systemd|pm2)\b", "intent:ops"),
+    # NOTE: `.env` is matched as a separate alternative with lookarounds because
+    # word-boundary (\b) can't anchor a pattern starting with a non-word char (.).
+    (r"(?:\b(?:deploy|deploying|deployed|deployment|ci/cd|ci\b|cd\b|github actions|gitlab ci|jenkins|docker|dockerfile|kubernetes|k8s|terraform|ansible|helm|env var|environment variable|nginx|caddy|systemd|pm2)\b|(?<!\w)\.env(?!\w))", "intent:ops"),
 ]
 
 TOOL_COLORS = {

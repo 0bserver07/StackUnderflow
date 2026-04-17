@@ -130,6 +130,27 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:test", tags)
 
+    def test_ops_intent_from_deploy_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Deploy this to staging and check the logs")],
+        )
+        self.assertIn("intent:ops", tags)
+
+    def test_ops_intent_from_docker_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Why is the docker build hanging on apt-get?")],
+        )
+        self.assertIn("intent:ops", tags)
+
+    def test_ops_intent_from_env_file_reference(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Missing value in .env — causes auth to fail")],
+        )
+        self.assertIn("intent:ops", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
