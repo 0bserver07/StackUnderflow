@@ -528,6 +528,7 @@ class QAService:
         date_from: str | None = None,
         date_to: str | None = None,
         search: str | None = None,
+        resolution_status: str | None = None,
         page: int = 1,
         per_page: int = 20,
     ) -> dict:
@@ -564,6 +565,10 @@ class QAService:
                     date_to = date_to + "T23:59:59"
                 where_clauses.append("q.timestamp <= ?")
                 params.append(date_to)
+
+            if resolution_status:
+                where_clauses.append("q.resolution_status = ?")
+                params.append(resolution_status)
 
             # Handle full-text search
             if search and search.strip():

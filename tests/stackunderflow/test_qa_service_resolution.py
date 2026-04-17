@@ -236,5 +236,58 @@ class TestListAndGetExposeResolution(_TempDBTestCase):
         self.assertEqual(pair["loop_count"], 0)
 
 
+class TestListQAResolutionFilter(_TempDBTestCase):
+    """list_qa(resolution_status=...) restricts results correctly."""
+
+    def _seed_mixed(self):
+        # resolved — code answer, no follow-ups
+        self.svc.index_project("p1", [
+            _msg("user", "Q1?", timestamp="2026-04-01T10:00:00"),
+            _msg("assistant", "A1:\n```py\nprint('hello world')\n```", timestamp="2026-04-01T10:00:01"),
+        ])
+        # looped — 2 follow-ups
+        self.svc.index_project("p2", [
+            _msg("user", "Q2?", session_id="s2", timestamp="2026-04-02T10:00:00"),
+            _msg("assistant", "A2a:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:01"),
+            _msg("user", "that doesn't work", session_id="s2", timestamp="2026-04-02T10:00:02"),
+            _msg("assistant", "A2b:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:03"),
+            _msg("user", "still not working", session_id="s2", timestamp="2026-04-02T10:00:04"),
+            _msg("assistant", "A2c:\n```py\nprint('hello world')\n```", session_id="s2", timestamp="2026-04-02T10:00:05"),
+        ])
+        # open — no code, no follow-ups
+        self.svc.index_project("p3", [
+            _msg("user", "What is Q3?", session_id="s3", timestamp="2026-04-03T10:00:00"),
+            _msg("assistant", "A3 is a thing.", session_id="s3", timestamp="2026-04-03T10:00:01"),
+        ])
+
+    def test_filter_resolved(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="resolved")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p1")
+
+    def test_filter_looped(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="looped")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p2")
+
+    def test_filter_open(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="open")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p3")
+
+    def test_unknown_status_returns_no_results(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="bogus")
+        self.assertEqual(result["total"], 0)
+
+    def test_no_filter_returns_all(self):
+        self._seed_mixed()
+        result = self.svc.list_qa()
+        self.assertEqual(result["total"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
