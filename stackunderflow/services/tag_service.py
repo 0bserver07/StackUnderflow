@@ -349,6 +349,21 @@ class TagService:
 
         return metadata
 
+    @staticmethod
+    def _detect_intents(combined_text: str) -> set[str]:
+        """Return the set of intent:* tags that match the given text.
+
+        A session can legitimately have multiple intents (e.g. the user started
+        building something, hit an error, and debugged it). We return all matches.
+        """
+        matches: set[str] = set()
+        if not combined_text:
+            return matches
+        for pattern, intent in INTENT_PATTERNS:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                matches.add(intent)
+        return matches
+
     def auto_tag_session(self, session_id: str, messages: list[dict]) -> list[str]:
         """Auto-detect tags for a session from its messages.
 
@@ -492,7 +507,10 @@ class TagService:
             if re.search(pattern, combined_text, re.IGNORECASE):
                 tags.add(topic)
 
-        # 5. Add tools used as tags
+        # 5. Detect intents (user's goal for the session)
+        tags.update(self._detect_intents(combined_text))
+
+        # 6. Add tools used as tags
         for tool_name in all_tool_names:
             if tool_name in TOOL_COLORS:
                 tags.add(tool_name)

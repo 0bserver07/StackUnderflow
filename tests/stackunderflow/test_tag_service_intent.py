@@ -53,6 +53,20 @@ class TestIntentDetection(unittest.TestCase):
         tags = self.svc.auto_tag_session("s1", [_msg("hello world")])
         self.assertEqual([t for t in tags if t.startswith("intent:")], [])
 
+    def test_build_intent_from_add_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Can you add a new /api/users endpoint?")],
+        )
+        self.assertIn("intent:build", tags)
+
+    def test_build_intent_from_implement_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Implement a retry wrapper around this function")],
+        )
+        self.assertIn("intent:build", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
