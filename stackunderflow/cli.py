@@ -545,6 +545,19 @@ def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
     _emit_report(report, fmt)
 
 
+@cli.command("status")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
+def status_cmd(fmt: str):
+    """Compact one-liner: today + month cost and message counts."""
+    projects = list_projects()
+    today = build_report(projects, scope=parse_period("today"), include=None, exclude=None)
+    month = build_report(projects, scope=parse_period("month"), include=None, exclude=None)
+    if fmt == "json":
+        click.echo(render_json({"today": today, "month": month}))
+    else:
+        click.echo(render_status_line(today=today, month=month))
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:

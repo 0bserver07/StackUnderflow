@@ -88,5 +88,46 @@ class TestTodayMonthCommands(unittest.TestCase):
         self.assertIn("this month", kwargs["scope"].label)
 
 
+class TestStatusCommand(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_status_outputs_one_line(self):
+        def build(_projects, *, scope, include, exclude):
+            return {
+                "scope_label": scope.label,
+                "total_cost": 1.23 if scope.label == "today" else 45.67,
+                "total_messages": 10 if scope.label == "today" else 500,
+                "total_sessions": 2,
+                "by_project": [],
+            }
+        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+             patch("stackunderflow.cli.build_report", side_effect=build):
+            result = self.runner.invoke(cli, ["status"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        lines = [ln for ln in result.output.strip().split("\n") if ln.strip()]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("today: $1.23", lines[0])
+        self.assertIn("month: $45.67", lines[0])
+
+    def test_status_format_json(self):
+        def build(_projects, *, scope, include, exclude):
+            return {
+                "scope_label": scope.label,
+                "total_cost": 1.0,
+                "total_messages": 10,
+                "total_sessions": 2,
+                "by_project": [],
+            }
+        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+             patch("stackunderflow.cli.build_report", side_effect=build):
+            result = self.runner.invoke(cli, ["status", "--format", "json"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        parsed = json.loads(result.output)
+        self.assertIn("today", parsed)
+        self.assertIn("month", parsed)
+        self.assertEqual(parsed["today"]["total_cost"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
