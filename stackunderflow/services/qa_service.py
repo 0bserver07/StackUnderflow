@@ -141,6 +141,24 @@ def _generate_qa_id(session_id: str, timestamp: str, content_preview: str) -> st
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _classify_resolution(followup_count: int, has_code: bool) -> tuple[str, int]:
+    """Classify how the Q&A was resolved based on observed signals.
+
+    Rules:
+      - followup_count >= 2  -> 'looped'  (user pushed back repeatedly)
+      - has_code and followup_count <= 1  -> 'resolved'  (concrete answer, no repeated pushback)
+      - otherwise  -> 'open'  (no strong signal either way)
+
+    Returns:
+        (resolution_status, loop_count) — loop_count equals followup_count verbatim.
+    """
+    if followup_count >= 2:
+        return "looped", followup_count
+    if has_code and followup_count <= 1:
+        return "resolved", followup_count
+    return "open", followup_count
+
+
 class QAService:
     """Service for extracting and managing Q&A pairs from Claude Code sessions."""
 

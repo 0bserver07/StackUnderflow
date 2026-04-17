@@ -114,5 +114,24 @@ class TestLegacyDBMigration(unittest.TestCase):
         self.assertEqual(row["loop_count"], 0)
 
 
+from stackunderflow.services.qa_service import _classify_resolution
+
+
+class TestClassifyResolution(unittest.TestCase):
+    """Pure classification function."""
+
+    def test_two_or_more_followups_is_looped(self):
+        self.assertEqual(_classify_resolution(followup_count=2, has_code=True), ("looped", 2))
+        self.assertEqual(_classify_resolution(followup_count=5, has_code=False), ("looped", 5))
+
+    def test_code_answer_with_zero_or_one_followup_is_resolved(self):
+        self.assertEqual(_classify_resolution(followup_count=0, has_code=True), ("resolved", 0))
+        self.assertEqual(_classify_resolution(followup_count=1, has_code=True), ("resolved", 1))
+
+    def test_no_code_and_few_followups_is_open(self):
+        self.assertEqual(_classify_resolution(followup_count=0, has_code=False), ("open", 0))
+        self.assertEqual(_classify_resolution(followup_count=1, has_code=False), ("open", 1))
+
+
 if __name__ == "__main__":
     unittest.main()
