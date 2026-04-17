@@ -141,6 +141,24 @@ def _generate_qa_id(session_id: str, timestamp: str, content_preview: str) -> st
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _classify_resolution(followup_count: int, has_code: bool) -> tuple[str, int]:
+    """Classify how the Q&A was resolved based on observed signals.
+
+    Rules:
+      - followup_count >= 2  -> 'looped'  (user pushed back repeatedly)
+      - has_code and followup_count <= 1  -> 'resolved'  (concrete answer, no repeated pushback)
+      - otherwise  -> 'open'  (no strong signal either way)
+
+    Returns:
+        (resolution_status, loop_count) — loop_count equals followup_count verbatim.
+    """
+    if followup_count >= 2:
+        return "looped", followup_count
+    if has_code and followup_count <= 1:
+        return "resolved", followup_count
+    return "open", followup_count
+
+
 class QAService:
     """Service for extracting and managing Q&A pairs from Claude Code sessions."""
 
@@ -173,9 +191,24 @@ class QAService:
                     timestamp TEXT,
                     model TEXT,
                     num_attempts INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    resolution_status TEXT NOT NULL DEFAULT 'open',
+                    loop_count INTEGER NOT NULL DEFAULT 0
                 )
             """)
+
+            # Idempotent migration for databases created before resolution_status existed.
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()
+            }
+            if "resolution_status" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE qa_pairs ADD COLUMN resolution_status TEXT NOT NULL DEFAULT 'open'"
+                )
+            if "loop_count" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE qa_pairs ADD COLUMN loop_count INTEGER NOT NULL DEFAULT 0"
+                )
 
             # FTS5 for full-text search within Q&A
             conn.execute("""
@@ -223,6 +256,7 @@ class QAService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_project ON qa_pairs(project)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_timestamp ON qa_pairs(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_session ON qa_pairs(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_qa_resolution ON qa_pairs(resolution_status)")
 
             conn.commit()
         finally:
@@ -294,6 +328,7 @@ class QAService:
             answer_parts = []
             all_answer_msgs = []
             num_attempts = 0
+            followup_count = 0
             session_id = msg.get("session_id", "")
             timestamp = msg.get("timestamp", "")
             model = "N/A"
@@ -328,6 +363,7 @@ class QAService:
                     if _is_followup(next_content):
                         # This is a continuation - include it as context
                         answer_parts.append(f"\n---\n[Follow-up]: {next_content}")
+                        followup_count += 1
                         j += 1
                         continue
                     else:
@@ -344,6 +380,11 @@ class QAService:
 
                 qa_id = _generate_qa_id(session_id, timestamp, question_text)
 
+                resolution_status, loop_count = _classify_resolution(
+                    followup_count=followup_count,
+                    has_code=bool(code_snippets),
+                )
+
                 qa_pairs.append({
                     "id": qa_id,
                     "session_id": session_id,
@@ -355,6 +396,8 @@ class QAService:
                     "timestamp": timestamp,
                     "model": model,
                     "num_attempts": max(1, num_attempts),
+                    "resolution_status": resolution_status,
+                    "loop_count": loop_count,
                 })
 
             # Move to the next unprocessed message
@@ -388,8 +431,9 @@ class QAService:
                 conn.execute(
                     """INSERT OR REPLACE INTO qa_pairs
                        (id, session_id, project, question_text, answer_text,
-                        code_snippets, tools_used, timestamp, model, num_attempts, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        code_snippets, tools_used, timestamp, model, num_attempts, created_at,
+                        resolution_status, loop_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         qa["id"],
                         qa["session_id"],
@@ -402,6 +446,8 @@ class QAService:
                         qa["model"],
                         qa["num_attempts"],
                         now,
+                        qa.get("resolution_status", "open"),
+                        qa.get("loop_count", 0),
                     ),
                 )
                 count += 1
@@ -482,6 +528,7 @@ class QAService:
         date_from: str | None = None,
         date_to: str | None = None,
         search: str | None = None,
+        resolution_status: str | None = None,
         page: int = 1,
         per_page: int = 20,
     ) -> dict:
@@ -518,6 +565,10 @@ class QAService:
                     date_to = date_to + "T23:59:59"
                 where_clauses.append("q.timestamp <= ?")
                 params.append(date_to)
+
+            if resolution_status:
+                where_clauses.append("q.resolution_status = ?")
+                params.append(resolution_status)
 
             # Handle full-text search
             if search and search.strip():
@@ -616,6 +667,8 @@ class QAService:
                     "timestamp": row["timestamp"],
                     "model": row["model"],
                     "num_attempts": row["num_attempts"],
+                    "resolution_status": row["resolution_status"],
+                    "loop_count": row["loop_count"],
                     "question_snippet": row["question_snippet"],
                     "answer_snippet": row["answer_snippet"],
                 })
@@ -662,6 +715,8 @@ class QAService:
                 "timestamp": row["timestamp"],
                 "model": row["model"],
                 "num_attempts": row["num_attempts"],
+                "resolution_status": row["resolution_status"],
+                "loop_count": row["loop_count"],
                 "created_at": row["created_at"],
             }
         finally:

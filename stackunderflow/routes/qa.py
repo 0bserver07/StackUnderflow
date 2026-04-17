@@ -14,6 +14,7 @@ async def list_qa_pairs(
     date_from: str | None = None,
     date_to: str | None = None,
     search: str | None = None,
+    resolution_status: str | None = None,
     page: int = 1,
     per_page: int = 20,
 ):
@@ -24,6 +25,7 @@ async def list_qa_pairs(
         date_from: Optional start date (YYYY-MM-DD)
         date_to: Optional end date (YYYY-MM-DD)
         search: Optional search text within Q&A pairs
+        resolution_status: Optional filter; one of 'resolved' | 'looped' | 'open'
         page: Page number (1-indexed)
         per_page: Results per page (max 100)
     """
@@ -39,6 +41,7 @@ async def list_qa_pairs(
             date_from=date_from,
             date_to=date_to,
             search=search,
+            resolution_status=resolution_status,
             page=page,
             per_page=per_page,
         )

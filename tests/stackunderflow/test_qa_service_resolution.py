@@ -1,0 +1,333 @@
+"""Unit tests for Q&A resolution classification.
+
+Each Q&A pair carries:
+  - resolution_status: 'resolved' | 'looped' | 'open'
+  - loop_count: number of follow-up pushbacks seen while extracting
+
+These tests cover schema migration, classification logic, persistence, and
+the list_qa filter.
+"""
+
+import os
+import sqlite3
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from stackunderflow.services.qa_service import QAService, _classify_resolution  # noqa: E402
+
+
+def _msg(mtype: str, content: str, session_id: str = "s1", timestamp: str = "2026-04-16T10:00:00") -> dict:
+    """Minimal message dict acceptable to extract_qa_pairs()."""
+    return {
+        "type": mtype,
+        "content": content,
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "tools": [],
+        "model": "claude-sonnet-4-6",
+    }
+
+
+class _TempDBTestCase(unittest.TestCase):
+    """Base class that creates a fresh throwaway SQLite DB per test."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "qa.db"
+        self.svc = QAService(db_path=self.db_path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+
+class TestSchemaHasResolutionColumns(_TempDBTestCase):
+    """Fresh databases expose resolution_status and loop_count columns."""
+
+    def test_fresh_db_has_resolution_status_column(self):
+        conn = self.svc._get_conn()
+        try:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()}
+        finally:
+            conn.close()
+        self.assertIn("resolution_status", cols)
+        self.assertIn("loop_count", cols)
+
+
+class TestLegacyDBMigration(unittest.TestCase):
+    """A database created before this feature migrates cleanly on reopen."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "legacy.db"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _create_legacy_schema(self):
+        """Create the pre-resolution qa_pairs schema exactly as it existed."""
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("""
+            CREATE TABLE qa_pairs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                question_text TEXT NOT NULL,
+                answer_text TEXT NOT NULL,
+                code_snippets TEXT DEFAULT '[]',
+                tools_used TEXT DEFAULT '[]',
+                timestamp TEXT,
+                model TEXT,
+                num_attempts INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            """INSERT INTO qa_pairs (id, session_id, project, question_text, answer_text, created_at)
+               VALUES ('legacy1', 's1', 'p1', 'Q?', 'A', '2026-01-01T00:00:00')"""
+        )
+        conn.commit()
+        conn.close()
+
+    def test_migration_preserves_existing_rows_and_adds_columns(self):
+        self._create_legacy_schema()
+
+        # Re-opening should trigger the idempotent migration.
+        svc = QAService(db_path=self.db_path)
+
+        conn = svc._get_conn()
+        try:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()}
+            row = conn.execute("SELECT * FROM qa_pairs WHERE id = 'legacy1'").fetchone()
+        finally:
+            conn.close()
+
+        self.assertIn("resolution_status", cols)
+        self.assertIn("loop_count", cols)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["resolution_status"], "open")
+        self.assertEqual(row["loop_count"], 0)
+
+
+class TestClassifyResolution(unittest.TestCase):
+    """Pure classification function."""
+
+    def test_two_or_more_followups_is_looped(self):
+        self.assertEqual(_classify_resolution(followup_count=2, has_code=True), ("looped", 2))
+        self.assertEqual(_classify_resolution(followup_count=5, has_code=False), ("looped", 5))
+
+    def test_code_answer_with_zero_or_one_followup_is_resolved(self):
+        self.assertEqual(_classify_resolution(followup_count=0, has_code=True), ("resolved", 0))
+        self.assertEqual(_classify_resolution(followup_count=1, has_code=True), ("resolved", 1))
+
+    def test_no_code_and_few_followups_is_open(self):
+        self.assertEqual(_classify_resolution(followup_count=0, has_code=False), ("open", 0))
+        self.assertEqual(_classify_resolution(followup_count=1, has_code=False), ("open", 1))
+
+
+class TestExtractionAttachesResolution(_TempDBTestCase):
+    """extract_qa_pairs produces resolution_status and loop_count on each pair."""
+
+    def test_code_answer_no_followup_is_resolved(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "How do I read a file in Python?"),
+            _msg("assistant", "Use open():\n```python\nopen('x.txt').read()\n```"),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "resolved")
+        self.assertEqual(pairs[0]["loop_count"], 0)
+
+    def test_two_followups_is_looped(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "How do I fix the ImportError?"),
+            _msg("assistant", "Try `pip install foo`:\n```bash\npip install foo\n```"),
+            _msg("user", "That doesn't work, still getting the error"),
+            _msg("assistant", "Try `pip install foo --upgrade`:\n```bash\npip install foo --upgrade\n```"),
+            _msg("user", "Still not working, same traceback"),
+            _msg("assistant", "Let's check the Python version:\n```bash\npython --version\n```"),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "looped")
+        self.assertGreaterEqual(pairs[0]["loop_count"], 2)
+
+    def test_non_code_no_followup_is_open(self):
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "What is Python?"),
+            _msg("assistant", "Python is a programming language."),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "open")
+        self.assertEqual(pairs[0]["loop_count"], 0)
+
+
+class TestIndexPersistsResolution(_TempDBTestCase):
+    """index_project writes resolution_status and loop_count into SQLite."""
+
+    def test_persisted_row_has_correct_resolution(self):
+        self.svc.index_project("p1", [
+            _msg("user", "How do I fix X?"),
+            _msg("assistant", "Try this:\n```python\nprint('hello world')\n```"),
+        ])
+        conn = self.svc._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT resolution_status, loop_count FROM qa_pairs WHERE project = ?",
+                ("p1",),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["resolution_status"], "resolved")
+        self.assertEqual(rows[0]["loop_count"], 0)
+
+    def test_persisted_looped_row(self):
+        self.svc.index_project("p2", [
+            _msg("user", "How do I fix the ImportError?"),
+            _msg("assistant", "Try:\n```bash\npip install foo\n```"),
+            _msg("user", "That doesn't work"),
+            _msg("assistant", "Try:\n```bash\npip install foo==1.0\n```"),
+            _msg("user", "Still not working"),
+            _msg("assistant", "Check:\n```bash\npython --version\n```"),
+        ])
+        conn = self.svc._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT resolution_status, loop_count FROM qa_pairs WHERE project = ?",
+                ("p2",),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["resolution_status"], "looped")
+        self.assertGreaterEqual(row["loop_count"], 2)
+
+
+class TestListAndGetExposeResolution(_TempDBTestCase):
+    """list_qa and get_qa_by_id return the resolution fields in their payloads."""
+
+    def _seed_one_resolved(self):
+        self.svc.index_project("p1", [
+            _msg("user", "How do I X?"),
+            _msg("assistant", "Try:\n```py\nprint('hello world')\n```"),
+        ])
+
+    def test_list_qa_includes_resolution_fields(self):
+        self._seed_one_resolved()
+        result = self.svc.list_qa(project="p1")
+        self.assertEqual(len(result["results"]), 1)
+        row = result["results"][0]
+        self.assertEqual(row["resolution_status"], "resolved")
+        self.assertEqual(row["loop_count"], 0)
+
+    def test_get_qa_by_id_includes_resolution_fields(self):
+        self._seed_one_resolved()
+        result = self.svc.list_qa(project="p1")
+        qa_id = result["results"][0]["id"]
+        pair = self.svc.get_qa_by_id(qa_id)
+        self.assertIsNotNone(pair)
+        self.assertEqual(pair["resolution_status"], "resolved")
+        self.assertEqual(pair["loop_count"], 0)
+
+
+class TestListQAResolutionFilter(_TempDBTestCase):
+    """list_qa(resolution_status=...) restricts results correctly."""
+
+    def _seed_mixed(self):
+        code_answer = "A:\n```py\nprint('hello world')\n```"
+        # resolved — code answer, no follow-ups
+        self.svc.index_project("p1", [
+            _msg("user", "Q1?", timestamp="2026-04-01T10:00:00"),
+            _msg("assistant", code_answer, timestamp="2026-04-01T10:00:01"),
+        ])
+        # looped — 2 follow-ups
+        self.svc.index_project("p2", [
+            _msg("user", "Q2?", session_id="s2", timestamp="2026-04-02T10:00:00"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:01"),
+            _msg("user", "that doesn't work", session_id="s2", timestamp="2026-04-02T10:00:02"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:03"),
+            _msg("user", "still not working", session_id="s2", timestamp="2026-04-02T10:00:04"),
+            _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:05"),
+        ])
+        # open — no code, no follow-ups
+        self.svc.index_project("p3", [
+            _msg("user", "What is Q3?", session_id="s3", timestamp="2026-04-03T10:00:00"),
+            _msg("assistant", "A3 is a thing.", session_id="s3", timestamp="2026-04-03T10:00:01"),
+        ])
+
+    def test_filter_resolved(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="resolved")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p1")
+
+    def test_filter_looped(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="looped")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p2")
+
+    def test_filter_open(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="open")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p3")
+
+    def test_unknown_status_returns_no_results(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="bogus")
+        self.assertEqual(result["total"], 0)
+
+    def test_no_filter_returns_all(self):
+        self._seed_mixed()
+        result = self.svc.list_qa()
+        self.assertEqual(result["total"], 3)
+
+
+class TestRouteFilter(unittest.TestCase):
+    """GET /api/qa?resolution_status=... reaches the service layer."""
+
+    def setUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import stackunderflow.deps as deps
+        from stackunderflow.routes import qa as qa_route
+
+        self._tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self._tmp.name) / "qa.db"
+
+        # Swap the global qa_service to a throwaway instance for the duration
+        # of this test so we don't touch the real ~/.stackunderflow DB.
+        self._original_svc = getattr(deps, "qa_service", None)
+        deps.qa_service = QAService(db_path=db_path)
+        deps.qa_service.index_project("p1", [
+            _msg("user", "Q1?"),
+            _msg("assistant", "A:\n```py\nprint('hello world')\n```"),
+        ])
+
+        # Build a minimal app with just the qa router mounted.
+        self._app = FastAPI()
+        self._app.include_router(qa_route.router)
+        self.client = TestClient(self._app)
+
+    def tearDown(self):
+        import stackunderflow.deps as deps
+        deps.qa_service = self._original_svc
+        self._tmp.cleanup()
+
+    def test_resolved_filter_returns_seeded_row(self):
+        resp = self.client.get("/api/qa", params={"resolution_status": "resolved"})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total"], 1)
+
+    def test_looped_filter_returns_empty_for_this_seed(self):
+        resp = self.client.get("/api/qa", params={"resolution_status": "looped"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["total"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
