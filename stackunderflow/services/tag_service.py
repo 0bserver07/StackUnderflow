@@ -116,6 +116,35 @@ TOPIC_COLORS = {
     "ci-cd": "#2c5282",
 }
 
+# Intent classifies the user's goal for a session. These are auto-only.
+# Prefix with "intent:" in tag storage so they never collide with topic names.
+INTENT_COLORS = {
+    "intent:build": "#10b981",      # green — new feature work
+    "intent:fix": "#ef4444",        # red — bug fixing
+    "intent:explore": "#3b82f6",    # blue — reading / understanding
+    "intent:refactor": "#8b5cf6",   # violet — cleanup
+    "intent:test": "#f59e0b",       # amber — writing / running tests
+    "intent:ops": "#64748b",        # slate — deploy / config / infra
+}
+
+# Intent detection patterns. Order matters: first match wins when a session
+# has evidence of multiple intents, but we keep all matches (a session CAN
+# have multiple intents — e.g. a "build" that ends in "fix").
+INTENT_PATTERNS = [
+    # build — adding something new
+    (r"\b(add|adding|added|implement|implementing|implemented|create|creating|created|build|building|built|new feature|scaffold|scaffolding|set up|setup)\b", "intent:build"),
+    # fix — bug or error
+    (r"\b(fix|fixing|fixed|bug|bugs|broken|breaks|breaking|crash|crashes|crashing|error|errors|traceback|stack trace|exception|regression|doesn't work|not working|failing|failed)\b", "intent:fix"),
+    # explore — reading / understanding
+    (r"\b(explain|explaining|explained|understand|understanding|walk me through|how does|how do|what does|what is|where is|show me|why is|why does|read|reading|review|reviewing|reviewed|look at|trace)\b", "intent:explore"),
+    # refactor — restructuring without behavior change
+    (r"\b(refactor|refactoring|refactored|clean up|cleanup|cleaning up|simplify|simplifying|simplified|restructure|restructuring|reorganize|reorganizing|rename|renaming|extract|extracting|inline|consolidate|dedup|deduplicate)\b", "intent:refactor"),
+    # test — writing or running tests
+    (r"\b(test|tests|testing|tested|unit test|integration test|pytest|jest|vitest|mocha|jasmine|rspec|assert|asserts|asserting|mock|mocking|mocked|spec|specs|coverage|tdd)\b", "intent:test"),
+    # ops — deployment, config, infra
+    (r"\b(deploy|deploying|deployed|deployment|ci/cd|ci\b|cd\b|github actions|gitlab ci|jenkins|docker|dockerfile|kubernetes|k8s|terraform|ansible|helm|\.env|env var|environment variable|nginx|caddy|systemd|pm2)\b", "intent:ops"),
+]
+
 TOOL_COLORS = {
     "Read": "#718096",
     "Write": "#718096",
