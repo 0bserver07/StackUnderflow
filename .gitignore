@@ -19,6 +19,9 @@ data/*
 data/claude_messages.json
 data/claude_usage_stats.json
 
+# Worktrees (isolated parallel-work checkouts)
+.worktrees/
+
 
 # macOS
 .DS_Store
