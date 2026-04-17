@@ -8,10 +8,14 @@ so tests can patch it without importing the real pipeline.
 
 from __future__ import annotations
 
+import logging
+
 from stackunderflow.pipeline import process as _run_pipeline  # re-exported for test patching
 from stackunderflow.reports.scope import Scope
 
 __all__ = ["build_report"]
+
+_log = logging.getLogger(__name__)
 
 
 def build_report(
@@ -45,10 +49,11 @@ def build_report(
     for p in projects:
         try:
             _messages, stats = _run_pipeline(p["log_path"])
-        except Exception:
-            # Skip projects that fail to process; the user should see this via
-            # a warning log from the pipeline itself. We don't crash the whole
-            # report over one bad project.
+        except Exception as exc:  # noqa: BLE001
+            # Skip projects that fail to process; the pipeline itself logs the
+            # underlying warning. We don't crash the whole report over one bad
+            # project, but we do surface which project was skipped.
+            _log.warning("skipping project %s (%s)", p.get("dir_name", "?"), exc)
             continue
 
         daily = stats.get("daily_stats", {})

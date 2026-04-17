@@ -36,7 +36,7 @@ def _fake_stats(daily: dict, total_cost: float = 0.0) -> dict:
         "sessions": {"count": 1, "average_duration_seconds": 0, "average_messages": 0, "sessions_with_errors": 0},
         "daily_stats": daily,
         "hourly_pattern": {"messages": {}, "tokens": {}},
-        "errors": {"total": 0, "rate": 0, "by_type": {}, "by_category": {}, "error_details": [], "assistant_details": []},
+        "errors": {"total": 0, "rate": 0, "by_type": {}, "by_category": {}, "error_details": [], "assistant_details": []},  # noqa: E501
         "models": {},
         "user_interactions": {},
         "cache": {"total_created": 0, "total_read": 0, "hit_rate": 0},
@@ -49,11 +49,11 @@ class TestBuildReport(unittest.TestCase):
     def _process_stub(self, log_path: str):
         data = {
             "/fake/proj-a": _fake_stats({
-                "2026-04-15": {"messages": 10, "sessions": 2, "tokens": {"input": 100}, "cost": {"total": 1.00, "by_model": {}}, "user_commands": 5, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 5, "error_rate": 0},
-                "2026-04-16": {"messages": 20, "sessions": 3, "tokens": {"input": 200}, "cost": {"total": 2.00, "by_model": {}}, "user_commands": 10, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 10, "error_rate": 0},
+                "2026-04-15": {"messages": 10, "sessions": 2, "tokens": {"input": 100}, "cost": {"total": 1.00, "by_model": {}}, "user_commands": 5, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 5, "error_rate": 0},  # noqa: E501
+                "2026-04-16": {"messages": 20, "sessions": 3, "tokens": {"input": 200}, "cost": {"total": 2.00, "by_model": {}}, "user_commands": 10, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 10, "error_rate": 0},  # noqa: E501
             }, total_cost=3.00),
             "/fake/proj-b": _fake_stats({
-                "2026-04-16": {"messages": 5, "sessions": 1, "tokens": {"input": 50}, "cost": {"total": 0.50, "by_model": {}}, "user_commands": 3, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 3, "error_rate": 0},
+                "2026-04-16": {"messages": 5, "sessions": 1, "tokens": {"input": 50}, "cost": {"total": 0.50, "by_model": {}}, "user_commands": 3, "interrupted_commands": 0, "interruption_rate": 0, "errors": 0, "assistant_messages": 3, "error_rate": 0},  # noqa: E501
             }, total_cost=0.50),
         }
         # Return (messages, stats) — messages unused here

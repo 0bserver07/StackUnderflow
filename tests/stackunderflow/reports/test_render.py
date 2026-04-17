@@ -67,8 +67,8 @@ class TestRenderText(unittest.TestCase):
 
 class TestRenderStatusLine(unittest.TestCase):
     def test_one_liner_shape(self):
-        today = {"total_cost": 0.50, "total_messages": 10, "total_sessions": 2, "scope_label": "today", "by_project": []}
-        month = {"total_cost": 15.25, "total_messages": 500, "total_sessions": 30, "scope_label": "month", "by_project": []}
+        today = {"total_cost": 0.50, "total_messages": 10, "total_sessions": 2, "scope_label": "today", "by_project": []}  # noqa: E501
+        month = {"total_cost": 15.25, "total_messages": 500, "total_sessions": 30, "scope_label": "month", "by_project": []}  # noqa: E501
         line = render_status_line(today=today, month=month)
         self.assertIn("today", line)
         self.assertIn("month", line)
