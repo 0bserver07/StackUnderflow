@@ -102,6 +102,20 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:explore", tags)
 
+    def test_refactor_intent_from_refactor_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Let's refactor this into smaller functions")],
+        )
+        self.assertIn("intent:refactor", tags)
+
+    def test_refactor_intent_from_simplify_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("Simplify this nested conditional")],
+        )
+        self.assertIn("intent:refactor", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
