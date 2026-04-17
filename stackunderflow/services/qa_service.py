@@ -431,8 +431,9 @@ class QAService:
                 conn.execute(
                     """INSERT OR REPLACE INTO qa_pairs
                        (id, session_id, project, question_text, answer_text,
-                        code_snippets, tools_used, timestamp, model, num_attempts, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        code_snippets, tools_used, timestamp, model, num_attempts, created_at,
+                        resolution_status, loop_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         qa["id"],
                         qa["session_id"],
@@ -445,6 +446,8 @@ class QAService:
                         qa["model"],
                         qa["num_attempts"],
                         now,
+                        qa.get("resolution_status", "open"),
+                        qa.get("loop_count", 0),
                     ),
                 )
                 count += 1

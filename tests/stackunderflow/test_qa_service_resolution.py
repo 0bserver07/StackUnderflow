@@ -168,5 +168,46 @@ class TestExtractionAttachesResolution(_TempDBTestCase):
         self.assertEqual(pairs[0]["loop_count"], 0)
 
 
+class TestIndexPersistsResolution(_TempDBTestCase):
+    """index_project writes resolution_status and loop_count into SQLite."""
+
+    def test_persisted_row_has_correct_resolution(self):
+        self.svc.index_project("p1", [
+            _msg("user", "How do I fix X?"),
+            _msg("assistant", "Try this:\n```python\nprint('hello world')\n```"),
+        ])
+        conn = self.svc._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT resolution_status, loop_count FROM qa_pairs WHERE project = ?",
+                ("p1",),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["resolution_status"], "resolved")
+        self.assertEqual(rows[0]["loop_count"], 0)
+
+    def test_persisted_looped_row(self):
+        self.svc.index_project("p2", [
+            _msg("user", "How do I fix the ImportError?"),
+            _msg("assistant", "Try:\n```bash\npip install foo\n```"),
+            _msg("user", "That doesn't work"),
+            _msg("assistant", "Try:\n```bash\npip install foo==1.0\n```"),
+            _msg("user", "Still not working"),
+            _msg("assistant", "Check:\n```bash\npython --version\n```"),
+        ])
+        conn = self.svc._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT resolution_status, loop_count FROM qa_pairs WHERE project = ?",
+                ("p2",),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["resolution_status"], "looped")
+        self.assertGreaterEqual(row["loop_count"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
