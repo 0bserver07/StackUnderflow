@@ -20,6 +20,16 @@ import click
 
 from . import __version__
 from .settings import Settings
+from stackunderflow.infra.discovery import project_metadata as list_projects
+from stackunderflow.reports.aggregate import build_report
+from stackunderflow.reports.optimize import find_waste
+from stackunderflow.reports.render import (
+    render_csv,
+    render_json,
+    render_status_line,
+    render_text,
+)
+from stackunderflow.reports.scope import parse_period
 
 _STATE_DIR = Path.home() / ".stackunderflow"
 
@@ -469,6 +479,70 @@ def _prune_backups(keep: int) -> None:
         old = backups.pop(0)
         shutil.rmtree(old)
         click.echo(f"  Pruned old backup: {old.name}")
+
+
+# ── data commands ────────────────────────────────────────────────────────────
+
+_VALID_FORMATS = ("text", "json")
+
+
+def _emit_report(report: dict, fmt: str) -> None:
+    if fmt == "json":
+        click.echo(render_json(report))
+    else:
+        render_text(report)
+
+
+@cli.command("report")
+@click.option("-p", "--period", default="7days",
+              help="Period: today, 7days, 30days, month, all")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              help="Output format")
+@click.option("--project", "include", multiple=True,
+              help="Include only these project dir names (repeatable)")
+@click.option("--exclude", "exclude", multiple=True,
+              help="Exclude these project dir names (repeatable)")
+@click.option("--provider", type=click.Choice(["all", "claude", "codex", "cursor", "opencode", "pi", "copilot"]),
+              default="all", help="Provider (only 'claude' and 'all' supported today)")
+def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...], provider: str):
+    """Dashboard-style summary over a date range."""
+    try:
+        scope = parse_period(period)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    _ = provider  # stub: wired in Plan C
+    projects = list_projects()
+    report = build_report(
+        projects,
+        scope=scope,
+        include=list(include) or None,
+        exclude=list(exclude) or None,
+    )
+    _emit_report(report, fmt)
+
+
+@cli.command("today")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
+@click.option("--project", "include", multiple=True)
+@click.option("--exclude", "exclude", multiple=True)
+def today_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+    """Today's usage."""
+    scope = parse_period("today")
+    projects = list_projects()
+    report = build_report(projects, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    _emit_report(report, fmt)
+
+
+@cli.command("month")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
+@click.option("--project", "include", multiple=True)
+@click.option("--exclude", "exclude", multiple=True)
+def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+    """This month's usage."""
+    scope = parse_period("month")
+    projects = list_projects()
+    report = build_report(projects, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    _emit_report(report, fmt)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
