@@ -289,5 +289,50 @@ class TestListQAResolutionFilter(_TempDBTestCase):
         self.assertEqual(result["total"], 3)
 
 
+class TestRouteFilter(unittest.TestCase):
+    """GET /api/qa?resolution_status=... reaches the service layer."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        import stackunderflow.deps as deps
+
+        self._tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self._tmp.name) / "qa.db"
+
+        # Swap the global qa_service to a throwaway instance for the duration
+        # of this test so we don't touch the real ~/.stackunderflow DB.
+        self._original_svc = getattr(deps, "qa_service", None)
+        deps.qa_service = QAService(db_path=db_path)
+        deps.qa_service.index_project("p1", [
+            _msg("user", "Q1?"),
+            _msg("assistant", "A:\n```py\nprint('hello world')\n```"),
+        ])
+
+        # Build a minimal app with just the qa router mounted.
+        from fastapi import FastAPI
+        from stackunderflow.routes import qa as qa_route
+
+        self._app = FastAPI()
+        self._app.include_router(qa_route.router)
+        self.client = TestClient(self._app)
+
+    def tearDown(self):
+        import stackunderflow.deps as deps
+        deps.qa_service = self._original_svc
+        self._tmp.cleanup()
+
+    def test_resolved_filter_returns_seeded_row(self):
+        resp = self.client.get("/api/qa", params={"resolution_status": "resolved"})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total"], 1)
+
+    def test_looped_filter_returns_empty_for_this_seed(self):
+        resp = self.client.get("/api/qa", params={"resolution_status": "looped"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["total"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
