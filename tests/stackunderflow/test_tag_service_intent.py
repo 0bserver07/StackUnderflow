@@ -67,6 +67,27 @@ class TestIntentDetection(unittest.TestCase):
         )
         self.assertIn("intent:build", tags)
 
+    def test_fix_intent_from_bug_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("There's a bug in the token counter — can you investigate?")],
+        )
+        self.assertIn("intent:fix", tags)
+
+    def test_fix_intent_from_error_keyword(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("I'm getting a traceback when I run this script")],
+        )
+        self.assertIn("intent:fix", tags)
+
+    def test_fix_intent_from_doesnt_work_phrase(self):
+        tags = self.svc.auto_tag_session(
+            "s1",
+            [_msg("The login flow doesn't work on Safari")],
+        )
+        self.assertIn("intent:fix", tags)
+
 
 if __name__ == "__main__":
     unittest.main()
