@@ -116,6 +116,37 @@ TOPIC_COLORS = {
     "ci-cd": "#2c5282",
 }
 
+# Intent classifies the user's goal for a session. These are auto-only.
+# Prefix with "intent:" in tag storage so they never collide with topic names.
+INTENT_COLORS = {
+    "intent:build": "#10b981",      # green — new feature work
+    "intent:fix": "#ef4444",        # red — bug fixing
+    "intent:explore": "#3b82f6",    # blue — reading / understanding
+    "intent:refactor": "#8b5cf6",   # violet — cleanup
+    "intent:test": "#f59e0b",       # amber — writing / running tests
+    "intent:ops": "#64748b",        # slate — deploy / config / infra
+}
+
+# Intent detection patterns. Order matters: first match wins when a session
+# has evidence of multiple intents, but we keep all matches (a session CAN
+# have multiple intents — e.g. a "build" that ends in "fix").
+INTENT_PATTERNS = [
+    # build — adding something new
+    (r"\b(add|adding|added|implement|implementing|implemented|create|creating|created|build|building|built|new feature|scaffold|scaffolding|set up|setup)\b", "intent:build"),
+    # fix — bug or error
+    (r"\b(fix|fixing|fixed|bug|bugs|broken|breaks|breaking|crash|crashes|crashing|error|errors|traceback|stack trace|exception|regression|doesn't work|not working|failing|failed)\b", "intent:fix"),
+    # explore — reading / understanding
+    (r"\b(explain|explaining|explained|understand|understanding|walk me through|how does|how do|what does|what is|where is|show me|why is|why does|read|reading|review|reviewing|reviewed|look at|trace)\b", "intent:explore"),
+    # refactor — restructuring without behavior change
+    (r"\b(refactor|refactoring|refactored|clean up|cleanup|cleaning up|simplify|simplifying|simplified|restructure|restructuring|reorganize|reorganizing|rename|renaming|extract|extracting|inline|consolidate|dedup|deduplicate)\b", "intent:refactor"),
+    # test — writing or running tests
+    (r"\b(test|tests|testing|tested|unit test|integration test|pytest|jest|vitest|mocha|jasmine|rspec|assert|asserts|asserting|mock|mocking|mocked|spec|specs|coverage|tdd)\b", "intent:test"),
+    # ops — deployment, config, infra
+    # NOTE: `.env` is matched as a separate alternative with lookarounds because
+    # word-boundary (\b) can't anchor a pattern starting with a non-word char (.).
+    (r"(?:\b(?:deploy|deploying|deployed|deployment|ci/cd|ci\b|cd\b|github actions|gitlab ci|jenkins|docker|dockerfile|kubernetes|k8s|terraform|ansible|helm|env var|environment variable|nginx|caddy|systemd|pm2)\b|(?<!\w)\.env(?!\w))", "intent:ops"),
+]
+
 TOOL_COLORS = {
     "Read": "#718096",
     "Write": "#718096",
@@ -315,10 +346,28 @@ class TagService:
         for topic, color in TOPIC_COLORS.items():
             metadata[topic] = {"color": color, "category": "topic"}
 
+        for intent, color in INTENT_COLORS.items():
+            metadata[intent] = {"color": color, "category": "intent"}
+
         for tool, color in TOOL_COLORS.items():
             metadata[tool] = {"color": color, "category": "tool"}
 
         return metadata
+
+    @staticmethod
+    def _detect_intents(combined_text: str) -> set[str]:
+        """Return the set of intent:* tags that match the given text.
+
+        A session can legitimately have multiple intents (e.g. the user started
+        building something, hit an error, and debugged it). We return all matches.
+        """
+        matches: set[str] = set()
+        if not combined_text:
+            return matches
+        for pattern, intent in INTENT_PATTERNS:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                matches.add(intent)
+        return matches
 
     def auto_tag_session(self, session_id: str, messages: list[dict]) -> list[str]:
         """Auto-detect tags for a session from its messages.
@@ -463,7 +512,10 @@ class TagService:
             if re.search(pattern, combined_text, re.IGNORECASE):
                 tags.add(topic)
 
-        # 5. Add tools used as tags
+        # 5. Detect intents (user's goal for the session)
+        tags.update(self._detect_intents(combined_text))
+
+        # 6. Add tools used as tags
         for tool_name in all_tool_names:
             if tool_name in TOOL_COLORS:
                 tags.add(tool_name)
