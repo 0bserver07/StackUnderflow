@@ -8,17 +8,34 @@ A local-first knowledge base for your AI coding sessions. Browse, search, and an
 
 ## Quickstart
 
-**Requirements:** Python 3.10+, Node 18+
+**Requirements:** Python 3.10+, Node 18+, and an existing `~/.claude/` directory from using Claude Code.
 
 ```bash
 git clone https://github.com/0bserver07/StackUnderflow.git
 cd StackUnderflow
-pip install -e .
+
+# 1. Build the React UI (one-time)
 cd stackunderflow-ui && npm install && npm run build && cd ..
+
+# 2. Install the Python package
+pip install -e .
+
+# 3. Launch the dashboard
 stackunderflow init
 ```
 
-Opens your browser at `http://localhost:8081` with a dashboard of your Claude Code sessions.
+Your browser opens to `http://localhost:8081` with every project under `~/.claude/projects/` indexed and ready to browse.
+
+**Common knobs:**
+
+```bash
+stackunderflow init --no-browser      # don't auto-open the browser
+stackunderflow cfg set port 8090      # change the port
+stackunderflow backup create          # snapshot ~/.claude/ before risky changes
+stackunderflow --help                 # everything else
+```
+
+If port 8081 is taken: `stackunderflow cfg set port <free-port>` then re-run `init`.
 
 > PyPI release coming soon. For now, install from source.
 
@@ -28,8 +45,8 @@ Opens your browser at `http://localhost:8081` with a dashboard of your Claude Co
 - **Session viewer** — browse individual JSONL session files with conversation replay, sub-agent grouping, per-session cost
 - **Full-text search** — across all sessions, with filters for date, model, and role
 - **Q&A pair detection** — heuristic extraction of question-answer pairs based on text patterns and follow-up cues
-- **Auto-tagging** — tags sessions by language, framework, and topic using keyword and pattern matching
-- **Related sessions** — surfaces other sessions with overlapping tags, tools, and project
+- **Auto-tagging** — tags sessions by language, framework, topic, and intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`) using keyword and pattern matching
+- **Resolution status** — flags Q&A pairs as `resolved`, `looped`, or `abandoned` based on follow-up patterns, with loop counts surfaced in the dashboard
 - **Bookmarks** — save and organise important conversations
 - **Incremental backups** — `stackunderflow backup create` snapshots `~/.claude/` with hard-linked `rsync --link-dest` (use `backup auto` on macOS for daily scheduling)
 - **Multi-project** — switch between projects, view cross-project statistics
