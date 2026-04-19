@@ -61,6 +61,27 @@ class TestServerEndpointStructure:
         import stackunderflow.deps as deps
         assert hasattr(deps, "store_path")
 
+    def test_cold_cache_removed_after_successful_ingest(self, tmp_path, monkeypatch):
+        from pathlib import Path
+        cold = tmp_path / ".stackunderflow" / "cache"
+        cold.mkdir(parents=True)
+        (cold / "stale.json").write_text("{}")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / ".stackunderflow" / "store.db")
+
+        from stackunderflow.adapters import registered
+        from stackunderflow.ingest import run_ingest
+        from stackunderflow.store import db, schema
+        from stackunderflow.server import _maybe_clean_cold_cache
+
+        conn = db.connect(tmp_path / ".stackunderflow" / "store.db")
+        schema.apply(conn)
+        run_ingest(conn, registered())
+        conn.close()
+
+        _maybe_clean_cold_cache()
+        assert not cold.exists()
+
 
 class TestProjectAPIMethods:
     """Test project-related API logic without full server."""
