@@ -60,7 +60,6 @@ class TestServerEndpointStructure:
         assert "/api/stats" in routes
         assert "/api/messages" in routes
         assert "/api/dashboard-data" in routes
-        assert "/api/cache/status" in routes
         assert "/api/refresh" in routes
         assert "/api/recent-projects" in routes
         assert "/api/projects" in routes
@@ -553,6 +552,105 @@ class TestBookmarksSessionMetadata:
         bm = data["bookmarks"][0]
         assert bm.get("session_first_ts") == "2026-01-01T00:00:00+00:00"
         assert bm.get("session_message_count") == 5
+
+
+class TestStoreBackedDataRoutes:
+    """data.py routes use the session store — no deps.cache, no pipeline import."""
+
+    @pytest.mark.asyncio
+    async def test_get_stats_returns_404_when_project_not_in_store(self, tmp_path, monkeypatch):
+        from stackunderflow.routes.data import get_stats
+        from fastapi import HTTPException
+
+        store_db = tmp_path / "store.db"
+        from stackunderflow.store import db, schema
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+        monkeypatch.setattr("stackunderflow.deps.current_log_path", "/fake/path/-missing-proj")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_stats(timezone_offset=0)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_stats_returns_400_when_no_project_selected(self, monkeypatch):
+        from stackunderflow.routes.data import get_stats
+        from fastapi import HTTPException
+
+        monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_stats()
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_get_messages_returns_400_when_no_project_selected(self, monkeypatch):
+        from stackunderflow.routes.data import get_messages
+        from fastapi import HTTPException
+
+        monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_messages()
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_data_routes_use_store_not_pipeline(self, tmp_path, monkeypatch):
+        """get_project_stats should be called; deps.cache must not be called."""
+        from stackunderflow.routes.data import get_stats
+        from stackunderflow.store import db, schema
+
+        store_db = tmp_path / "store.db"
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("claude", "-test-data-proj", "-test-data-proj", 0.0, 0.0),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+        monkeypatch.setattr("stackunderflow.deps.current_log_path", "/fake/-test-data-proj")
+
+        called_with: list = []
+
+        def fake_get_project_stats(conn, *, project_id, tz_offset=0):
+            called_with.append(project_id)
+            return [], {"overview": {}}
+
+        with patch("stackunderflow.routes.data.queries.get_project_stats", side_effect=fake_get_project_stats):
+            await get_stats(timezone_offset=0)
+
+        assert len(called_with) == 1
+
+    def test_data_module_has_no_cache_import(self):
+        """data.py must not import deps.cache or TieredCache."""
+        import ast
+        import pathlib
+
+        src = (
+            pathlib.Path(__file__).parent.parent.parent
+            / "stackunderflow" / "routes" / "data.py"
+        ).read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [
+                    alias.name or ""
+                    for alias in getattr(node, "names", [])
+                ]
+                module = getattr(node, "module", "") or ""
+                assert "cache" not in module.lower(), f"data.py imports cache: {module}"
+                assert "pipeline" not in module.lower(), f"data.py imports pipeline: {module}"
+
+    def test_cache_status_endpoint_removed(self):
+        """The /api/cache/status endpoint must be gone."""
+        from stackunderflow.server import app
+        routes = [r.path for r in app.routes if hasattr(r, "path")]
+        assert "/api/cache/status" not in routes
 
 
 if __name__ == "__main__":
