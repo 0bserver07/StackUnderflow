@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **SQLite session store**: Persistent `~/.stackunderflow/sessions.db` (WAL mode) that
+  stores every message with tokens, model, timestamps, and tool-call metadata. Replaces
+  the cold-cache JSON blobs for session browsing and cross-project aggregation. New
+  modules: `store/db.py`, `store/schema.py`, `store/queries.py`, `store/types.py`.
+- **Pluggable source-adapter layer**: `adapters/base.py` defines a `LogAdapter` ABC
+  (`discover()` + `stream_messages()`); `adapters/claude.py` implements it for Claude
+  Code JSONL logs. Adding a new AI tool means adding one adapter file.
+- **Incremental ingest (`stackunderflow reindex`)**: `ingest/enumerate.py` fans all
+  adapters' `SessionRef`s into one iterable; `ingest/writer.py` writes new messages
+  transactionally, skipping files whose `mtime` and byte-offset haven't changed since
+  the last run.
+- **Store-backed session browsing**: `/api/jsonl-files` and `/api/jsonl-content` now
+  query the store instead of scanning the filesystem at request time.
+- **Store-backed bookmark enrichment**: bookmark listings include `session_first_ts`,
+  `session_last_ts`, and `session_message_count` sourced from the store.
+- **Store-backed reports**: `reports/aggregate.py` (`build_report`) and
+  `reports/optimize.py` (`find_waste`) now take a `sqlite3.Connection` and query the
+  store directly; the old `projects: list[dict]` pipeline loop is gone.
 - **Legacy session recovery**: Reads `~/.claude/history.jsonl` for projects
   that pre-date Claude Code's per-project JSONL format (~Jan 2026). Recovers
   ~96 legacy projects (~8k user prompts back to mid-2025) with prompt text and

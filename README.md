@@ -115,7 +115,18 @@ See [CLI reference](docs/cli-reference.md) for all commands.
 
 ```
 stackunderflow/
-  pipeline/       # JSONL → messages + statistics (ETL core)
+  adapters/       # source-adapter layer (one adapter per AI tool)
+    base.py       #   LogAdapter ABC — discover() + stream_messages() protocol
+    claude.py     #   Claude Code adapter — reads ~/.claude/projects/ + history.jsonl
+  ingest/         # mtime-gated incremental import into the store
+    enumerate.py  #   fan all adapters' SessionRefs into one iterable
+    writer.py     #   transactional writer — one file → one transaction → one ingest_log row
+  store/          # SQLite session store (~/.stackunderflow/sessions.db)
+    db.py         #   connection factory (WAL mode, row_factory)
+    schema.py     #   CREATE TABLE migrations
+    queries.py    #   typed read helpers (list_projects, get_session_messages, …)
+    types.py      #   frozen dataclasses returned by query helpers
+  pipeline/       # JSONL → messages + statistics (legacy ETL — used by dashboard endpoints)
     reader.py     #   scan .jsonl files into raw entries (recursive, sub-agent aware)
     dedup.py      #   collapse streaming duplicates
     classifier.py #   tag message types and error patterns
@@ -130,20 +141,24 @@ stackunderflow/
   routes/         # FastAPI route modules
     projects.py   #   project selection and listing
     data.py       #   stats, dashboard-data, messages, refresh
-    sessions.py   #   JSONL file browsing and content
+    sessions.py   #   session browsing (store-backed)
     search.py     #   full-text search
     qa.py         #   Q&A pair browsing
     tags.py       #   auto-tags and manual tagging
-    bookmarks.py  #   bookmark CRUD
+    bookmarks.py  #   bookmark CRUD + session metadata enrichment
     misc.py       #   pricing, related, health, static
   services/       # search, Q&A, tags, bookmarks, related, pricing
-  deps.py         # shared state (cache, config, services)
+  deps.py         # shared state (cache, config, services, store_path)
   server.py       # thin shell — app creation, middleware, lifespan
   settings.py     # env → file → default config resolution (descriptor-based)
-  cli.py          # click CLI (init, start, cfg, backup, clear-cache)
+  cli.py          # click CLI (init, start, cfg, backup, clear-cache, reindex)
 
 stackunderflow-ui/  # React + TypeScript + Tailwind frontend
 ```
+
+### How refresh works
+
+`stackunderflow reindex` (also run at server startup) fans every registered adapter's discovered files through `ingest/enumerate.py`. For each file, the ingest runner checks the stored `last_offset` and `last_mtime` and only reads bytes beyond the last offset. New messages are written transactionally to the SQLite store. The store is the source of truth for session browsing, cross-project aggregation (`reports/aggregate.py`), and the waste-finding heuristic (`reports/optimize.py`).
 
 ### Source adapters
 
