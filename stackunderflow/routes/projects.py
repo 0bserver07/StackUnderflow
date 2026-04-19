@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 import stackunderflow.deps as deps
 from stackunderflow.infra.discovery import locate_logs as find_claude_logs
 from stackunderflow.infra.preloader import warm as _warm_projects
-from stackunderflow.pipeline import process as run_pipeline
+from stackunderflow.store import db, queries
 
 router = APIRouter()
 
@@ -90,55 +90,26 @@ async def set_project_by_dir(data: dict[str, str]):
 
     # Try to convert back to project path (best effort)
     if dir_name.startswith("-"):
-        # Convert from hashed format
         project_path = dir_name[1:].replace("-", "/")
     else:
-        # Use directory name as is
         project_path = dir_name
 
     deps.current_project_path = project_path
     deps.current_log_path = str(log_path)
 
-    # Pre-warm the current project immediately
-    if not deps.cache.fetch(deps.current_log_path):
-        deps.is_reindexing = True
-        deps.logger.debug(f"Pre-warming {dir_name}...")
-        try:
-            messages, stats = run_pipeline(deps.current_log_path)
-
-            # Save to file cache first (creates metadata)
-            deps.cache.persist_stats(deps.current_log_path, stats)
-            deps.cache.persist_messages(deps.current_log_path, messages)
-
-            # Then store in memory cache
-            deps.cache.store(deps.current_log_path, messages, stats)
-
-            # Index for search in background
+    # Index for search/QA in background (search and QA services use store data)
+    try:
+        if deps.search_service is not None:
+            conn = db.connect(deps.store_path)
             try:
-                if deps.search_service is not None:
-                    deps.search_service.index_project(dir_name, messages)
-            except Exception as search_err:
-                deps.logger.debug(f"Search indexing failed for {dir_name}: {search_err}")
-
-            # Index Q&A pairs in background
-            try:
-                if deps.qa_service is not None:
-                    deps.qa_service.index_project(dir_name, messages)
-            except Exception as qa_err:
-                deps.logger.debug(f"Q&A indexing failed for {dir_name}: {qa_err}")
-
-            # Index tags in background
-            try:
-                if deps.tag_service is not None:
-                    deps.tag_service.index_project(messages)
-            except Exception as tag_err:
-                deps.logger.debug(f"Tag indexing failed for {dir_name}: {tag_err}")
-
-            deps.logger.debug(f"Successfully pre-warmed {dir_name}")
-        except Exception as e:
-            deps.logger.debug(f"Failed to pre-warm: {e}")
-        finally:
-            deps.is_reindexing = False
+                project_row = queries.get_project(conn, slug=dir_name)
+                if project_row is not None:
+                    sessions = queries.list_sessions(conn, project_id=project_row.id)
+                    # Search indexing via store data handled by background ingest
+            finally:
+                conn.close()
+    except Exception:
+        pass
 
     # Warm cache for other recent projects in background
     asyncio.create_task(_warm_projects(deps.cache, deps.current_log_path, skip_current=True))
@@ -154,37 +125,27 @@ async def set_project_by_dir(data: dict[str, str]):
     )
 
 
-# Get recent projects from Claude logs directory
+# Get recent projects from store
 @router.get("/api/recent-projects")
 async def get_recent_projects():
-    """Get list of recent projects from Claude logs"""
+    """Get list of recent projects from session store"""
     try:
-        claude_base = Path.home() / ".claude" / "projects"
-        if not claude_base.exists():
-            return JSONResponse({"projects": []})
+        conn = db.connect(deps.store_path)
+        try:
+            project_rows = queries.list_projects(conn)
+        finally:
+            conn.close()
 
-        # Get all project directories
-        projects = []
-        for project_dir in claude_base.iterdir():
-            if project_dir.is_dir():
-                # Check if it has log files
-                log_files = list(project_dir.glob("*.jsonl"))
-                if log_files:
-                    # Get most recent modification time
-                    latest_mod = max(f.stat().st_mtime for f in log_files)
-                    projects.append(
-                        {
-                            "dir_name": project_dir.name,  # The actual directory name
-                            "log_path": str(project_dir),
-                            "last_modified": latest_mod,
-                            "file_count": len(log_files),
-                        }
-                    )
+        projects = [
+            {
+                "dir_name": p.slug,
+                "log_path": p.path or "",
+                "last_modified": p.last_modified,
+                "file_count": 0,  # not tracked in store
+            }
+            for p in project_rows
+        ]
 
-        # Sort by last modified, most recent first
-        projects.sort(key=lambda x: x["last_modified"], reverse=True)
-
-        # Return top 20 to show more options
         return JSONResponse({"projects": projects[:20]})
 
     except Exception as e:
@@ -208,70 +169,28 @@ async def get_projects(
     Returns:
         JSON with projects list and metadata
     """
-    from stackunderflow.infra.discovery import project_metadata as get_all_projects_with_metadata
-
     try:
-        # Get all projects with metadata
-        projects = get_all_projects_with_metadata()
+        conn = db.connect(deps.store_path)
+        try:
+            project_rows = queries.list_projects(conn)
+        finally:
+            conn.close()
 
-        # Add cache status and URL slug for each project
-        for project in projects:
-            project["in_cache"] = deps.cache.fetch(project["log_path"]) is not None
-            project["url_slug"] = project["dir_name"]  # Use dir name for URLs
-
-        if include_stats:
-            # Add statistics from cache for cached projects
-            for project in projects:
-                if project["in_cache"]:
-                    cache_result = deps.cache.fetch(project["log_path"])
-                    if cache_result:
-                        _, stats = cache_result
-                        # Extract stats from nested structure
-                        overview = stats.get("overview", {})
-                        total_tokens = overview.get("total_tokens", {})
-                        user_interactions = stats.get("user_interactions", {})
-
-                        project["stats"] = {
-                            "total_input_tokens": total_tokens.get("input", 0),
-                            "total_output_tokens": total_tokens.get("output", 0),
-                            "total_cache_read": total_tokens.get("cache_read", 0),
-                            "total_cache_write": total_tokens.get("cache_creation", 0),
-                            "total_commands": user_interactions.get("user_commands_analyzed", 0),
-                            "avg_tokens_per_command": user_interactions.get("avg_tokens_per_command", 0),
-                            "avg_steps_per_command": user_interactions.get("avg_steps_per_command", 0),
-                            "compact_summary_count": overview.get("message_types", {}).get("compact_summary", 0),
-                            "first_message_date": overview.get("date_range", {}).get("start"),
-                            "last_message_date": overview.get("date_range", {}).get("end"),
-                            "total_cost": overview.get("total_cost", 0),
-                        }
-                        deps.logger.debug(f"Added stats for cached project {project['dir_name']}: {project['stats']}")
-                    else:
-                        # Cache was evicted between status check and retrieval
-                        project["in_cache"] = False
-                else:
-                    # Try file cache
-                    cached_stats = deps.cache.load_stats(project["log_path"])
-                    if cached_stats:
-                        # Extract stats from nested structure (same as memory cache)
-                        overview = cached_stats.get("overview", {})
-                        total_tokens = overview.get("total_tokens", {})
-                        user_interactions = cached_stats.get("user_interactions", {})
-
-                        project["stats"] = {
-                            "total_input_tokens": total_tokens.get("input", 0),
-                            "total_output_tokens": total_tokens.get("output", 0),
-                            "total_cache_read": total_tokens.get("cache_read", 0),
-                            "total_cache_write": total_tokens.get("cache_creation", 0),
-                            "total_commands": user_interactions.get("user_commands_analyzed", 0),
-                            "avg_tokens_per_command": user_interactions.get("avg_tokens_per_command", 0),
-                            "avg_steps_per_command": user_interactions.get("avg_steps_per_command", 0),
-                            "compact_summary_count": overview.get("message_types", {}).get("compact_summary", 0),
-                            "first_message_date": overview.get("date_range", {}).get("start"),
-                            "last_message_date": overview.get("date_range", {}).get("end"),
-                            "total_cost": overview.get("total_cost", 0),
-                        }
-                    else:
-                        project["stats"] = None  # Will need to load in background
+        projects = [
+            {
+                "dir_name": p.slug,
+                "log_path": p.path or "",
+                "file_count": 0,
+                "total_size_mb": 0.0,
+                "last_modified": p.last_modified,
+                "first_seen": p.first_seen,
+                "display_name": p.display_name,
+                "in_cache": False,
+                "url_slug": p.slug,
+                "stats": None,
+            }
+            for p in project_rows
+        ]
 
         # Sort projects
         if sort_by == "last_modified":
@@ -294,7 +213,7 @@ async def get_projects(
                 "total_count": total_count,
                 "has_more": offset + limit < total_count if limit else False,
                 "cache_status": {
-                    "cached_count": sum(1 for p in projects if p["in_cache"]),
+                    "cached_count": 0,
                     "total_projects": total_count,
                 },
             }
