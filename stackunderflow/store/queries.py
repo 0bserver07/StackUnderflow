@@ -95,6 +95,71 @@ def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
     }
 
 
+def get_project_stats(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    tz_offset: int = 0,
+) -> tuple[list[dict], dict]:
+    """Run the pipeline on stored messages and return (messages, statistics).
+
+    Reconstructs pipeline RawEntry objects from raw_json stored in the messages
+    table, then runs the full dedup → classify → enrich → aggregate chain.
+    The return shape is identical to pipeline.process(log_dir).
+    """
+    import json as _json
+    from pathlib import Path
+
+    from stackunderflow.pipeline import aggregator, classifier, dedup, enricher, formatter
+    from stackunderflow.pipeline.reader import RawEntry
+
+    row = conn.execute(
+        "SELECT path, slug FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if row is None:
+        return [], {}
+
+    log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
+
+    rows = conn.execute(
+        "SELECT m.raw_json, s.session_id "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "WHERE s.project_id = ? "
+        "ORDER BY m.timestamp",
+        (project_id,),
+    ).fetchall()
+
+    raw_entries = [
+        RawEntry(
+            payload=_json.loads(r["raw_json"]),
+            session_id=r["session_id"],
+            origin=r["session_id"],
+        )
+        for r in rows
+    ]
+
+    merged = dedup.collapse(raw_entries)
+    tagged = classifier.tag(merged)
+    dataset = enricher.build(tagged, log_dir)
+    messages = formatter.to_dicts(dataset)
+    stats = aggregator.summarise(dataset, log_dir, tz_offset=tz_offset)
+    return messages, stats
+
+
+def get_project_messages(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    limit: int | None = None,
+) -> list[dict]:
+    """Return pipeline-formatted messages for a project, ordered by timestamp."""
+    messages, _ = get_project_stats(conn, project_id=project_id)
+    if limit is not None:
+        return messages[:limit]
+    return messages
+
+
 def cross_project_daily_totals(
     conn: sqlite3.Connection,
     *,
