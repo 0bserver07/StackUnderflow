@@ -40,3 +40,58 @@ def test_enumerate_legacy_project_from_history(fake_home: Path, monkeypatch) -> 
     a = ClaudeAdapter()
     refs = list(a.enumerate())
     assert any(r.project_slug == "-Users-me-legacy" for r in refs)
+
+
+def test_read_modern_jsonl_yields_records(fake_home: Path) -> None:
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"user","timestamp":"2026-01-01T00:00:00Z",'
+        '"uuid":"u1","message":{"role":"user","content":"hello"}}\n'
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u2","parentUuid":"u1",'
+        '"message":{"role":"assistant","model":"claude-sonnet-4-6",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 2
+    assert records[0].role == "user"
+    assert records[0].content_text == "hello"
+    assert records[1].role == "assistant"
+    assert records[1].input_tokens == 5
+    assert records[1].output_tokens == 2
+    assert records[1].model == "claude-sonnet-4-6"
+    assert records[0].seq < records[1].seq
+
+
+def test_read_respects_since_offset(fake_home: Path) -> None:
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    line1 = '{"sessionId":"abc","type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"user","content":"a"}}\n'
+    line2 = '{"sessionId":"abc","type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":"b"}}\n'
+    fp.write_text(line1 + line2)
+
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref, since_offset=len(line1.encode())))
+    assert len(records) == 1
+    assert records[0].content_text == "b"
+
+
+def test_read_skips_malformed_lines(fake_home: Path) -> None:
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        'not-json\n'
+        '{"sessionId":"abc","type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u","message":{"role":"user","content":"hello"}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 1
