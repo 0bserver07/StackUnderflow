@@ -21,3 +21,8 @@ def register(adapter: SourceAdapter) -> None:
 def registered() -> list[SourceAdapter]:
     """Return the current registry. The ingest layer iterates this."""
     return list(_registry)
+
+
+from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
+
+register(_ClaudeAdapter())
