@@ -1,8 +1,11 @@
+import os
+import unittest
 from pathlib import Path
 
 import pytest
 
 from stackunderflow.adapters.claude import ClaudeAdapter
+from tests.stackunderflow.adapters.contract import AdapterContract
 
 
 @pytest.fixture
@@ -115,3 +118,24 @@ def test_read_legacy_history_yields_records(fake_home: Path) -> None:
     assert recs[1].content_text == "msg2"
     assert all(r.role == "user" for r in recs)
     assert recs[0].timestamp.startswith("2024-01-01")
+
+
+class TestClaudeAdapterContract(unittest.TestCase, AdapterContract):
+    """Runs every AdapterContract invariant against a ClaudeAdapter backed by a fake HOME."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self._tmp.name
+        project_dir = Path(self._tmp.name) / ".claude" / "projects" / "-a"
+        project_dir.mkdir(parents=True)
+        (project_dir / "s1.jsonl").write_text(
+            '{"sessionId":"s1","type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u","message":{"role":"user","content":"x"}}\n'
+        )
+        self.adapter = ClaudeAdapter()
+
+    def tearDown(self):
+        if self._old_home is not None:
+            os.environ["HOME"] = self._old_home
+        self._tmp.cleanup()
