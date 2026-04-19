@@ -89,6 +89,7 @@ async def _lifespan(_app: FastAPI):
         counts = run_ingest(store_conn, registered())
         logger.info("Ingest complete: %s", counts)
         store_conn.close()
+        _maybe_clean_cold_cache()
     except Exception as e:
         logger.error("Ingest failed at startup: %s", e)
 
@@ -151,6 +152,16 @@ async def spa_catch_all_project(full_path: str):
 
 
 from stackunderflow.routes.data import refresh_all_projects, refresh_data  # noqa: E402, F401
+
+
+def _maybe_clean_cold_cache() -> None:
+    """Remove the old JSON cache once the store is populated."""
+    import shutil
+    from pathlib import Path
+
+    cold = Path.home() / ".stackunderflow" / "cache"
+    if cold.exists():
+        shutil.rmtree(cold, ignore_errors=True)
 
 
 def start_server_with_args(port=8081, host="localhost"):
