@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from stackunderflow.store import db, queries, schema
 
 
 @pytest.fixture
-def conn(tmp_path: Path) -> sqlite3.Connection:
+def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
     c = db.connect(tmp_path / "store.db")
     schema.apply(c)
     yield c
@@ -20,6 +21,7 @@ def _seed_project(conn: sqlite3.Connection, *, slug: str = "-a", provider: str =
         "VALUES (?, ?, ?, ?, ?)",
         (provider, slug, slug, 0.0, 0.0),
     )
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
@@ -28,6 +30,7 @@ def _seed_session(conn: sqlite3.Connection, project_id: int, session_id: str = "
         "INSERT INTO sessions (project_id, session_id) VALUES (?, ?)",
         (project_id, session_id),
     )
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
