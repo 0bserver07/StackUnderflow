@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from stackunderflow.infra.cache import TieredCache
@@ -33,6 +34,9 @@ cache = TieredCache(
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Path to the unified session store (created on first use).
+store_path = Path.home() / ".stackunderflow" / "store.db"
 
 # ── mutable project state ────────────────────────────────────────────────────
 
