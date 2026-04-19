@@ -150,9 +150,6 @@ async def spa_catch_all_project(full_path: str):
     return FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))
 
 
-# ── Backward compatibility ────────────────────────────────────────────────────
-# Tests import these directly from server; delegate to the route modules.
-from stackunderflow.pipeline import process as run_pipeline  # noqa: E402, F401
 from stackunderflow.routes.data import refresh_all_projects, refresh_data  # noqa: E402, F401
 
 

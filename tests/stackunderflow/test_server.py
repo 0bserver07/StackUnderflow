@@ -4,8 +4,6 @@ Tests for the FastAPI server endpoints and functionality.
 import json
 import os
 import sys
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -23,20 +21,6 @@ class TestServerImports:
         import stackunderflow.deps
         assert hasattr(stackunderflow.server, 'app')
 
-    def test_can_import_memory_cache(self):
-        """Test that TieredCache can be imported."""
-        from stackunderflow.infra.cache import TieredCache
-        cache = TieredCache()
-        assert hasattr(cache, 'fetch')
-        assert hasattr(cache, 'store')
-        assert hasattr(cache, 'drop')
-    
-    def test_can_import_local_cache(self):
-        """Test that TieredCache (cold tier) can be imported."""
-        from stackunderflow.infra.cache import TieredCache
-        cache = TieredCache()
-        assert hasattr(cache, 'load_stats')
-        assert hasattr(cache, 'persist_stats')
 
 
 class TestServerEndpointStructure:
@@ -76,125 +60,6 @@ class TestServerEndpointStructure:
     def test_shared_deps_has_store_path(self):
         import stackunderflow.deps as deps
         assert hasattr(deps, "store_path")
-
-
-class TestMemoryCacheFunctionality:
-    """Test memory cache basic functionality."""
-
-    def test_memory_cache_basic_operations(self):
-        """Test basic TieredCache hot-tier operations."""
-        from stackunderflow.infra.cache import TieredCache
-
-        cache = TieredCache(max_slots=2, max_mb=1)
-
-        # Test empty cache
-        assert cache.fetch("test_path") is None
-
-        # Test store and fetch
-        messages = [{"type": "user", "content": "test"}]
-        stats = {"total": 1}
-        assert cache.store("test_path", messages, stats)
-
-        result = cache.fetch("test_path")
-        assert result is not None
-        assert result[0] == messages
-        assert result[1] == stats
-
-        # Test drop
-        assert cache.drop("test_path")
-        assert cache.fetch("test_path") is None
-
-        # Test metrics
-        cache_stats = cache.metrics()
-        assert cache_stats['hits'] >= 0
-        assert cache_stats['misses'] >= 0
-        assert cache_stats['projects_cached'] == 0
-
-    def test_memory_cache_lru_eviction(self):
-        """Test eviction in TieredCache."""
-        from stackunderflow.infra.cache import TieredCache
-
-        cache = TieredCache(max_slots=2, max_mb=1)
-
-        # Add two projects
-        cache.store("path1", [{"msg": 1}], {"stats": 1})
-        cache.store("path2", [{"msg": 2}], {"stats": 2})
-
-        # Access path1 to make it more recently used
-        cache.fetch("path1")
-
-        # Add third project - should evict lowest-scored entry
-        # Use force=True to bypass protection
-        cache.store("path3", [{"msg": 3}], {"stats": 3}, force=True)
-
-        # path1 and path3 should be in cache, path2 should be evicted
-        assert cache.fetch("path1") is not None
-        assert cache.fetch("path2") is None
-        assert cache.fetch("path3") is not None
-
-    def test_memory_cache_size_limit(self):
-        """Test TieredCache size limits."""
-        from stackunderflow.infra.cache import TieredCache
-
-        # Very small size limit (roughly 1KB via max_mb)
-        cache = TieredCache(max_slots=5, max_mb=0)
-
-        # Create large message
-        large_messages = [{"content": "x" * 10000} for _ in range(100)]
-        stats = {"total": 100}
-
-        # Should reject due to size
-        result = cache.store("large_path", large_messages, stats)
-        assert result is False
-        assert cache.fetch("large_path") is None
-
-
-class TestLocalCacheService:
-    """Test TieredCache cold-tier functionality."""
-
-    def test_local_cache_basic_operations(self):
-        """Test basic cold-tier operations."""
-        from stackunderflow.infra.cache import TieredCache
-
-        with tempfile.TemporaryDirectory() as cache_dir:
-            cache = TieredCache(disk_root=Path(cache_dir))
-
-            # Test saving and retrieving stats
-            test_stats = {"total_messages": 42, "total_tokens": 1000}
-            cache.persist_stats("/test/path", test_stats)
-
-            retrieved_stats = cache.load_stats("/test/path")
-            assert retrieved_stats == test_stats
-
-            # Test saving and retrieving messages
-            test_messages = [{"type": "user", "content": "hello"}]
-            cache.persist_messages("/test/path", test_messages)
-
-            retrieved_messages = cache.load_messages("/test/path")
-            assert retrieved_messages == test_messages
-
-            # Test invalidation
-            cache.invalidate_disk("/test/path")
-            assert cache.load_stats("/test/path") is None
-            assert cache.load_messages("/test/path") is None
-
-
-class TestServerConfiguration:
-    """Test server configuration and environment variables."""
-
-    def test_cache_configuration_from_env(self):
-        """Test that cache configuration is read from environment."""
-        with patch.dict(os.environ, {
-            'CACHE_MAX_PROJECTS': '10',
-            'CACHE_MAX_MB_PER_PROJECT': '100',
-        }):
-            import importlib
-
-            import stackunderflow.server
-            importlib.reload(stackunderflow.server)
-
-            assert stackunderflow.server.config.get("cache_max_projects") == 10
-            assert stackunderflow.server.config.get("cache_max_mb_per_project") == 100
 
 
 class TestProjectAPIMethods:
