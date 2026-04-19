@@ -153,12 +153,13 @@ class SearchService:
         finally:
             conn.close()
 
-    def reindex_all(self, memory_cache, cache_service) -> dict:
+    def reindex_all(self, memory_cache, cache_service, projects=None) -> dict:
         """Rebuild the entire search index from all available project data.
 
         Args:
             memory_cache: The MemoryCache instance
             cache_service: The LocalCacheService instance
+            projects: Optional project list override; if None, discovered from filesystem
 
         Returns:
             Dict with reindex results
@@ -166,7 +167,8 @@ class SearchService:
         from ..infra.discovery import project_metadata as get_all_projects_with_metadata
         from ..pipeline import process as _run_pipeline
 
-        projects = get_all_projects_with_metadata()
+        if projects is None:
+            projects = get_all_projects_with_metadata()
         total_messages = 0
         projects_indexed = 0
         errors = []
