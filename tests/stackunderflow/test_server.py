@@ -529,5 +529,43 @@ class TestSearchReindexUsesStore:
         assert "-my-test-proj" in slugs
 
 
+class TestQAReindexUsesStore:
+    """Test that QA reindex pulls project list from session store."""
+
+    @pytest.mark.asyncio
+    async def test_qa_reindex_passes_store_projects_to_service(self, tmp_path, monkeypatch):
+        import stackunderflow.deps as deps
+        from stackunderflow.routes.qa import reindex_qa
+        from stackunderflow.store import db, schema
+
+        store_db = tmp_path / "store.db"
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("claude", "-qa-proj", "-qa-proj", 0.0, 0.0),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+
+        captured: dict = {}
+
+        class FakeQAService:
+            def reindex_all(self, memory_cache, cache_service, projects=None):
+                captured["projects"] = projects
+                return {"projects_indexed": 0, "total_qa_indexed": 0, "errors": []}
+
+        monkeypatch.setattr("stackunderflow.deps.qa_service", FakeQAService())
+
+        await reindex_qa()
+
+        assert captured.get("projects") is not None
+        slugs = {p["dir_name"] for p in captured["projects"]}
+        assert "-qa-proj" in slugs
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
