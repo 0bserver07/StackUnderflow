@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **SQLite session store**: Persistent `~/.stackunderflow/sessions.db` (WAL mode) that
+- **SQLite session store**: Persistent `~/.stackunderflow/store.db` (WAL mode) that
   stores every message with tokens, model, timestamps, and tool-call metadata. Replaces
   the cold-cache JSON blobs for session browsing and cross-project aggregation. New
   modules: `store/db.py`, `store/schema.py`, `store/queries.py`, `store/types.py`.
@@ -26,11 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Store-backed reports**: `reports/aggregate.py` (`build_report`) and
   `reports/optimize.py` (`find_waste`) now take a `sqlite3.Connection` and query the
   store directly; the old `projects: list[dict]` pipeline loop is gone.
+- **Store-backed dashboard endpoints**: `/api/stats`, `/api/dashboard-data`, and
+  `/api/messages` now call `queries.get_project_stats()` — messages come from the
+  store, are classified and aggregated by `stats/`, and returned without touching the
+  filesystem at request time.
 - **Legacy session recovery**: Reads `~/.claude/history.jsonl` for projects
-  that pre-date Claude Code's per-project JSONL format (~Jan 2026). Recovers
-  ~96 legacy projects (~8k user prompts back to mid-2025) with prompt text and
-  timestamps; token/model data is unavailable for these — it was never stored
-  locally in the old format. New module: `stackunderflow/pipeline/history_reader.py`.
+  that pre-date Claude Code's per-project JSONL format (~Jan 2026). Handled by
+  `adapters/claude.py`; token/model data is unavailable for these entries since
+  they were never stored in the old format.
+- **Cold-cache cleanup**: On first successful ingest, the legacy
+  `~/.stackunderflow/cache/` directory (TieredCache cold storage) is removed
+  automatically via `server._maybe_clean_cold_cache()`.
 - **Pricing staleness signal**: `/api/pricing` now sets `is_stale: true` when
   the cached LiteLLM pricing data is older than 7 days or the last refresh
   attempt failed. The Overview's Total Cost card surfaces a small amber badge
@@ -40,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out of the box.
 
 ### Removed
+- **`TieredCache` and cold-cache infrastructure**: `infra/cache.py` and
+  `infra/preloader.py` deleted. The session store replaces everything the
+  two-tier cache used to do. Background cache warming is gone; the store is
+  incrementally updated on startup via `run_ingest()`.
+- **`pipeline/reader.py`, `pipeline/dedup.py`, `pipeline/history_reader.py`**:
+  JSONL reading and deduplication now happen inside the adapter layer
+  (`adapters/claude.py`). History reading is also handled by the adapter.
+- **`/api/cache/status`** endpoint: `TieredCache` no longer exists.
 - **Agent simulation, social discussions, and votes**: Required external API
   keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`) most users don't have, and the
   UI was only reachable via an undocumented deep link. Dropped
@@ -67,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `healthCheck`, etc.) along with their unused TS types.
 
 ### Changed
+- **`pipeline/` reorganised into `stats/`**: The classifier, enricher, aggregator,
+  and formatter modules moved to `stackunderflow/stats/`. The I/O layer (`reader.py`,
+  `dedup.py`, `history_reader.py`) and the legacy cross-project query (`cross_project`)
+  were removed — their jobs are now handled by `adapters/` and `store/queries.py`.
+  Existing call sites in routes and reports were updated; the public stats shape is
+  unchanged.
+- **`/api/refresh`** now calls `run_ingest()` instead of re-parsing JSONL files
+  through the old pipeline; `/api/cache/status` endpoint removed.
 - **CORS allowlist** now derives from the configured `port` setting instead
   of hardcoding `8081`. Vite dev origin updated from `localhost:3000` to
   `localhost:5175` to match `stackunderflow-ui/vite.config.ts`.
