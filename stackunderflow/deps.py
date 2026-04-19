@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from stackunderflow.infra.cache import TieredCache
 from stackunderflow.settings import Settings
 
 if TYPE_CHECKING:
@@ -27,11 +26,6 @@ logger = logging.getLogger("stackunderflow")
 # ── configuration & cache ────────────────────────────────────────────────────
 
 config = Settings()
-
-cache = TieredCache(
-    max_slots=config.get("cache_max_projects"),
-    max_mb=config.get("cache_max_mb_per_project"),
-)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

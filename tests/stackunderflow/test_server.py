@@ -19,17 +19,10 @@ class TestServerImports:
     
     def test_can_import_server(self):
         """Test that server.py can be imported."""
-        with patch('stackunderflow.infra.preloader.warm', new=AsyncMock()):
-            import stackunderflow.server
-            import stackunderflow.deps
-            assert hasattr(stackunderflow.server, 'app')
-            assert hasattr(stackunderflow.deps, 'cache')
-    
-    def test_can_import_cache_warmer(self):
-        """Test that preloader can be imported."""
-        from stackunderflow.infra.preloader import warm as warm_recent_projects
-        assert callable(warm_recent_projects)
-    
+        import stackunderflow.server
+        import stackunderflow.deps
+        assert hasattr(stackunderflow.server, 'app')
+
     def test_can_import_memory_cache(self):
         """Test that TieredCache can be imported."""
         from stackunderflow.infra.cache import TieredCache
@@ -51,34 +44,32 @@ class TestServerEndpointStructure:
     
     def test_server_has_required_endpoints(self):
         """Test that server has all required endpoints defined."""
-        with patch('stackunderflow.infra.preloader.warm', new=AsyncMock()):
-            from stackunderflow.server import app
-            
-            # Get all routes
-            routes = []
-            for route in app.routes:
-                if hasattr(route, 'path'):
-                    routes.append(route.path)
-            
-            # Check critical endpoints exist
-            assert "/" in routes
-            assert "/project/{full_path:path}" in routes  # Project-specific URLs (SPA catch-all)
-            assert "/api/health" in routes
-            assert "/api/project" in routes
-            assert "/api/stats" in routes
-            assert "/api/messages" in routes
-            assert "/api/dashboard-data" in routes
-            assert "/api/cache/status" in routes
-            assert "/api/refresh" in routes
-            assert "/api/recent-projects" in routes
-            assert "/api/projects" in routes  # New comprehensive projects endpoint
-            assert "/api/pricing" in routes
+        from stackunderflow.server import app
+
+        # Get all routes
+        routes = []
+        for route in app.routes:
+            if hasattr(route, 'path'):
+                routes.append(route.path)
+
+        # Check critical endpoints exist
+        assert "/" in routes
+        assert "/project/{full_path:path}" in routes
+        assert "/api/health" in routes
+        assert "/api/project" in routes
+        assert "/api/stats" in routes
+        assert "/api/messages" in routes
+        assert "/api/dashboard-data" in routes
+        assert "/api/cache/status" in routes
+        assert "/api/refresh" in routes
+        assert "/api/recent-projects" in routes
+        assert "/api/projects" in routes
+        assert "/api/pricing" in routes
     
     def test_shared_deps_exist(self):
         """Test that shared deps module has required state."""
         import stackunderflow.deps as deps
 
-        assert hasattr(deps, 'cache')
         assert hasattr(deps, 'config')
         assert hasattr(deps, 'current_project_path')
         assert hasattr(deps, 'current_log_path')
@@ -86,74 +77,6 @@ class TestServerEndpointStructure:
     def test_shared_deps_has_store_path(self):
         import stackunderflow.deps as deps
         assert hasattr(deps, "store_path")
-
-
-class TestCacheWarmerFunction:
-    """Test the cache warmer function behavior."""
-
-    @pytest.mark.asyncio
-    async def test_warm_recent_projects_handles_empty_dir(self):
-        """Test that warm handles missing directories gracefully."""
-        from stackunderflow.infra.preloader import warm as warm_recent_projects
-
-        mock_cache = Mock()
-        mock_cache.fetch.return_value = None
-
-        with patch('pathlib.Path.home') as mock_home:
-            # Create a temporary directory that doesn't have .claude/projects
-            with tempfile.TemporaryDirectory() as temp_dir:
-                mock_home.return_value = Path(temp_dir)
-
-                # Should complete without errors
-                await warm_recent_projects(
-                    mock_cache,
-                    None,
-                    cap=3,
-                )
-
-        # Should not have tried to cache anything
-        mock_cache.store.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_warm_recent_projects_skips_current(self):
-        """Test that warm can skip the current project."""
-        from stackunderflow.infra.preloader import warm as warm_recent_projects
-
-        mock_cache = Mock()
-        mock_cache.fetch.return_value = None
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create mock project structure
-            claude_dir = Path(temp_dir) / ".claude" / "projects"
-            claude_dir.mkdir(parents=True)
-
-            # Create two project dirs
-            project1 = claude_dir / "project1"
-            project1.mkdir()
-            (project1 / "log.jsonl").write_text('{"type": "user"}\n')
-
-            project2 = claude_dir / "project2"
-            project2.mkdir()
-            (project2 / "log.jsonl").write_text('{"type": "user"}\n')
-
-            with patch('pathlib.Path.home') as mock_home:
-                mock_home.return_value = Path(temp_dir)
-
-                # Mock pipeline to avoid actual processing
-                with patch('stackunderflow.pipeline.process') as mock_pipeline:
-                    mock_pipeline.return_value = ([], {})
-
-                    # Warm with current project = project1, skip_current=True
-                    await warm_recent_projects(
-                        mock_cache,
-                        str(project1),
-                        skip_current=True,
-                        cap=5,
-                    )
-
-            # Should only process project2
-            assert mock_pipeline.call_count == 1
-            assert "project2" in str(mock_pipeline.call_args[0][0])
 
 
 class TestMemoryCacheFunctionality:
@@ -265,18 +188,14 @@ class TestServerConfiguration:
         with patch.dict(os.environ, {
             'CACHE_MAX_PROJECTS': '10',
             'CACHE_MAX_MB_PER_PROJECT': '100',
-            'CACHE_WARM_ON_STARTUP': '5'
         }):
-            # Re-import to get new env values
             import importlib
 
             import stackunderflow.server
             importlib.reload(stackunderflow.server)
 
-            # Config values are now accessed through config.get()
             assert stackunderflow.server.config.get("cache_max_projects") == 10
             assert stackunderflow.server.config.get("cache_max_mb_per_project") == 100
-            assert stackunderflow.server.cache_warm_on_startup == 5
 
 
 class TestProjectAPIMethods:
@@ -316,18 +235,16 @@ class TestProjectsAPIEndpoint:
     
     def test_project_specific_url_routing(self):
         """Test that project-specific URLs are configured."""
-        with patch('stackunderflow.infra.preloader.warm', new=AsyncMock()):
-            from stackunderflow.server import app
+        from stackunderflow.server import app
 
-            # Check the SPA catch-all route exists for /project/
-            project_route = None
-            for route in app.routes:
-                if hasattr(route, 'path') and route.path == "/project/{full_path:path}":
-                    project_route = route
-                    break
+        project_route = None
+        for route in app.routes:
+            if hasattr(route, 'path') and route.path == "/project/{full_path:path}":
+                project_route = route
+                break
 
-            assert project_route is not None
-            assert project_route.path == "/project/{full_path:path}"
+        assert project_route is not None
+        assert project_route.path == "/project/{full_path:path}"
     
     def test_projects_api_with_mock_data(self):
         """Test projects API response structure with mock data."""
@@ -368,22 +285,11 @@ class TestProjectsAPIEndpoint:
     
     def test_project_switching_no_duplicate_selectors(self):
         """Test that project switching doesn't create duplicate selectors."""
-        # This tests the fix for the duplicate project selector issue
-        
-        # The fix was in project-detector.js - removed populateProjectSelector
-        # and in dashboard.html - updated switchProject to use URL navigation
-        
-        # We can verify the server-side logic
-        with patch('stackunderflow.infra.preloader.warm', new=AsyncMock()):
-            from stackunderflow.server import app
+        from stackunderflow.server import app
 
-            # Verify both root and project routes exist
-            routes = [route.path for route in app.routes if hasattr(route, 'path')]
-            assert "/" in routes
-            assert "/project/{full_path:path}" in routes
-
-            # The actual DOM testing would require end-to-end tests
-            # For now, we've verified the server routes are correct
+        routes = [route.path for route in app.routes if hasattr(route, 'path')]
+        assert "/" in routes
+        assert "/project/{full_path:path}" in routes
 
 
 class TestRefreshAllProjects:

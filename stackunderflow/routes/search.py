@@ -73,7 +73,7 @@ async def reindex_search():
         finally:
             conn.close()
         projects = [{"dir_name": p.slug, "log_path": p.path or ""} for p in project_rows]
-        result = deps.search_service.reindex_all(deps.cache, deps.cache, projects=projects)
+        result = deps.search_service.reindex_all(None, None, projects=projects)
         elapsed_ms = (time.time() - start_time) * 1000
         result["elapsed_ms"] = round(elapsed_ms, 2)
         deps.logger.info(
