@@ -110,8 +110,8 @@ def get_project_stats(
     import json as _json
     from pathlib import Path
 
-    from stackunderflow.pipeline import aggregator, classifier, dedup, enricher, formatter
-    from stackunderflow.pipeline.reader import RawEntry
+    from stackunderflow.stats import aggregator, classifier, enricher, formatter
+    from stackunderflow.stats.classifier import RawEntry
 
     row = conn.execute(
         "SELECT path, slug FROM projects WHERE id = ?", (project_id,)
@@ -139,8 +139,7 @@ def get_project_stats(
         for r in rows
     ]
 
-    merged = dedup.collapse(raw_entries)
-    tagged = classifier.tag(merged)
+    tagged = classifier.tag(raw_entries)
     dataset = enricher.build(tagged, log_dir)
     messages = formatter.to_dicts(dataset)
     stats = aggregator.summarise(dataset, log_dir, tz_offset=tz_offset)

@@ -11,7 +11,13 @@ import re
 from enum import Enum, auto
 from typing import NamedTuple
 
-from .reader import RawEntry
+
+class RawEntry(NamedTuple):
+    """One line from a JSONL file, lightly annotated."""
+    payload: dict
+    session_id: str
+    origin: str
+
 
 # ── interruption markers ─────────────────────────────────────────────────────
 

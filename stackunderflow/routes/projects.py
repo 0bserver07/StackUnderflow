@@ -219,37 +219,3 @@ async def get_projects(
         traceback.print_exc()
         return JSONResponse({"error": f"Failed to get projects: {str(e)}"}, status_code=500)
 
-
-# Global statistics endpoint
-@router.get("/api/global-stats")
-async def get_global_stats():
-    """
-    Get aggregated statistics across all projects.
-
-    Returns:
-        JSON with global statistics including charts data
-    """
-    from stackunderflow.infra.discovery import project_metadata as get_all_projects_with_metadata
-    from stackunderflow.pipeline.cross_project import aggregate as _aggregate
-
-    try:
-        # Get all projects
-        projects = get_all_projects_with_metadata()
-
-        # Add cache status
-        for project in projects:
-            project["in_cache"] = deps.cache.fetch(project["log_path"]) is not None
-
-        # Aggregate global stats
-        global_stats = await _aggregate(projects, deps.cache, deps.cache)
-
-        # Add configuration
-        global_stats["config"] = {"max_date_range_days": deps.config.get("max_date_range_days")}
-
-        return JSONResponse(global_stats)
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        return JSONResponse({"error": f"Failed to get global stats: {str(e)}"}, status_code=500)

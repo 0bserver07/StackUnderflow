@@ -156,34 +156,6 @@ def check_project(project_dir: str) -> tuple[bool, str]:
 
 
 def _legacy_project_info(child: Path) -> ProjectInfo:
-    """Build ProjectInfo for an old-format project using history.jsonl data."""
-    from datetime import datetime as _dt
-
-    from stackunderflow.pipeline.history_reader import entries_for_slug
-
-    entries = entries_for_slug(child.name)
-    if entries:
-        epochs: list[float] = []
-        for e in entries:
-            ts = e.payload.get("timestamp", "")
-            if isinstance(ts, str) and ts:
-                try:
-                    epochs.append(_dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
-                except ValueError:
-                    pass
-            elif isinstance(ts, (int, float)) and ts:
-                epochs.append(ts / 1000 if ts > 1e12 else ts)
-        if epochs:
-            return ProjectInfo(
-                dir_name=child.name,
-                log_path=str(child),
-                file_count=len(entries),
-                total_size_mb=0.0,
-                last_modified=max(epochs),
-                first_seen=min(epochs),
-                display_name=child.name,
-            )
-    # Fallback: use the directory's own mtime
     st = child.stat()
     return ProjectInfo(
         dir_name=child.name,
