@@ -490,5 +490,44 @@ class TestRefreshAllProjects:
         pass
 
 
+class TestSearchReindexUsesStore:
+    """Test that search reindex pulls project list from session store."""
+
+    @pytest.mark.asyncio
+    async def test_reindex_passes_store_projects_to_service(self, tmp_path, monkeypatch):
+        """reindex_search should build project list from store and pass to reindex_all."""
+        import stackunderflow.deps as deps
+        from stackunderflow.routes.search import reindex_search
+        from stackunderflow.store import db, schema
+
+        store_db = tmp_path / "store.db"
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("claude", "-my-test-proj", "-my-test-proj", 0.0, 0.0),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+
+        captured: dict = {}
+
+        class FakeSearchService:
+            def reindex_all(self, memory_cache, cache_service, projects=None):
+                captured["projects"] = projects
+                return {"projects_indexed": 0, "total_messages_indexed": 0, "errors": []}
+
+        monkeypatch.setattr("stackunderflow.deps.search_service", FakeSearchService())
+
+        await reindex_search()
+
+        assert captured.get("projects") is not None
+        slugs = {p["dir_name"] for p in captured["projects"]}
+        assert "-my-test-proj" in slugs
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
