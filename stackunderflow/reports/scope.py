@@ -4,9 +4,9 @@ A `Scope` is a (since, until, label) triple where both bounds are UTC ISO-8601
 strings, or `None` to mean unbounded. The label is a human-readable phrase
 used in report headers and status lines.
 
-`parse_period()` translates codeburn-style period specs ('today', '7days',
-'30days', 'month', 'all') into `Scope` objects. It accepts an optional `now`
-argument so tests can pin time.
+`parse_period()` translates short period specs ('today', '7days', '30days',
+'month', 'all') into `Scope` objects. It accepts an optional `now` argument
+so tests can pin time.
 """
 
 from __future__ import annotations

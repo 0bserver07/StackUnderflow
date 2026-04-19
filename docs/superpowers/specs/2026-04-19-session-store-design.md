@@ -196,17 +196,22 @@ Message rows are inserted with `INSERT OR IGNORE` on `(session_fk, seq)`. Adapte
 
 All inserts for a single file happen in one transaction. A crashed refresh leaves the store in a pre-transaction state; `ingest_log` only updates after commit.
 
-### 4.5 Route migration
+### 4.5 Consumer migration
 
-Route files are rewritten one at a time. Order:
+Three callers read session data today and all move to the store in sequence, one commit per file:
 
+**Route handlers:**
 1. `routes/projects.py` — project list, set-current-project
 2. `routes/data.py` — dashboard-data, messages, refresh, stats
 3. `routes/sessions.py` — JSONL files list, content drill-down
 4. `routes/search.py` — keeps its own FTS DB, but pulls the project list from the new store
 5. `routes/qa.py`, `routes/tags.py`, `routes/bookmarks.py` — already SQLite-backed, just need to reference the new projects/sessions tables for joins
 
-Each route migration is a standalone commit. The old in-memory `deps.cache` stays alive until the last handler is migrated; at that point it's deleted. Tests catch regressions per route.
+**CLI report commands** (`stackunderflow/reports/`, shipped in `dae8346`):
+6. `reports/aggregate.py` — currently calls `pipeline.process` per project in a loop. Rewrite to issue a single cross-project `SELECT ... GROUP BY date, project, model` against the store. This is where the design pays off the biggest — aggregate report on all projects is one query instead of N full pipeline runs.
+7. `reports/optimize.py` — currently scans for `resolution_status='looped'` via the Q&A service. Already joins to session data; update the join source to the new store's `sessions` / `messages` tables.
+
+The old in-memory `deps.cache` stays alive until all six consumers are migrated; then it's deleted in unit 6 together with `TieredCache` and the cold JSON cache. Tests catch regressions per consumer.
 
 ### 4.6 Query helpers (`store/queries.py`)
 
@@ -254,10 +259,10 @@ Chunked into units that can proceed with minimal coordination. Items 1–3 are i
 | 2 | `adapters/base.py` + dataclasses + registry | — | ~80 lines |
 | 3 | `adapters/claude.py` — port of `reader.py` + `history_reader.py` behind the interface | 2 | ~250 lines |
 | 4 | `ingest/` enumerate + writer, incremental logic | 1, 2, 3 | ~200 lines |
-| 5 | `routes/*.py` rewrites (one commit per route file) | 1, 4 | 5 × ~100 lines |
+| 5 | Route + reports rewrites (one commit per file: 5 routes + `reports/aggregate.py` + `reports/optimize.py`) | 1, 4 | 7 × ~100 lines |
 | 6 | CLI `stackunderflow reindex`, first-run detection, cold-cache cleanup, remove `TieredCache` | 5 | ~150 lines |
 
-Total: ~1200 lines of production code plus tests. The old `pipeline/`, `TieredCache`, and cold JSON cache get deleted as part of unit 6.
+Total: ~1400 lines of production code plus tests. The old `pipeline/`, `TieredCache`, and cold JSON cache get deleted as part of unit 6.
 
 ## 8. Open questions (resolved)
 
