@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.api.messages import get_messages_summary, get_paginated_messages
+from stackunderflow.ingest import run_ingest
 from stackunderflow.pipeline import process as run_pipeline
 from stackunderflow.pipeline.aggregator import recompute_tz_stats
 
@@ -147,7 +148,7 @@ async def get_messages_summary_endpoint():
 
 @router.post("/api/refresh")
 async def refresh_data(request: dict):
-    """Refresh project data only if files have changed."""
+    """Refresh project data — runs an incremental ingest pass."""
     if not deps.current_log_path:
         return await refresh_all_projects(request)
 
@@ -193,39 +194,30 @@ async def refresh_data(request: dict):
 
 
 async def refresh_all_projects(request: dict):
-    """Refresh all projects — called from overview page."""
-    from stackunderflow.infra.discovery import project_metadata
+    """Refresh all projects — runs an incremental ingest pass via the session store."""
+    from stackunderflow.adapters import registered
+    from stackunderflow.store import db, schema
 
     t0 = time.time()
-    all_projects = project_metadata()
-    refreshed = 0
+    conn = db.connect(deps.store_path)
+    try:
+        schema.apply(conn)
+        counts = run_ingest(conn, registered())
+    finally:
+        conn.close()
 
-    for project in all_projects:
-        lp = project["log_path"]
-        if not deps.cache.has_disk_changes(lp):
-            continue
-        deps.cache.invalidate_disk(lp)
-        deps.cache.drop(lp)
-        try:
-            messages, stats = run_pipeline(lp)
-            deps.cache.persist_stats(lp, stats)
-            deps.cache.persist_messages(lp, messages)
-            deps.cache.store(lp, messages, stats)
-            refreshed += 1
-        except Exception as e:
-            deps.logger.error(f"Error refreshing {project['display_name']}: {e}")
-
+    total_new = sum(counts.values())
     ms = int((time.time() - t0) * 1000)
     return JSONResponse({
         "status": "success",
         "message": (
-            f"Refreshed {refreshed} of {len(all_projects)} projects"
-            if refreshed else "No changes detected in any project"
+            f"Ingested {total_new} new records"
+            if total_new else "No changes detected"
         ),
-        "files_changed": refreshed > 0,
+        "files_changed": total_new > 0,
         "refresh_time_ms": ms,
-        "projects_refreshed": refreshed,
-        "total_projects": len(all_projects),
+        "projects_refreshed": total_new,
+        "total_projects": total_new,
     })
 
 

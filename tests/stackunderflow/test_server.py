@@ -388,162 +388,74 @@ class TestProjectsAPIEndpoint:
 
 class TestRefreshAllProjects:
     """Test the refresh_all_projects function behavior."""
-    
+
     @pytest.mark.asyncio
-    async def test_refresh_all_projects_no_changes(self):
-        """Test refresh_all_projects when no projects have changed."""
+    async def test_refresh_all_projects_no_changes(self, tmp_path, monkeypatch):
+        """Test refresh_all_projects when no new records are ingested."""
         from stackunderflow.server import refresh_all_projects
 
-        # Mock project_metadata to return test projects
-        test_projects = [
-            {"display_name": "project1", "log_path": "/test/path1"},
-            {"display_name": "project2", "log_path": "/test/path2"},
-            {"display_name": "project3", "log_path": "/test/path3"}
-        ]
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+        monkeypatch.setenv("HOME", str(tmp_path))
 
-        # Mock unified cache
-        mock_cache = Mock()
-        mock_cache.has_disk_changes.return_value = False  # No changes
-
-        with patch('stackunderflow.infra.discovery.project_metadata', return_value=test_projects):
-            with patch('stackunderflow.deps.cache', mock_cache):
-                result = await refresh_all_projects({})
-
-        # Verify has_disk_changes was called for each project
-        assert mock_cache.has_disk_changes.call_count == 3
-        mock_cache.has_disk_changes.assert_any_call("/test/path1")
-        mock_cache.has_disk_changes.assert_any_call("/test/path2")
-        mock_cache.has_disk_changes.assert_any_call("/test/path3")
-
-        # Verify no invalidation or processing happened
-        mock_cache.invalidate_disk.assert_not_called()
-        mock_cache.drop.assert_not_called()
-
-        # Check response
-        response = result.body.decode()
-        response_data = json.loads(response)
-        assert response_data["status"] == "success"
-        assert response_data["files_changed"] is False
-        assert response_data["projects_refreshed"] == 0
-        assert response_data["total_projects"] == 3
-        assert "No changes detected" in response_data["message"]
-    
-    @pytest.mark.asyncio
-    async def test_refresh_all_projects_with_changes(self):
-        """Test refresh_all_projects when some projects have changed."""
-        from stackunderflow.server import refresh_all_projects
-
-        # Mock project_metadata to return test projects
-        test_projects = [
-            {"display_name": "project1", "log_path": "/test/path1"},
-            {"display_name": "project2", "log_path": "/test/path2"},
-            {"display_name": "project3", "log_path": "/test/path3"}
-        ]
-
-        # Mock unified cache
-        mock_cache = Mock()
-        # First project: no changes, second: has changes, third: no changes
-        mock_cache.has_disk_changes.side_effect = [False, True, False]
-
-        # Mock pipeline
-        mock_messages = [{"type": "user", "content": "test"}]
-        mock_stats = {"total": 1}
-
-        with patch('stackunderflow.infra.discovery.project_metadata', return_value=test_projects):
-            with patch('stackunderflow.deps.cache', mock_cache):
-                with patch('stackunderflow.routes.data.run_pipeline') as mock_pipeline:
-                    mock_pipeline.return_value = (mock_messages, mock_stats)
-
-                    result = await refresh_all_projects({})
-
-        # Verify has_disk_changes was called for each project
-        assert mock_cache.has_disk_changes.call_count == 3
-
-        # Verify only project2 was invalidated and processed
-        mock_cache.invalidate_disk.assert_called_once_with("/test/path2")
-        mock_cache.drop.assert_called_once_with("/test/path2")
-
-        # Verify pipeline was called once for project2
-        assert mock_pipeline.call_count == 1
-        mock_pipeline.assert_called_with("/test/path2")
-
-        # Verify caches were updated for project2
-        mock_cache.persist_stats.assert_called_once_with("/test/path2", mock_stats)
-        mock_cache.persist_messages.assert_called_once_with("/test/path2", mock_messages)
-        mock_cache.store.assert_called_once_with("/test/path2", mock_messages, mock_stats)
-
-        # Check response
-        response = result.body.decode()
-        response_data = json.loads(response)
-        assert response_data["status"] == "success"
-        assert response_data["files_changed"] is True
-        assert response_data["projects_refreshed"] == 1
-        assert response_data["total_projects"] == 3
-        assert "Refreshed 1 of 3 projects" in response_data["message"]
-    
-    @pytest.mark.asyncio
-    async def test_refresh_all_projects_handles_errors(self):
-        """Test refresh_all_projects handles processing errors gracefully."""
-        from stackunderflow.server import refresh_all_projects
-
-        # Mock project_metadata to return test projects
-        test_projects = [
-            {"display_name": "project1", "log_path": "/test/path1"},
-            {"display_name": "project2", "log_path": "/test/path2"},
-        ]
-
-        # Mock unified cache
-        mock_cache = Mock()
-        # Both projects have changes
-        mock_cache.has_disk_changes.return_value = True
-
-        with patch('stackunderflow.infra.discovery.project_metadata', return_value=test_projects):
-            with patch('stackunderflow.deps.cache', mock_cache):
-                with patch('stackunderflow.routes.data.run_pipeline') as mock_pipeline:
-                    # First project processes successfully, second throws error
-                    mock_pipeline.side_effect = [
-                        ([{"msg": 1}], {"stats": 1}),
-                        Exception("Processing error")
-                    ]
-
-                    result = await refresh_all_projects({})
-
-        # Verify both projects were attempted to be processed
-        assert mock_pipeline.call_count == 2
-
-        # Verify caches were invalidated for both
-        assert mock_cache.invalidate_disk.call_count == 2
-        assert mock_cache.drop.call_count == 2
-
-        # Verify only first project's caches were saved
-        assert mock_cache.persist_stats.call_count == 1
-        assert mock_cache.persist_messages.call_count == 1
-        assert mock_cache.store.call_count == 1
-
-        # Check response - should report 1 successful refresh
-        response = result.body.decode()
-        response_data = json.loads(response)
-        assert response_data["status"] == "success"
-        assert response_data["files_changed"] is True
-        assert response_data["projects_refreshed"] == 1
-        assert response_data["total_projects"] == 2
-    
-    @pytest.mark.asyncio
-    async def test_refresh_all_projects_empty_projects(self):
-        """Test refresh_all_projects when no projects exist."""
-        from stackunderflow.server import refresh_all_projects
-
-        # Mock project_metadata to return empty list
-        with patch('stackunderflow.infra.discovery.project_metadata', return_value=[]):
+        with patch("stackunderflow.routes.data.run_ingest", return_value={}) as mock_ingest:
             result = await refresh_all_projects({})
-        
-        # Check response
-        response = result.body.decode()
-        response_data = json.loads(response)
+
+        mock_ingest.assert_called_once()
+
+        response_data = json.loads(result.body.decode())
         assert response_data["status"] == "success"
         assert response_data["files_changed"] is False
         assert response_data["projects_refreshed"] == 0
-        assert response_data["total_projects"] == 0
+        assert "No changes detected" in response_data["message"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_all_projects_with_changes(self, tmp_path, monkeypatch):
+        """Test refresh_all_projects when new records are found."""
+        from stackunderflow.server import refresh_all_projects
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        with patch("stackunderflow.routes.data.run_ingest", return_value={"claude": 5}):
+            result = await refresh_all_projects({})
+
+        response_data = json.loads(result.body.decode())
+        assert response_data["status"] == "success"
+        assert response_data["files_changed"] is True
+        assert response_data["projects_refreshed"] == 5
+        assert "5 new records" in response_data["message"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_all_projects_handles_errors(self, tmp_path, monkeypatch):
+        """Test refresh_all_projects propagates ingest errors."""
+        from stackunderflow.server import refresh_all_projects
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        with patch("stackunderflow.routes.data.run_ingest", side_effect=RuntimeError("db error")):
+            try:
+                await refresh_all_projects({})
+                raised = False
+            except RuntimeError:
+                raised = True
+        assert raised
+
+    @pytest.mark.asyncio
+    async def test_refresh_all_projects_empty_projects(self, tmp_path, monkeypatch):
+        """Test refresh_all_projects when store has no new records."""
+        from stackunderflow.server import refresh_all_projects
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        with patch("stackunderflow.routes.data.run_ingest", return_value={}):
+            result = await refresh_all_projects({})
+
+        response_data = json.loads(result.body.decode())
+        assert response_data["status"] == "success"
+        assert response_data["files_changed"] is False
+        assert response_data["projects_refreshed"] == 0
         assert "No changes detected" in response_data["message"]
     
     @pytest.mark.asyncio
