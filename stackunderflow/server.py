@@ -82,6 +82,20 @@ async def _lifespan(_app: FastAPI):
     if failed:
         logger.warning(f"Failed services: {', '.join(failed)}")
 
+    # Initialise the session store and run one ingest pass.
+    from stackunderflow.adapters import registered
+    from stackunderflow.ingest import run_ingest
+    from stackunderflow.store import db, schema
+
+    try:
+        store_conn = db.connect(deps.store_path)
+        schema.apply(store_conn)
+        counts = run_ingest(store_conn, registered())
+        logger.info("Ingest complete: %s", counts)
+        store_conn.close()
+    except Exception as e:
+        logger.error("Ingest failed at startup: %s", e)
+
     async def warm_cache_background():
         logger.debug(f"[Server] Starting cache warming ({cache_warm_on_startup} projects)")
         await _warm_projects(deps.cache, deps.current_log_path, cap=cache_warm_on_startup)

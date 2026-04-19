@@ -83,6 +83,10 @@ class TestServerEndpointStructure:
         assert hasattr(deps, 'current_project_path')
         assert hasattr(deps, 'current_log_path')
 
+    def test_shared_deps_has_store_path(self):
+        import stackunderflow.deps as deps
+        assert hasattr(deps, "store_path")
+
 
 class TestCacheWarmerFunction:
     """Test the cache warmer function behavior."""
