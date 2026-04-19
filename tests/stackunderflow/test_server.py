@@ -606,5 +606,48 @@ class TestTagsReindexUsesStore:
         assert "-tag-proj" in slugs
 
 
+class TestBookmarksSessionMetadata:
+    """Test that bookmark listing enriches with session store metadata."""
+
+    @pytest.mark.asyncio
+    async def test_list_bookmarks_includes_session_metadata(self, tmp_path, monkeypatch):
+        import stackunderflow.deps as deps
+        from stackunderflow.routes.bookmarks import list_bookmarks
+        from stackunderflow.store import db, schema
+
+        # Seed store with a project and session
+        store_db = tmp_path / "store.db"
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("claude", "-bm-proj", "-bm-proj", 0.0, 0.0),
+        )
+        pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, message_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (pid, "bm-session-1", "2026-01-01T00:00:00+00:00", "2026-01-01T01:00:00+00:00", 5),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+
+        class FakeBookmarkService:
+            def list_all(self, tag=None, sort_by="created_at"):
+                return [{"id": "bm1", "session_id": "bm-session-1", "title": "Test"}]
+
+        monkeypatch.setattr("stackunderflow.deps.bookmark_service", FakeBookmarkService())
+
+        response = await list_bookmarks()
+        import json
+        data = json.loads(response.body)
+        bm = data["bookmarks"][0]
+        assert bm.get("session_first_ts") == "2026-01-01T00:00:00+00:00"
+        assert bm.get("session_message_count") == 5
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
