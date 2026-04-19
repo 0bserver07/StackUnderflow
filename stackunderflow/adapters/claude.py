@@ -9,6 +9,7 @@ Handles two on-disk formats:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -125,7 +126,68 @@ class ClaudeAdapter:
         )
 
     def _read_history(self, ref: SessionRef) -> Iterable[Record]:
-        raise NotImplementedError  # task 3.3
+        if not ref.file_path.is_file():
+            return
+        try:
+            raw = ref.file_path.read_bytes()
+        except OSError as exc:
+            _log.warning("Cannot read history file %s: %s", ref.file_path, exc)
+            return
+        target_slug = ref.project_slug
+        seq = 0
+        for line in raw.split(b"\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = orjson.loads(stripped)
+            except (orjson.JSONDecodeError, ValueError):
+                continue
+            project = obj.get("project", "")
+            if not project:
+                continue
+            if _slug_for(project) != target_slug:
+                continue
+            display = obj.get("display", "")
+            ts_ms = int(obj.get("timestamp", 0))
+            if not ts_ms:
+                continue
+            ts_iso = _epoch_ms_to_iso(ts_ms)
+            session_id = obj.get("sessionId") or ref.session_id
+            yield Record(
+                provider=self.name,
+                session_id=session_id,
+                seq=seq,
+                timestamp=ts_iso,
+                role="user",
+                model=None,
+                input_tokens=0,
+                output_tokens=0,
+                cache_create_tokens=0,
+                cache_read_tokens=0,
+                content_text=display,
+                tools=(),
+                cwd=None,
+                is_sidechain=False,
+                uuid="",
+                parent_uuid=None,
+                raw=obj,
+            )
+            seq += 1
+
+
+def _slug_for(project_path: str) -> str:
+    return (
+        os.path.abspath(project_path)
+        .rstrip(os.sep)
+        .replace(os.sep, "-")
+        .replace("_", "-")
+    )
+
+
+def _epoch_ms_to_iso(ts_ms: int) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
 
 
 def _role_from(obj: dict, msg: dict) -> str | None:
