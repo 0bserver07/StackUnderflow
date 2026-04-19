@@ -1,6 +1,5 @@
 """Project management routes."""
 
-import asyncio
 import os
 from pathlib import Path
 
@@ -9,7 +8,6 @@ from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.discovery import locate_logs as find_claude_logs
-from stackunderflow.infra.preloader import warm as _warm_projects
 from stackunderflow.store import db, queries
 
 router = APIRouter()
@@ -109,9 +107,6 @@ async def set_project_by_dir(data: dict[str, str]):
                 conn.close()
     except Exception:  # noqa: S110
         pass
-
-    # Warm cache for other recent projects in background
-    asyncio.create_task(_warm_projects(deps.cache, deps.current_log_path, skip_current=True))
 
     return JSONResponse(
         {

@@ -3,7 +3,6 @@
 FastAPI application for StackUnderflow Local Mode
 """
 
-import asyncio
 import importlib.metadata
 import logging
 import os
@@ -16,7 +15,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import stackunderflow.deps as deps
-from stackunderflow.infra.preloader import warm as _warm_projects
 
 # Route modules
 from stackunderflow.routes import (
@@ -55,8 +53,6 @@ except importlib.metadata.PackageNotFoundError:
 
 # Configuration (needed by lifespan)
 config = deps.config
-cache_warm_on_startup = config.get("cache_warm_on_startup")
-enable_background_processing = config.get("enable_background_processing")
 BASE_DIR = deps.BASE_DIR
 
 
@@ -96,23 +92,7 @@ async def _lifespan(_app: FastAPI):
     except Exception as e:
         logger.error("Ingest failed at startup: %s", e)
 
-    async def warm_cache_background():
-        logger.debug(f"[Server] Starting cache warming ({cache_warm_on_startup} projects)")
-        await _warm_projects(deps.cache, deps.current_log_path, cap=cache_warm_on_startup)
-        logger.debug("[Server] Cache warming completed")
-
-    tasks: list[asyncio.Task] = []
-    tasks.append(asyncio.create_task(warm_cache_background()))
-
-    if enable_background_processing:
-        tasks.append(asyncio.create_task(background_stats_processor()))
-
-    try:
-        yield
-    finally:
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    yield
 
 
 # Create FastAPI app
@@ -154,54 +134,6 @@ app.include_router(qa.router)
 app.include_router(tags.router)
 app.include_router(bookmarks.router)
 app.include_router(misc.router)
-
-
-async def background_stats_processor():
-    """Background task to process stats for all projects."""
-    logger.debug("[Server] Starting background stats processor")
-
-    # Wait a bit for server to fully start
-    await asyncio.sleep(5)
-
-    while True:
-        try:
-            # Get all projects
-            from stackunderflow.infra.discovery import project_metadata as get_all_projects_with_metadata
-
-            all_projects = get_all_projects_with_metadata()
-
-            # Find projects without cached stats
-            uncached_projects = []
-            for project in all_projects:
-                log_path = project["log_path"]
-                # Skip if in memory cache
-                if deps.cache.fetch(log_path):
-                    continue
-                # Skip if in file cache
-                if deps.cache.load_stats(log_path):
-                    continue
-                uncached_projects.append(project)
-
-            if uncached_projects:
-                logger.debug(f"[Background] Found {len(uncached_projects)} projects without cached stats")
-
-                # Process them using global aggregator
-                from stackunderflow.pipeline.cross_project import background_process
-
-                processed = await background_process(uncached_projects, deps.cache, deps.cache, cap=5)
-
-                logger.debug(f"[Background] Processed {processed} projects")
-
-                # Wait before next batch
-                await asyncio.sleep(30)
-            else:
-                logger.debug("[Background] All projects have cached stats")
-                # Check again in 5 minutes
-                await asyncio.sleep(300)
-
-        except Exception as e:
-            logger.error(f"[Background] Error in stats processor: {e}")
-            await asyncio.sleep(60)
 
 
 
