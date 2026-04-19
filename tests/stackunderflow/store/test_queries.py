@@ -77,6 +77,20 @@ def test_get_messages_paginates(conn) -> None:
     assert [m.seq for m in page] == [1, 2]
 
 
+def test_get_session_messages(conn) -> None:
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sid, i, f"2026-01-01T00:0{i}:00+00:00", "user", "{}"),
+        )
+    msgs = queries.get_session_messages(conn, session_fk=sid)
+    assert len(msgs) == 3
+    assert [m.seq for m in msgs] == [0, 1, 2]
+
+
 def test_get_session_stats(conn) -> None:
     pid = _seed_project(conn)
     sid = _seed_session(conn, pid, "s1")

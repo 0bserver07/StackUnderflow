@@ -59,6 +59,20 @@ def get_messages(
     ]
 
 
+def get_session_messages(conn: sqlite3.Connection, *, session_fk: int) -> list[MessageRow]:
+    rows = conn.execute(
+        "SELECT id, session_fk, seq, timestamp, role, model, "
+        "       input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
+        "       content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid "
+        "FROM messages WHERE session_fk = ? ORDER BY seq",
+        (session_fk,),
+    ).fetchall()
+    return [
+        MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])})
+        for r in rows
+    ]
+
+
 def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
     row = conn.execute(
         "SELECT "
