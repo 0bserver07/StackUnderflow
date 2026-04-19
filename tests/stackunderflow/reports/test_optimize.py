@@ -1,17 +1,14 @@
-"""Tests for the waste-finding heuristic."""
+"""Tests for the waste-finding heuristic (store-backed)."""
 
-import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-
 from stackunderflow.reports.optimize import find_waste
 from stackunderflow.reports.scope import Scope
 from stackunderflow.services.qa_service import QAService
+from stackunderflow.store import db, schema
 
 
 def _msg(mtype: str, content: str, timestamp: str, session_id: str = "s1") -> dict:
@@ -27,11 +24,12 @@ def _msg(mtype: str, content: str, timestamp: str, session_id: str = "s1") -> di
 
 class TestFindWaste(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.db_path = Path(self._tmp.name) / "qa.db"
-        self.svc = QAService(db_path=self.db_path)
+        self._qa_tmp = tempfile.TemporaryDirectory()
+        self._store_tmp = tempfile.TemporaryDirectory()
+        qa_path = Path(self._qa_tmp.name) / "qa.db"
+        store_path = Path(self._store_tmp.name) / "store.db"
 
-        # Seed: proj-a has 2 looped pairs; proj-b has 0.
+        self.svc = QAService(db_path=qa_path)
         self.svc.index_project("proj-a", [
             _msg("user", "How do I fix the import?", "2026-04-16T10:00:00"),
             _msg("assistant", "Try:\n```bash\npip install foo\n```", "2026-04-16T10:00:01"),
@@ -43,8 +41,6 @@ class TestFindWaste(unittest.TestCase):
         self.svc.index_project("proj-a-second-loop", [
             _msg("user", "Why is my build failing?", "2026-04-16T11:00:00", session_id="s2"),
             _msg("assistant", "Try:\n```bash\nrm -rf node_modules\n```", "2026-04-16T11:00:01", session_id="s2"),
-            # Note: must match FOLLOWUP_PATTERNS ("that doesn't work"), else parser
-            # treats it as a new question and loop_count stays at 1 -> 'resolved'.
             _msg("user", "that doesn't work", "2026-04-16T11:00:02", session_id="s2"),
             _msg("assistant", "Try:\n```bash\nnpm cache clean\n```", "2026-04-16T11:00:03", session_id="s2"),
             _msg("user", "still broken", "2026-04-16T11:00:04", session_id="s2"),
@@ -55,35 +51,43 @@ class TestFindWaste(unittest.TestCase):
             _msg("assistant", "Use:\n```python\nopen('x.txt').read()\n```", "2026-04-16T12:00:01", session_id="s3"),
         ])
 
+        # Seed the session store with the same projects
+        self.conn = db.connect(store_path)
+        schema.apply(self.conn)
+        for slug in ("proj-a", "proj-a-second-loop", "proj-b"):
+            self.conn.execute(
+                "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("claude", slug, slug, 0.0, 0.0),
+            )
+        self.conn.commit()
+
     def tearDown(self):
-        self._tmp.cleanup()
+        self.conn.close()
+        self._qa_tmp.cleanup()
+        self._store_tmp.cleanup()
 
     def test_find_waste_ranks_looped_projects_first(self):
         scope = Scope(since=None, until=None, label="all")
-        projects = [
-            {"dir_name": "proj-a", "log_path": "/fake/a"},
-            {"dir_name": "proj-a-second-loop", "log_path": "/fake/a2"},
-            {"dir_name": "proj-b", "log_path": "/fake/b"},
-        ]
         with patch("stackunderflow.reports.optimize._qa_service_factory", return_value=self.svc):
-            waste = find_waste(projects, scope=scope)
-        # Two projects have looped pairs, one does not.
+            waste = find_waste(self.conn, scope=scope)
         names = {w["project"] for w in waste}
         self.assertIn("proj-a", names)
         self.assertIn("proj-a-second-loop", names)
         self.assertNotIn("proj-b", names)
-        # Each looped-project row has loop_count >= 1
         for row in waste:
             self.assertGreaterEqual(row["looped_pairs"], 1)
 
-    def test_find_waste_respects_include_exclude(self):
+    def test_find_waste_respects_exclude(self):
         scope = Scope(since=None, until=None, label="all")
-        projects = [
-            {"dir_name": "proj-a", "log_path": "/fake/a"},
-            {"dir_name": "proj-a-second-loop", "log_path": "/fake/a2"},
-        ]
         with patch("stackunderflow.reports.optimize._qa_service_factory", return_value=self.svc):
-            waste = find_waste(projects, scope=scope, exclude=["proj-a-second-loop"])
+            waste = find_waste(self.conn, scope=scope, exclude=["proj-a-second-loop"])
+        self.assertEqual({w["project"] for w in waste}, {"proj-a"})
+
+    def test_find_waste_respects_include(self):
+        scope = Scope(since=None, until=None, label="all")
+        with patch("stackunderflow.reports.optimize._qa_service_factory", return_value=self.svc):
+            waste = find_waste(self.conn, scope=scope, include=["proj-a"])
         self.assertEqual({w["project"] for w in waste}, {"proj-a"})
 
 
