@@ -298,6 +298,8 @@ export interface CacheStats {
 // Q&A types
 // ---------------------------------------------------------------------------
 
+export type ResolutionStatus = 'resolved' | 'looped' | 'abandoned' | 'open'
+
 export interface QAPair {
   id: string
   session_id: string
@@ -311,6 +313,8 @@ export interface QAPair {
   timestamp: string
   model?: string
   num_attempts: number
+  resolution_status: ResolutionStatus
+  loop_count: number
   // These may appear on detail responses
   tags?: string[]
   has_code?: boolean

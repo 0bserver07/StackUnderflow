@@ -10,7 +10,7 @@ import {
   IconSortDescending,
 } from '@tabler/icons-react'
 import { getQAList, reindexQA } from '../../services/api'
-import type { QAPair } from '../../types/api'
+import type { QAPair, ResolutionStatus } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import TimeAgo from '../common/TimeAgo'
@@ -22,6 +22,30 @@ interface QATabProps {
 const PER_PAGE = 20
 
 type SortMode = 'recent' | 'tools' | 'has_code'
+type ResolutionFilter = 'all' | ResolutionStatus
+
+const RESOLUTION_STYLES: Record<ResolutionStatus, { label: string; className: string; title: string }> = {
+  resolved: {
+    label: 'resolved',
+    className: 'bg-emerald-900/40 text-emerald-300 border-emerald-800',
+    title: 'Answer appears to have worked — no follow-up frustration detected.',
+  },
+  looped: {
+    label: 'looped',
+    className: 'bg-amber-900/40 text-amber-300 border-amber-800',
+    title: 'User kept asking variants of the same question — agent may have gone in circles.',
+  },
+  abandoned: {
+    label: 'abandoned',
+    className: 'bg-rose-900/40 text-rose-300 border-rose-800',
+    title: 'Question never got a follow-up or resolution signal.',
+  },
+  open: {
+    label: 'open',
+    className: 'bg-gray-800 text-gray-400 border-gray-700',
+    title: 'Not enough signal to classify.',
+  },
+}
 
 function QAItem({
   qa,
@@ -50,6 +74,16 @@ function QAItem({
       </p>
 
       <div className="flex items-center gap-2 flex-wrap">
+        {qa.resolution_status && qa.resolution_status !== 'open' && (
+          <span
+            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full border ${RESOLUTION_STYLES[qa.resolution_status].className}`}
+            title={RESOLUTION_STYLES[qa.resolution_status].title}
+          >
+            {RESOLUTION_STYLES[qa.resolution_status].label}
+            {qa.loop_count > 1 && qa.resolution_status === 'looped' && ` ×${qa.loop_count}`}
+          </span>
+        )}
+
         {qa.code_snippets.length > 0 && (
           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full border bg-purple-900/50 text-purple-300 border-purple-800">
             <IconCode size={10} />
@@ -103,18 +137,20 @@ export default function QATab({ projectName }: QATabProps) {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [sortMode, setSortMode] = useState<SortMode>('recent')
+  const [resolutionFilter, setResolutionFilter] = useState<ResolutionFilter>('all')
   const [reindexing, setReindexing] = useState(false)
 
   useEffect(() => {
     setPage(1)
-  }, [search])
+  }, [search, resolutionFilter])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['qa-list', projectName, search, page],
+    queryKey: ['qa-list', projectName, search, resolutionFilter, page],
     queryFn: () =>
       getQAList({
         project: projectName,
         search: search || undefined,
+        resolution_status: resolutionFilter === 'all' ? undefined : resolutionFilter,
         page,
         per_page: PER_PAGE,
       }),
@@ -151,6 +187,20 @@ export default function QATab({ projectName }: QATabProps) {
               className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
             />
           </div>
+
+          {/* Resolution filter */}
+          <select
+            value={resolutionFilter}
+            onChange={(e) => setResolutionFilter(e.target.value as ResolutionFilter)}
+            className="appearance-none px-2 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
+            title="Filter by resolution status"
+          >
+            <option value="all">All</option>
+            <option value="resolved">Resolved</option>
+            <option value="looped">Looped</option>
+            <option value="abandoned">Abandoned</option>
+            <option value="open">Open</option>
+          </select>
 
           {/* Sort dropdown */}
           <div className="relative">
