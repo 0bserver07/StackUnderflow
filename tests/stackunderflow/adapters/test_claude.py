@@ -95,3 +95,23 @@ def test_read_skips_malformed_lines(fake_home: Path) -> None:
     ref = list(a.enumerate())[0]
     records = list(a.read(ref))
     assert len(records) == 1
+
+
+def test_read_legacy_history_yields_records(fake_home: Path) -> None:
+    project_dir = fake_home / ".claude" / "projects" / "-Users-me-legacy"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".continuation_cache.json").write_text("{}")
+    history = fake_home / ".claude" / "history.jsonl"
+    history.write_text(
+        '{"display":"msg1","timestamp":1704067200000,"project":"/Users/me/legacy"}\n'
+        '{"display":"msg2","timestamp":1704067260000,"project":"/Users/me/legacy","sessionId":"s-real"}\n'
+        '{"display":"other","timestamp":1704067200000,"project":"/Users/me/other"}\n'
+    )
+    a = ClaudeAdapter()
+    ref = [r for r in a.enumerate() if r.project_slug == "-Users-me-legacy"][0]
+    recs = list(a.read(ref))
+    assert len(recs) == 2
+    assert recs[0].content_text == "msg1"
+    assert recs[1].content_text == "msg2"
+    assert all(r.role == "user" for r in recs)
+    assert recs[0].timestamp.startswith("2024-01-01")
