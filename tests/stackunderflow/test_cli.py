@@ -150,6 +150,19 @@ class TestCLICommands:
         # The init command is integration tested manually
         pytest.skip("Init command requires full server import - tested manually")
 
+    def test_reindex_command(self, tmp_path, monkeypatch):
+        """reindex should create the store file and report per-provider counts."""
+        from click.testing import CliRunner
+        from stackunderflow.cli import cli
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["reindex"])
+        assert result.exit_code == 0
+        assert (tmp_path / "store.db").exists()
+
     def test_config_environment_override(self):
         """Test that environment variables override config file."""
         with self.runner.isolated_filesystem() as td:

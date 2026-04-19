@@ -621,6 +621,24 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
             click.echo(f"    - {q}")
 
 
+@cli.command()
+def reindex():
+    """Rebuild the session store from scratch."""
+    import stackunderflow.deps as deps
+    from stackunderflow.adapters import registered
+    from stackunderflow.ingest import run_ingest
+    from stackunderflow.store import db, schema
+
+    click.echo(f"Reindexing into {deps.store_path}")
+    conn = db.connect(deps.store_path)
+    try:
+        schema.apply(conn)
+        counts = run_ingest(conn, registered())
+    finally:
+        conn.close()
+    click.echo(f"Done: {counts}")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
