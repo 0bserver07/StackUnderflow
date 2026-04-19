@@ -75,3 +75,28 @@ def test_get_messages_paginates(conn) -> None:
         )
     page = queries.get_messages(conn, session_fk=sid, limit=2, offset=1)
     assert [m.seq for m in page] == [1, 2]
+
+
+def test_get_session_stats(conn) -> None:
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, tools_json, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, 0, "2026-01-01T00:00:00+00:00", "user", None, 10, 0, "[]", "{}"),
+    )
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, tools_json, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, 1, "2026-01-01T00:00:01+00:00", "assistant", "claude-sonnet-4-6",
+         5, 20, '[{"name":"bash"}]', "{}"),
+    )
+    stats = queries.get_session_stats(conn, session_fk=sid)
+    assert stats["user_messages"] == 1
+    assert stats["assistant_messages"] == 1
+    assert stats["input_tokens"] == 15
+    assert stats["output_tokens"] == 20
+    assert stats["model"] == "claude-sonnet-4-6"
+    assert stats["tool_calls"] == 1

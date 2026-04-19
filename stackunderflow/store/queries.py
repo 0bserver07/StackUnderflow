@@ -57,3 +57,25 @@ def get_messages(
         MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])})
         for r in rows
     ]
+
+
+def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
+    row = conn.execute(
+        "SELECT "
+        "  SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_messages, "
+        "  SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) AS assistant_messages, "
+        "  COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "  COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+        "  MAX(CASE WHEN model IS NOT NULL AND model != '' THEN model END) AS model, "
+        "  COALESCE(SUM(json_array_length(tools_json)), 0) AS tool_calls "
+        "FROM messages WHERE session_fk = ?",
+        (session_fk,),
+    ).fetchone()
+    return {
+        "user_messages": row["user_messages"] or 0,
+        "assistant_messages": row["assistant_messages"] or 0,
+        "input_tokens": row["input_tokens"] or 0,
+        "output_tokens": row["output_tokens"] or 0,
+        "model": row["model"],
+        "tool_calls": row["tool_calls"] or 0,
+    }
