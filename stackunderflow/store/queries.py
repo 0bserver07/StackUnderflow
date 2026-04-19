@@ -93,3 +93,33 @@ def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
         "model": row["model"],
         "tool_calls": row["tool_calls"] or 0,
     }
+
+
+def cross_project_daily_totals(
+    conn: sqlite3.Connection,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[tuple]:
+    """Per-(project_slug, day, model) token rollups within [since, until]."""
+    sql = (
+        "SELECT projects.slug AS slug, "
+        "       substr(messages.timestamp, 1, 10) AS day, "
+        "       COALESCE(messages.model, '') AS model, "
+        "       SUM(messages.input_tokens) AS input_tokens, "
+        "       SUM(messages.output_tokens) AS output_tokens, "
+        "       COUNT(*) AS messages "
+        "FROM messages "
+        "JOIN sessions ON sessions.id = messages.session_fk "
+        "JOIN projects ON projects.id = sessions.project_id "
+        "WHERE 1=1 "
+    )
+    params: list[str] = []
+    if since:
+        sql += "AND messages.timestamp >= ? "
+        params.append(since)
+    if until:
+        sql += "AND messages.timestamp < ? "
+        params.append(until)
+    sql += "GROUP BY slug, day, model ORDER BY day"
+    return [tuple(row) for row in conn.execute(sql, params).fetchall()]
