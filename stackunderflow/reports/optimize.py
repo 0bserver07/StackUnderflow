@@ -10,8 +10,11 @@ many looped pairs is a project where the assistant often failed first try.
 
 from __future__ import annotations
 
+import sqlite3
+
 from stackunderflow.reports.scope import Scope
 from stackunderflow.services.qa_service import QAService
+from stackunderflow.store import queries
 
 __all__ = ["find_waste"]
 
@@ -22,7 +25,7 @@ def _qa_service_factory() -> QAService:
 
 
 def find_waste(
-    projects: list[dict],
+    conn: sqlite3.Connection,
     *,
     scope: Scope,
     include: list[str] | None = None,
@@ -33,17 +36,19 @@ def find_waste(
     Returns a list of dicts: `{project, looped_pairs, sample_questions}`.
     Projects with zero looped pairs are omitted.
     """
+    slugs = [p.slug for p in queries.list_projects(conn)]
+
     if include is not None:
-        projects = [p for p in projects if p["dir_name"] in include]
+        slugs = [s for s in slugs if s in include]
     if exclude is not None:
-        projects = [p for p in projects if p["dir_name"] not in exclude]
+        slugs = [s for s in slugs if s not in exclude]
 
     svc = _qa_service_factory()
 
     rows: list[dict] = []
-    for p in projects:
+    for slug in slugs:
         result = svc.list_qa(
-            project=p["dir_name"],
+            project=slug,
             resolution_status="looped",
             date_from=scope.since,
             date_to=scope.until,
@@ -53,7 +58,7 @@ def find_waste(
             continue
         samples = [r["question_text"][:120] for r in result["results"][:3]]
         rows.append({
-            "project": p["dir_name"],
+            "project": slug,
             "looped_pairs": result["total"],
             "sample_questions": samples,
         })
