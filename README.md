@@ -61,26 +61,28 @@ import stackunderflow
 
 # List all Claude Code projects on your machine
 projects = stackunderflow.list_projects()
-# [{"dir_name": "...", "log_path": "...", "file_count": 15, ...}, ...]
+# [{"dir_name": "...", "log_path": "...", ...}, ...]
 
-# Process a project's logs → (messages, statistics)
-path = projects[0]["log_path"]
-messages, stats = stackunderflow.process(path)
+# Query the session store directly
+from stackunderflow.store import db, queries
+
+from pathlib import Path
+store = Path.home() / ".stackunderflow" / "store.db"
+conn = db.connect(store)
+project = queries.get_project(conn, slug=projects[0]["dir_name"])
+messages, stats = queries.get_project_stats(conn, project_id=project.id)
+conn.close()
 
 tokens = stats["overview"]["total_tokens"]
 print(f"Sessions: {stats['overview']['sessions']}")
 print(f"Tokens: {tokens['input']:,} in / {tokens['output']:,} out")
 print(f"Total cost: ${stats['overview']['total_cost']:.2f}")
-
-# Limit messages or adjust timezone
-messages, stats = stackunderflow.process(path, limit=100, tz_offset=-480)
 ```
 
-The pipeline stages are also importable for custom workflows:
+The stats modules are also importable for custom workflows:
 
 ```python
-from stackunderflow.pipeline import reader, dedup, classifier, enricher, aggregator
-from stackunderflow.infra.cache import TieredCache
+from stackunderflow.stats import classifier, enricher, aggregator, formatter
 from stackunderflow.infra.discovery import locate_logs
 ```
 
@@ -98,6 +100,9 @@ stackunderflow cfg ls
 
 # Reset a setting to default
 stackunderflow cfg rm port
+
+# Sync the session store with the latest JSONL files (incremental)
+stackunderflow reindex
 ```
 
 | Key | Default | Description |
@@ -105,8 +110,6 @@ stackunderflow cfg rm port
 | `port` | 8081 | Server port |
 | `host` | 127.0.0.1 | Server host |
 | `auto_browser` | true | Auto-open browser on start |
-| `cache_max_projects` | 5 | Max projects in memory cache |
-| `cache_max_mb_per_project` | 500 | Max MB per project in cache |
 | `max_date_range_days` | 30 | Default date range for analytics |
 
 See [CLI reference](docs/cli-reference.md) for all commands.
@@ -121,34 +124,30 @@ stackunderflow/
   ingest/         # mtime-gated incremental import into the store
     enumerate.py  #   fan all adapters' SessionRefs into one iterable
     writer.py     #   transactional writer — one file → one transaction → one ingest_log row
-  store/          # SQLite session store (~/.stackunderflow/sessions.db)
+  store/          # SQLite session store (~/.stackunderflow/store.db)
     db.py         #   connection factory (WAL mode, row_factory)
     schema.py     #   CREATE TABLE migrations
-    queries.py    #   typed read helpers (list_projects, get_session_messages, …)
+    queries.py    #   typed read helpers (list_projects, get_project_stats, …)
     types.py      #   frozen dataclasses returned by query helpers
-  pipeline/       # JSONL → messages + statistics (legacy ETL — used by dashboard endpoints)
-    reader.py     #   scan .jsonl files into raw entries (recursive, sub-agent aware)
-    dedup.py      #   collapse streaming duplicates
+  stats/          # message classification + analytics (no I/O — pure transforms)
     classifier.py #   tag message types and error patterns
     enricher.py   #   build dataset with interaction chains
     aggregator.py #   compute statistics (one pass, collector-based)
     formatter.py  #   shape messages for the REST API
   infra/
-    cache.py      # TieredCache — hot (memory LRU with weighted eviction) + cold (disk JSON)
     discovery.py  # find and enumerate Claude log directories
     costs.py      # per-model cost estimation
-    preloader.py  # background cache warming
   routes/         # FastAPI route modules
     projects.py   #   project selection and listing
-    data.py       #   stats, dashboard-data, messages, refresh
+    data.py       #   stats, dashboard-data, messages, refresh (store-backed)
     sessions.py   #   session browsing (store-backed)
     search.py     #   full-text search
     qa.py         #   Q&A pair browsing
     tags.py       #   auto-tags and manual tagging
     bookmarks.py  #   bookmark CRUD + session metadata enrichment
-    misc.py       #   pricing, related, health, static
-  services/       # search, Q&A, tags, bookmarks, related, pricing
-  deps.py         # shared state (cache, config, services, store_path)
+    misc.py       #   pricing, health, static
+  services/       # search, Q&A, tags, bookmarks, pricing
+  deps.py         # shared state (config, services, store_path)
   server.py       # thin shell — app creation, middleware, lifespan
   settings.py     # env → file → default config resolution (descriptor-based)
   cli.py          # click CLI (init, start, cfg, backup, clear-cache, reindex)
@@ -156,9 +155,32 @@ stackunderflow/
 stackunderflow-ui/  # React + TypeScript + Tailwind frontend
 ```
 
+### Data flow
+
+```
+~/.claude/projects/<slug>/*.jsonl
+         │
+         ▼
+  ClaudeAdapter.enumerate() + read()
+         │  (incremental: skip unchanged mtime/offset)
+         ▼
+  ingest/writer.py  →  SQLite store (~/.stackunderflow/store.db)
+         │
+         ▼
+  queries.get_project_stats(conn, project_id)
+         │  (reconstructs messages, feeds stats/ chain)
+         ▼
+  stats/{classifier → enricher → aggregator → formatter}
+         │
+         ▼
+  /api/stats, /api/dashboard-data, /api/messages
+```
+
 ### How refresh works
 
-`stackunderflow reindex` (also run at server startup) fans every registered adapter's discovered files through `ingest/enumerate.py`. For each file, the ingest runner checks the stored `last_offset` and `last_mtime` and only reads bytes beyond the last offset. New messages are written transactionally to the SQLite store. The store is the source of truth for session browsing, cross-project aggregation (`reports/aggregate.py`), and the waste-finding heuristic (`reports/optimize.py`).
+`stackunderflow reindex` (or `/api/refresh`) fans every registered adapter's discovered files through `ingest/enumerate.py`. For each file the runner compares the stored `last_mtime` and `last_offset` and only reads newly-appended bytes. New messages are written transactionally to the store. The store is then the source of truth for all API endpoints — session browsing, cross-project aggregation (`reports/aggregate.py`), and the waste-finding heuristic (`reports/optimize.py`).
+
+On first successful ingest the legacy `~/.stackunderflow/cache/` directory is removed if present.
 
 ### Source adapters
 
@@ -175,7 +197,7 @@ StackUnderflow processes all your Claude Code logs locally.
 
 **What it does with that data:**
 - Parsing, search indexing, and analytics run locally — nothing is uploaded
-- A cache is written to `~/.stackunderflow/` (hot analytics + config)
+- The session store is written to `~/.stackunderflow/store.db` (SQLite, WAL mode)
 - Backups (opt-in) are written to `~/.stackunderflow/backups/` unencrypted — protect this directory like you would your `~/.claude/`
 
 **What leaves your machine (only if you enable it):**
