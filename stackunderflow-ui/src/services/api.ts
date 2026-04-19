@@ -67,6 +67,7 @@ export async function getQAList(params: {
   date_from?: string
   date_to?: string
   search?: string
+  resolution_status?: 'resolved' | 'looped' | 'abandoned' | 'open'
   page?: number
   per_page?: number
 }): Promise<QAListResponse> {
@@ -75,6 +76,7 @@ export async function getQAList(params: {
   if (params.date_from) searchParams.set('date_from', params.date_from)
   if (params.date_to) searchParams.set('date_to', params.date_to)
   if (params.search) searchParams.set('search', params.search)
+  if (params.resolution_status) searchParams.set('resolution_status', params.resolution_status)
   if (params.page) searchParams.set('page', String(params.page))
   if (params.per_page) searchParams.set('per_page', String(params.per_page))
   return fetchJson(`${BASE}/qa?${searchParams}`)

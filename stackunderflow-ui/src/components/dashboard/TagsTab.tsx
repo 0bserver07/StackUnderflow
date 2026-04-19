@@ -9,7 +9,6 @@ import {
   IconUsers,
 } from '@tabler/icons-react';
 import { getTagCloud, browseTag, reindexTags } from '../../services/api';
-import type { Tag } from '../../types/api';
 import LoadingSpinner from '../common/LoadingSpinner';
 import EmptyState from '../common/EmptyState';
 
@@ -25,12 +24,27 @@ function getTagSizeClass(count: number, maxCount: number): string {
   return 'text-xs';
 }
 
-function tagColorClasses(category: string, color?: string): string {
-  if (category === 'tool') {
-    return 'bg-purple-500/20 text-purple-300 border-purple-500/30 hover:bg-purple-500/30'
-  }
-  return 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/30'
+const CATEGORY_CLASSES: Record<string, string> = {
+  intent: 'bg-amber-500/20 text-amber-300 border-amber-500/30 hover:bg-amber-500/30',
+  language: 'bg-blue-500/20 text-blue-300 border-blue-500/30 hover:bg-blue-500/30',
+  framework: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30',
+  tool: 'bg-purple-500/20 text-purple-300 border-purple-500/30 hover:bg-purple-500/30',
+  topic: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/30',
 }
+
+const DEFAULT_TAG_CLASSES = 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/30'
+
+function tagColorClasses(category: string): string {
+  return CATEGORY_CLASSES[category] ?? DEFAULT_TAG_CLASSES
+}
+
+const LEGEND: Array<{ category: string; label: string; dot: string }> = [
+  { category: 'intent', label: 'Intent', dot: 'bg-amber-500' },
+  { category: 'language', label: 'Language', dot: 'bg-blue-500' },
+  { category: 'framework', label: 'Framework', dot: 'bg-emerald-500' },
+  { category: 'topic', label: 'Topic', dot: 'bg-indigo-500' },
+  { category: 'tool', label: 'Tool', dot: 'bg-purple-500' },
+]
 
 function formatTimestamp(ts: string): string {
   try {
@@ -143,15 +157,13 @@ export default function TagsTab() {
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-4 text-xs text-zinc-500">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
-            Topic
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-            Tool
-          </span>
+        <div className="flex items-center gap-4 text-xs text-zinc-500 flex-wrap">
+          {LEGEND.map((l) => (
+            <span key={l.category} className="flex items-center gap-1.5">
+              <span className={`w-2.5 h-2.5 rounded-full ${l.dot}`} />
+              {l.label}
+            </span>
+          ))}
         </div>
 
         {/* Tag Cloud */}
