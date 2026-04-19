@@ -567,5 +567,44 @@ class TestQAReindexUsesStore:
         assert "-qa-proj" in slugs
 
 
+class TestTagsReindexUsesStore:
+    """Test that tags reindex pulls project list from session store."""
+
+    @pytest.mark.asyncio
+    async def test_tags_reindex_passes_store_projects_to_service(self, tmp_path, monkeypatch):
+        import stackunderflow.deps as deps
+        from stackunderflow.routes.tags import reindex_tags
+        from stackunderflow.store import db, schema
+
+        store_db = tmp_path / "store.db"
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("claude", "-tag-proj", "-tag-proj", 0.0, 0.0),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+
+        captured: dict = {}
+
+        class FakeTagService:
+            def reindex_all(self, memory_cache, cache_service, projects=None):
+                captured["projects"] = projects
+                return {"projects_indexed": 0, "total_sessions_tagged": 0,
+                        "total_tags_assigned": 0, "errors": []}
+
+        monkeypatch.setattr("stackunderflow.deps.tag_service", FakeTagService())
+
+        await reindex_tags()
+
+        assert captured.get("projects") is not None
+        slugs = {p["dir_name"] for p in captured["projects"]}
+        assert "-tag-proj" in slugs
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

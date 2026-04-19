@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
+from stackunderflow.store import db, queries
 
 router = APIRouter()
 
@@ -101,7 +102,13 @@ async def reindex_tags():
 
     start_time = time.time()
     try:
-        result = deps.tag_service.reindex_all(deps.cache, deps.cache)
+        conn = db.connect(deps.store_path)
+        try:
+            project_rows = queries.list_projects(conn)
+        finally:
+            conn.close()
+        projects = [{"dir_name": p.slug, "log_path": p.path or ""} for p in project_rows]
+        result = deps.tag_service.reindex_all(deps.cache, deps.cache, projects=projects)
         elapsed_ms = (time.time() - start_time) * 1000
         result["elapsed_ms"] = round(elapsed_ms, 2)
         deps.logger.info(
