@@ -114,3 +114,46 @@ def test_get_session_stats(conn) -> None:
     assert stats["output_tokens"] == 20
     assert stats["model"] == "claude-sonnet-4-6"
     assert stats["tool_calls"] == 1
+
+
+def test_cross_project_daily_totals(conn) -> None:
+    # Two projects, messages on different days
+    pa = _seed_project(conn, slug="proj-a")
+    pb = _seed_project(conn, slug="proj-b")
+    sa = _seed_session(conn, pa, "s-a")
+    sb = _seed_session(conn, pb, "s-b")
+    for seq, (ts, session_fk, model, inp, out) in enumerate([
+        ("2026-04-15T10:00:00+00:00", sa, "claude-3", 100, 50),
+        ("2026-04-16T10:00:00+00:00", sa, "claude-3", 200, 80),
+        ("2026-04-16T11:00:00+00:00", sb, "claude-3", 40, 20),
+    ]):
+        conn.execute(
+            "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+            "input_tokens, output_tokens, raw_json) VALUES (?,?,?,?,?,?,?,?)",
+            (session_fk, seq, ts, "assistant", model, inp, out, "{}"),
+        )
+    rows = queries.cross_project_daily_totals(conn)
+    slugs = {r[0] for r in rows}
+    assert slugs == {"proj-a", "proj-b"}
+    # proj-a 2026-04-15: 100 in, 50 out; proj-a 2026-04-16: 200 in, 80 out
+    pa_totals = [(r[3], r[4]) for r in rows if r[0] == "proj-a"]
+    assert sum(inp for inp, _ in pa_totals) == 300
+    assert sum(out for _, out in pa_totals) == 130
+
+
+def test_cross_project_daily_totals_since_filter(conn) -> None:
+    pa = _seed_project(conn, slug="proj-a")
+    sa = _seed_session(conn, pa, "s-a")
+    for seq, (ts, inp) in enumerate([
+        ("2026-04-14T10:00:00+00:00", 10),
+        ("2026-04-15T10:00:00+00:00", 20),
+        ("2026-04-16T10:00:00+00:00", 30),
+    ]):
+        conn.execute(
+            "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+            "input_tokens, output_tokens, raw_json) VALUES (?,?,?,?,?,?,?,?)",
+            (sa, seq, ts, "user", "", inp, 0, "{}"),
+        )
+    rows = queries.cross_project_daily_totals(conn, since="2026-04-15T00:00:00+00:00")
+    total_in = sum(r[3] for r in rows)
+    assert total_in == 50  # 20 + 30, not 10
