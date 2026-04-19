@@ -104,11 +104,10 @@ async def set_project_by_dir(data: dict[str, str]):
             try:
                 project_row = queries.get_project(conn, slug=dir_name)
                 if project_row is not None:
-                    sessions = queries.list_sessions(conn, project_id=project_row.id)
-                    # Search indexing via store data handled by background ingest
+                    queries.list_sessions(conn, project_id=project_row.id)
             finally:
                 conn.close()
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
     # Warm cache for other recent projects in background

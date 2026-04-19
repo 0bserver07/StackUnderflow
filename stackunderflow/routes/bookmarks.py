@@ -30,11 +30,11 @@ async def list_bookmarks(tag: str | None = None, sort_by: str = "created_at"):
                     conn = db.connect(deps.store_path)
                     try:
                         placeholders = ",".join("?" * len(session_ids))
-                        rows = conn.execute(
-                            f"SELECT session_id, first_ts, last_ts, message_count "
-                            f"FROM sessions WHERE session_id IN ({placeholders})",
-                            session_ids,
-                        ).fetchall()
+                        sql = (
+                            "SELECT session_id, first_ts, last_ts, message_count "
+                            "FROM sessions WHERE session_id IN (" + placeholders + ")"
+                        )
+                        rows = conn.execute(sql, session_ids).fetchall()
                         meta = {r["session_id"]: r for r in rows}
                     finally:
                         conn.close()
@@ -44,8 +44,8 @@ async def list_bookmarks(tag: str | None = None, sort_by: str = "created_at"):
                             bm["session_first_ts"] = meta[sid]["first_ts"]
                             bm["session_last_ts"] = meta[sid]["last_ts"]
                             bm["session_message_count"] = meta[sid]["message_count"]
-                except Exception:
-                    pass  # metadata enrichment is best-effort
+                except Exception:  # noqa: S110
+                    pass
 
         return JSONResponse({"bookmarks": bookmarks})
     except Exception as e:

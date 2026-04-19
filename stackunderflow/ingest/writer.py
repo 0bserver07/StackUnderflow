@@ -89,7 +89,7 @@ def _upsert_project(conn: sqlite3.Connection, ref: SessionRef) -> int:
             ref.file_mtime,
         ),
     )
-    assert cur.lastrowid is not None
+    assert cur.lastrowid is not None  # noqa: S101
     return cur.lastrowid
 
 
@@ -104,7 +104,7 @@ def _upsert_session(conn: sqlite3.Connection, project_id: int, ref: SessionRef) 
         "INSERT INTO sessions (project_id, session_id) VALUES (?, ?)",
         (project_id, ref.session_id),
     )
-    assert cur.lastrowid is not None
+    assert cur.lastrowid is not None  # noqa: S101
     return cur.lastrowid
 
 

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
+from datetime import UTC
 from pathlib import Path
-from typing import Iterable
 
 import orjson
 
@@ -186,8 +187,8 @@ def _slug_for(project_path: str) -> str:
 
 
 def _epoch_ms_to_iso(ts_ms: int) -> str:
-    from datetime import datetime, timezone
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
 
 
 def _role_from(obj: dict, msg: dict) -> str | None:
