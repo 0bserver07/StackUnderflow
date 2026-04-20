@@ -73,13 +73,9 @@ class Settings:
 
     port                         = _Opt(8081,  "PORT")
     host                         = _Opt("127.0.0.1", "HOST")
-    cache_max_projects           = _Opt(5,     "CACHE_MAX_PROJECTS")
-    cache_max_mb_per_project     = _Opt(500,   "CACHE_MAX_MB_PER_PROJECT")
     auto_browser                 = _Opt(True,  "AUTO_BROWSER")
     max_date_range_days          = _Opt(30,    "MAX_DATE_RANGE_DAYS")
     messages_initial_load        = _Opt(500,   "MESSAGES_INITIAL_LOAD")
-    enable_background_processing = _Opt(True,  "ENABLE_BACKGROUND_PROCESSING")
-    cache_warm_on_startup        = _Opt(3,     "CACHE_WARM_ON_STARTUP")
     log_level                    = _Opt("INFO","LOG_LEVEL")
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────

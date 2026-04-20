@@ -190,7 +190,7 @@ class TestSettings:
                 cfg = Settings()
                 assert cfg.get('port') == 8081
                 assert cfg.get('auto_browser') is True
-                assert cfg.get('cache_max_projects') == 5
+                assert cfg.get('max_date_range_days') == 30
 
     def test_config_file_persistence(self):
         """Test configuration persists to file."""
