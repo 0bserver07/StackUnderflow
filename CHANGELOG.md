@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempt failed. The Overview's Total Cost card surfaces a small amber badge
   when prices may be out of date. Failed remote fetches now log at WARNING
   level instead of INFO.
+- **CLI usage and reporting commands**: `report -p <period>` for date-ranged
+  summaries, `today` / `month` for quick project-level tables, `status` for
+  a one-line cost/message count, `optimize` to surface wasted spend, and
+  `export` to dump CSV/JSON. Full docs in `docs/cli-reference.md`.
+- **Incremental backup commands**: `backup create` / `list` / `restore` /
+  `auto` to snapshot and restore `~/.claude/` session data, with optional
+  launchd-based daily backups on macOS.
 - **`[dev]` extras** in `pyproject.toml` so `pip install -e ".[dev]"` works
   out of the box.
 
@@ -107,11 +114,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current single-component layout.
 - **`.github/workflows/test.yml`** uses `pip install -e ".[dev]"` instead of
   the legacy `requirements-dev.txt` path.
+- **README** install flow rewritten for PyPI: primary path is
+  `pip install stackunderflow && stackunderflow init`; source/dev
+  instructions moved under a `Development setup` subsection.
 
 ### Fixed
-- Tests: 147 passing, 2 skipped (was 158 before this round; net delta is
-  142 baseline minus the 22 deleted admin tests, plus 5 new tests for
-  pricing staleness and 14 new tests for legacy `history_reader.py`).
+- **Dashboard project-list columns now populate**:
+  `/api/projects?include_stats=true` returns per-project token totals,
+  command counts, avg steps/command, estimated cost, and date range.
+  Previously always returned `stats: null`, leaving Commands / Tokens /
+  Cost / Size columns blank in the dashboard.
+- **`get_project_stats` survives non-Claude adapter data**: when
+  reconstructing pipeline entries from `raw_json`, the clean ISO
+  timestamp from the `messages.timestamp` column is injected into the
+  payload, preventing `AttributeError: 'int' object has no attribute
+  'replace'` for adapters that store epoch-millis timestamps.
+- Tests: **340 passing, 2 skipped**.
 
 ## [0.2.0] - 2026-04-01
 

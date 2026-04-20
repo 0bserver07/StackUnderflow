@@ -8,19 +8,10 @@ A local-first knowledge base for your AI coding sessions. Browse, search, and an
 
 ## Quickstart
 
-**Requirements:** Python 3.10+, Node 18+, and an existing `~/.claude/` directory from using Claude Code.
+**Requirements:** Python 3.10+ and an existing `~/.claude/` directory from using Claude Code.
 
 ```bash
-git clone https://github.com/0bserver07/StackUnderflow.git
-cd StackUnderflow
-
-# 1. Build the React UI (one-time)
-cd stackunderflow-ui && npm install && npm run build && cd ..
-
-# 2. Install the Python package
-pip install -e .
-
-# 3. Launch the dashboard
+pip install stackunderflow
 stackunderflow init
 ```
 
@@ -37,7 +28,23 @@ stackunderflow --help                 # everything else
 
 If port 8081 is taken: `stackunderflow cfg set port <free-port>` then re-run `init`.
 
-> PyPI release coming soon. For now, install from source.
+### Development setup
+
+If you want to hack on StackUnderflow (or install from source), you'll also need Node 18+ to build the React UI:
+
+```bash
+git clone https://github.com/0bserver07/StackUnderflow.git
+cd StackUnderflow
+
+# 1. Build the React UI (one-time)
+cd stackunderflow-ui && npm install && npm run build && cd ..
+
+# 2. Install the Python package in editable mode
+pip install -e .
+
+# 3. Launch the dashboard
+stackunderflow init
+```
 
 ## Features
 
