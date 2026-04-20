@@ -122,7 +122,7 @@ def get_project_stats(
     log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
 
     rows = conn.execute(
-        "SELECT m.raw_json, s.session_id "
+        "SELECT m.raw_json, s.session_id, m.timestamp "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
         "WHERE s.project_id = ? "
@@ -130,14 +130,21 @@ def get_project_stats(
         (project_id,),
     ).fetchall()
 
-    raw_entries = [
-        RawEntry(
-            payload=_json.loads(r["raw_json"]),
-            session_id=r["session_id"],
-            origin=r["session_id"],
+    raw_entries = []
+    for r in rows:
+        payload = _json.loads(r["raw_json"])
+        # Authoritative clean timestamp lives in the column; raw_json may hold
+        # epoch-millis ints from non-Claude adapters that the downstream
+        # aggregator's string-ts assumption can't handle.
+        if r["timestamp"]:
+            payload["timestamp"] = r["timestamp"]
+        raw_entries.append(
+            RawEntry(
+                payload=payload,
+                session_id=r["session_id"],
+                origin=r["session_id"],
+            )
         )
-        for r in rows
-    ]
 
     tagged = classifier.tag(raw_entries)
     dataset = enricher.build(tagged, log_dir)

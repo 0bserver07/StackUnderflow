@@ -167,39 +167,45 @@ async def get_projects(
         conn = db.connect(deps.store_path)
         try:
             project_rows = queries.list_projects(conn)
+
+            projects = [
+                {
+                    "dir_name": p.slug,
+                    "log_path": _resolve_log_dir(p.path, p.slug),
+                    "file_count": len(queries.list_sessions(conn, project_id=p.id)),
+                    "total_size_mb": _dir_size_mb(_resolve_log_dir(p.path, p.slug)),
+                    "last_modified": p.last_modified,
+                    "first_seen": p.first_seen,
+                    "display_name": p.display_name,
+                    "in_cache": False,
+                    "url_slug": p.slug,
+                    "stats": None,
+                    "_id": p.id,
+                }
+                for p in project_rows
+            ]
+
+            if sort_by == "last_modified":
+                projects.sort(key=lambda x: x["last_modified"], reverse=True)
+            elif sort_by == "first_seen":
+                projects.sort(key=lambda x: x["first_seen"])
+            elif sort_by == "size":
+                projects.sort(key=lambda x: x["total_size_mb"], reverse=True)
+            elif sort_by == "name":
+                projects.sort(key=lambda x: x["display_name"])
+
+            total_count = len(projects)
+            if limit:
+                projects = projects[offset : offset + limit]
+
+            if include_stats:
+                for proj in projects:
+                    proj["stats"] = _project_stats_for_ui(conn, proj["_id"])
+
+            for proj in projects:
+                proj.pop("_id", None)
         finally:
             conn.close()
-
-        projects = [
-            {
-                "dir_name": p.slug,
-                "log_path": p.path or "",
-                "file_count": 0,
-                "total_size_mb": 0.0,
-                "last_modified": p.last_modified,
-                "first_seen": p.first_seen,
-                "display_name": p.display_name,
-                "in_cache": False,
-                "url_slug": p.slug,
-                "stats": None,
-            }
-            for p in project_rows
-        ]
-
-        # Sort projects
-        if sort_by == "last_modified":
-            projects.sort(key=lambda x: x["last_modified"], reverse=True)
-        elif sort_by == "first_seen":
-            projects.sort(key=lambda x: x["first_seen"])
-        elif sort_by == "size":
-            projects.sort(key=lambda x: x["total_size_mb"], reverse=True)
-        elif sort_by == "name":
-            projects.sort(key=lambda x: x["display_name"])
-
-        # Apply pagination
-        total_count = len(projects)
-        if limit:
-            projects = projects[offset : offset + limit]
 
         return JSONResponse(
             {
@@ -218,6 +224,60 @@ async def get_projects(
 
         traceback.print_exc()
         return JSONResponse({"error": f"Failed to get projects: {str(e)}"}, status_code=500)
+
+
+def _resolve_log_dir(path: str | None, slug: str) -> str:
+    if path:
+        return path
+    return str(Path.home() / ".claude" / "projects" / slug)
+
+
+def _dir_size_mb(log_dir: str) -> float:
+    p = Path(log_dir)
+    if not p.is_dir():
+        return 0.0
+    try:
+        total = sum(f.stat().st_size for f in p.glob("*.jsonl"))
+    except OSError:
+        return 0.0
+    return round(total / (1024 * 1024), 2)
+
+
+def _project_stats_for_ui(conn, project_id: int) -> dict:
+    """Flatten aggregator output into the ProjectStats shape the UI expects."""
+    _, stats = queries.get_project_stats(conn, project_id=project_id)
+    if not stats:
+        return {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read": 0,
+            "total_cache_write": 0,
+            "total_commands": 0,
+            "avg_tokens_per_command": 0,
+            "avg_steps_per_command": 0,
+            "compact_summary_count": 0,
+            "first_message_date": None,
+            "last_message_date": None,
+            "total_cost": 0.0,
+        }
+    overview = stats.get("overview") or {}
+    tokens = overview.get("total_tokens") or {}
+    ui = stats.get("user_interactions") or {}
+    kinds = overview.get("message_types") or {}
+    date_range = overview.get("date_range") or {}
+    return {
+        "total_input_tokens": int(tokens.get("input", 0)),
+        "total_output_tokens": int(tokens.get("output", 0)),
+        "total_cache_read": int(tokens.get("cache_read", 0)),
+        "total_cache_write": int(tokens.get("cache_creation", 0)),
+        "total_commands": int(ui.get("user_commands_analyzed", 0)),
+        "avg_tokens_per_command": ui.get("avg_tokens_per_command", 0),
+        "avg_steps_per_command": ui.get("avg_steps_per_command", 0),
+        "compact_summary_count": int(kinds.get("compact_summary", 0)) + int(kinds.get("summary", 0)),
+        "first_message_date": date_range.get("start"),
+        "last_message_date": date_range.get("end"),
+        "total_cost": float(overview.get("total_cost", 0.0)),
+    }
 
 
 
