@@ -12,7 +12,6 @@ start*.sh
 tests/baseline_phase2.json
 
 node_modules/
-package-lock.json
 
 # Generated data files
 data/*
