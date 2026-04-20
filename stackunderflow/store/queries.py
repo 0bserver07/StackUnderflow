@@ -159,6 +159,73 @@ def get_project_messages(
     return messages
 
 
+def get_global_stats(conn: sqlite3.Connection) -> dict:
+    """Return the cross-project stats shape the Overview page expects.
+
+    Keys: first_use_date, last_use_date, daily_token_usage, daily_costs,
+    models, total_cache_read_tokens, total_cache_write_tokens.
+    """
+    from stackunderflow.infra.costs import compute_cost
+
+    row = conn.execute(
+        "SELECT MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts, "
+        "       SUM(cache_read_tokens)   AS cache_read, "
+        "       SUM(cache_create_tokens) AS cache_write "
+        "FROM messages"
+    ).fetchone()
+    first_ts = (row["first_ts"] or "")[:10]
+    last_ts = (row["last_ts"] or "")[:10]
+
+    daily_tokens = [
+        {"date": r["day"], "input": r["inp"], "output": r["out"]}
+        for r in conn.execute(
+            "SELECT substr(timestamp,1,10) AS day, "
+            "       SUM(input_tokens) AS inp, SUM(output_tokens) AS out "
+            "FROM messages GROUP BY day ORDER BY day"
+        )
+    ]
+
+    # per-(day, model) rollup feeding both daily_costs and the models map
+    per_day_model = conn.execute(
+        "SELECT substr(timestamp,1,10) AS day, "
+        "       COALESCE(model,'') AS model, "
+        "       SUM(input_tokens) AS inp, SUM(output_tokens) AS out, "
+        "       SUM(cache_create_tokens) AS cache_create, "
+        "       SUM(cache_read_tokens) AS cache_read, "
+        "       COUNT(*) AS n "
+        "FROM messages GROUP BY day, model ORDER BY day"
+    ).fetchall()
+
+    daily_costs_map: dict[str, dict] = {}
+    models: dict[str, dict] = {}
+    for r in per_day_model:
+        day, model = r["day"], r["model"]
+        tokens = {
+            "input": r["inp"] or 0,
+            "output": r["out"] or 0,
+            "cache_creation": r["cache_create"] or 0,
+            "cache_read": r["cache_read"] or 0,
+        }
+        cost = compute_cost(tokens, model)["total_cost"] if model else 0.0
+        bucket = daily_costs_map.setdefault(day, {"date": day, "cost": 0.0, "by_model": {}})
+        bucket["cost"] += cost
+        if model:
+            bucket["by_model"][model] = bucket["by_model"].get(model, 0.0) + cost
+            m = models.setdefault(model, {"count": 0, "cost": 0.0})
+            m["count"] += r["n"]
+            m["cost"] += cost
+
+    return {
+        "first_use_date": first_ts,
+        "last_use_date": last_ts,
+        "daily_token_usage": daily_tokens,
+        "daily_costs": list(daily_costs_map.values()),
+        "models": models,
+        "total_cache_read_tokens": int(row["cache_read"] or 0),
+        "total_cache_write_tokens": int(row["cache_write"] or 0),
+    }
+
+
 def cross_project_daily_totals(
     conn: sqlite3.Connection,
     *,
