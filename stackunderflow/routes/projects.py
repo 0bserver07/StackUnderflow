@@ -219,3 +219,21 @@ async def get_projects(
         traceback.print_exc()
         return JSONResponse({"error": f"Failed to get projects: {str(e)}"}, status_code=500)
 
+
+
+@router.get("/api/global-stats")
+async def get_global_stats():
+    """Aggregated statistics across all projects, backed by the session store."""
+    try:
+        conn = db.connect(deps.store_path)
+        try:
+            stats = queries.get_global_stats(conn)
+        finally:
+            conn.close()
+        stats["config"] = {"max_date_range_days": deps.config.get("max_date_range_days")}
+        return JSONResponse(stats)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Failed to get global stats: {str(e)}"},
+            status_code=500,
+        )

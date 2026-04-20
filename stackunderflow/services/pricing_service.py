@@ -132,6 +132,9 @@ class PricingService:
         }
 
         try:
+            # Cold-cache cleanup at startup may have removed the parent dir;
+            # re-create it defensively so pricing refresh survives.
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
             with open(self.pricing_cache_file, "w") as f:
                 json.dump(cache_data, f, indent=2)
         except OSError as e:
