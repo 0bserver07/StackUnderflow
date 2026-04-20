@@ -18,7 +18,6 @@ from typing import Any
 
 import click
 
-from stackunderflow.infra.discovery import project_metadata as list_projects
 from stackunderflow.reports.aggregate import build_report
 from stackunderflow.reports.optimize import find_waste
 from stackunderflow.reports.render import (
@@ -494,6 +493,15 @@ def _emit_report(report: dict, fmt: str) -> None:
         render_text(report)
 
 
+def _open_store():
+    """Open the session store connection, applying the schema if needed."""
+    import stackunderflow.deps as deps
+    from stackunderflow.store import db, schema
+    conn = db.connect(deps.store_path)
+    schema.apply(conn)
+    return conn
+
+
 @cli.command("report")
 @click.option("-p", "--period", default="7days",
               help="Period: today, 7days, 30days, month, all")
@@ -512,13 +520,16 @@ def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
     except ValueError as e:
         raise click.ClickException(str(e)) from e
     _ = provider  # stub: wired in Plan C
-    projects = list_projects()
-    report = build_report(
-        projects,
-        scope=scope,
-        include=list(include) or None,
-        exclude=list(exclude) or None,
-    )
+    conn = _open_store()
+    try:
+        report = build_report(
+            conn,
+            scope=scope,
+            include=list(include) or None,
+            exclude=list(exclude) or None,
+        )
+    finally:
+        conn.close()
     _emit_report(report, fmt)
 
 
@@ -529,8 +540,11 @@ def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
 def today_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
     """Today's usage."""
     scope = parse_period("today")
-    projects = list_projects()
-    report = build_report(projects, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    conn = _open_store()
+    try:
+        report = build_report(conn, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    finally:
+        conn.close()
     _emit_report(report, fmt)
 
 
@@ -541,8 +555,11 @@ def today_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
 def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
     """This month's usage."""
     scope = parse_period("month")
-    projects = list_projects()
-    report = build_report(projects, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    conn = _open_store()
+    try:
+        report = build_report(conn, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
+    finally:
+        conn.close()
     _emit_report(report, fmt)
 
 
@@ -550,9 +567,12 @@ def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
 def status_cmd(fmt: str):
     """Compact one-liner: today + month cost and message counts."""
-    projects = list_projects()
-    today = build_report(projects, scope=parse_period("today"), include=None, exclude=None)
-    month = build_report(projects, scope=parse_period("month"), include=None, exclude=None)
+    conn = _open_store()
+    try:
+        today = build_report(conn, scope=parse_period("today"), include=None, exclude=None)
+        month = build_report(conn, scope=parse_period("month"), include=None, exclude=None)
+    finally:
+        conn.close()
     if fmt == "json":
         click.echo(render_json({"today": today, "month": month}))
     else:
@@ -573,13 +593,16 @@ def export_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
         scope = parse_period(period)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
-    projects = list_projects()
-    report = build_report(
-        projects,
-        scope=scope,
-        include=list(include) or None,
-        exclude=list(exclude) or None,
-    )
+    conn = _open_store()
+    try:
+        report = build_report(
+            conn,
+            scope=scope,
+            include=list(include) or None,
+            exclude=list(exclude) or None,
+        )
+    finally:
+        conn.close()
     if fmt == "json":
         click.echo(render_json(report))
     else:
@@ -597,13 +620,16 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
         scope = parse_period(period)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
-    projects = list_projects()
-    waste = find_waste(
-        projects,
-        scope=scope,
-        include=list(include) or None,
-        exclude=list(exclude) or None,
-    )
+    conn = _open_store()
+    try:
+        waste = find_waste(
+            conn,
+            scope=scope,
+            include=list(include) or None,
+            exclude=list(exclude) or None,
+        )
+    finally:
+        conn.close()
 
     if fmt == "json":
         click.echo(render_json(waste))
