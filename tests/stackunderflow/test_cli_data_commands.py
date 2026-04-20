@@ -1,12 +1,8 @@
 """End-to-end CLI tests for data-facing commands."""
 
 import json
-import os
-import sys
 import unittest
-from unittest.mock import patch
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -38,7 +34,7 @@ class TestReportCommand(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_report_default_period_is_7days(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()) as mock_build:
             result = self.runner.invoke(cli, ["report"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -48,7 +44,7 @@ class TestReportCommand(unittest.TestCase):
         self.assertEqual(kwargs["scope"].label, "last 7 days")
 
     def test_report_format_json(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()):
             result = self.runner.invoke(cli, ["report", "--format", "json"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -56,14 +52,14 @@ class TestReportCommand(unittest.TestCase):
         self.assertEqual(parsed["total_cost"], 5.00)
 
     def test_report_period_30days(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()) as mock_build:
             self.runner.invoke(cli, ["report", "-p", "30days"])
         _args, kwargs = mock_build.call_args
         self.assertEqual(kwargs["scope"].label, "last 30 days")
 
     def test_unknown_period_exits_nonzero(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()):
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()):
             result = self.runner.invoke(cli, ["report", "-p", "bogus"])
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Unknown period", result.output)
@@ -74,14 +70,14 @@ class TestTodayMonthCommands(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_today_passes_today_scope(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()) as mock_build:
             self.runner.invoke(cli, ["today"])
         _args, kwargs = mock_build.call_args
         self.assertEqual(kwargs["scope"].label, "today")
 
     def test_month_passes_month_scope(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()) as mock_build:
             self.runner.invoke(cli, ["month"])
         _args, kwargs = mock_build.call_args
@@ -93,7 +89,7 @@ class TestStatusCommand(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_status_outputs_one_line(self):
-        def build(_projects, *, scope, include, exclude):
+        def build(_conn, *, scope, include, exclude):
             return {
                 "scope_label": scope.label,
                 "total_cost": 1.23 if scope.label == "today" else 45.67,
@@ -101,7 +97,7 @@ class TestStatusCommand(unittest.TestCase):
                 "total_sessions": 2,
                 "by_project": [],
             }
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", side_effect=build):
             result = self.runner.invoke(cli, ["status"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -111,7 +107,7 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("month: $45.67", lines[0])
 
     def test_status_format_json(self):
-        def build(_projects, *, scope, include, exclude):
+        def build(_conn, *, scope, include, exclude):
             return {
                 "scope_label": scope.label,
                 "total_cost": 1.0,
@@ -119,7 +115,7 @@ class TestStatusCommand(unittest.TestCase):
                 "total_sessions": 2,
                 "by_project": [],
             }
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", side_effect=build):
             result = self.runner.invoke(cli, ["status", "--format", "json"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -134,7 +130,7 @@ class TestExportCommand(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_export_csv_default(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()):
             result = self.runner.invoke(cli, ["export"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -142,7 +138,7 @@ class TestExportCommand(unittest.TestCase):
         self.assertIn("alpha", result.output)
 
     def test_export_json(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.build_report", return_value=_fake_report()):
             result = self.runner.invoke(cli, ["export", "-f", "json"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -159,7 +155,7 @@ class TestOptimizeCommand(unittest.TestCase):
             {"project": "alpha", "looped_pairs": 5, "sample_questions": ["How do I fix X?", "Why is Y broken?"]},
             {"project": "beta", "looped_pairs": 2, "sample_questions": ["What does Z mean?"]},
         ]
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.find_waste", return_value=waste):
             result = self.runner.invoke(cli, ["optimize"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -168,7 +164,7 @@ class TestOptimizeCommand(unittest.TestCase):
         self.assertIn("How do I fix X?", result.output)
 
     def test_optimize_no_waste_message(self):
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.find_waste", return_value=[]):
             result = self.runner.invoke(cli, ["optimize"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -176,7 +172,7 @@ class TestOptimizeCommand(unittest.TestCase):
 
     def test_optimize_json_format(self):
         waste = [{"project": "alpha", "looped_pairs": 5, "sample_questions": ["Q?"]}]
-        with patch("stackunderflow.cli.list_projects", return_value=_fake_projects()), \
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
              patch("stackunderflow.cli.find_waste", return_value=waste):
             result = self.runner.invoke(cli, ["optimize", "--format", "json"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
