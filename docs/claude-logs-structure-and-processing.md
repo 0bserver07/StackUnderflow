@@ -1,6 +1,6 @@
 # Claude Logs Structure and Processing Documentation
 
-This document comprehensively describes Claude log files (JSONL format), their structure, and how StackUnderflow processes them to generate analytics while handling complex edge cases.
+This document describes Claude log files (JSONL format), their structure, and how StackUnderflow processes them to generate analytics while handling complex edge cases.
 
 ## Table of Contents
 1. [Log File Structure](#log-file-structure)
@@ -8,38 +8,46 @@ This document comprehensively describes Claude log files (JSONL format), their s
 3. [Message Formats](#message-formats)
 4. [Tool Usage](#tool-usage)
 5. [Special Cases](#special-cases)
-6. [Processing Strategy](#processing-strategy)
+6. [Processing Pipeline](#processing-pipeline)
 7. [Deduplication and Tool Counting](#deduplication-and-tool-counting)
-8. [Performance and Caching](#performance-and-caching)
-9. [Known Issues and Solutions](#known-issues-and-solutions)
+8. [Storage](#storage)
+9. [Legacy Format](#legacy-format)
+10. [Known Issues and Solutions](#known-issues-and-solutions)
 
 ## Log File Structure
 
 ### File Location
+
+Modern Claude Code (January 2026 and later) writes one JSONL file per session, organised by project:
+
 ```
-~/.claude/projects/{project-path-hash}/{session-id}.jsonl
+~/.claude/projects/{project-path-slug}/{session-id}.jsonl
 ```
 
-Example:
+The slug is the absolute project path with path separators replaced by hyphens:
+
 ```
 /Users/example/.claude/projects/-Users-example-dev-myproject/08fce8c2-8453-42da-a52c-e03472c24e0f.jsonl
 ```
 
+`ClaudeAdapter.enumerate()` walks `~/.claude/projects/`, yields a `SessionRef` for every `.jsonl` file it finds, and falls back to `~/.claude/history.jsonl` for project directories that predate the per-project format (see [Legacy Format](#legacy-format)).
+
 ### Important: Multiple Sessions Per File
+
 While JSONL files are named after a primary session ID, they can contain log entries from multiple sessions:
 
 1. **Conversation Continuation**: When a conversation is continued after compaction or restart
 2. **Cross-Session References**: When Claude references work from another session
 3. **Session Merging**: When multiple related sessions are logged together
 
-**Best Practice**: The reader groups files by the `sessionId` field from the JSONL content. Filename stems are used only as a fallback when sessionId is absent.
+**Best Practice**: The adapter reads the `sessionId` field from each JSONL line and stores it on the `Record`. Filename stems are used as a fallback only when `sessionId` is absent.
 
 ## Entry Types and Fields
 
 ### Entry Types
-- `summary` - Session or conversation summary
-- `user` - User messages (includes tool results)
-- `assistant` - Claude's responses
+- `summary` — Session or conversation summary
+- `user` — User messages (includes tool results)
+- `assistant` — Claude's responses
 
 **Important:** The root `type` field indicates the log entry type, NOT necessarily the message role.
 
@@ -133,6 +141,8 @@ While JSONL files are named after a primary session ID, they can contain log ent
 }
 ```
 
+`summary` and `compact_summary` entries are skipped by the adapter (`_role_from()` returns `None` for them) — they are not inserted into the messages table.
+
 ## Tool Usage
 
 ### Common Tools
@@ -149,9 +159,12 @@ Tool results appear in subsequent user messages:
   "type": "tool_result",
   "tool_use_id": "toolu_xxxxx",
   "content": "Result of tool execution",
-  "is_error": true  // If tool execution failed
+  "is_error": true
 }
 ```
+
+### Tool Names on Records
+`ClaudeAdapter._tools_from()` walks the `message.content` array and collects every block whose `type` is `"tool_use"`. The resulting tuple of names is stored in the `Record.tools` field and serialised as `tools_json` in the messages table.
 
 ### Task Tool Limitations
 **Critical**: Task tool operations are NOT individually logged:
@@ -177,7 +190,7 @@ Claude logs streaming responses as multiple entries with the same message ID:
 
 // Entry 2: Tool use (same message ID)
 {
-  "type": "assistant", 
+  "type": "assistant",
   "message": {
     "id": "msg_01Y9yWFraRY5ptb3Bqbvpmqx",
     "content": [{"type": "tool_use", "name": "Write", ...}]
@@ -231,37 +244,73 @@ Appears as both error AND user message:
 }
 ```
 
-## Processing Strategy
+## Processing Pipeline
 
 ### Overview
-StackUnderflow processes logs to handle:
-1. Streaming response merging
-2. Message deduplication
-3. Proper type classification
-4. Tool count reconciliation
-5. Timezone conversion
-6. Performance optimization
 
-### Message Type Classification
-```python
-# Base type from root field
-base_type = msg['type']
-
-# Special cases
-if msg.get('isSidechain') and base_type == 'user':
-    type = 'task'
-elif msg.get('isCompactSummary'):
-    type = 'compact_summary'
-elif base_type == 'summary':
-    type = 'summary'
+```
+~/.claude/
+    |
+    v
+ClaudeAdapter          (stackunderflow/adapters/claude.py)
+    enumerate() -> SessionRef[]
+    read(ref)   -> Record[]
+    |
+    v
+ingest/writer          (stackunderflow/ingest/writer.py)
+    ingest_file()  -- one transaction per file,
+                      mtime + byte-offset tracking via ingest_log table
+    |
+    v
+SQLite store           (~/.stackunderflow/store.db)
+    projects / sessions / messages / ingest_log tables
+    |
+    v
+store/queries          (stackunderflow/store/queries.py)
+    get_project_stats() -- reconstructs RawEntry objects from raw_json,
+                           feeds the stats chain below
+    |
+    v
+stats chain            (stackunderflow/stats/)
+    classifier  -> enricher -> aggregator -> formatter
+    |
+    v
+API routes             (stackunderflow/routes/)
 ```
 
+### Incremental Ingest
+
+`ingest/writer.run_ingest()` compares each `SessionRef`'s `(mtime, size)` against the `ingest_log` table:
+
+- **Unchanged** (same mtime and size): skip entirely — no read, no transaction.
+- **Appended** (larger size, same or newer mtime): seek to `processed_offset` and read only the new bytes.
+- **Truncated / rotated** (size shrank): delete the `ingest_log` row and reparse from byte 0.
+
+This means large projects pay for a filesystem stat check only, not a full reparse, on every poll.
+
+### Record Normalisation
+
+`ClaudeAdapter._parse_line()` converts a raw JSONL object into a `Record` dataclass:
+
+```python
+# Role assignment
+base_type = obj['type']      # 'user' | 'assistant' | 'summary' | ...
+if base_type == 'user':
+    role = 'user'
+elif base_type == 'assistant':
+    role = 'assistant'
+elif base_type in ('summary', 'compact_summary'):
+    return None              # skip — not a conversational record
+```
+
+Token counts come from `message.usage`; tool names from every `"tool_use"` block in `message.content`; the entire raw dict is preserved in `Record.raw` and written to `messages.raw_json`.
+
 ### Timezone Handling
-All timestamps are stored in UTC but displayed in user's local timezone:
+All timestamps are stored in UTC but displayed in the user's local timezone:
 
 1. Frontend detects timezone offset: `new Date().getTimezoneOffset()`
 2. Backend converts UTC to local time for grouping
-3. Charts display dates in user's local timezone
+3. Charts display dates in the user's local timezone
 
 ## Deduplication and Tool Counting
 
@@ -272,34 +321,15 @@ When Claude Code crashes and restarts with `--continue`:
 - Incomplete assistant responses
 - Missing tool execution logs
 
-### Solution: Interaction-Based Processing
+### Solution: stats/classifier Deduplication
 
-Instead of processing individual messages, group into complete interactions:
+The `stackunderflow/stats/classifier.py` module receives a list of `RawEntry` objects (reconstructed from `messages.raw_json`) and performs two-phase deduplication:
 
-```python
-class Interaction:
-    interaction_id: str
-    command: dict
-    responses: list[dict]
-    tool_results: list[dict]
-    session_id: str
-    start_time: str
-    end_time: str
-    model: str
-    tool_count: int
-    assistant_steps: int
-    is_continuation: bool
-    tools_used: list[str]
-    has_task_tool: bool
-```
+1. **Phase 1 — ID-based merge**: Merges entries sharing the same `message.id` (keeping the longer content variant). This handles streaming responses where Claude emits multiple entries for the same message.
 
-### Deduplication Algorithm
+2. **Phase 2 — Exact duplicate drop**: Drops exact duplicates by hashing timestamp + content + UUID. This handles entries duplicated across files after crash/continue scenarios.
 
-Dedup is a two-phase process in `stackunderflow/pipeline/dedup.py`:
-
-1. **Phase 1 -- ID-based merge**: Merges entries sharing the same `message.id` (keeping the longer content variant). This handles streaming responses where Claude emits multiple entries for the same message.
-
-2. **Phase 2 -- Exact duplicate drop**: Drops exact duplicates by hashing timestamp + content + UUID. This handles entries duplicated across files after crash/continue scenarios.
+The deduplication logic that was previously in `pipeline/dedup.py` now lives inside the stats chain at `stackunderflow/stats/classifier.py`. The on-disk records themselves are stored with duplicates intact — dedup is a query-time operation so the raw JSONL is always faithfully preserved.
 
 ### Edge Cases Handled
 
@@ -310,55 +340,69 @@ Dedup is a two-phase process in `stackunderflow/pipeline/dedup.py`:
 5. **Streaming Response Merging**: Multiple entries with same message ID
 6. **Task Tool Sidechains**: Sub-agent operations not logged
 
-## Performance and Caching
+## Storage
 
-### Backend Optimization
-1. **Streaming Parser**: Line-by-line processing for large files
-2. **Backend Chart Calculation**: All aggregation done server-side
-3. **Pre-computed Statistics**: Charts use cached calculations
+### Database Location
+```
+~/.stackunderflow/store.db
+```
 
-### Caching Strategy
+### Schema
 
-#### TieredCache (`stackunderflow/infra/cache.py`)
-A unified cache with hot (memory) and cold (disk) tiers:
+The authoritative schema lives in `stackunderflow/store/migrations/v001_initial.sql`. Key tables:
 
-1. **Hot tier (L1 - RAM)**: Fast in-memory storage
-   - Weighted-score eviction (frequency + recency)
-   - Configurable size limits
-   - ~74,000x speedup for retrieval
+| Table | Purpose |
+|---|---|
+| `projects` | One row per `(provider, slug)` pair |
+| `sessions` | One row per session UUID, FK to `projects` |
+| `messages` | One row per parsed line, FK to `sessions` |
+| `ingest_log` | One row per source file; tracks `mtime`, `size`, `processed_offset` |
 
-2. **Cold tier (L2 - disk)**: Persistent storage
-   - JSON format
-   - Change detection via file stats
-   - ~2.4x speedup vs reprocessing
+**messages** is the central table. Rows are keyed on `(session_fk, seq)` where `seq` is the byte offset of the line within its source file. Every row carries a `raw_json` column containing the full original JSONL object, so nothing is ever discarded during ingest — downstream consumers reconstruct whatever they need from the raw payload.
 
-### Data Refresh
-Smart change detection minimizes unnecessary reprocessing:
+Selected `messages` columns:
+- `seq` (INTEGER) — byte offset used as a stable, monotonically increasing sequence number
+- `role` (TEXT) — `"user"` or `"assistant"`
+- `model` (TEXT) — model identifier when present in the source line
+- `input_tokens`, `output_tokens`, `cache_create_tokens`, `cache_read_tokens` (INTEGER)
+- `tools_json` (TEXT) — JSON array of tool names called in this message
+- `raw_json` (TEXT) — the complete original JSONL object
+- `is_sidechain` (INTEGER 0/1) — set when `isSidechain` is true in the source
+- `uuid`, `parent_uuid` (TEXT) — message threading fields from the JSONL
 
-1. Check file metadata (size + mtime)
-2. If no changes: Keep cache (<5ms)
-3. If changes: Invalidate and reprocess
-4. Auto-reload UI after update
+All typed query helpers that read from the store live in `stackunderflow/store/queries.py`. Application code imports helpers from there rather than writing raw SQL.
 
-### Performance Benchmarks
-- Processing: ~27,000 messages/second
-- Memory: ~36KB per message
-- Cache hit: <5ms response time
-- Full refresh: ~1.6s for 124MB project
+## Legacy Format
+
+Before January 2026, Claude Code did not write per-project JSONL files. Instead, all prompts were appended to a single centralised file:
+
+```
+~/.claude/history.jsonl
+```
+
+Each line in that file has a different shape from modern per-project JSONL — notably it uses `"project"` (an absolute path string) and `"timestamp"` (milliseconds since epoch) rather than the nested `"message"` object modern sessions use.
+
+`ClaudeAdapter` handles both formats transparently:
+
+- `enumerate()` checks each project directory for `.jsonl` files. If none are found but a `.continuation_cache.json` exists, it treats the project as legacy and yields a single synthetic `SessionRef` whose `session_id` starts with `"legacy-"` and whose `file_path` points at `~/.claude/history.jsonl`.
+- `read()` detects the `"legacy-"` prefix and calls `_read_history()` instead of `_read_jsonl()`.
+- `_read_history()` filters lines by `_slug_for(obj["project"])`, converts the millisecond timestamp to ISO 8601, and yields minimal `Record` objects (role `"user"`, no token counts, no tools) — one per matching history line.
+
+This means analytics for pre-January-2026 projects will show user prompts but no token counts or model information, since the legacy format does not record those fields.
 
 ## Known Issues and Solutions
 
 ### Issue 1: Duplicate Commands in Table
 **Cause**: Same user message in multiple files after crash/continue
-**Solution**: Interaction-based deduplication with content hashing
+**Solution**: Two-phase deduplication in `stats/classifier.py` at query time; raw records are preserved intact in the store
 
 ### Issue 2: Wrong Tool Counts
 **Cause**: Incomplete logging, Task tool limitations, streaming issues
-**Solution**: Tool count reconciliation across all interaction versions
+**Solution**: Tool count reconciliation across all interaction versions during the classify → enrich chain
 
 ### Issue 3: Missing Model Names
 **Cause**: Incomplete assistant messages from crashes
-**Solution**: Preserve model info during interaction merging
+**Solution**: Preserve model info during interaction merging in the stats chain; `MAX(CASE WHEN model IS NOT NULL …)` aggregation in `get_session_stats()`
 
 ### Issue 4: Overview Refresh Intermittent
 **Status**: Documented in TODO
@@ -367,7 +411,7 @@ Smart change detection minimizes unnecessary reprocessing:
 ## Success Metrics
 
 1. **Accuracy**: No duplicate messages, correct type classification
-2. **Performance**: Efficient processing with caching
-3. **Completeness**: All tools counted accurately
+2. **Performance**: Incremental ingest — only new bytes read per poll cycle
+3. **Completeness**: All tools counted accurately; raw JSONL always preserved
 4. **Timezone Support**: Correct local time display
 5. **Reliability**: Graceful handling of crashes and continuations
