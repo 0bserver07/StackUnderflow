@@ -6,7 +6,7 @@ description: How to install StackUnderflow and open the dashboard.
 ## Requirements
 
 - **Python 3.10 or newer**
-- An existing `~/.claude/` directory from having used [Claude Code](https://claude.ai/code)
+- At least one supported AI coding tool with local session logs. Today that's [Claude Code](https://claude.ai/code) (logs at `~/.claude/`); adapters for other tools are planned.
 
 ## Install from PyPI
 

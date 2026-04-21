@@ -1,6 +1,6 @@
 # StackUnderflow
 
-A local-first knowledge base for your AI coding sessions. Browse, search, and analyse conversations from Claude Code.
+A local-first knowledge base for your AI coding sessions. Browse, search, and analyse your conversations across AI coding tools — first-class [Claude Code](https://claude.ai/code) support today, pluggable adapter layer for [Codex](https://github.com/openai/codex) and others next.
 
 [Quickstart](#quickstart) | [Features](#features) | [Configuration](#configuration) | [Architecture](#architecture) | [Contributing](#contributing)
 
@@ -8,7 +8,7 @@ A local-first knowledge base for your AI coding sessions. Browse, search, and an
 
 ## Quickstart
 
-**Requirements:** Python 3.10+ and an existing `~/.claude/` directory from using Claude Code.
+**Requirements:** Python 3.10+ and at least one supported AI coding tool installed locally. Today that's Claude Code (session logs at `~/.claude/`); adapters for other tools (Codex, Cursor, etc.) are planned.
 
 ```bash
 pip install stackunderflow
