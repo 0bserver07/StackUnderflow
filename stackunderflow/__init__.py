@@ -4,7 +4,8 @@ Top-level API::
 
     import stackunderflow
 
-    # List all Claude Code projects on this machine
+    # List all AI-coding-tool projects discovered on this machine
+    # (Claude Code today; pluggable adapters for other tools next).
     projects = stackunderflow.list_projects()
 
 Submodule access::

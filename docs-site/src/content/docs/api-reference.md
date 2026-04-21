@@ -486,7 +486,7 @@ Return the raw parsed messages for a single session, identified by filename.
 
 ### GET /api/search
 
-Full-text search across all indexed Claude Code sessions using SQLite FTS5.
+Full-text search across every indexed session from every configured adapter (Claude Code today), using SQLite FTS5.
 Returns `503` if the search service failed to initialise on startup.
 
 **Query parameters**
