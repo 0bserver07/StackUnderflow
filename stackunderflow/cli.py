@@ -102,6 +102,16 @@ def start_cmd(port: int | None, host: str | None, headless: bool, fresh: bool):
     port = port or cfg.port
     host = host or cfg.host
 
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        click.secho(
+            f"  ⚠  Binding to {host} exposes the dashboard to anyone who can reach "
+            f"that interface. The API has no authentication — session data, "
+            f"tokens, and cost info are served unauthenticated. Use 127.0.0.1 "
+            f"unless you know what you're doing.",
+            fg="yellow",
+            err=True,
+        )
+
     _install_fast_event_loop()
 
     handle = _ServerHandle(port, host)
