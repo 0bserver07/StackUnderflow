@@ -9,7 +9,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'StackUnderflow',
-      description: 'A local-first knowledge base for your AI coding sessions across Claude Code, Codex, and other tools.',
+      description: 'The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/0bserver07/StackUnderflow' },
       ],

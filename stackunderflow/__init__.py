@@ -1,11 +1,13 @@
-"""StackUnderflow — a knowledge base for your AI coding sessions.
+"""StackUnderflow: the local observability for your coding agents.
+
+Search, replay, and analyse every session, all offline. Starts with
+Claude Code; adapters for more coding agents are on the way.
 
 Top-level API::
 
     import stackunderflow
 
-    # List all AI-coding-tool projects discovered on this machine
-    # (Claude Code today; pluggable adapters for other tools next).
+    # List all coding-agent projects discovered on this machine
     projects = stackunderflow.list_projects()
 
 Submodule access::

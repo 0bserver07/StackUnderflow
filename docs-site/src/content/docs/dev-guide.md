@@ -11,7 +11,7 @@ Guide for contributors. Covers architecture, dev setup, testing, and release.
 
 StackUnderflow is a single-process local-first app:
 
-- **Python backend**: FastAPI server in `stackunderflow/` that reads AI-coding-session logs through a pluggable adapter layer (Claude Code adapter today, reading `~/.claude/projects/`), processes them, and exposes a JSON API.
+- **Python backend**: FastAPI server in `stackunderflow/` that reads coding-agent session logs through a pluggable adapter layer (Claude Code adapter today, reading `~/.claude/projects/`), processes them, and exposes a JSON API.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. Built output is written to `stackunderflow/static/react/` and served by the backend.
 
 Everything runs on the user's machine. There is no cloud component, no sharing feature, no multi-tenant deployment. Data never leaves the host.

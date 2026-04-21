@@ -1,9 +1,9 @@
 ---
 title: StackUnderflow
-description: A local-first knowledge base for your AI coding sessions — across Claude Code, Codex, and other AI coding tools.
+description: The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code.
 template: splash
 hero:
-  tagline: Browse, search, and analyse your AI coding sessions across every tool — all local, all yours.
+  tagline: "The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code."
   actions:
     - text: Install
       link: /StackUnderflow/installation/
@@ -26,9 +26,8 @@ That opens the dashboard at `http://127.0.0.1:8095`.
 
 ## What it does
 
-StackUnderflow turns your local AI coding session logs into a searchable, cross-project knowledge base. Nothing leaves your machine.
+StackUnderflow is the local observability for your coding agents. Every session you run is indexed into a local SQLite store on your machine, searchable, replayable, and analysable without anything leaving the host. It starts with Claude Code; adapters for more agents are on the way.
 
-- **Pluggable adapter layer** — Claude Code supported today (reads `~/.claude/`); Codex and other tool adapters are on the roadmap. Any tool that writes session logs can be wired in.
 - **Dashboard** — browse projects, sessions, token costs, and daily usage
 - **Full-text search** across every message you've sent or received
 - **Q&A extraction** — automatic question/answer pairs with code snippets
