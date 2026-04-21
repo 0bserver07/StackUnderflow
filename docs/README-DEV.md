@@ -6,7 +6,7 @@ Guide for contributors. Covers architecture, dev setup, testing, and release.
 
 StackUnderflow is a single-process local-first app:
 
-- **Python backend**: FastAPI server in `stackunderflow/` that reads Claude Code JSONL logs from `~/.claude/projects/`, processes them through a pipeline, and exposes a JSON API.
+- **Python backend**: FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer (Claude Code today) into a local SQLite store, and exposes a JSON API on top of it.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. Built output is written to `stackunderflow/static/react/` and served by the backend.
 
 Everything runs on the user's machine. There is no cloud component, no sharing feature, no multi-tenant deployment. Data never leaves the host.
@@ -68,24 +68,34 @@ cd stackunderflow-ui && npm run build   # writes to stackunderflow/static/react/
 ```
 StackUnderflow/
 ├── stackunderflow/              # Python package
-│   ├── __init__.py              # Public API: process(), list_projects()
+│   ├── __init__.py              # Public API: list_projects()
 │   ├── __version__.py
-│   ├── cli.py                   # Click CLI (start/init, cfg, clear-cache, backup)
+│   ├── cli.py                   # Click CLI (start/init, cfg, reports, backup)
 │   ├── server.py                # FastAPI app, lifespan, router registration
-│   ├── deps.py                  # Shared singletons (cache, config, services)
+│   ├── deps.py                  # Shared singletons (config, services, store_path)
 │   ├── settings.py              # Descriptor-based Settings (env > file > default)
-│   ├── api/
-│   │   └── messages.py          # Message helpers
-│   ├── pipeline/                # ETL: reader → dedup → classifier → enricher → aggregator → formatter
-│   │   ├── __init__.py          # process(log_dir) entry point
-│   │   ├── reader.py            # JSONL discovery + parsing (recursive)
-│   │   ├── history_reader.py    # Legacy ~/.claude/history.jsonl support (pre-Jan-2026)
-│   │   ├── dedup.py             # Collapse duplicate entries across resumed sessions
+│   ├── adapters/                # Source adapters — normalise on-disk formats
+│   │   ├── base.py              # SourceAdapter protocol, SessionRef, Record dataclasses
+│   │   └── claude.py            # Claude Code JSONL + legacy history.jsonl
+│   ├── ingest/                  # Drives adapters into the store
+│   │   ├── enumerate.py         # Walk all registered adapters, yield SessionRefs
+│   │   └── writer.py            # One file → one transaction → one ingest_log row
+│   ├── store/                   # SQLite session store (~/.stackunderflow/store.db)
+│   │   ├── db.py                # connect() + WAL pragma
+│   │   ├── schema.py            # CREATE TABLE / migrations entry point
+│   │   ├── migrations/          # Versioned schema migrations
+│   │   ├── queries.py           # Typed read helpers (list_projects, messages_in_range, …)
+│   │   └── types.py             # ProjectRow / SessionRow / MessageRow dataclasses
+│   ├── stats/                   # Pure transforms over query results — no I/O
 │   │   ├── classifier.py        # Tag entries (user/assistant/tool/summary/...)
-│   │   ├── enricher.py          # Attach derived fields (costs, continuations)
-│   │   ├── aggregator.py        # Statistics (tokens, models, per-day, per-tool)
-│   │   ├── formatter.py         # Shape message dicts for the API
-│   │   └── cross_project.py     # Background aggregation across all projects
+│   │   ├── enricher.py          # Derived fields (costs, continuation links)
+│   │   ├── aggregator.py        # Per-day, per-model, per-tool stats
+│   │   └── formatter.py         # Shape for the wire
+│   ├── reports/                 # CLI reporting (report / today / month / export / optimize)
+│   │   ├── aggregate.py         # build_report()
+│   │   ├── optimize.py          # find_waste()
+│   │   ├── scope.py             # parse_period()
+│   │   └── render.py            # text / JSON / CSV output
 │   ├── routes/                  # FastAPI routers — one module per concern
 │   │   ├── projects.py          # /api/project, /api/projects, /api/global-stats
 │   │   ├── data.py              # /api/stats, /api/dashboard-data, /api/messages, /api/refresh
@@ -95,17 +105,17 @@ StackUnderflow/
 │   │   ├── tags.py              # /api/tags session tagging
 │   │   ├── bookmarks.py         # /api/bookmarks
 │   │   └── misc.py              # /api/health, /api/pricing, /ollama-api proxy
-│   ├── services/                # Stateful services initialized at startup
+│   ├── services/                # Stateful services initialised at startup
 │   │   ├── search_service.py    # Full-text search over messages
 │   │   ├── qa_service.py        # Question/answer extraction
 │   │   ├── tag_service.py       # Session tagging
 │   │   ├── bookmark_service.py  # User bookmarks
 │   │   └── pricing_service.py   # Token cost lookup
+│   ├── api/
+│   │   └── messages.py          # Message helpers
 │   ├── infra/
-│   │   ├── cache.py             # TieredCache (hot LRU + cold disk JSON)
-│   │   ├── discovery.py         # Find projects under ~/.claude/projects/
-│   │   ├── costs.py             # Pricing math
-│   │   └── preloader.py         # Warm cache on startup
+│   │   ├── discovery.py         # project_metadata(): list projects under ~/.claude/projects/
+│   │   └── costs.py             # Pricing math
 │   └── static/
 │       └── react/               # Frontend build output (gitignored contents)
 ├── stackunderflow-ui/           # React + TypeScript + Tailwind source
@@ -119,58 +129,70 @@ StackUnderflow/
 │   ├── vite.config.ts           # Dev server :5175, proxies /api → :8081
 │   └── package.json
 ├── tests/
+│   ├── mock-data/               # Fixture JSONL + pricing.json
 │   └── stackunderflow/
-│       ├── core/                # Pipeline, processor, history_reader, stats
-│       ├── utils/                # Cache, log discovery
+│       ├── adapters/            # Adapter protocol + Claude adapter
+│       ├── ingest/              # enumerate, writer, incremental behaviour
+│       ├── store/               # db, schema, queries, types
+│       ├── stats/               # classifier, enricher, aggregator, formatter
+│       ├── reports/             # aggregate, optimize, render, scope
+│       ├── utils/               # log discovery
 │       ├── test_cli.py
+│       ├── test_cli_data_commands.py
 │       ├── test_server.py
-│       ├── test_performance.py
-│       └── test_processor_*.py
+│       ├── test_pricing_service.py
+│       ├── test_qa_service_resolution.py
+│       └── test_tag_service_intent.py
 ├── docs/                         # This guide, CLI reference, etc.
+├── docs-site/                    # Astro Starlight site published to GitHub Pages
 ├── lint.sh                       # Runs ruff + mypy
 ├── pyproject.toml
 ├── requirements.txt
 └── requirements-dev.txt
 ```
 
-## How sessions are processed
+## Data flow
 
-Call site: `stackunderflow.pipeline.process(log_dir) -> (messages, statistics)`.
+The 0.3.0 rewrite replaced the in-process cache with a SQLite-backed session store. The pipeline is split into two halves: a **pre-ingest** path that normalises on-disk session data into rows, and a **post-ingest** path of pure transforms over query results.
 
-1. **reader** (`reader.py`). Walks `log_dir` recursively, reads every `*.jsonl`, and yields `RawEntry(payload, session_id, origin)`. Handles three file shapes:
-   - `<project>/<uuid>.jsonl` — main sessions
-   - `<project>/agent-<hash>.jsonl` — top-level sub-agents
-   - `<project>/<uuid>/subagents/agent-<hash>.jsonl` — nested sub-agents
-   - Detects session continuations (resumed sessions) across files.
+```
+~/.claude/projects/*.jsonl
+       ↓
+adapters/claude.py  (enumerate() → SessionRef, read() → Record stream)
+       ↓
+ingest/writer.py    (incremental, mtime+size gated, one txn per file)
+       ↓
+~/.stackunderflow/store.db   (SQLite, WAL mode)
+       ↓
+store/queries.py    (typed read helpers, all SQL lives here)
+       ↓
+stats/ {classifier → enricher → aggregator → formatter}  (pure, no I/O)
+       ↓
+routes/*.py         (FastAPI) — or — reports/*.py (CLI)
+       ↓
+React UI or CLI output
+```
 
-2. **history_reader** (`history_reader.py`). Fallback for legacy projects. Before January 2026, Claude Code wrote only user prompts to a centralized `~/.claude/history.jsonl` instead of per-project JSONL conversation logs. When `reader.scan()` finds no JSONL under a project directory, it falls back to this module, which:
-   - Parses `~/.claude/history.jsonl` once and caches the result by project slug.
-   - Groups entries without a `sessionId` into synthetic sessions using a 2-hour gap heuristic.
-   - Converts each entry into the same `RawEntry` shape the rest of the pipeline expects.
-   - Legacy entries contain prompt text and timestamp only — no token counts, model, or assistant response.
+Key properties:
 
-3. **dedup** (`dedup.py`). Collapses duplicate entries that appear when a session is resumed (Claude Code rewrites prefix lines).
+- **Adapters** are the only code that reads session files. A `SourceAdapter` (see `adapters/base.py`) implements `enumerate() -> Iterable[SessionRef]` and `read(ref, *, since_offset) -> Iterable[Record]`. The Claude adapter handles modern per-project JSONL and the pre-Jan-2026 centralised `~/.claude/history.jsonl`. New providers plug in by implementing the same protocol and calling `adapters.register()`.
+- **Ingest** is incremental. `run_ingest()` compares `(mtime, size)` against the `ingest_log` table and either skips the file, tail-reads from `processed_offset`, or reparses from zero on truncation. Each file's records land in a single transaction.
+- **The store** is the single source of truth at runtime. It's created lazily at `~/.stackunderflow/store.db`, opened in WAL mode (`store/db.py`), and migrated on startup via `store.schema.apply()`.
+- **Stats modules** are pure functions over query results. No file reads, no HTTP, no clock calls outside the data that's passed in. Easy to test.
+- **Routes and CLI reports** both read through `store.queries`; neither touches `sqlite3` directly.
 
-4. **classifier** (`classifier.py`). Tags each merged entry by role/kind (user, assistant, tool_use, tool_result, summary, system).
-
-5. **enricher** (`enricher.py`). Attaches derived fields: token cost from pricing data, session continuation links, normalized model names.
-
-6. **aggregator** (`aggregator.py`). Walks the enriched dataset once and returns the stats dict: per-day, per-model, per-tool, token totals, dollar totals, first/last message timestamps.
-
-7. **formatter** (`formatter.py`). Converts entries into the wire format the frontend expects and applies the `limit` argument.
-
-Results are cached by `TieredCache` (hot in-memory LRU + cold disk JSON under `~/.stackunderflow/cache/`). The hot cache is configurable via `cache_max_projects` and `cache_max_mb_per_project`. At startup, `infra/preloader.warm()` pre-processes the `cache_warm_on_startup` most-recent projects so the first page load is instant.
+`server.py` runs one ingest pass inside the FastAPI `lifespan` at boot. The CLI exposes `stackunderflow reindex` to rebuild the store from scratch.
 
 ## Shared state (`deps.py`)
 
 Route modules import singletons from `stackunderflow.deps`:
 
-- `cache` — the `TieredCache` instance
 - `config` — the `Settings` instance
-- `current_project_path`, `current_log_path` — the currently selected project (mutated by `POST /api/project`)
+- `store_path` — `~/.stackunderflow/store.db`
+- `current_project_path`, `current_log_path`, `is_reindexing` — mutable server state
 - `search_service`, `tag_service`, `qa_service`, `bookmark_service`, `pricing_service` — all `None` at import time, populated by the FastAPI `lifespan` handler in `server.py`
 
-Services initialize inside `lifespan` (not at import time) because some of them open SQLite files. Initializing at import would trigger I/O on any tooling that imports the package (pytest collection, build, CLI startup, etc.).
+Services initialise inside `lifespan` (not at import time) because some open SQLite files. Initialising at import would trigger I/O on any tooling that imports the package (pytest collection, build, CLI startup, etc.).
 
 ## Settings
 
@@ -180,20 +202,16 @@ Services initialize inside `lifespan` (not at import time) because some of them 
 2. `~/.stackunderflow/config.json`
 3. Declared default
 
-Available keys:
+Available keys (from `settings.py`):
 
-| Key                            | Env                             | Default       |
-| ------------------------------ | ------------------------------- | ------------- |
-| `port`                         | `PORT`                          | `8081`        |
-| `host`                         | `HOST`                          | `127.0.0.1`   |
-| `cache_max_projects`           | `CACHE_MAX_PROJECTS`            | `5`           |
-| `cache_max_mb_per_project`     | `CACHE_MAX_MB_PER_PROJECT`      | `500`         |
-| `auto_browser`                 | `AUTO_BROWSER`                  | `True`        |
-| `max_date_range_days`          | `MAX_DATE_RANGE_DAYS`           | `30`          |
-| `messages_initial_load`        | `MESSAGES_INITIAL_LOAD`         | `500`         |
-| `enable_background_processing` | `ENABLE_BACKGROUND_PROCESSING`  | `True`        |
-| `cache_warm_on_startup`        | `CACHE_WARM_ON_STARTUP`         | `3`           |
-| `log_level`                    | `LOG_LEVEL`                     | `"INFO"`      |
+| Key                       | Env                      | Default     |
+| ------------------------- | ------------------------ | ----------- |
+| `port`                    | `PORT`                   | `8081`      |
+| `host`                    | `HOST`                   | `127.0.0.1` |
+| `auto_browser`            | `AUTO_BROWSER`           | `True`      |
+| `max_date_range_days`     | `MAX_DATE_RANGE_DAYS`    | `30`        |
+| `messages_initial_load`   | `MESSAGES_INITIAL_LOAD`  | `500`       |
+| `log_level`               | `LOG_LEVEL`              | `"INFO"`    |
 
 Managed from the CLI:
 
@@ -219,6 +237,12 @@ Defined in `stackunderflow/cli.py`. Runs via the `stackunderflow` entry point.
 | `stackunderflow cfg set KEY VALUE`     | Persist setting to config file.                                    |
 | `stackunderflow cfg rm KEY`            | Remove persisted setting.                                          |
 | `stackunderflow clear-cache`           | Informational; cache is cleared on restart with `--fresh`.         |
+| `stackunderflow reindex`               | Rebuild the session store from scratch.                            |
+| `stackunderflow report`                | Dashboard-style summary over a date range.                         |
+| `stackunderflow today` / `month`       | Shortcuts for common report periods.                               |
+| `stackunderflow status`                | One-liner: today + month cost and message counts.                  |
+| `stackunderflow export`                | Export aggregated data as CSV or JSON.                             |
+| `stackunderflow optimize`              | Surface sessions with repeated retry loops.                        |
 | `stackunderflow backup create`         | Incremental rsync-based backup of `~/.claude/` (hard-links).       |
 | `stackunderflow backup list`           | List existing backups.                                             |
 | `stackunderflow backup restore NAME`   | Restore `~/.claude/` from a named backup (confirms first).         |
@@ -232,36 +256,35 @@ Full details: [cli-reference.md](cli-reference.md).
 import stackunderflow
 
 projects = stackunderflow.list_projects()
-messages, stats = stackunderflow.process(projects[0]["log_path"])
+# [{"log_path": ..., "display_name": ..., ...}, ...]
 ```
-
-- `list_projects()` returns `[{"log_path": ..., "display_name": ..., ...}]` for every project under `~/.claude/projects/` (plus legacy projects discovered via `history.jsonl`).
-- `process(log_dir, *, limit=None, tz_offset=0)` runs the full pipeline.
 
 Lower-level entry points:
 
 ```python
-from stackunderflow.pipeline import reader, dedup, classifier, enricher, aggregator, formatter
+from stackunderflow.adapters import registered, register
+from stackunderflow.adapters.base import SourceAdapter, SessionRef, Record
+from stackunderflow.ingest import run_ingest
+from stackunderflow.store import db, schema, queries
 from stackunderflow.infra.discovery import project_metadata, ProjectInfo
-from stackunderflow.infra.cache import TieredCache
 from stackunderflow.settings import Settings
 ```
 
 ## Testing
 
 ```bash
-pytest                                  # full suite
-pytest -q                               # quiet
-pytest -v                               # verbose
-pytest -k history                       # subset by name
-pytest tests/stackunderflow/core/test_processor.py
-pytest --cov=stackunderflow             # coverage
-pytest tests/stackunderflow/test_performance.py    # perf (local only)
+python -m pytest -q                                         # full suite
+python -m pytest -v                                         # verbose
+python -m pytest -k history                                 # subset by name
+python -m pytest tests/stackunderflow/adapters/ -q          # one subtree
+python -m pytest tests/stackunderflow/store/ -q
+python -m pytest tests/stackunderflow/stats/ -q
+python -m pytest --cov=stackunderflow                       # coverage
 ```
 
-Current suite: **142 passed, 2 skipped**. The two skips cover interactive `init` flows that require a running server.
+Current suite: **340 passed, 2 skipped**. The two skips cover interactive `init` flows that require a running server.
 
-Mock data: `tests/mock-data/-Users-test-dev-ai-music/`.
+Mock data: `tests/mock-data/-Users-test-dev-ai-music/` plus `tests/mock-data/pricing.json`.
 
 See [tests.md](tests.md) for layout and conventions.
 
@@ -303,6 +326,7 @@ Workflows live in `.github/workflows/`:
 - `lint.yml` — ruff + mypy.
 - `build.yml` — `python -m build` + `pip install dist/*.whl` on Ubuntu, macOS, Windows × Python 3.10, 3.12.
 - `publish.yml` — publishes to PyPI on GitHub release or manual dispatch.
+- `docs.yml` — builds and deploys `docs-site/` to GitHub Pages.
 
 ## Release
 
@@ -310,7 +334,7 @@ Workflows live in `.github/workflows/`:
 2. Update `CHANGELOG.md`.
 3. Run locally:
    ```bash
-   pytest
+   python -m pytest -q
    ./lint.sh
    rm -rf dist/ build/ *.egg-info
    python -m build
@@ -336,7 +360,7 @@ Once on PyPI, `uvx stackunderflow init` works immediately; no separate publish s
 - Server won't start: `lsof -i :8081` to check the port.
 - Stale Python bytecode after a refactor: `find . -name __pycache__ -type d -exec rm -rf {} +`.
 - Verbose logs: `LOG_LEVEL=DEBUG stackunderflow start`.
-- Cache looks wrong: `stackunderflow start --fresh` wipes `~/.stackunderflow/cache/` on boot.
+- Store looks wrong / out of date: `stackunderflow reindex` rebuilds `~/.stackunderflow/store.db` from scratch. `stackunderflow start --fresh` also wipes any residual JSON cache at `~/.stackunderflow/cache/`.
 - Frontend not reflecting API changes: confirm the Vite proxy target matches the backend port (`stackunderflow-ui/vite.config.ts` hardcodes `:8081`).
 
 ## Contributing
@@ -344,12 +368,12 @@ Once on PyPI, `uvx stackunderflow init` works immediately; no separate publish s
 - Add tests for new behavior.
 - Keep functions small and type-hinted.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`).
-- Run `./lint.sh` and `pytest` before pushing.
+- Run `./lint.sh` and `python -m pytest -q` before pushing.
 
 ## Other docs
 
 - [cli-reference.md](cli-reference.md) — full CLI options and examples.
 - [claude-logs-structure-and-processing.md](claude-logs-structure-and-processing.md) — JSONL format details.
-- [memory-and-latency-optimization.md](memory-and-latency-optimization.md) — cache architecture.
+- [memory-and-latency-optimization.md](memory-and-latency-optimization.md) — store / latency notes.
 - [tests.md](tests.md) — test suite walk-through.
 - [codex-adapter-spec.md](codex-adapter-spec.md) — design sketch for optional OpenAI Codex ingestion.
