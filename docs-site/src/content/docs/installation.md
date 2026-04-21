@@ -29,7 +29,7 @@ stackunderflow init
 This:
 
 1. Ingests every session under `~/.claude/projects/` into a local SQLite store at `~/.stackunderflow/store.db`.
-2. Starts a FastAPI server at `http://127.0.0.1:8095` (or the next free port).
+2. Starts a FastAPI server at `http://127.0.0.1:8081` (or the next free port).
 3. Opens the dashboard in your default browser.
 
 Use `Ctrl+C` to stop.
@@ -40,11 +40,11 @@ Use `Ctrl+C` to stop.
 stackunderflow status          # one-liner: today and this month
 stackunderflow today           # today's usage per project
 stackunderflow month           # this month's usage per project
-stackunderflow report -p week  # custom date-ranged report
+stackunderflow report -p 7days # custom date-ranged report
 stackunderflow --help          # everything else
 ```
 
-If port 8095 is taken, configure a different one:
+If port 8081 is taken, configure a different one:
 
 ```bash
 stackunderflow cfg set port 8099

@@ -4,6 +4,8 @@ description: The local observability for your coding agents. Search, replay, and
 template: splash
 hero:
   tagline: "The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code."
+  image:
+    file: ../../assets/dashboard.png
   actions:
     - text: Install
       link: /StackUnderflow/installation/
@@ -22,7 +24,7 @@ pip install stackunderflow
 stackunderflow init
 ```
 
-That opens the dashboard at `http://127.0.0.1:8095`.
+That opens the dashboard at `http://127.0.0.1:8081`.
 
 ## What it does
 

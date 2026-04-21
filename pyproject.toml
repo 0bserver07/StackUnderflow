@@ -55,6 +55,8 @@ stackunderflow = "stackunderflow.cli:cli"
 Homepage = "https://github.com/0bserver07/StackUnderflow"
 Repository = "https://github.com/0bserver07/StackUnderflow"
 Issues = "https://github.com/0bserver07/StackUnderflow/issues"
+Documentation = "https://0bserver07.github.io/StackUnderflow/"
+Changelog = "https://github.com/0bserver07/StackUnderflow/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["stackunderflow"]

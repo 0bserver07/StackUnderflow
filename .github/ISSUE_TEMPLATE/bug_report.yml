@@ -1,0 +1,97 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Clear repro steps make a huge difference — the more specific you can be about what you did and what you saw, the faster this gets fixed.
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: StackUnderflow version
+      description: Output of `stackunderflow --version`.
+      options:
+        - 0.3.0
+        - 0.2.x
+        - main (from source)
+        - other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: python
+    attributes:
+      label: Python version
+      options:
+        - "3.10"
+        - "3.11"
+        - "3.12"
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: install
+    attributes:
+      label: How did you install it?
+      description: pip, pipx, from source, etc.
+      placeholder: pipx install stackunderflow
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: What you did
+      description: Minimal steps to reproduce. Include commands, config, and any relevant input.
+      placeholder: |
+        1. Ran `stackunderflow init`
+        2. Opened the dashboard
+        3. Clicked ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+      description: Paste full tracebacks where possible. Don't truncate.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Logs, screenshots, or other context
+      description: Optional. Drag-and-drop images, paste logs, or link to a gist.
+
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true

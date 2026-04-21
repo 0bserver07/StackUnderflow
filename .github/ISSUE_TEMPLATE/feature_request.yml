@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem, not the solution. Describing *why* you need something makes it much easier to design the right fix — sometimes the best answer isn't the feature you initially imagined.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you're hitting
+      description: What are you trying to do? Where does StackUnderflow get in the way or fall short today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: feature
+    attributes:
+      label: The feature you want
+      description: What should it do? CLI flag, UI change, new route, new adapter — be concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Optional. Workarounds, other tools, or designs you rejected and why.
+
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and discussions and didn't find a duplicate.
+          required: true
