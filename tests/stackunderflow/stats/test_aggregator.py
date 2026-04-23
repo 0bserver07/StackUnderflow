@@ -793,41 +793,171 @@ def test_session_efficiency_empty():
 
 # ── _ErrorCostCollector (§1.8) ───────────────────────────────────────────────
 
-def test_error_cost_collector_aggregates():
+def _tool_result_error_rec(
+    *,
+    tool_use_id: str,
+    session_id: str = "s1",
+    timestamp: str = "2026-01-01T12:00:01Z",
+) -> Record:
+    """Build a user tool_result error record shaped like a real log entry
+    (is_error on the tool_result block + a tool_use_id back-pointer)."""
+    raw = {
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "is_error": True,
+                    "content": "Error: command failed",
+                }
+            ],
+        }
+    }
+    r = _rec(
+        kind="user",
+        session_id=session_id,
+        timestamp=timestamp,
+        model="N/A",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        is_error=True,
+        has_tool_result=True,
+    )
+    r.raw_data = raw
+    return r
+
+
+def test_error_cost_collector_charges_next_assistant():
+    """An error tool_result in a user message is charged the output tokens of
+    the next assistant message in the same interaction — NOT zero, and NOT
+    gated on retry-signal detection."""
     c = _ErrorCostCollector()
-    c.ingest(_rec(kind="assistant", model=_MODEL, is_error=True,
-                  tokens={"input": 0, "output": 500, "cache_creation": 0, "cache_read": 0},
-                  tools=[{"name": "Bash", "id": "1", "input": {}}]))
-    c.ingest(_rec(kind="assistant", model=_MODEL, is_error=True,
-                  tokens={"input": 0, "output": 300, "cache_creation": 0, "cache_read": 0},
-                  tools=[{"name": "Edit", "id": "2", "input": {}}]))
-    c.ingest(_rec(is_error=False))
-    out = c.result(interactions=[])
-    assert out["total_errors"] == 2
-    assert out["errors_by_tool"] == {"Bash": 1, "Edit": 1}
-    # avg_output_per_error = (500+300)/2 = 400; total = 400 × 2 = 800
-    assert out["estimated_retry_tokens"] == 800
+    # Interaction timeline: assistant#1 (tool_use Bash) → user(tool_result error) → assistant#2 (retry)
+    asst1 = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:00Z",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        tools=[{"name": "Bash", "id": "tid-1", "input": {}}],
+    )
+    err = _tool_result_error_rec(tool_use_id="tid-1",
+                                 timestamp="2026-01-01T12:00:01Z")
+    asst2 = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:02Z",
+        tokens={"input": 0, "output": 400, "cache_creation": 0, "cache_read": 0},
+    )
+    # ingest feeds the tool_id→name map and the total_errors count
+    for r in (asst1, err, asst2):
+        c.ingest(r)
+    ix = _ix(interaction_id="ix-err",
+             responses=[asst1, asst2],
+             tool_results=[err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    # tool attribution via tool_use_id lookup
+    assert out["errors_by_tool"] == {"Bash": 1}
+    # retry cost = output tokens of the NEXT assistant
+    assert out["estimated_retry_tokens"] == 400
+    assert out["estimated_retry_cost"] > 0
+    # top_error_commands populated (decoupled from any retry_signal logic)
+    assert len(out["top_error_commands"]) == 1
+    assert out["top_error_commands"][0]["interaction_id"] == "ix-err"
+
+
+def test_error_cost_collector_assistant_error_uses_own_tokens():
+    """If the error record is itself an assistant (e.g., an interruption),
+    charge its own output tokens rather than scanning forward."""
+    c = _ErrorCostCollector()
+    asst_err = _rec(
+        kind="assistant",
+        model=_MODEL,
+        is_error=True,
+        tokens={"input": 0, "output": 250, "cache_creation": 0, "cache_read": 0},
+    )
+    c.ingest(asst_err)
+    ix = _ix(interaction_id="ix-asst-err", responses=[asst_err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    assert out["estimated_retry_tokens"] == 250
     assert out["estimated_retry_cost"] > 0
 
 
-def test_error_cost_collector_top_commands():
+def test_error_cost_collector_ranks_top_error_commands():
+    """top_error_commands ranks by error-record count per Interaction,
+    capped at 10, with the OutlierCommand shape the frontend expects."""
     c = _ErrorCostCollector()
-    c.ingest(_rec(is_error=True, model=_MODEL))
-    r_err = _rec(kind="assistant", model=_MODEL, is_error=True)
-    ix_with_error = _ix(interaction_id="bad", responses=[r_err])
-    ix_without = _ix(interaction_id="good",
-                     responses=[_rec(kind="assistant", model=_MODEL, is_error=False)])
-    out = c.result(interactions=[ix_with_error, ix_without])
-    assert len(out["top_error_commands"]) == 1
-    assert out["top_error_commands"][0]["interaction_id"] == "bad"
+    # Track three assistants with tool_use, then three error tool_results
+    asst_tools = [
+        _rec(kind="assistant", model=_MODEL,
+             timestamp=f"2026-01-01T12:0{i}:00Z",
+             tools=[{"name": "Bash", "id": f"tid-{i}", "input": {}}])
+        for i in range(3)
+    ]
+    errs = [
+        _tool_result_error_rec(tool_use_id=f"tid-{i}",
+                               timestamp=f"2026-01-01T12:0{i}:30Z")
+        for i in range(3)
+    ]
+    # Interaction "many" has 2 errors; "few" has 1 error.
+    for r in asst_tools[:2] + errs[:2] + [asst_tools[2]] + [errs[2]]:
+        c.ingest(r)
+    ix_many = _ix(
+        interaction_id="many",
+        responses=asst_tools[:2],
+        tool_results=errs[:2],
+    )
+    ix_few = _ix(
+        interaction_id="few",
+        responses=[asst_tools[2]],
+        tool_results=[errs[2]],
+    )
+    out = c.result(interactions=[ix_many, ix_few])
+
+    assert out["total_errors"] == 3
+    assert out["errors_by_tool"]["Bash"] == 3
+    assert [e["interaction_id"] for e in out["top_error_commands"]] == ["many", "few"]
+    # shape check — must match OutlierCommand TypedDict the frontend imports
+    top = out["top_error_commands"][0]
+    assert set(top.keys()) == {
+        "interaction_id", "session_id", "timestamp",
+        "prompt_preview", "tool_count", "step_count", "cost",
+    }
 
 
 def test_error_cost_collector_empty():
     out = _ErrorCostCollector().result(interactions=[])
     assert out["total_errors"] == 0
     assert out["estimated_retry_tokens"] == 0
+    assert out["estimated_retry_cost"] == 0.0
     assert out["errors_by_tool"] == {}
     assert out["top_error_commands"] == []
+
+
+def test_error_cost_collector_unresolved_tool_id_drops_bucket():
+    """If a tool_result error references a tool_use_id we never saw (out of
+    scope or corrupt log), we don't invent an 'Unknown' bucket — total_errors
+    still increments but errors_by_tool stays empty for that record."""
+    c = _ErrorCostCollector()
+    err = _tool_result_error_rec(tool_use_id="never-seen")
+    asst = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:02Z",
+        tokens={"input": 0, "output": 100, "cache_creation": 0, "cache_read": 0},
+    )
+    c.ingest(err)
+    c.ingest(asst)
+    ix = _ix(responses=[asst], tool_results=[err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    assert out["errors_by_tool"] == {}
+    assert out["estimated_retry_tokens"] == 100
+    assert out["estimated_retry_cost"] > 0
 
 
 # ── _trends (§1.9) ───────────────────────────────────────────────────────────

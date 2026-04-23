@@ -612,74 +612,157 @@ class _SessionEfficiencyCollector:
 
 
 class _ErrorCostCollector:
-    """§1.8 — total errors, retry-cost estimate, errors-by-tool, top interactions."""
+    """§1.8 — total errors, retry-cost estimate, errors-by-tool, top interactions.
+
+    The retry-cost estimate is *decoupled* from retry-signal detection: every
+    error record is charged the output-token cost of the next assistant message
+    in the same Interaction (or the error record's own output tokens if it is
+    itself an assistant). Errors are expensive whether or not the agent loops.
+
+    Tool attribution works by matching ``tool_use_id`` on error ``tool_result``
+    blocks back to the ``tool_use`` blocks we observed on prior assistant
+    records — tool_result error records themselves have no ``tools`` list.
+    """
 
     def __init__(self) -> None:
         self.total_errors = 0
-        self._errors_by_tool: Counter[str] = Counter()
-        self._err_tokens_by_model: dict[str, Counter[str]] = {}
-        self._err_records_by_model: Counter[str] = Counter()
+        # tool_use_id → tool_name, populated from every assistant record we see
+        # so errors_by_tool can attribute tool_result errors correctly
+        self._tool_id_to_name: dict[str, str] = {}
 
     def ingest(self, r: Record) -> None:
-        if not r.is_error:
-            return
-        self.total_errors += 1
-        for t in r.tools:
-            self._errors_by_tool[t.get("name", "?")] += 1
-        if r.model and r.model != "N/A":
-            self._err_records_by_model[r.model] += 1
-            m = self._err_tokens_by_model.setdefault(r.model, Counter())
-            for k, v in r.tokens.items():
-                m[k] += v
+        if r.kind == "assistant":
+            for t in r.tools:
+                tid = t.get("id")
+                name = t.get("name")
+                if tid and name:
+                    self._tool_id_to_name[tid] = name
+        if r.is_error:
+            self.total_errors += 1
 
     def result(self, interactions: list[Interaction]) -> dict:
-        total_out = sum(m.get("output", 0) for m in self._err_tokens_by_model.values())
-        total_cnt = sum(self._err_records_by_model.values())
-        avg_out = (total_out / total_cnt) if total_cnt else 0.0
-        est_retry_tokens = int(avg_out * self.total_errors)
-
+        errors_by_tool: Counter[str] = Counter()
+        est_retry_tokens = 0
         est_retry_cost = 0.0
-        if total_cnt and est_retry_tokens:
-            for model, cnt in self._err_records_by_model.items():
-                share = cnt / total_cnt
-                tokens = {"input": 0, "output": int(est_retry_tokens * share),
-                          "cache_creation": 0, "cache_read": 0}
-                est_retry_cost += compute_cost(tokens, model)["total_cost"]
+        ranked: list[tuple[int, Interaction]] = []
 
-        # top error-containing interactions (per spec: top 10 by error count)
-        ranked: list[tuple[int, dict]] = []
         for ix in interactions:
-            ec = 0
-            by_model: dict[str, Counter[str]] = {}
-            for r in ix.responses + ix.tool_results:
-                if r.is_error:
-                    ec += 1
-                if r.kind == "assistant" and r.model and r.model != "N/A":
-                    m = by_model.setdefault(r.model, Counter())
-                    for k, v in r.tokens.items():
-                        m[k] += v
-            if ec == 0:
-                continue
-            cost = sum(compute_cost(dict(tok_c), model)["total_cost"] for model, tok_c in by_model.items())
-            ranked.append((ec, {
-                "interaction_id": ix.interaction_id,
-                "session_id": ix.session_id,
-                "timestamp": ix.start_time or "",
-                "prompt_preview": _preview(ix.command.content or "", 200),
-                "tool_count": ix.tool_count,
-                "step_count": ix.assistant_steps,
-                "cost": cost,
-            }))
-        ranked.sort(key=lambda x: x[0], reverse=True)
-        top_error_commands = [entry for _, entry in ranked[:10]]
+            timeline = sorted(
+                ix.responses + ix.tool_results,
+                key=lambda rec: rec.timestamp or "",
+            )
+            err_count = 0
+            for idx, rec in enumerate(timeline):
+                if not rec.is_error:
+                    continue
+                err_count += 1
+                # Tool attribution: match tool_use_id on error tool_result blocks.
+                for name in self._tool_names_for_error(rec):
+                    errors_by_tool[name] += 1
+                # Fallback: if the error record carries its own tool_use blocks
+                # (rare — mainly assistants flagged as errors), count those too.
+                if rec.kind != "user":
+                    for t in rec.tools:
+                        nm = t.get("name")
+                        if nm:
+                            errors_by_tool[nm] += 1
+                # Retry cost: own output tokens if assistant, else next assistant.
+                tokens, model = self._retry_tokens_and_model(rec, timeline, idx)
+                if tokens and model and model != "N/A":
+                    est_retry_tokens += tokens
+                    est_retry_cost += compute_cost(
+                        {"input": 0, "output": tokens,
+                         "cache_creation": 0, "cache_read": 0},
+                        model,
+                    )["total_cost"]
+            if err_count > 0:
+                ranked.append((err_count, ix))
+
+        ranked.sort(key=lambda p: p[0], reverse=True)
+        top_error_commands: list[dict] = [
+            _interaction_to_outlier_command(ix) for _, ix in ranked[:10]
+        ]
 
         return {
             "total_errors": self.total_errors,
             "estimated_retry_tokens": est_retry_tokens,
             "estimated_retry_cost": est_retry_cost,
-            "errors_by_tool": dict(self._errors_by_tool),
+            "errors_by_tool": dict(errors_by_tool),
             "top_error_commands": top_error_commands,
         }
+
+    def _tool_names_for_error(self, r: Record) -> list[str]:
+        """Resolve tool name(s) for an error record by inspecting the raw
+        ``tool_result`` blocks and looking up their ``tool_use_id`` in the
+        accumulated id→name map built from prior assistant tool_use blocks.
+        Returns only tool names that could be resolved — we'd rather drop a
+        noisy "Unknown" bucket than pollute the attribution.
+        """
+        raw = r.raw_data
+        if not isinstance(raw, dict):
+            return []
+        msg = raw.get("message")
+        if not isinstance(msg, dict):
+            return []
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return []
+        names: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_result" or not block.get("is_error"):
+                continue
+            tid = block.get("tool_use_id")
+            if tid and tid in self._tool_id_to_name:
+                names.append(self._tool_id_to_name[tid])
+        return names
+
+    @staticmethod
+    def _retry_tokens_and_model(
+        error_rec: Record,
+        timeline: list[Record],
+        idx: int,
+    ) -> tuple[int, str]:
+        """Return ``(output_tokens, model)`` to charge for this error record.
+
+        If the error is itself an assistant with output tokens, use those and
+        its own model. Otherwise, scan forward in the interaction timeline for
+        the next assistant message and use its output tokens + model.
+        """
+        if error_rec.kind == "assistant":
+            out = int(error_rec.tokens.get("output", 0) or 0)
+            if out and error_rec.model and error_rec.model != "N/A":
+                return out, error_rec.model
+        for j in range(idx + 1, len(timeline)):
+            cand = timeline[j]
+            if cand.kind == "assistant" and cand.model and cand.model != "N/A":
+                return int(cand.tokens.get("output", 0) or 0), cand.model
+        return 0, ""
+
+
+def _interaction_to_outlier_command(ix: Interaction) -> dict:
+    """Render an Interaction as an ``OutlierCommand`` dict (shape shared with
+    ``_OutlierCollector`` and the frontend ``OutlierCommand`` TypedDict)."""
+    by_model: dict[str, Counter[str]] = {}
+    for r in ix.responses + ix.tool_results:
+        if r.kind == "assistant" and r.model and r.model != "N/A":
+            m = by_model.setdefault(r.model, Counter())
+            for k, v in r.tokens.items():
+                m[k] += v
+    cost = sum(
+        compute_cost(dict(tok_c), model)["total_cost"]
+        for model, tok_c in by_model.items()
+    )
+    return {
+        "interaction_id": ix.interaction_id,
+        "session_id": ix.session_id,
+        "timestamp": ix.start_time or "",
+        "prompt_preview": _preview(ix.command.content or "", 200),
+        "tool_count": ix.tool_count,
+        "step_count": ix.assistant_steps,
+        "cost": cost,
+    }
 
 
 def _empty_token_composition() -> dict:
