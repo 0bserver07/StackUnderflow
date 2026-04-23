@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   IconHash,
   IconCurrencyDollar,
@@ -11,7 +12,7 @@ import {
   IconMessage,
   IconCalendar,
 } from '@tabler/icons-react'
-import type { DashboardStats } from '../../types/api'
+import type { DashboardStats, Trends } from '../../types/api'
 import StatsCards from '../analytics/StatsCards'
 import TokenUsageChart from '../charts/TokenUsageChart'
 import DailyCostChart from '../charts/DailyCostChart'
@@ -27,6 +28,7 @@ import ErrorCategoryChart from '../charts/ErrorCategoryChart'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
 import TokenCompositionDonut from '../cost/TokenCompositionDonut'
+import { setTab } from '../../services/navigation'
 
 interface OverviewTabProps {
   stats: DashboardStats
@@ -64,6 +66,38 @@ function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-400' }:
 }
 
 export default function OverviewTab({ stats }: OverviewTabProps) {
+  // Trends moved off /api/dashboard-data into /api/cost-data (spec §A3) — lazy
+  // fetch them in a non-blocking effect so the rest of the overview renders
+  // immediately. `stats.trends` will normally be undefined here; we still seed
+  // from it so an older payload (or a future re-merge) keeps working.
+  const [trends, setTrends] = useState<Trends | null>(stats.trends ?? null)
+
+  useEffect(() => {
+    if (stats.trends) {
+      setTrends(stats.trends)
+      return
+    }
+    let cancelled = false
+    fetch('/api/cost-data')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        // /api/cost-data returns {} for missing trends — treat that as null so
+        // TrendDeltaStrip renders its empty state instead of NaN tiles.
+        const t = data.trends as Trends | undefined
+        if (t && t.current_week && t.prior_week && t.delta_pct) {
+          setTrends(t)
+        }
+      })
+      .catch(() => {
+        // Non-blocking: leave `trends` as null and let the strip show its
+        // empty state. We deliberately don't surface this in the UI.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [stats.trends])
+
   if (!stats?.overview) return null
 
   const tokens = stats.overview.total_tokens ?? { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
@@ -78,6 +112,8 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
   const toolUseMessages = messageTypes['tool_use'] ?? 0
   const toolResultMessages = messageTypes['tool_result'] ?? 0
 
+  // `token_composition` also moved to /api/cost-data; per task brief, prefer
+  // the simpler fallback derived from the still-present overview.total_tokens.
   const tokenTotals = stats.token_composition?.totals ?? {
     input: tokens.input,
     output: tokens.output,
@@ -85,16 +121,28 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
     cache_creation: tokens.cache_creation,
   }
 
+  // Click on any TrendDeltaStrip tile → jump to the Cost tab. The strip also
+  // dispatches a `stackunderflow:filter-window` event independently; the Cost
+  // tab can pick that up to apply a date filter once it lands.
+  const handleTrendTileClick = () => {
+    setTab('cost')
+  }
+
   return (
     <div className="space-y-6">
-      {/* Trend delta strip — full-width top banner (spec §2.4) */}
-      <TrendDeltaStrip trends={stats.trends} />
+      {/* Trend delta strip — full-width top banner (spec §2.4 / C22) */}
+      <TrendDeltaStrip
+        trends={trends}
+        endDate={dateRange.end || undefined}
+        onTileClick={handleTrendTileClick}
+      />
 
       {/* Primary stats from existing StatsCards component */}
       <StatsCards stats={stats} />
 
-      {/* Cache ROI hero card — sits between stats cards and extended grid (spec §2.4) */}
-      <CacheRoiCard cache={stats.cache} />
+      {/* Cache ROI hero card — uses the still-present `cache` field on
+          /api/dashboard-data; daily_stats supplies the ROI sparkline. */}
+      <CacheRoiCard cache={stats.cache} dailyStats={stats.daily_stats} />
 
       {/* Token composition donut replaces the four mini token cards (spec §2.4) */}
       <TokenCompositionDonut totals={tokenTotals} />
