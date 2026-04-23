@@ -2,13 +2,8 @@ import { useCallback, useMemo, useState } from 'react'
 import { IconChevronUp, IconChevronDown } from '@tabler/icons-react'
 import Badge from '../common/Badge'
 import type { SessionEfficiency } from '../../types/api'
+import { openSession } from '../../services/navigation'
 
-// TODO(merge): replace local stubs with imports once primitives land:
-//   import { useSortableTable, SortHeader } from '../../hooks/useSortableTable'
-//   import { openSession } from '../../services/navigation'
-// Both primitives are tracked under §A5 / §A8 of docs/specs/analytics-polish.md
-// and live in sibling worktrees (prim-sort, prim-nav-A8). The local stubs below
-// match their public APIs so the swap is mechanical at merge time.
 type SortDir = 'asc' | 'desc'
 
 interface UseSortableTableResult<T> {
@@ -115,22 +110,6 @@ function SortHeader({
     </th>
   )
 }
-
-function openSession(sessionId: string): void {
-  if (typeof window === 'undefined') return
-  const url = new URL(window.location.href)
-  url.search = ''
-  url.searchParams.set('tab', 'sessions')
-  url.searchParams.set('session', sessionId)
-  const next = `${url.pathname}${url.search}${url.hash}`
-  if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
-    window.history.pushState({}, '', next)
-  }
-  window.dispatchEvent(
-    new CustomEvent('stackunderflow:nav', { detail: { tab: 'sessions', session: sessionId } }),
-  )
-}
-// END TODO(merge) stub block
 
 interface SessionEfficiencyTableProps {
   data: SessionEfficiency[] | null | undefined

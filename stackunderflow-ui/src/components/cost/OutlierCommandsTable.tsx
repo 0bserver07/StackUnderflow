@@ -15,20 +15,7 @@ import {
   IconChevronDown,
 } from '@tabler/icons-react'
 import type { Outliers, OutlierCommand } from '../../types/api'
-
-// -------------------------------------------------------------------------------------
-// Inline primitive fallbacks. The shared versions live at:
-//   - ../../hooks/useSortableTable   (A5)
-//   - ../common/ExpandableRow        (A6)
-//   - ../common/TableFooterAggregates (A7)
-//   - ../../services/navigation      (A8)
-// They may land concurrently. When they are on main, delete the matching block
-// below and switch to the real import.
-// TODO: swap to shared primitive when available (../../hooks/useSortableTable)
-// TODO: swap to shared primitive when available (../common/ExpandableRow)
-// TODO: swap to shared primitive when available (../common/TableFooterAggregates)
-// TODO: swap to shared primitive when available (../../services/navigation)
-// -------------------------------------------------------------------------------------
+import { openInteraction, openSession } from '../../services/navigation'
 
 type SortDir = 'asc' | 'desc'
 
@@ -223,26 +210,6 @@ function median(values: number[]): number {
     return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
   }
   return sorted[mid] ?? 0
-}
-
-// Fallback nav helpers — dispatch the same `stackunderflow:nav` event the shared
-// navigation service uses, so listeners are forward-compatible.
-const NAV_EVENT_FALLBACK = 'stackunderflow:nav'
-function navPush(params: Record<string, string>): void {
-  if (typeof window === 'undefined') return
-  const url = new URL(window.location.href)
-  url.search = ''
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
-  const next = `${url.pathname}${url.search}${url.hash}`
-  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
-  if (next !== current) window.history.pushState({}, '', next)
-  window.dispatchEvent(new CustomEvent(NAV_EVENT_FALLBACK, { detail: params }))
-}
-function fallbackOpenInteraction(id: string): void {
-  navPush({ tab: 'messages', interaction: id })
-}
-function fallbackOpenSession(id: string): void {
-  navPush({ tab: 'sessions', session: id })
 }
 
 // -------------------------------------------------------------------------------------
@@ -494,12 +461,12 @@ export default function OutlierCommandsTable({ outliers, onOpen }: OutlierComman
   const onOpenInteraction = useCallback(
     (id: string) => {
       if (onOpen) onOpen(id)
-      else fallbackOpenInteraction(id)
+      else openInteraction(id)
     },
     [onOpen]
   )
   const onOpenSession = useCallback((id: string) => {
-    fallbackOpenSession(id)
+    openSession(id)
   }, [])
 
   if (!outliers || (highTool.length === 0 && highStep.length === 0)) {

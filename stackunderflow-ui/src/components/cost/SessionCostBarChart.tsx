@@ -10,62 +10,7 @@ import {
   LabelList,
 } from 'recharts'
 import type { SessionCost } from '../../types/api'
-
-// ---------------------------------------------------------------------------
-// Navigation helper — concurrently landing at `services/navigation` (spec §A8).
-// The module may not yet exist in this worktree, so we load it optimistically
-// at runtime and fall back to a local CustomEvent dispatcher otherwise.
-// TODO(c-sesscost): once `services/navigation.ts` merges into this branch,
-// swap this block for `import { openSession } from '../../services/navigation'`.
-// ---------------------------------------------------------------------------
-let navOpenSession: ((sessionId: string) => void) | null = null
-if (typeof window !== 'undefined') {
-  // Path stored in a variable so bundlers don't resolve it statically.
-  const navPath = '../../services/navigation'
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore — optimistic import; module may not exist at build time
-  import(/* @vite-ignore */ navPath)
-    .then((mod: { openSession?: (id: string) => void }) => {
-      if (mod && typeof mod.openSession === 'function') {
-        navOpenSession = mod.openSession
-      }
-    })
-    .catch(() => {
-      /* navigation service not yet available — fallback handles this */
-    })
-}
-
-function fallbackOpenSession(sessionId: string): void {
-  // Minimal shim matching navigation.openSession contract:
-  // update URL + dispatch `stackunderflow:nav` CustomEvent.
-  if (typeof window === 'undefined') return
-  try {
-    const url = new URL(window.location.href)
-    url.search = ''
-    url.searchParams.set('tab', 'sessions')
-    url.searchParams.set('session', sessionId)
-    const next = `${url.pathname}${url.search}${url.hash}`
-    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    if (next !== current) {
-      window.history.pushState({}, '', next)
-    }
-  } catch {
-    /* URL mutation best-effort */
-  }
-  window.dispatchEvent(
-    new CustomEvent('stackunderflow:nav', {
-      detail: { tab: 'sessions', session: sessionId },
-    }),
-  )
-}
-
-function resolveOpenSession(sessionId: string): void {
-  if (navOpenSession) {
-    navOpenSession(sessionId)
-    return
-  }
-  fallbackOpenSession(sessionId)
-}
+import { openSession } from '../../services/navigation'
 
 interface SessionCostBarChartProps {
   data: SessionCost[]
@@ -269,7 +214,7 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
       onSelect(sid)
       return
     }
-    resolveOpenSession(sid)
+    openSession(sid)
   }
 
   return (
