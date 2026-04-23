@@ -9,7 +9,7 @@ function AppLayout() {
   const [chatOpen, setChatOpen] = useState(false)
 
   return (
-    <div className="h-screen w-screen bg-gray-950 flex flex-col">
+    <div className="h-screen w-screen bg-white dark:bg-gray-950 flex flex-col">
       <Header onToggleChat={() => setChatOpen(v => !v)} chatOpen={chatOpen} />
       <main className="flex-1 overflow-auto">
         <Routes>

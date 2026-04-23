@@ -2,23 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom scrollbar styles */
+/* Custom scrollbar styles — light mode defaults, dark overrides via html.dark.
+   Gutter and thumb follow the gray-100 / gray-300 pairing in light mode, and
+   gray-900 / gray-700 in dark mode to match the rest of the UI chrome. */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgb(17 24 39);
+  background: rgb(243 244 246); /* gray-100 */
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(55 65 81);
+  background: rgb(209 213 219); /* gray-300 */
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(75 85 99);
+  background: rgb(156 163 175); /* gray-400 */
+}
+
+html.dark ::-webkit-scrollbar-track {
+  background: rgb(17 24 39); /* gray-900 */
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgb(55 65 81); /* gray-700 */
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgb(75 85 99); /* gray-600 */
 }
 
 /* Code block styling */
@@ -26,23 +40,45 @@ pre code {
   font-family: 'JetBrains Mono', 'Fira Code', 'Monaco', 'Consolas', monospace;
 }
 
-/* Prose overrides for dark mode */
+/* Prose token overrides.
+   `.prose-invert` was originally dark-only; make it theme-aware by providing
+   light defaults and overriding under html.dark. Components using
+   `prose-invert` now render correctly in both modes without needing to
+   toggle class names. */
 .prose-invert {
-  --tw-prose-body: rgb(209 213 219);
-  --tw-prose-headings: rgb(243 244 246);
-  --tw-prose-links: rgb(96 165 250);
-  --tw-prose-bold: rgb(243 244 246);
-  --tw-prose-counters: rgb(156 163 175);
-  --tw-prose-bullets: rgb(107 114 128);
-  --tw-prose-hr: rgb(55 65 81);
-  --tw-prose-quotes: rgb(243 244 246);
-  --tw-prose-quote-borders: rgb(55 65 81);
-  --tw-prose-captions: rgb(156 163 175);
-  --tw-prose-code: rgb(147 197 253);
-  --tw-prose-pre-code: rgb(209 213 219);
-  --tw-prose-pre-bg: rgb(17 24 39);
-  --tw-prose-th-borders: rgb(55 65 81);
-  --tw-prose-td-borders: rgb(31 41 55);
+  --tw-prose-body: rgb(55 65 81);        /* gray-700 */
+  --tw-prose-headings: rgb(17 24 39);    /* gray-900 */
+  --tw-prose-links: rgb(67 56 202);      /* indigo-700 */
+  --tw-prose-bold: rgb(17 24 39);        /* gray-900 */
+  --tw-prose-counters: rgb(107 114 128); /* gray-500 */
+  --tw-prose-bullets: rgb(156 163 175);  /* gray-400 */
+  --tw-prose-hr: rgb(229 231 235);       /* gray-200 */
+  --tw-prose-quotes: rgb(17 24 39);      /* gray-900 */
+  --tw-prose-quote-borders: rgb(229 231 235); /* gray-200 */
+  --tw-prose-captions: rgb(107 114 128); /* gray-500 */
+  --tw-prose-code: rgb(29 78 216);       /* blue-700 */
+  --tw-prose-pre-code: rgb(55 65 81);    /* gray-700 */
+  --tw-prose-pre-bg: rgb(243 244 246);   /* gray-100 */
+  --tw-prose-th-borders: rgb(229 231 235); /* gray-200 */
+  --tw-prose-td-borders: rgb(243 244 246); /* gray-100 */
+}
+
+html.dark .prose-invert {
+  --tw-prose-body: rgb(209 213 219);     /* gray-300 */
+  --tw-prose-headings: rgb(243 244 246); /* gray-100 */
+  --tw-prose-links: rgb(96 165 250);     /* blue-400 */
+  --tw-prose-bold: rgb(243 244 246);     /* gray-100 */
+  --tw-prose-counters: rgb(156 163 175); /* gray-400 */
+  --tw-prose-bullets: rgb(107 114 128);  /* gray-500 */
+  --tw-prose-hr: rgb(55 65 81);          /* gray-700 */
+  --tw-prose-quotes: rgb(243 244 246);   /* gray-100 */
+  --tw-prose-quote-borders: rgb(55 65 81); /* gray-700 */
+  --tw-prose-captions: rgb(156 163 175); /* gray-400 */
+  --tw-prose-code: rgb(147 197 253);     /* blue-300 */
+  --tw-prose-pre-code: rgb(209 213 219); /* gray-300 */
+  --tw-prose-pre-bg: rgb(17 24 39);      /* gray-900 */
+  --tw-prose-th-borders: rgb(55 65 81);  /* gray-700 */
+  --tw-prose-td-borders: rgb(31 41 55);  /* gray-800 */
 }
 
 /* Reset transition for spinner */
