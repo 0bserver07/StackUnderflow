@@ -12,6 +12,7 @@ import stackunderflow.deps as deps
 from stackunderflow.adapters import registered
 from stackunderflow.api.messages import get_messages_summary, get_paginated_messages
 from stackunderflow.ingest import run_ingest
+from stackunderflow.routes.cost import COST_KEYS
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
@@ -86,9 +87,12 @@ async def get_dashboard_data(timezone_offset: int = 0):
         conn.close()
 
     first_page = get_paginated_messages(messages, page=1, per_page=50)
+    # §A3: the heavy analytics sections moved to /api/cost-data. Strip them
+    # from this payload so the initial dashboard load stays under 1 MB.
+    lean_stats = {k: v for k, v in stats.items() if k not in COST_KEYS}
     deps.logger.debug(f"dashboard-data [store] {(time.time()-t0)*1000:.1f}ms")
     return {
-        "statistics": stats,
+        "statistics": lean_stats,
         "messages_page": first_page,
         "message_count": len(messages),
         "is_reindexing": deps.is_reindexing,
