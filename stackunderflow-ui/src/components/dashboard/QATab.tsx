@@ -99,7 +99,7 @@ function QAItem({
         )}
 
         {qa.model && (
-          <span className="text-[10px] text-gray-600 font-mono">{qa.model}</span>
+          <span className="text-[10px] text-gray-400 font-mono">{qa.model}</span>
         )}
 
         <span className="ml-auto">

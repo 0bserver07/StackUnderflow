@@ -188,7 +188,7 @@ export default function TrendDeltaStrip({ trends, endDate, onTileClick }: TrendD
               className="relative group text-left px-4 py-3 cursor-pointer hover:bg-gray-800/40 focus:bg-gray-800/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-600 transition-colors"
             >
               <div className="flex items-center gap-1.5 text-[10px] text-gray-500 uppercase tracking-wider">
-                <span className="text-gray-600">{tile.icon}</span>
+                <span className="text-gray-500">{tile.icon}</span>
                 {tile.label}
               </div>
               <div className="flex items-baseline gap-2 mt-1">

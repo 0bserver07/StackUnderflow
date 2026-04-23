@@ -110,7 +110,7 @@ function SearchResultItem({ result }: { result: SearchResult }) {
             {result.model && result.model !== 'N/A' && (
               <span className="text-[10px] text-gray-500 font-mono">{result.model}</span>
             )}
-            <span className="text-[10px] text-gray-600 font-mono truncate max-w-[180px]">
+            <span className="text-[10px] text-gray-400 font-mono truncate max-w-[180px]">
               {result.session_id}
             </span>
             <TimeAgo timestamp={result.timestamp} />
