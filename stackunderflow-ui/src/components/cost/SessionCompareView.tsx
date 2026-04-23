@@ -203,15 +203,15 @@ export default function SessionCompareView({
   // Empty state: missing one or both ids
   if (!haveBothIds) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-6 border border-gray-800">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-6 border border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2 mb-2">
           <IconArrowsLeftRight size={16} className="text-indigo-400" />
-          <h3 className="text-sm font-medium text-gray-300">Compare sessions</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Compare sessions</h3>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="ml-auto text-gray-500 hover:text-gray-300"
+              className="ml-auto text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
               aria-label="Close compare view"
             >
               <IconX size={14} />
@@ -229,7 +229,7 @@ export default function SessionCompareView({
   const header = (
     <div className="flex items-center gap-2 mb-3">
       <IconArrowsLeftRight size={16} className="text-indigo-400" />
-      <h3 className="text-sm font-medium text-gray-300">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
         Compare sessions
         <span className="ml-2 text-xs text-gray-500 font-normal font-mono">
           {shortSession(sessionAId)} ↔ {shortSession(sessionBId)}
@@ -239,7 +239,7 @@ export default function SessionCompareView({
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto text-gray-500 hover:text-gray-300"
+          className="ml-auto text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
           aria-label="Close compare view"
         >
           <IconX size={14} />
@@ -251,12 +251,12 @@ export default function SessionCompareView({
   // Loading skeleton
   if (loading) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
         {header}
-        <div className="bg-gray-800/30 rounded border border-gray-800 overflow-hidden">
+        <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <th className="px-3 py-2 text-left">Metric</th>
                 <th className="px-3 py-2 text-right">A</th>
                 <th className="px-3 py-2 text-right">B</th>
@@ -265,18 +265,18 @@ export default function SessionCompareView({
             </thead>
             <tbody>
               {ROWS.map((row) => (
-                <tr key={row.key} className="border-b border-gray-800/50 animate-pulse">
+                <tr key={row.key} className="border-b border-gray-200/50 dark:border-gray-800/50 animate-pulse">
                   <td className="px-3 py-2">
-                    <div className="h-3 w-24 bg-gray-700/60 rounded" />
+                    <div className="h-3 w-24 bg-gray-200/80 dark:bg-gray-700/60 rounded" />
                   </td>
                   <td className="px-3 py-2">
-                    <div className="h-3 w-16 bg-gray-700/40 rounded ml-auto" />
+                    <div className="h-3 w-16 bg-gray-200/60 dark:bg-gray-700/40 rounded ml-auto" />
                   </td>
                   <td className="px-3 py-2">
-                    <div className="h-3 w-16 bg-gray-700/40 rounded ml-auto" />
+                    <div className="h-3 w-16 bg-gray-200/60 dark:bg-gray-700/40 rounded ml-auto" />
                   </td>
                   <td className="px-3 py-2">
-                    <div className="h-3 w-12 bg-gray-700/40 rounded ml-auto" />
+                    <div className="h-3 w-12 bg-gray-200/60 dark:bg-gray-700/40 rounded ml-auto" />
                   </td>
                 </tr>
               ))}
@@ -290,7 +290,7 @@ export default function SessionCompareView({
   // Error state
   if (error) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-red-900/60">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-red-900/60">
         {header}
         <div className="bg-red-950/30 border border-red-900/40 rounded p-3 text-xs text-red-200">
           <div className="font-medium mb-1">Failed to load comparison</div>
@@ -309,7 +309,7 @@ export default function SessionCompareView({
 
   if (!data) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
         {header}
         <div className="text-xs text-gray-500 py-6 text-center">No comparison data.</div>
       </div>
@@ -317,13 +317,13 @@ export default function SessionCompareView({
   }
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
       {header}
-      <div className="bg-gray-800/30 rounded border border-gray-800 overflow-hidden">
+      <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <th className="px-3 py-2 text-left">Metric</th>
                 <th className="px-3 py-2 text-right">
                   <span className="font-mono text-indigo-300">A · {shortSession(data.a.session_id)}</span>
@@ -344,12 +344,12 @@ export default function SessionCompareView({
                 const pct = aVal !== 0 ? (delta / Math.abs(aVal)) * 100 : delta === 0 ? 0 : Infinity
                 const color = deltaColor(row.key, delta)
                 return (
-                  <tr key={row.key} className="border-b border-gray-800/50">
-                    <td className="px-3 py-2 text-gray-300">{row.label}</td>
-                    <td className="px-3 py-2 text-right text-gray-200 tabular-nums">
+                  <tr key={row.key} className="border-b border-gray-200/50 dark:border-gray-800/50">
+                    <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{row.label}</td>
+                    <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
                       {formatValue(row.kind, aVal)}
                     </td>
-                    <td className="px-3 py-2 text-right text-gray-200 tabular-nums">
+                    <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
                       {formatValue(row.kind, bVal)}
                     </td>
                     <td className={`px-3 py-2 text-right tabular-nums ${color}`}>

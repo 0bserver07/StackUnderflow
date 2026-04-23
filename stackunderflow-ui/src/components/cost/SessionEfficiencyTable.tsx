@@ -188,10 +188,10 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
   if (!data || data.length === 0) {
     return (
       <div
-        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
         data-testid="session-efficiency-table"
       >
-        <h3 className="text-sm font-medium text-gray-300 mb-3">Session Efficiency</h3>
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Session Efficiency</h3>
         <div className="text-xs text-gray-500 py-8 text-center">No session efficiency data yet</div>
       </div>
     )
@@ -203,10 +203,10 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
 
   return (
     <div
-      className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+      className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
       data-testid="session-efficiency-table"
     >
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
         Session Efficiency
         <span className="ml-2 text-xs text-gray-500 font-normal">
           {filtered.length === rows.length
@@ -238,8 +238,8 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors',
                 active
                   ? 'bg-blue-900/60 text-blue-200 border-blue-700'
-                  : 'bg-gray-800/60 text-gray-400 border-gray-700 hover:bg-gray-800 hover:text-gray-200',
-                disabled ? 'opacity-40 cursor-not-allowed hover:bg-gray-800/60 hover:text-gray-400' : '',
+                  : 'bg-gray-100/80 dark:bg-gray-800/60 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 hover:text-gray-800 dark:hover:text-gray-200',
+                disabled ? 'opacity-40 cursor-not-allowed hover:bg-gray-100/80 dark:hover:bg-gray-800/60 hover:text-gray-600 dark:hover:text-gray-400' : '',
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -251,11 +251,11 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
         })}
       </div>
 
-      <div className="bg-gray-800/30 rounded border border-gray-800 overflow-hidden">
+      <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <SortHeader
                   label="Session"
                   sortKey="session_id"
@@ -341,7 +341,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   return (
                     <tr
                       key={s.session_id}
-                      className="border-b border-gray-800/50 cursor-pointer hover:bg-gray-800/40 focus:bg-gray-800/60 focus:outline-none"
+                      className="border-b border-gray-200/50 dark:border-gray-800/50 cursor-pointer hover:bg-gray-100/60 dark:hover:bg-gray-800/40 focus:bg-gray-100/80 dark:focus:bg-gray-800/60 focus:outline-none"
                       onClick={() => openSession(s.session_id)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -354,28 +354,28 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                       aria-label={`Open session ${s.session_id}`}
                       data-testid={`session-efficiency-row-${s.session_id}`}
                     >
-                      <td className="px-3 py-2 text-gray-300 font-mono text-xs">
+                      <td className="px-3 py-2 text-gray-700 dark:text-gray-300 font-mono text-xs">
                         {shortSession(s.session_id)}
                       </td>
                       <td className="px-3 py-2">
                         <Badge color={color}>{s.classification}</Badge>
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatPct(s.edit_ratio)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatPct(s.read_ratio)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatPct(s.search_ratio)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatPct(s.bash_ratio)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 tabular-nums">
                         {formatDuration(s.idle_gap_total_s)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 tabular-nums">
                         {formatDuration(s.idle_gap_max_s)}
                       </td>
                     </tr>

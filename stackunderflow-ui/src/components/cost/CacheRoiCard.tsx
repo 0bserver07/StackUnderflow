@@ -140,12 +140,12 @@ export default function CacheRoiCard({
   if (!cache || cache.total_created === 0) {
     return (
       <div
-        className="bg-gradient-to-br from-indigo-900/30 to-gray-900/30 rounded-lg p-6 border border-indigo-900/40"
+        className="bg-gradient-to-br from-indigo-900/30 to-gray-50/50 dark:to-gray-900/30 rounded-lg p-6 border border-indigo-900/40"
         data-testid="cache-roi-card"
       >
         <div className="flex items-center gap-2 mb-3">
           <IconDatabase size={18} className="text-indigo-400" />
-          <span className="text-xs text-gray-400 uppercase tracking-wider">Cache ROI</span>
+          <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">Cache ROI</span>
         </div>
         <div className="text-gray-500 text-sm">No cache activity yet</div>
       </div>
@@ -163,12 +163,12 @@ export default function CacheRoiCard({
 
   return (
     <div
-      className="bg-gradient-to-br from-indigo-900/40 to-gray-900/40 rounded-lg p-6 border border-indigo-900/50"
+      className="bg-gradient-to-br from-indigo-900/40 to-gray-50/60 dark:to-gray-900/40 rounded-lg p-6 border border-indigo-900/50"
       data-testid="cache-roi-card"
     >
       <div className="flex items-center gap-2 mb-3">
         <IconDatabase size={18} className="text-indigo-400" />
-        <span className="text-xs text-gray-400 uppercase tracking-wider">Cache ROI</span>
+        <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">Cache ROI</span>
         <div className="flex-1" />
         {breakEven ? (
           <span className="inline-flex items-center gap-1 text-[10px] text-green-300 bg-green-900/40 border border-green-800 rounded-full px-2 py-0.5">
@@ -225,7 +225,7 @@ export default function CacheRoiCard({
       <div className="grid grid-cols-3 gap-4 mt-5 pt-4 border-t border-indigo-900/30">
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Tokens Saved</div>
-          <div className="text-lg font-semibold text-gray-100 mt-0.5">{formatNumber(tokensSaved)}</div>
+          <div className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-0.5">{formatNumber(tokensSaved)}</div>
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Cost Saved</div>
@@ -233,7 +233,7 @@ export default function CacheRoiCard({
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Hit Rate</div>
-          <div className="text-lg font-semibold text-gray-100 mt-0.5">{hitRate.toFixed(1)}%</div>
+          <div className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-0.5">{hitRate.toFixed(1)}%</div>
         </div>
       </div>
 
@@ -257,7 +257,7 @@ export default function CacheRoiCard({
           </button>
           {expanded ? (
             <ul
-              className="mt-3 divide-y divide-indigo-900/20 rounded border border-indigo-900/30 bg-gray-900/40"
+              className="mt-3 divide-y divide-indigo-900/20 rounded border border-indigo-900/30 bg-gray-50/60 dark:bg-gray-900/40"
               data-testid="cache-roi-savers"
             >
               {topSavers.map((s) => (
@@ -268,7 +268,7 @@ export default function CacheRoiCard({
                   <code className="text-indigo-300 font-mono">{shortId(s.session_id)}</code>
                   <div className="flex items-center gap-4 text-right">
                     <div>
-                      <div className="text-gray-100 font-semibold">
+                      <div className="text-gray-900 dark:text-gray-100 font-semibold">
                         {formatNumber(s.tokens_saved)}
                       </div>
                       <div className="text-[10px] text-gray-500 uppercase tracking-wider">

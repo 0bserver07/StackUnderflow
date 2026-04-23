@@ -113,11 +113,11 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
 
   const header = (
     <div className="flex items-center justify-between mb-3 gap-3">
-      <h3 className="text-sm font-medium text-gray-300">{headerTitle}</h3>
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">{headerTitle}</h3>
       <div
         role="tablist"
         aria-label="Sort tools"
-        className="inline-flex items-center rounded-md border border-gray-700 bg-gray-900/60 p-0.5 text-[11px]"
+        className="inline-flex items-center rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-900/60 p-0.5 text-[11px]"
       >
         {SORTS.map((s) => {
           const active = s.key === sortKey
@@ -132,7 +132,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
                 'px-2.5 py-1 rounded transition-colors',
                 active
                   ? 'bg-indigo-500/25 text-indigo-200'
-                  : 'text-gray-400 hover:text-gray-200',
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200',
               ].join(' ')}
             >
               {s.label}
@@ -145,7 +145,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
 
   if (!data || Object.keys(data).length === 0 || !hasData) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
         {header}
         <div className="text-xs text-gray-500 py-8 text-center">No tool cost data yet</div>
       </div>
@@ -180,7 +180,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
   const sortLabelLower = (SORTS.find((s) => s.key === sortKey)?.label ?? 'cost').toLowerCase()
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
       {header}
       <ResponsiveContainer width="100%" height={Math.max(260, chartData.length * 32)}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 20, right: 88 }}>

@@ -48,11 +48,11 @@ function ToolBarList({ rows, maxCount, scrollable = false }: ToolBarListProps) {
         const pct = maxCount > 0 ? (count / maxCount) * 100 : 0
         return (
           <div key={tool} className="flex items-center gap-2 text-xs">
-            <span className="w-24 text-gray-300 truncate" title={tool}>{tool}</span>
-            <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <span className="w-24 text-gray-700 dark:text-gray-300 truncate" title={tool}>{tool}</span>
+            <div className="flex-1 h-1.5 bg-white dark:bg-gray-800 rounded-full overflow-hidden">
               <div className="h-full bg-red-500/70" style={{ width: `${pct}%` }} />
             </div>
-            <span className="text-gray-400 tabular-nums w-10 text-right">{count}</span>
+            <span className="text-gray-600 dark:text-gray-400 tabular-nums w-10 text-right">{count}</span>
           </div>
         )
       })}
@@ -79,13 +79,13 @@ function TopErrorCommandRow({ cmd }: TopErrorCommandRowProps) {
         className="text-gray-500 group-hover:text-red-300 mt-1 flex-shrink-0"
         aria-hidden="true"
       />
-      <span className="flex-1 text-xs text-gray-300 truncate" title={cmd.prompt_preview ?? ''}>
+      <span className="flex-1 text-xs text-gray-700 dark:text-gray-300 truncate" title={cmd.prompt_preview ?? ''}>
         {truncate(cmd.prompt_preview ?? '(no prompt)', 72)}
       </span>
       <span className="text-[10px] text-red-300 tabular-nums whitespace-nowrap">
         {errorCount} err
       </span>
-      <span className="text-[10px] text-gray-400 tabular-nums whitespace-nowrap w-14 text-right">
+      <span className="text-[10px] text-gray-600 dark:text-gray-400 tabular-nums whitespace-nowrap w-14 text-right">
         {formatCost(cost)}
       </span>
     </button>
@@ -98,10 +98,10 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
 
   if (!errorCost || errorCost.total_errors === 0) {
     return (
-      <div className="bg-gradient-to-br from-red-900/20 to-gray-900/30 rounded-lg p-6 border border-red-900/30">
+      <div className="bg-gradient-to-br from-red-900/20 to-gray-50/50 dark:to-gray-900/30 rounded-lg p-6 border border-red-900/30">
         <div className="flex items-center gap-2 mb-3">
           <IconAlertTriangle size={18} className="text-red-400" />
-          <span className="text-xs text-gray-400 uppercase tracking-wider">Error Cost</span>
+          <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">Error Cost</span>
         </div>
         <div className="text-gray-500 text-sm">No errors recorded.</div>
       </div>
@@ -125,10 +125,10 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
   const overflowTopErrors = Math.max(0, topErrorCommands.length - 3)
 
   return (
-    <div className="bg-gradient-to-br from-red-900/30 to-gray-900/40 rounded-lg p-6 border border-red-900/40">
+    <div className="bg-gradient-to-br from-red-900/30 to-gray-50/60 dark:to-gray-900/40 rounded-lg p-6 border border-red-900/40">
       <div className="flex items-center gap-2 mb-3">
         <IconAlertTriangle size={18} className="text-red-400" />
-        <span className="text-xs text-gray-400 uppercase tracking-wider">Error Cost</span>
+        <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">Error Cost</span>
       </div>
 
       {/* Hero — wasted retry $ is the lede; total error count is supporting detail. */}
@@ -136,7 +136,7 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
         <div className="text-4xl font-bold text-red-300 leading-none tabular-nums">
           {formatCost(retryCost)}
         </div>
-        <div className="text-xs text-gray-400 mt-2">
+        <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">
           wasted on{' '}
           <span className="text-red-200 font-medium">{totals.toLocaleString()}</span> error
           {totals === 1 ? '' : 's'} across{' '}

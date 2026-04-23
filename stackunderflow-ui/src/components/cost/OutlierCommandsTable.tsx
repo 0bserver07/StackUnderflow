@@ -161,9 +161,9 @@ function ExpandableRow({
 }: ExpandableRowProps) {
   const rowCls =
     rowClassName ??
-    'border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer focus:outline-none focus:bg-gray-800/50'
+    'border-b border-gray-200/50 dark:border-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer focus:outline-none focus:bg-gray-100/70 dark:focus:bg-gray-800/50'
   const detailCls =
-    detailClassName ?? 'bg-gray-900/60 text-gray-300 px-6 py-3 border-b border-gray-800'
+    detailClassName ?? 'bg-gray-50/80 dark:bg-gray-900/60 text-gray-700 dark:text-gray-300 px-6 py-3 border-b border-gray-200 dark:border-gray-800'
   const handleKeyDown = (e: KeyboardEvent<HTMLTableRowElement>) => {
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
       e.preventDefault()
@@ -289,21 +289,21 @@ function OutlierSection({
 
   return (
     <div data-testid={`${testIdPrefix}-section`}>
-      <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-2">
+      <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 mb-2">
         <span className="text-gray-500">{icon}</span>
         <span className="font-medium uppercase tracking-wider">{title}</span>
         <span className="text-gray-500">({rows.length})</span>
       </div>
       {rows.length === 0 ? (
-        <div className="text-xs text-gray-500 py-4 px-3 bg-gray-800/30 rounded border border-gray-800">
+        <div className="text-xs text-gray-500 py-4 px-3 bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800">
           {empty}
         </div>
       ) : (
-        <div className="bg-gray-800/30 rounded border border-gray-800 overflow-hidden">
+        <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid={`${testIdPrefix}-table`}>
               <thead>
-                <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+                <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                   <th className="w-6 px-2 py-2" aria-hidden="true" />
                   <th className="px-3 py-2 text-left">Prompt</th>
                   <SortHeader
@@ -353,24 +353,24 @@ function OutlierSection({
                             <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">
                               Prompt
                             </div>
-                            <div className="text-sm text-gray-200 whitespace-pre-wrap break-words">
+                            <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words">
                               {r.prompt_preview || (
                                 <span className="text-gray-500 italic">(empty prompt)</span>
                               )}
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-400">
+                          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-600 dark:text-gray-400">
                             <div>
                               <span className="text-gray-500">Tool calls:</span>{' '}
-                              <span className="tabular-nums text-gray-200">{r.tool_count}</span>
+                              <span className="tabular-nums text-gray-800 dark:text-gray-200">{r.tool_count}</span>
                             </div>
                             <div>
                               <span className="text-gray-500">Assistant steps:</span>{' '}
-                              <span className="tabular-nums text-gray-200">{r.step_count}</span>
+                              <span className="tabular-nums text-gray-800 dark:text-gray-200">{r.step_count}</span>
                             </div>
                             <div>
                               <span className="text-gray-500">Cost:</span>{' '}
-                              <span className="tabular-nums text-gray-200">
+                              <span className="tabular-nums text-gray-800 dark:text-gray-200">
                                 {formatCost(r.cost)}
                               </span>
                             </div>
@@ -391,7 +391,7 @@ function OutlierSection({
                         </div>
                       }
                     >
-                      <td className="px-3 py-2 text-gray-200 max-w-md">
+                      <td className="px-3 py-2 text-gray-800 dark:text-gray-200 max-w-md">
                         <span className="truncate block" title={r.prompt_preview}>
                           {r.prompt_preview || (
                             <span className="text-gray-500 italic">(empty prompt)</span>
@@ -401,10 +401,10 @@ function OutlierSection({
                       <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
                         {formatTime(r.timestamp)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-100 font-medium tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100 font-medium tabular-nums">
                         {r[countKey]}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatCost(r.cost)}
                       </td>
                     </ExpandableRow>
@@ -412,12 +412,12 @@ function OutlierSection({
                 })}
               </tbody>
               <tfoot
-                className="border-t border-gray-800 bg-gray-800/40 text-xs"
+                className="border-t border-gray-200 dark:border-gray-800 bg-gray-100/60 dark:bg-gray-800/40 text-xs"
                 data-testid={`${testIdPrefix}-footer`}
               >
                 <tr>
                   <td className="w-6 px-2 py-2" aria-hidden="true" />
-                  <td className="px-3 py-2 font-medium text-gray-400 uppercase tracking-wider">
+                  <td className="px-3 py-2 font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                     {total} {total === 1 ? 'command' : 'commands'}
                     {capped ? (
                       <span className="text-gray-500 normal-case ml-2">
@@ -429,7 +429,7 @@ function OutlierSection({
                   <td className="px-3 py-2 text-right text-gray-500 uppercase tracking-wider">
                     median
                   </td>
-                  <td className="px-3 py-2 text-right text-gray-200 tabular-nums">
+                  <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
                     {formatCost(medianCost)}
                   </td>
                 </tr>
@@ -437,7 +437,7 @@ function OutlierSection({
             </table>
           </div>
           {total > DEFAULT_PAGE_SIZE && (
-            <div className="border-t border-gray-800 px-3 py-2 bg-gray-800/20 text-center">
+            <div className="border-t border-gray-200 dark:border-gray-800 px-3 py-2 bg-gray-100/40 dark:bg-gray-800/20 text-center">
               <button
                 type="button"
                 className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
@@ -472,10 +472,10 @@ export default function OutlierCommandsTable({ outliers, onOpen }: OutlierComman
   if (!outliers || (highTool.length === 0 && highStep.length === 0)) {
     return (
       <div
-        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
         data-testid="outlier-commands-table"
       >
-        <h3 className="text-sm font-medium text-gray-300 mb-3">Outlier Commands</h3>
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Outlier Commands</h3>
         <div className="text-xs text-gray-500 py-8 text-center">
           No outlier commands — nothing exceeded the thresholds.
         </div>
@@ -485,10 +485,10 @@ export default function OutlierCommandsTable({ outliers, onOpen }: OutlierComman
 
   return (
     <div
-      className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+      className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
       data-testid="outlier-commands-table"
     >
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
         Outlier Commands
         <span className="ml-2 text-xs text-gray-500 font-normal">
           tool-count &gt; 20 · step-count &gt; 15
