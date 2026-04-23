@@ -1,4 +1,4 @@
-"""Anthropic model billing.
+"""Anthropic + OpenAI model billing.
 
 Pricing is stored in a flat table indexed by model-family enum values.
 Model IDs are resolved to families by splitting on hyphens and matching
@@ -24,6 +24,17 @@ class _Family(Enum):
     OPUS_3 = auto()
     SONNET_3 = auto()
     HAIKU_3 = auto()
+    # OpenAI Codex variants
+    GPT_5_CODEX = auto()
+    GPT_52_CODEX = auto()
+    GPT_53_CODEX = auto()
+    # OpenAI base GPT families
+    GPT_54 = auto()
+    GPT_5 = auto()
+    GPT_5_MINI = auto()
+    GPT_4O = auto()
+    GPT_4O_MINI = auto()
+    GPT_41 = auto()
 
 
 # (input $/M, output $/M, cache-write $/M, cache-read $/M)
@@ -40,6 +51,18 @@ _RATES: dict[_Family, tuple[float, float, float, float]] = {
     _Family.OPUS_3:    (15.0,  75.0,  18.75, 1.50),
     _Family.SONNET_3:  (3.0,   15.0,  3.75,  0.30),
     _Family.HAIKU_3:   (0.25,  1.25,  0.30,  0.03),
+    # OpenAI — cache-write is 0 because OpenAI does not bill for prompt
+    # cache writes.  Cache-read is ~10% of input for Codex/gpt-5, ~50%
+    # for gpt-4o.  Overlay will correct at runtime if real values differ.
+    _Family.GPT_5_CODEX:  (1.25,  10.0,  0.0,   0.125),
+    _Family.GPT_52_CODEX: (1.25,  10.0,  0.0,   0.125),
+    _Family.GPT_53_CODEX: (1.25,  10.0,  0.0,   0.125),
+    _Family.GPT_54:       (2.50,  20.0,  0.0,   0.25),
+    _Family.GPT_5:        (2.50,  20.0,  0.0,   0.25),
+    _Family.GPT_5_MINI:   (0.25,  2.00,  0.0,   0.025),
+    _Family.GPT_4O:       (2.50,  10.0,  0.0,   1.25),
+    _Family.GPT_4O_MINI:  (0.15,  0.60,  0.0,   0.075),
+    _Family.GPT_41:       (2.50,  10.0,  0.0,   0.625),
 }
 
 _FALLBACK = _Family.SONNET_35
@@ -57,6 +80,35 @@ def _identify(model_id: str) -> _Family:
     has_opus = "opus" in parts
     has_sonnet = "sonnet" in parts
     has_haiku = "haiku" in parts
+
+    # ── OpenAI Codex variants ────────────────────────────────────────────
+    if "codex" in parts:
+        # Disambiguate by version number combination.
+        if "5" in parts and "3" in parts:
+            return _Family.GPT_53_CODEX
+        if "5" in parts and "2" in parts:
+            return _Family.GPT_52_CODEX
+        if "5" in parts:
+            return _Family.GPT_5_CODEX
+        # Unknown codex flavour — best-effort default.
+        return _Family.GPT_5_CODEX
+
+    # ── OpenAI base GPT families ─────────────────────────────────────────
+    if "gpt" in parts:
+        has_mini = "mini" in parts
+        if "5" in parts and "4" in parts:
+            return _Family.GPT_54
+        if "5" in parts:
+            if has_mini:
+                return _Family.GPT_5_MINI
+            return _Family.GPT_5
+        # 4o detection — token may be literal "4o" or split "4" + "o"
+        if "4o" in parts or ("4" in parts and "o" in parts):
+            if has_mini:
+                return _Family.GPT_4O_MINI
+            return _Family.GPT_4O
+        if ("4" in parts and "1" in parts) or "4-1" in parts:
+            return _Family.GPT_41
 
     # version detection by checking for version-specific tokens
     if "6" in parts and "4" in parts:
@@ -164,6 +216,10 @@ _CANONICAL_IDS = [
     "claude-opus-4-20250514", "claude-sonnet-4-20250514",
     "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
+    # OpenAI Codex + base GPT families
+    "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",
+    "gpt-5.4", "gpt-5", "gpt-5-mini",
+    "gpt-4o", "gpt-4o-mini", "gpt-4.1",
 ]
 
 
