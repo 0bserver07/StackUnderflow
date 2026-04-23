@@ -325,7 +325,7 @@ function OutlierSection({
       <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-2">
         <span className="text-gray-500">{icon}</span>
         <span className="font-medium uppercase tracking-wider">{title}</span>
-        <span className="text-gray-600">({rows.length})</span>
+        <span className="text-gray-500">({rows.length})</span>
       </div>
       {rows.length === 0 ? (
         <div className="text-xs text-gray-500 py-4 px-3 bg-gray-800/30 rounded border border-gray-800">

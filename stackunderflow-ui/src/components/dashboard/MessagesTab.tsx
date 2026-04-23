@@ -283,7 +283,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       render: (row) => (
         row.model
           ? <span className="text-gray-400 text-xs font-mono">{row.model}</span>
-          : <span className="text-gray-600 text-xs">-</span>
+          : <span className="text-gray-500 text-xs">-</span>
       ),
     },
     {
@@ -312,7 +312,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
             })}
           </div>
         ) : (
-          <span className="text-gray-600 text-xs">-</span>
+          <span className="text-gray-500 text-xs">-</span>
         )
       ),
     },

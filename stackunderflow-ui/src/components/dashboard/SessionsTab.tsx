@@ -298,13 +298,13 @@ function SessionCard({
             <span className="text-emerald-400/80 font-medium">{fmtCost(file.estimated_cost)}</span>
           )}
           {file.model && (
-            <span className="text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
+            <span className="text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
           )}
-          <span className="text-gray-600">{fmtBytes(file.size)}</span>
+          <span className="text-gray-400">{fmtBytes(file.size)}</span>
         </div>
 
         {/* Dates row */}
-        <div className="flex items-center gap-4 text-[10px] text-gray-600 mt-1.5">
+        <div className="flex items-center gap-4 text-[10px] text-gray-400 mt-1.5">
           <span>Created {fmtTs(file.created)}</span>
           <span>Modified {fmtTs(file.modified)}</span>
         </div>
@@ -400,9 +400,9 @@ function ConversationMessage({
     return sidechainWrapper(
       <div className="border border-gray-800 rounded-lg p-3 bg-gray-900/30">
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-[10px] text-gray-600 font-mono">#{index + 1}</span>
+          <span className="text-[10px] text-gray-500 font-mono">#{index + 1}</span>
           <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
-          {ts && <span className="text-[10px] text-gray-600">{fmtTs(ts)}</span>}
+          {ts && <span className="text-[10px] text-gray-500">{fmtTs(ts)}</span>}
         </div>
         <pre className="text-[11px] text-gray-400 overflow-x-auto whitespace-pre-wrap font-mono bg-gray-950/50 rounded p-2 max-h-96 overflow-y-auto">
           {JSON.stringify(line, null, 2)}
@@ -419,12 +419,12 @@ function ConversationMessage({
         <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
         {model && <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">{model}</span>}
         {tokens && (
-          <span className="text-[10px] text-gray-600">
+          <span className="text-[10px] text-gray-400">
             {tokens.input.toLocaleString()} in / {tokens.output.toLocaleString()} out
           </span>
         )}
         <span className="flex-1" />
-        {ts && <span className="text-[10px] text-gray-600">{fmtTs(ts)}</span>}
+        {ts && <span className="text-[10px] text-gray-400">{fmtTs(ts)}</span>}
       </div>
       {/* Body */}
       <div className="px-4 py-3">

@@ -135,7 +135,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
       render: (row) => (
         row.model
           ? <span className="text-gray-400 text-xs font-mono">{row.model}</span>
-          : <span className="text-gray-600 text-xs">-</span>
+          : <span className="text-gray-500 text-xs">-</span>
       ),
     },
     {
@@ -150,7 +150,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
             ))}
           </div>
         ) : (
-          <span className="text-gray-600 text-xs">-</span>
+          <span className="text-gray-500 text-xs">-</span>
         )
       ),
       sortValue: (row) => row.toolsUsed.length,
@@ -171,7 +171,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
             </span>
           )
         }
-        return <span className="text-gray-600 text-xs">-</span>
+        return <span className="text-gray-500 text-xs">-</span>
       },
     },
   ], [expandedId])
