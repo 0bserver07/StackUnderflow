@@ -3,10 +3,7 @@ import {
   IconCurrencyDollar,
   IconTerminal2,
   IconMessageCircle,
-  IconDatabase,
   IconCpu,
-  IconArrowDownRight,
-  IconArrowUpRight,
   IconClockHour4,
   IconUser,
   IconRobot,
@@ -27,6 +24,9 @@ import CommandToolDistChart from '../charts/CommandToolDistChart'
 import InterruptionRateChart from '../charts/InterruptionRateChart'
 import ErrorRateChart from '../charts/ErrorRateChart'
 import ErrorCategoryChart from '../charts/ErrorCategoryChart'
+import TrendDeltaStrip from '../cost/TrendDeltaStrip'
+import CacheRoiCard from '../cost/CacheRoiCard'
+import TokenCompositionDonut from '../cost/TokenCompositionDonut'
 
 interface OverviewTabProps {
   stats: DashboardStats
@@ -78,37 +78,29 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
   const toolUseMessages = messageTypes['tool_use'] ?? 0
   const toolResultMessages = messageTypes['tool_result'] ?? 0
 
+  const tokenTotals = stats.token_composition?.totals ?? {
+    input: tokens.input,
+    output: tokens.output,
+    cache_read: tokens.cache_read,
+    cache_creation: tokens.cache_creation,
+  }
+
   return (
     <div className="space-y-6">
+      {/* Trend delta strip — full-width top banner (spec §2.4) */}
+      <TrendDeltaStrip trends={stats.trends} />
+
       {/* Primary stats from existing StatsCards component */}
       <StatsCards stats={stats} />
 
+      {/* Cache ROI hero card — sits between stats cards and extended grid (spec §2.4) */}
+      <CacheRoiCard cache={stats.cache} />
+
+      {/* Token composition donut replaces the four mini token cards (spec §2.4) */}
+      <TokenCompositionDonut totals={tokenTotals} />
+
       {/* Extended stat cards grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <MiniStatCard
-          icon={<IconArrowDownRight size={14} />}
-          label="Input Tokens"
-          value={formatNumber(tokens.input)}
-          color="text-indigo-400"
-        />
-        <MiniStatCard
-          icon={<IconArrowUpRight size={14} />}
-          label="Output Tokens"
-          value={formatNumber(tokens.output)}
-          color="text-emerald-400"
-        />
-        <MiniStatCard
-          icon={<IconDatabase size={14} />}
-          label="Cache Read"
-          value={formatNumber(tokens.cache_read)}
-          color="text-amber-400"
-        />
-        <MiniStatCard
-          icon={<IconDatabase size={14} />}
-          label="Cache Creation"
-          value={formatNumber(tokens.cache_creation)}
-          color="text-orange-400"
-        />
         <MiniStatCard
           icon={<IconHash size={14} />}
           label="Total Tokens"

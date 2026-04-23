@@ -17,13 +17,15 @@ import {
   IconChevronRight as IconChevronRightNav,
 } from '@tabler/icons-react'
 import { getJsonlFiles, getJsonlContent } from '../../services/api'
-import type { JsonlFile, JsonlContentResponse } from '../../types/api'
+import type { JsonlFile, JsonlContentResponse, SessionEfficiency } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import Markdown from '../common/Markdown'
+import SessionEfficiencyTable from '../cost/SessionEfficiencyTable'
 
 interface SessionsTabProps {
   projectName: string
+  sessionEfficiency?: SessionEfficiency[]
 }
 
 const PAGE_SIZE = 30
@@ -539,7 +541,7 @@ function SessionViewer({
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
-export default function SessionsTab({ projectName }: SessionsTabProps) {
+export default function SessionsTab({ projectName, sessionEfficiency }: SessionsTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<'modified' | 'created' | 'size'>('modified')
 
@@ -588,6 +590,9 @@ export default function SessionsTab({ projectName }: SessionsTabProps) {
 
   return (
     <div className="space-y-4">
+      {/* Session efficiency table — analytics-expansion spec §2.5 */}
+      <SessionEfficiencyTable data={sessionEfficiency ?? []} />
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm text-gray-400">
           <IconHash size={14} />
