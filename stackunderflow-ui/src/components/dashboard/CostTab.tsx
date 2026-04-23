@@ -157,7 +157,7 @@ function FilterBar({ filter, onRangeChange, onClearSession, onClearTool }: Filte
     { key: 'all', label: 'All time' },
   ]
   return (
-    <div className="flex flex-wrap items-center gap-3 bg-gray-800/40 border border-gray-800 rounded-lg px-3 py-2">
+    <div className="flex flex-wrap items-center gap-3 bg-gray-100/40 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2">
       <div className="flex items-center gap-1.5 text-gray-500">
         <IconFilter size={13} />
         <span className="text-[11px] uppercase tracking-wider">Filter</span>
@@ -171,7 +171,7 @@ function FilterBar({ filter, onRangeChange, onClearSession, onClearTool }: Filte
             className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
               filter.range === r.key
                 ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                : 'text-gray-400 hover:text-gray-200 border border-transparent'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-transparent'
             }`}
           >
             {r.label}
@@ -205,7 +205,7 @@ function FilterBar({ filter, onRangeChange, onClearSession, onClearTool }: Filte
 // ── skeleton ────────────────────────────────────────────────────────────────
 
 function Skeleton() {
-  const row = 'bg-gray-800/40 rounded-lg border border-gray-800 animate-pulse'
+  const row = 'bg-gray-100/40 dark:bg-gray-800/40 rounded-lg border border-gray-200 dark:border-gray-800 animate-pulse'
   return (
     <div className="space-y-6" aria-busy="true" aria-label="Loading cost analytics">
       <div className={`${row} h-20`} />
@@ -243,7 +243,7 @@ function ErrorBanner({ message, onRetry }: ErrorBannerProps) {
       </div>
       <button
         onClick={onRetry}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 hover:bg-gray-700 shrink-0"
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs text-gray-800 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 shrink-0"
       >
         <IconRefresh size={12} /> Retry
       </button>

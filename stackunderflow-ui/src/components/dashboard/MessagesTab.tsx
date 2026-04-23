@@ -258,7 +258,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       key: 'content',
       label: 'Content',
       render: (row) => (
-        <span className="text-gray-300 text-xs truncate block max-w-lg">
+        <span className="text-gray-700 dark:text-gray-300 text-xs truncate block max-w-lg">
           {row.content.length > 150
             ? row.content.slice(0, 150) + '...'
             : row.content}
@@ -270,7 +270,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       label: 'Timestamp',
       width: '160px',
       render: (row) => (
-        <span className="text-gray-400 text-xs whitespace-nowrap">
+        <span className="text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">
           {formatTimestamp(row.timestamp)}
         </span>
       ),
@@ -282,7 +282,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       width: '140px',
       render: (row) => (
         row.model
-          ? <span className="text-gray-400 text-xs font-mono">{row.model}</span>
+          ? <span className="text-gray-600 dark:text-gray-400 text-xs font-mono">{row.model}</span>
           : <span className="text-gray-500 text-xs">-</span>
       ),
     },
@@ -372,7 +372,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       )}
 
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-200">
+        <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
           All Messages
           <span className="ml-2 text-xs text-gray-500 font-normal">
             {isLoading ? (
@@ -387,11 +387,11 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       {/* Filter controls */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-400">Type:</label>
+          <label className="text-xs text-gray-600 dark:text-gray-400">Type:</label>
           <select
             value={typeFilter}
             onChange={e => setTypeFilter(e.target.value as MessageType)}
-            className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-indigo-500"
+            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-700 dark:text-gray-300 focus:outline-none focus:border-indigo-500"
           >
             <option value="all">All ({messages.length})</option>
             <option value="user">user ({typeCounts.user ?? 0})</option>
@@ -401,12 +401,12 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
           </select>
         </div>
 
-        <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={errorsOnly}
             onChange={e => setErrorsOnly(e.target.checked)}
-            className="rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+            className="rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
           />
           Errors only
         </label>
@@ -452,7 +452,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
                 {selectedMessage.type}
               </Badge>
               {selectedMessage.model && (
-                <span className="text-xs text-gray-400 font-mono bg-gray-800 px-2 py-0.5 rounded">
+                <span className="text-xs text-gray-600 dark:text-gray-400 font-mono bg-white dark:bg-gray-800 px-2 py-0.5 rounded">
                   {selectedMessage.model}
                 </span>
               )}
@@ -463,7 +463,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
 
             {/* Session info */}
             <div className="text-xs text-gray-500">
-              Session: <span className="font-mono text-gray-400">{selectedMessage.session_id}</span>
+              Session: <span className="font-mono text-gray-600 dark:text-gray-400">{selectedMessage.session_id}</span>
             </div>
 
             {/* Tokens */}
@@ -485,11 +485,11 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
             )}
 
             {/* Content */}
-            <div className="border-t border-gray-700 pt-3">
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
               {selectedMessage.type === 'assistant' ? (
                 <Markdown content={selectedMessage.content} />
               ) : (
-                <pre className="text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+                <pre className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
                   {selectedMessage.content}
                 </pre>
               )}
@@ -528,7 +528,7 @@ function InteractionPanelView({ panel, pulse, onClose, panelRef }: InteractionPa
           <Badge color="purple" size="sm">interaction</Badge>
           <code className="text-[10px] text-indigo-300 font-mono">{panel.interactionId}</code>
           {panel.kind === 'loading' && (
-            <span className="text-xs text-gray-400 inline-flex items-center gap-1">
+            <span className="text-xs text-gray-600 dark:text-gray-400 inline-flex items-center gap-1">
               <IconLoader2 size={12} className="animate-spin" /> loading…
             </span>
           )}
@@ -541,7 +541,7 @@ function InteractionPanelView({ panel, pulse, onClose, panelRef }: InteractionPa
         </div>
         <button
           onClick={onClose}
-          className="text-gray-500 hover:text-gray-300 p-0.5 rounded"
+          className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-0.5 rounded"
           title="Close"
           aria-label="Close interaction panel"
         >
@@ -576,7 +576,7 @@ function LoadedMessageView({ message }: { message: Message }) {
       <div className="flex items-center gap-2 flex-wrap">
         <Badge color={getTypeColor(message.type)} size="sm">{message.type}</Badge>
         {message.model && (
-          <span className="text-[10px] text-gray-400 font-mono bg-gray-800 px-1.5 py-0.5 rounded">
+          <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded">
             {message.model}
           </span>
         )}
@@ -585,7 +585,7 @@ function LoadedMessageView({ message }: { message: Message }) {
           session {truncateSessionId(message.session_id)}
         </span>
       </div>
-      <pre className="text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-60 overflow-y-auto">
+      <pre className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-60 overflow-y-auto">
         {message.content}
       </pre>
     </div>
@@ -595,7 +595,7 @@ function LoadedMessageView({ message }: { message: Message }) {
 function FetchedInteractionView({ ix }: { ix: InteractionResponse }) {
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap text-[10px] text-gray-400">
+      <div className="flex items-center gap-2 flex-wrap text-[10px] text-gray-600 dark:text-gray-400">
         <span className="font-mono" title={ix.session_id}>session {truncateSessionId(ix.session_id)}</span>
         <span>•</span>
         <span>{formatTimestamp(ix.start_time)}</span>
@@ -614,7 +614,7 @@ function FetchedInteractionView({ ix }: { ix: InteractionResponse }) {
       {/* Command (the user prompt) */}
       <div className="border-l-2 border-indigo-700 pl-2">
         <div className="text-[10px] uppercase tracking-wider text-indigo-300 mb-0.5">command</div>
-        <pre className="text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-40 overflow-y-auto">
+        <pre className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-40 overflow-y-auto">
           {ix.command.content}
         </pre>
       </div>
@@ -625,7 +625,7 @@ function FetchedInteractionView({ ix }: { ix: InteractionResponse }) {
           <div className="text-[10px] uppercase tracking-wider text-green-300 mb-0.5">
             responses ({ix.responses.length})
           </div>
-          <pre className="text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-60 overflow-y-auto">
+          <pre className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-60 overflow-y-auto">
             {ix.responses.map(r => r.content).join('\n\n— —\n\n')}
           </pre>
         </div>
@@ -637,7 +637,7 @@ function FetchedInteractionView({ ix }: { ix: InteractionResponse }) {
           <div className="text-[10px] uppercase tracking-wider text-yellow-300 mb-0.5">
             tool_results ({ix.tool_results.length})
           </div>
-          <pre className="text-gray-400 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-40 overflow-y-auto">
+          <pre className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-40 overflow-y-auto">
             {ix.tool_results.map(r => r.content).join('\n\n— —\n\n')}
           </pre>
         </div>

@@ -52,14 +52,14 @@ interface MiniStatCardProps {
   color?: string
 }
 
-function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-400' }: MiniStatCardProps) {
+function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-600 dark:text-gray-400' }: MiniStatCardProps) {
   return (
-    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-800">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-3 border border-gray-200 dark:border-gray-800">
       <div className="flex items-center gap-1.5 mb-1">
         <span className={color}>{icon}</span>
         <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
       </div>
-      <div className="text-lg font-bold text-gray-100">{value}</div>
+      <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{value}</div>
       {sublabel && <div className="text-[10px] text-gray-500 mt-0.5">{sublabel}</div>}
     </div>
   )
@@ -153,7 +153,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
           icon={<IconHash size={14} />}
           label="Total Tokens"
           value={formatNumber(totalTokens)}
-          color="text-gray-400"
+          color="text-gray-600 dark:text-gray-400"
         />
         <MiniStatCard
           icon={<IconCurrencyDollar size={14} />}
@@ -215,7 +215,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
           label="Date Range"
           value={dateRange.start ? `${dateRange.start.slice(5)}` : 'N/A'}
           sublabel={dateRange.end ? `to ${dateRange.end.slice(5)}` : ''}
-          color="text-gray-400"
+          color="text-gray-600 dark:text-gray-400"
         />
       </div>
 
