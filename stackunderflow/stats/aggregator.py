@@ -462,53 +462,69 @@ class _OutlierCollector:
 
 
 class _RetryCollector:
-    """§1.6 — same tool invoked ≥2x in an interaction with is_error between them."""
+    """§1.6 / polish §A1 — retry signals inside an Interaction.
+
+    A retry fires when the same tool is invoked ≥2 times AND at least one
+    preceding invocation was *followed by an error*. The follow-up error can
+    surface in three places (none of them on the assistant record itself,
+    which is why the v1 detection missed every chimera retry):
+
+    1. The next ``tool_result`` record has ``is_error=True``.
+    2. The next ``tool_result``'s textual content starts with ``"Error"`` or
+       ``"failed"`` (covers stderr-only outputs that the classifier didn't
+       pick up).
+    3. A subsequent assistant message in the same Interaction matches
+       ``INTERRUPT_API`` / ``INTERRUPT_PREFIX``.
+    """
 
     def __init__(self) -> None:
         self._items: list[dict] = []
 
     def ingest_interaction(self, ix: Interaction) -> None:
-        events: list[dict] = []
-        for r in sorted(ix.responses, key=lambda r: r.timestamp or ""):
-            if not r.tools:
-                continue
-            for t in r.tools:
-                events.append({
-                    "name": t.get("name", "?"),
-                    "is_error": r.is_error,
-                    "output_tokens": r.tokens.get("output", 0),
-                })
-        if len(events) < 2:
+        events = sorted(
+            list(ix.responses) + list(ix.tool_results),
+            key=lambda r: r.timestamp or "",
+        )
+        if not events:
             return
 
-        per_tool: dict[str, list[int]] = {}
-        for i, ev in enumerate(events):
-            per_tool.setdefault(ev["name"], []).append(i)
+        # Per-tool: ordered list of failure flags, one per invocation.
+        per_tool_flags: dict[str, list[bool]] = {}
+        per_tool_wasted: dict[str, int] = {}
 
-        for name, indices in per_tool.items():
-            if len(indices) < 2:
+        for i, r in enumerate(events):
+            if r.kind != "assistant" or not r.tools:
                 continue
-            span = events[indices[0]:indices[-1] + 1]
-            if not any(ev["is_error"] for ev in span):
+            failed = _next_record_signals_error(events, i)
+            out_tok = r.tokens.get("output", 0)
+            for t in r.tools:
+                name = t.get("name", "?")
+                per_tool_flags.setdefault(name, []).append(failed)
+                if failed:
+                    per_tool_wasted[name] = per_tool_wasted.get(name, 0) + out_tok
+
+        for name, flags in per_tool_flags.items():
+            if len(flags) < 2:
                 continue
-            # consecutive failures = longest run of is_error invocations of this tool
+            # "at least one *preceding* invocation was followed by an error" —
+            # a retry signal needs a follow-up invocation, so the failure
+            # must occur in any but the last slot.
+            if not any(flags[:-1]):
+                continue
+            # consecutive_failures = longest run of failed invocations of this tool.
             run = max_run = 0
-            for idx in indices:
-                if events[idx]["is_error"]:
+            for f in flags:
+                if f:
                     run += 1
                     if run > max_run:
                         max_run = run
                 else:
                     run = 0
-            # fall back to 1 if the error sits on a neighbouring record but none
-            # of the tool's own invocations was flagged
-            if max_run == 0:
-                max_run = 1
-            wasted_tokens = sum(events[idx]["output_tokens"] for idx in indices if events[idx]["is_error"])
-            wasted_cost = 0.0
-            if ix.model and ix.model != "N/A" and wasted_tokens:
-                wasted_cost = compute_cost(
-                    {"input": 0, "output": wasted_tokens, "cache_creation": 0, "cache_read": 0},
+            wt = per_tool_wasted.get(name, 0)
+            wc = 0.0
+            if ix.model and ix.model != "N/A" and wt:
+                wc = compute_cost(
+                    {"input": 0, "output": wt, "cache_creation": 0, "cache_read": 0},
                     ix.model,
                 )["total_cost"]
             self._items.append({
@@ -517,13 +533,35 @@ class _RetryCollector:
                 "timestamp": ix.start_time or "",
                 "tool": name,
                 "consecutive_failures": max_run,
-                "total_invocations": len(indices),
-                "estimated_wasted_tokens": wasted_tokens,
-                "estimated_wasted_cost": wasted_cost,
+                "total_invocations": len(flags),
+                "estimated_wasted_tokens": wt,
+                "estimated_wasted_cost": wc,
             })
 
     def result(self) -> list[dict]:
         return list(self._items)
+
+
+def _next_record_signals_error(events: list[Record], idx: int) -> bool:
+    """True iff the records following ``events[idx]`` indicate the tool batch
+    just invoked ended in failure. See ``_RetryCollector`` for the full rule."""
+    j = idx + 1
+    while j < len(events):
+        r = events[j]
+        if r.kind == "assistant":
+            txt = r.content or ""
+            if txt.startswith(INTERRUPT_API) or txt.startswith(INTERRUPT_PREFIX):
+                return True
+            # Hit the next assistant turn without seeing an error in between.
+            return False
+        # tool_result record
+        if r.is_error:
+            return True
+        stripped = (r.content or "").lstrip()
+        if stripped.startswith("Error") or stripped.startswith("failed"):
+            return True
+        j += 1
+    return False
 
 
 # Search tool heuristic for §1.7 classification.

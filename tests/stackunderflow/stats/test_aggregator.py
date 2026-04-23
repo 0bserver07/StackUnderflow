@@ -698,40 +698,163 @@ def test_outlier_collector_empty():
     assert r == {"high_tool_commands": [], "high_step_commands": []}
 
 
-# ── _RetryCollector (§1.6) ───────────────────────────────────────────────────
+# ── _RetryCollector (§1.6 / polish §A1) ─────────────────────────────────────
 
-def test_retry_collector_detects_failed_retry():
+def _tr(*, timestamp: str, content: str = "", is_error: bool = False,
+        session_id: str = "s1") -> Record:
+    """Convenience: build a tool_result record (kind='user', has_tool_result=True)."""
+    return _rec(
+        session_id=session_id,
+        kind="user",
+        timestamp=timestamp,
+        model="N/A",
+        content=content,
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        is_error=is_error,
+        has_tool_result=True,
+    )
+
+
+def _asst_with_tool(*, tool: str, timestamp: str, output_tokens: int = 0,
+                    tool_id: str = "t") -> Record:
+    return _rec(
+        kind="assistant", model=_MODEL, timestamp=timestamp,
+        tokens={"input": 0, "output": output_tokens, "cache_creation": 0, "cache_read": 0},
+        tools=[{"name": tool, "id": tool_id, "input": {}}],
+    )
+
+
+def test_retry_collector_legit_retry_chain_via_tool_result_error():
+    """Real chimera pattern: Bash invoked, tool_result.is_error=True, Bash retried."""
     c = _RetryCollector()
-    # Bash invoked 3x, middle call errored with 1000 output tokens
-    r1 = _rec(kind="assistant", model=_MODEL, timestamp="2026-02-01T00:00:00Z",
-              tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
-              tools=[{"name": "Bash", "id": "t1", "input": {}}])
-    r2 = _rec(kind="assistant", model=_MODEL, timestamp="2026-02-01T00:00:10Z",
-              tokens={"input": 0, "output": 1000, "cache_creation": 0, "cache_read": 0},
-              tools=[{"name": "Bash", "id": "t2", "input": {}}], is_error=True)
-    r3 = _rec(kind="assistant", model=_MODEL, timestamp="2026-02-01T00:00:20Z",
-              tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
-              tools=[{"name": "Bash", "id": "t3", "input": {}}])
-    ix = _ix(interaction_id="retry", responses=[r1, r2, r3])
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=300, tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="Exit code 1 boom",
+              is_error=True)
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z",
+                         output_tokens=200, tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    ix = _ix(interaction_id="retry", responses=[a1, a2], tool_results=[tr1, tr2])
     c.ingest_interaction(ix)
     out = c.result()
     assert len(out) == 1
-    s = out[0]
-    assert s["tool"] == "Bash"
-    assert s["total_invocations"] == 3
-    assert s["consecutive_failures"] == 1
-    assert s["estimated_wasted_tokens"] == 1000
-    assert s["estimated_wasted_cost"] > 0
+    sig = out[0]
+    assert sig["tool"] == "Bash"
+    assert sig["total_invocations"] == 2
+    assert sig["consecutive_failures"] == 1
+    # only the first invocation was followed by an error → 300 tokens wasted
+    assert sig["estimated_wasted_tokens"] == 300
+    assert sig["estimated_wasted_cost"] > 0
 
 
-def test_retry_collector_no_error_no_signal():
+def test_retry_collector_single_success_no_signal():
+    """One Bash invocation with successful tool_result → no retry signal."""
     c = _RetryCollector()
-    r1 = _rec(kind="assistant", model=_MODEL,
-              tools=[{"name": "Bash", "id": "t1", "input": {}}])
-    r2 = _rec(kind="assistant", model=_MODEL,
-              tools=[{"name": "Bash", "id": "t2", "input": {}}])
-    c.ingest_interaction(_ix(responses=[r1, r2]))
+    a = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z")
+    tr = _tr(timestamp="2026-02-01T00:00:01Z", content="OK", is_error=False)
+    c.ingest_interaction(_ix(responses=[a], tool_results=[tr]))
     assert c.result() == []
+
+
+def test_retry_collector_retry_after_success_no_signal():
+    """Two clean Bash invocations (no error between) → no retry signal."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="OK")
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    assert c.result() == []
+
+
+def test_retry_collector_text_starts_with_error_counts_as_failure():
+    """Tool result without is_error flag but content starts with 'Error' → retry."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Read", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=50, tool_id="r1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z",
+              content="Error: file not found", is_error=False)
+    a2 = _asst_with_tool(tool="Read", timestamp="2026-02-01T00:00:10Z",
+                         tool_id="r2")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["tool"] == "Read"
+    assert out[0]["estimated_wasted_tokens"] == 50
+
+
+def test_retry_collector_text_starts_with_failed_counts_as_failure():
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z",
+              content="failed: connection refused", is_error=False)
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1]))
+    assert len(c.result()) == 1
+
+
+def test_retry_collector_interrupt_assistant_marks_failure():
+    """Assistant interrupt message (INTERRUPT_API/PREFIX) flags preceding tool as failed."""
+    from stackunderflow.stats.classifier import INTERRUPT_PREFIX
+
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=400, tool_id="b1")
+    interrupt = _rec(
+        kind="assistant", model=_MODEL,
+        timestamp="2026-02-01T00:00:01Z",
+        content=INTERRUPT_PREFIX + " stop",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+    )
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    c.ingest_interaction(_ix(responses=[a1, interrupt, a2]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["tool"] == "Bash"
+    assert out[0]["estimated_wasted_tokens"] == 400
+
+
+def test_retry_collector_first_invocation_failed_last_succeeded():
+    """[failed, succeeded] is the canonical retry shape — must signal."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Edit", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=120, tool_id="e1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="oops", is_error=True)
+    a2 = _asst_with_tool(tool="Edit", timestamp="2026-02-01T00:00:10Z", tool_id="e2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["consecutive_failures"] == 1
+
+
+def test_retry_collector_only_last_invocation_failed_no_signal():
+    """[succeeded, failed] — no preceding invocation failed, so no retry."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="OK")
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="boom", is_error=True)
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    assert c.result() == []
+
+
+def test_retry_collector_distinct_tools_track_separately():
+    c = _RetryCollector()
+    bash1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                            output_tokens=50, tool_id="b1")
+    tr_bash = _tr(timestamp="2026-02-01T00:00:01Z", content="boom", is_error=True)
+    bash2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    grep1 = _asst_with_tool(tool="Grep", timestamp="2026-02-01T00:00:20Z", tool_id="g1")
+    tr_grep = _tr(timestamp="2026-02-01T00:00:21Z", content="OK")
+    c.ingest_interaction(_ix(
+        responses=[bash1, bash2, grep1],
+        tool_results=[tr_bash, tr_grep],
+    ))
+    out = c.result()
+    tools = [s["tool"] for s in out]
+    assert "Bash" in tools
+    assert "Grep" not in tools  # only one Grep invocation
 
 
 def test_retry_collector_empty():
