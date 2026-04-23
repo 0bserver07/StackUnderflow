@@ -8,16 +8,7 @@ import {
 } from '@tabler/icons-react'
 import type { CommandCost } from '../../types/api'
 import Badge from '../common/Badge'
-
-// ---------------------------------------------------------------------------
-// Concurrent-primitive stubs — see docs/specs/analytics-polish.md §B9.
-// These will be replaced with real imports once A5/A7/A8 merge:
-//   - useSortableTable ← ../../hooks/useSortableTable      (prim-sort, A5)
-//   - openInteraction  ← ../../services/navigation         (prim-nav,  A8)
-//   - ExpandableRow    ← ../common/ExpandableRow           (prim-expand, A6)
-//   - TableFooterAggregates ← ../common/TableFooterAggregates (prim-aggr, A7)
-// Stubs below preserve the same call signatures so the swap is mechanical.
-// ---------------------------------------------------------------------------
+import { openInteraction } from '../../services/navigation'
 
 type SortDir = 'asc' | 'desc'
 type SortKey = 'cost' | 'tokens' | 'tools' | 'steps' | 'when'
@@ -118,22 +109,6 @@ function percentile(nums: number[], p: number): number {
   return sorted[idx] ?? 0
 }
 
-// TODO(prim-nav A8): replace with `import { openInteraction } from '../../services/navigation'`
-function openInteractionStub(id: string): void {
-  if (typeof window === 'undefined') return
-  const params = new URLSearchParams(window.location.search)
-  params.set('tab', 'messages')
-  params.set('interaction', id)
-  const url = `${window.location.pathname}?${params.toString()}`
-  window.history.pushState({}, '', url)
-  window.dispatchEvent(
-    new CustomEvent('stackunderflow:nav', {
-      detail: { tab: 'messages', interaction: id },
-    }),
-  )
-}
-
-// TODO(prim-sort A5): replace with `import { useSortableTable } from '../../hooks/useSortableTable'`
 function useSortableTableStub(
   rows: CommandCost[],
   initialKey: SortKey,
@@ -197,7 +172,6 @@ interface ExpandedDetailProps {
   colSpan: number
 }
 
-// TODO(prim-expand A6): replace inline expanded panel with `<ExpandableRow detail={...}/>`.
 function ExpandedDetail({ row, colSpan }: ExpandedDetailProps) {
   return (
     <tr className="border-b border-gray-800/50 bg-gray-900/40" data-testid="ccl-expanded">
@@ -272,7 +246,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
       onOpen(id)
       return
     }
-    openInteractionStub(id)
+    openInteraction(id)
   }, [onOpen])
 
   if (!data || data.length === 0) {
@@ -407,7 +381,6 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                 )
               })}
             </tbody>
-            {/* TODO(prim-aggr A7): replace with <TableFooterAggregates columns={[...]} /> */}
             <tfoot>
               <tr
                 className="border-t border-gray-700 text-gray-300 text-xs bg-gray-800/40"

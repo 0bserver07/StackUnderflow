@@ -1,27 +1,7 @@
 import { useMemo, useState } from 'react'
 import { IconAlertTriangle, IconRefresh } from '@tabler/icons-react'
 import type { RetrySignal } from '../../types/api'
-
-// TODO(c-retry): replace with `import { openInteraction } from '../../services/navigation'`
-// once A8 `prim-nav` lands. Constraint §B19 restricts this commit to a single file, so we
-// stub the behaviour inline — the external API will be identical (takes an interaction_id,
-// pushes a URL, dispatches `stackunderflow:nav`).
-function openInteraction(interactionId: string): void {
-  if (typeof window === 'undefined') return
-  try {
-    const url = new URL(window.location.href)
-    url.searchParams.set('tab', 'messages')
-    url.searchParams.set('interaction', interactionId)
-    window.history.pushState({}, '', url.toString())
-    window.dispatchEvent(
-      new CustomEvent('stackunderflow:nav', {
-        detail: { tab: 'messages', interaction: interactionId },
-      }),
-    )
-  } catch {
-    // Ignore — worst case the click is a no-op until A8 wires real navigation.
-  }
-}
+import { openInteraction } from '../../services/navigation'
 
 interface RetryAlertsPanelProps {
   signals: RetrySignal[] | null | undefined
