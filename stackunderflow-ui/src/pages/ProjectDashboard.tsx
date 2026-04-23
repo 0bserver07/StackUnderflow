@@ -154,7 +154,7 @@ export default function ProjectDashboard() {
     const err = setError || dataError
     return (
       <div className="p-6">
-        <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-400 text-sm">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg p-4 text-red-700 dark:text-red-400 text-sm">
           Failed to load project: {err instanceof Error ? err.message : 'Unknown error'}
         </div>
       </div>
@@ -193,7 +193,7 @@ export default function ProjectDashboard() {
       {/* Dashboard Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-gray-100">{displayName}</h1>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100">{displayName}</h1>
           {stats?.overview?.date_range && (
             <p className="text-xs text-gray-500">
               {stats.overview.date_range.start} — {stats.overview.date_range.end}
@@ -202,12 +202,12 @@ export default function ProjectDashboard() {
         </div>
         <div className="flex items-center gap-2">
           {dashboardData.is_reindexing && (
-            <span className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">Reindexing...</span>
+            <span className="text-xs text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 px-2 py-1 rounded">Reindexing...</span>
           )}
           <button
             onClick={() => refreshMutation.mutate()}
             disabled={refreshMutation.isPending}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 text-gray-300 hover:text-white rounded text-sm border border-gray-700 hover:border-gray-600 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded text-sm border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50"
           >
             <IconRefresh size={14} className={refreshMutation.isPending ? 'animate-spin' : ''} />
             Refresh
@@ -216,7 +216,7 @@ export default function ProjectDashboard() {
       </div>
 
       {/* Tab Bar */}
-      <div className="border-b border-gray-800">
+      <div className="border-b border-gray-200 dark:border-gray-800">
         <nav className="flex gap-0 -mb-px overflow-x-auto" data-testid="dashboard-tabs">
           {TABS.map(tab => {
             const Icon = tab.icon
@@ -228,7 +228,7 @@ export default function ProjectDashboard() {
                 className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 ${
                   activeTab === tab.id
                     ? 'text-indigo-400 border-indigo-400'
-                    : 'text-gray-400 border-transparent hover:text-gray-200 hover:border-gray-600'
+                    : 'text-gray-600 dark:text-gray-400 border-transparent hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600'
                 }`}
               >
                 <Icon size={14} />
