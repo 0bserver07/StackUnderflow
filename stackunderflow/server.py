@@ -19,6 +19,7 @@ import stackunderflow.deps as deps
 # Route modules
 from stackunderflow.routes import (
     bookmarks,
+    commands,
     cost,
     data,
     misc,
@@ -131,6 +132,7 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 app.include_router(projects.router)
 app.include_router(data.router)
 app.include_router(cost.router)
+app.include_router(commands.router)
 app.include_router(sessions.router)
 app.include_router(search.router)
 app.include_router(qa.router)

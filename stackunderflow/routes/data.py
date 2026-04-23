@@ -90,6 +90,16 @@ async def get_dashboard_data(timezone_offset: int = 0):
     # §A3: the heavy analytics sections moved to /api/cost-data. Strip them
     # from this payload so the initial dashboard load stays under 1 MB.
     lean_stats = {k: v for k, v in stats.items() if k not in COST_KEYS}
+    # §D1: user_interactions.command_details is the bulk of the remaining
+    # payload (~1.8 MB on chimera). Drop the per-command array so only the
+    # summary stats — counts, averages, percentages, tool_count_distribution —
+    # survive. The Commands tab now fetches that list paginated from
+    # /api/commands.
+    ui = lean_stats.get("user_interactions")
+    if isinstance(ui, dict):
+        lean_stats["user_interactions"] = {
+            k: v for k, v in ui.items() if k != "command_details"
+        }
     deps.logger.debug(f"dashboard-data [store] {(time.time()-t0)*1000:.1f}ms")
     return {
         "statistics": lean_stats,
