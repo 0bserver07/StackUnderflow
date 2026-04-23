@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   IconRefresh,
@@ -15,6 +15,12 @@ import {
 } from '@tabler/icons-react'
 import { setProjectByDir, getDashboardData, refreshData } from '../services/api'
 import { formatProjectName, getNameMode } from '../services/nameMode'
+import {
+  NAV_EVENT,
+  getTabFromURL,
+  getParam,
+  setTab as navSetTab,
+} from '../services/navigation'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
 import OverviewTab from '../components/dashboard/OverviewTab'
@@ -41,13 +47,26 @@ const TABS = [
 
 type TabId = typeof TABS[number]['id']
 
+const TAB_IDS = TABS.map(t => t.id) as readonly string[]
+
+function isValidTab(value: string | null): value is TabId {
+  return !!value && TAB_IDS.includes(value)
+}
+
+function resolveInitialTab(): TabId {
+  const fromUrl = getTabFromURL()
+  return isValidTab(fromUrl) ? fromUrl : 'overview'
+}
+
 export default function ProjectDashboard() {
   const { name } = useParams<{ name: string }>()
-  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
 
-  const tabParam = searchParams.get('tab') as TabId | null
-  const [activeTab, setActiveTab] = useState<TabId>(tabParam && TABS.some(t => t.id === tabParam) ? tabParam : 'overview')
+  // Initial tab comes from `?tab=` if present and valid.
+  const [activeTab, setActiveTab] = useState<TabId>(resolveInitialTab)
+  // `urlTick` bumps whenever the URL changes via NAV_EVENT or popstate so
+  // children that read URL params (Search query, etc.) re-render in step.
+  const [urlTick, setUrlTick] = useState(0)
 
   // Set project on backend
   const { isLoading: settingProject, error: setError } = useQuery({
@@ -71,23 +90,60 @@ export default function ProjectDashboard() {
     },
   })
 
-  const handleTabChange = (tab: TabId) => {
+  // User clicked a tab in the bar: swap state + rewrite URL via
+  // `history.replaceState` so other params (session=, interaction=, q=)
+  // are preserved and we don't pollute the back/forward stack.
+  const handleTabChange = useCallback((tab: TabId) => {
     setActiveTab(tab)
-    const params = new URLSearchParams(searchParams)
-    if (tab === 'overview') {
-      params.delete('tab')
-    } else {
-      params.set('tab', tab)
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', tab)
+    const next = `${url.pathname}${url.search}${url.hash}`
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (next !== current) {
+      window.history.replaceState({}, '', next)
     }
-    setSearchParams(params, { replace: true })
-  }
+  }, [])
 
-  // Sync tab from URL on mount
+  // Programmatic API for child components / external callers that prefer
+  // the navigation service. Keeps `activeTab` in sync if the listeners
+  // somehow miss the round-trip event.
+  const switchTabProgrammatically = useCallback(
+    (tab: TabId, extra?: Record<string, string>) => {
+      setActiveTab(tab)
+      navSetTab(tab, extra)
+    },
+    [],
+  )
+  // Surface on window for ad-hoc cross-tab triggers (debug + e2e hooks).
   useEffect(() => {
-    if (tabParam && TABS.some(t => t.id === tabParam)) {
-      setActiveTab(tabParam)
+    if (typeof window === 'undefined') return
+    ;(window as unknown as { __suSwitchTab?: typeof switchTabProgrammatically }).__suSwitchTab =
+      switchTabProgrammatically
+    return () => {
+      delete (window as unknown as { __suSwitchTab?: typeof switchTabProgrammatically }).__suSwitchTab
     }
-  }, [tabParam])
+  }, [switchTabProgrammatically])
+
+  // Listen to NAV_EVENT (fired by openInteraction / openSession / setTab in
+  // ../services/navigation) and to the browser's popstate so back/forward
+  // and deep-link nav both update the active tab without a full reload.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const sync = () => {
+      const next = getTabFromURL()
+      if (isValidTab(next)) {
+        setActiveTab(prev => (prev === next ? prev : next))
+      }
+      setUrlTick(t => t + 1)
+    }
+    window.addEventListener(NAV_EVENT, sync as EventListener)
+    window.addEventListener('popstate', sync)
+    return () => {
+      window.removeEventListener(NAV_EVENT, sync as EventListener)
+      window.removeEventListener('popstate', sync)
+    }
+  }, [])
 
   const displayName = name ? formatProjectName(name, undefined, getNameMode()) : ''
 
@@ -105,6 +161,9 @@ export default function ProjectDashboard() {
   if (!dashboardData) return <EmptyState title="No data" description="No dashboard data available" />
 
   const stats = dashboardData.statistics
+  // Re-read on every render so URL changes captured via `urlTick` propagate.
+  void urlTick
+  const initialSearchQuery = getParam('q') ?? ''
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-4 space-y-4">
@@ -135,7 +194,7 @@ export default function ProjectDashboard() {
 
       {/* Tab Bar */}
       <div className="border-b border-gray-800">
-        <nav className="flex gap-0 -mb-px overflow-x-auto">
+        <nav className="flex gap-0 -mb-px overflow-x-auto" data-testid="dashboard-tabs">
           {TABS.map(tab => {
             const Icon = tab.icon
             return (
@@ -163,7 +222,7 @@ export default function ProjectDashboard() {
         {activeTab === 'cost' && <CostTab stats={stats} />}
         {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
         {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
-        {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={searchParams.get('q') ?? ''} />}
+        {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
         {activeTab === 'qa' && <QATab projectName={name!} />}
         {activeTab === 'bookmarks' && <BookmarksTab />}
         {activeTab === 'tags' && <TagsTab />}
