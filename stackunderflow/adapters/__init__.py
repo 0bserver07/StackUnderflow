@@ -1,8 +1,8 @@
 """Source adapters for session data.
 
 Each adapter turns a specific tool's on-disk session format (Claude Code's
-JSONL, Codex's SQLite, etc.) into a stream of normalised `Record`s. The
-ingest layer drives adapters; route handlers and reports only ever see
+JSONL, Codex's rollout JSONL, etc.) into a stream of normalised `Record`s.
+The ingest layer drives adapters; route handlers and reports only ever see
 store rows.
 """
 
@@ -24,5 +24,7 @@ def registered() -> list[SourceAdapter]:
 
 
 from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
+from .codex import CodexAdapter as _CodexAdapter  # noqa: E402
 
 register(_ClaudeAdapter())
+register(_CodexAdapter())

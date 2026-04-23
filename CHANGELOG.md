@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **OpenAI Codex adapter** (`stackunderflow/adapters/codex.py`). Walks
+  `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, validates each file's
+  `session_meta` header (originator must start with `codex`), and streams
+  records through the same store pipeline Claude Code uses. Projects are
+  keyed off `session_meta.payload.cwd` using Claude's slug convention so
+  a single project spanning both tools lands under one display name.
+- **Token normalisation for OpenAI billing semantics.** Codex embeds cached
+  tokens inside `input_tokens` (OpenAI convention); Anthropic keeps them
+  separate. The adapter strips cached tokens out of `input_tokens`, adds
+  reasoning tokens onto `output_tokens`, and writes `cache_read_tokens`
+  independently so the cost math matches. Without this the numbers are
+  off by ~2x for any session with a large cached prefix.
+- **Tool-name mapping.** Codex function-call names are normalised to the
+  same verbs Claude uses: `exec_command → Bash`, `read_file → Read`,
+  `write_file`/`apply_diff`/`apply_patch → Edit`, `read_dir → Glob`,
+  `spawn_agent`/`wait_agent`/`close_agent → Agent`. Unknown names pass
+  through unchanged.
+- **OpenAI / Codex pricing** in `stackunderflow/infra/costs.py`: new
+  `_Family` members for `gpt-5`, `gpt-5-mini`, `gpt-5-codex`,
+  `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-4o`, `gpt-4o-mini`,
+  `gpt-4.1`, with cache-write always at `$0` (OpenAI doesn't bill for
+  prompt-cache writes). The LiteLLM overlay still updates live rates
+  at runtime if they drift.
+- **Adapter registration** in `stackunderflow/adapters/__init__.py`:
+  Codex now registers alongside Claude. `stackunderflow reindex` picks up
+  both without further changes; routes and reports stay provider-agnostic
+  because they read only from the store.
+- **10 new tests** in `tests/stackunderflow/adapters/test_codex.py` with a
+  committed fixture at `tests/mock-data/codex-sessions/2026/04/19/rollout-*.jsonl`.
+  Cover enumerate/validate, project slugging, message + tool records,
+  token-count attachment, malformed-line tolerance, monotonic seq, and
+  `since_offset` resume. Suite total: 350 passed, 2 skipped.
+
 ## [0.3.0] - 2026-04-19
 
 ### Added
