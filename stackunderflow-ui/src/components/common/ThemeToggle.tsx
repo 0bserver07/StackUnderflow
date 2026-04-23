@@ -18,8 +18,8 @@ export default function ThemeToggle({ className }: ThemeToggleProps) {
   const label = `Switch to ${nextTheme} mode`
 
   const baseClass =
-    'inline-flex items-center justify-center rounded-md p-1.5 text-gray-400 ' +
-    'hover:bg-gray-800 hover:text-gray-100 focus:outline-none focus-visible:ring-2 ' +
+    'inline-flex items-center justify-center rounded-md p-1.5 text-gray-600 dark:text-gray-400 ' +
+    'hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-100 focus:outline-none focus-visible:ring-2 ' +
     'focus-visible:ring-blue-500 transition-colors'
   const mergedClass = className ? `${baseClass} ${className}` : baseClass
 

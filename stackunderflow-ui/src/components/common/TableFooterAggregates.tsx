@@ -125,7 +125,7 @@ export default function TableFooterAggregates({
   }
 
   const rootClass = [
-    'border-t border-gray-800 bg-gray-800/40 text-xs',
+    'border-t border-gray-200 dark:border-gray-800 bg-gray-100/60 dark:bg-gray-800/40 text-xs',
     className ?? '',
   ]
     .filter(Boolean)
@@ -140,7 +140,7 @@ export default function TableFooterAggregates({
         <tr key={kind} data-testid={`aggregate-row-${kind}`}>
           {/* Leftmost cell: aggregate label. */}
           <td
-            className={`px-4 py-2 font-medium text-gray-400 uppercase tracking-wider ${firstAlignCls}`}
+            className={`px-4 py-2 font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wider ${firstAlignCls}`}
           >
             {firstCol?.label ?? AGGREGATE_LABELS[kind]}
           </td>
@@ -176,7 +176,7 @@ export default function TableFooterAggregates({
             return (
               <td
                 key={keyBase}
-                className={`px-4 py-2 text-gray-200 tabular-nums ${alignCls}`}
+                className={`px-4 py-2 text-gray-800 dark:text-gray-200 tabular-nums ${alignCls}`}
               >
                 {formatted}
               </td>

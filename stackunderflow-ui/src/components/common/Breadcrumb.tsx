@@ -30,7 +30,7 @@ export function Breadcrumb({ trail }: BreadcrumbProps) {
   if (trail.length === 0) return null
 
   return (
-    <nav aria-label="Breadcrumb" className="flex items-center text-xs text-gray-400">
+    <nav aria-label="Breadcrumb" className="flex items-center text-xs text-gray-600 dark:text-gray-400">
       <ol className="flex items-center flex-wrap gap-1">
         {trail.map((segment, idx) => {
           const isLast = idx === trail.length - 1
@@ -42,13 +42,13 @@ export function Breadcrumb({ trail }: BreadcrumbProps) {
                   <button
                     type="button"
                     onClick={segment.onClick}
-                    className="text-gray-400 hover:text-indigo-400 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 rounded px-0.5"
+                    className="text-gray-600 dark:text-gray-400 hover:text-indigo-400 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 rounded px-0.5"
                   >
                     {segment.label}
                   </button>
                 ) : (
                   <span
-                    className={isLast ? 'text-gray-200 font-medium' : 'text-gray-400'}
+                    className={isLast ? 'text-gray-800 dark:text-gray-200 font-medium' : 'text-gray-600 dark:text-gray-400'}
                     aria-current={isLast ? 'page' : undefined}
                   >
                     {segment.label}
@@ -56,7 +56,7 @@ export function Breadcrumb({ trail }: BreadcrumbProps) {
                 )}
               </li>
               {!isLast && (
-                <li aria-hidden="true" className="flex items-center text-gray-600">
+                <li aria-hidden="true" className="flex items-center text-gray-400 dark:text-gray-600">
                   <IconChevronRight size={12} />
                 </li>
               )}
@@ -78,7 +78,7 @@ export function BackButton() {
           window.history.back()
         }
       }}
-      className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-600 rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400"
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400"
     >
       <IconArrowLeft size={12} />
       Back
