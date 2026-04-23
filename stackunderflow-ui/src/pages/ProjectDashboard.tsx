@@ -19,10 +19,12 @@ import {
   NAV_EVENT,
   getTabFromURL,
   getParam,
+  clearParam,
   setTab as navSetTab,
 } from '../services/navigation'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
+import { Breadcrumb, BackButton } from '../components/common/Breadcrumb'
 import OverviewTab from '../components/dashboard/OverviewTab'
 import CommandsTab from '../components/dashboard/CommandsTab'
 import MessagesTab from '../components/dashboard/MessagesTab'
@@ -165,6 +167,27 @@ export default function ProjectDashboard() {
   void urlTick
   const initialSearchQuery = getParam('q') ?? ''
 
+  // Deep-link awareness: when ?session= or ?interaction= is active, surface a
+  // breadcrumb (with BackButton) between the tab bar and the tab content.
+  // Clicking the tab segment clears the deep-link params and returns the user
+  // to the bare tab; keeps the tab bar as the primary nav, avoids clutter
+  // when no detail view is active.
+  const activeSessionParam = getParam('session')
+  const activeInteractionParam = getParam('interaction')
+  const activeTabLabel = TABS.find(t => t.id === activeTab)?.label ?? activeTab
+  let breadcrumbTrail: Array<{ label: string; onClick?: () => void }> | null = null
+  if (activeSessionParam) {
+    breadcrumbTrail = [
+      { label: activeTabLabel, onClick: () => clearParam('session') },
+      { label: `Session · ${activeSessionParam}` },
+    ]
+  } else if (activeInteractionParam) {
+    breadcrumbTrail = [
+      { label: activeTabLabel, onClick: () => clearParam('interaction') },
+      { label: `Interaction · ${activeInteractionParam}` },
+    ]
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-6 py-4 space-y-4">
       {/* Dashboard Header */}
@@ -215,6 +238,15 @@ export default function ProjectDashboard() {
           })}
         </nav>
       </div>
+
+      {/* Breadcrumb strip — shown only when a deep-link param is active, to
+          avoid clutter on the main tab views. */}
+      {breadcrumbTrail && (
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <Breadcrumb trail={breadcrumbTrail} />
+        </div>
+      )}
 
       {/* Tab Content */}
       <div>
