@@ -5,6 +5,24 @@ import App from './App'
 import ErrorBoundary from './components/common/ErrorBoundary'
 import './index.css'
 
+// Apply the persisted theme class before React's first paint so there is no
+// flash of the wrong theme. Must stay in sync with the constants in
+// `hooks/useTheme.ts`.
+;(function applyInitialTheme() {
+  try {
+    const stored = window.localStorage.getItem('suf:theme')
+    const theme = stored === 'light' ? 'light' : 'dark'
+    if (theme === 'light') {
+      document.documentElement.classList.remove('dark')
+    } else {
+      document.documentElement.classList.add('dark')
+    }
+  } catch {
+    // localStorage unavailable — fall back to the default (dark).
+    document.documentElement.classList.add('dark')
+  }
+})()
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
