@@ -118,10 +118,10 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
   if (!totals || grandTotal === 0) {
     return (
       <div
-        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
         data-testid="token-composition-donut-empty"
       >
-        <h3 className="text-sm font-medium text-gray-300 mb-3">Token Composition</h3>
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Token Composition</h3>
         <div className="text-xs text-gray-500 py-8 text-center">No token data yet</div>
       </div>
     )
@@ -138,10 +138,10 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
 
   return (
     <div
-      className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+      className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
       data-testid="token-composition-donut"
     >
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
         Token Composition
         <span className="ml-2 text-xs text-gray-500 font-normal">
           {formatTokens(grandTotal)} total
@@ -253,8 +253,8 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
                           className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0"
                           style={{ backgroundColor: entry.color ?? datum.color }}
                         />
-                        <span className="text-gray-400">{datum.label}</span>
-                        <span className="text-gray-200 font-medium tabular-nums">
+                        <span className="text-gray-600 dark:text-gray-400">{datum.label}</span>
+                        <span className="text-gray-800 dark:text-gray-200 font-medium tabular-nums">
                           {formatTokens(datum.value)}
                         </span>
                         <span className="text-gray-500 tabular-nums">

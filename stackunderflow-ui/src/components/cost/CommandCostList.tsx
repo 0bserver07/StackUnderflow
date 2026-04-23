@@ -151,7 +151,7 @@ function SortHeader({ label, sortKey, activeKey, dir, onSort, align = 'right', c
   return (
     <th
       scope="col"
-      className={`px-3 py-2 cursor-pointer select-none hover:text-gray-200 ${align === 'right' ? 'text-right' : 'text-left'} ${className ?? ''}`}
+      className={`px-3 py-2 cursor-pointer select-none hover:text-gray-800 dark:hover:text-gray-200 ${align === 'right' ? 'text-right' : 'text-left'} ${className ?? ''}`}
       onClick={() => onSort(sortKey)}
       aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
       data-testid={`ccl-sort-${sortKey}`}
@@ -174,12 +174,12 @@ interface ExpandedDetailProps {
 
 function ExpandedDetail({ row, colSpan }: ExpandedDetailProps) {
   return (
-    <tr className="border-b border-gray-800/50 bg-gray-900/40" data-testid="ccl-expanded">
+    <tr className="border-b border-gray-200/50 dark:border-gray-800/50 bg-gray-50/60 dark:bg-gray-900/40" data-testid="ccl-expanded">
       <td colSpan={colSpan} className="px-3 py-3">
         <div className="space-y-2">
           <div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Prompt</div>
-            <div className="text-sm text-gray-200 whitespace-pre-wrap break-words">
+            <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words">
               {row.prompt_preview || <span className="text-gray-500 italic">(empty prompt)</span>}
             </div>
           </div>
@@ -252,10 +252,10 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
   if (!data || data.length === 0) {
     return (
       <div
-        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
         data-testid="ccl-root-empty"
       >
-        <h3 className="text-sm font-medium text-gray-300 mb-3">Most Expensive Commands</h3>
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Most Expensive Commands</h3>
         <div className="text-xs text-gray-500 py-8 text-center">No command cost data yet</div>
       </div>
     )
@@ -265,21 +265,21 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
 
   return (
     <div
-      className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+      className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
       data-testid="ccl-root"
     >
       <div className="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
-        <h3 className="text-sm font-medium text-gray-300">Most Expensive Commands</h3>
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Most Expensive Commands</h3>
         <div className="text-xs text-gray-500" data-testid="ccl-caption">
           showing {sorted.length} of {rows.length}, sorted by {SORT_LABELS[sortKey]} ({sortDir})
         </div>
       </div>
 
-      <div className="bg-gray-800/30 rounded border border-gray-800 overflow-hidden">
+      <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <th scope="col" className="w-8" aria-label="expand" />
                 <th scope="col" className="px-3 py-2 text-left">Prompt</th>
                 <SortHeader
@@ -313,7 +313,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                 return (
                   <Fragment key={r.interaction_id}>
                     <tr
-                      className="border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer"
+                      className="border-b border-gray-200/50 dark:border-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer"
                       onClick={() => handleRowClick(r.interaction_id)}
                       data-testid="ccl-row"
                     >
@@ -331,7 +331,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                               toggleExpand(r.interaction_id)
                             }
                           }}
-                          className="p-0.5 rounded hover:text-gray-200 hover:bg-gray-700/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          className="p-0.5 rounded hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200/70 dark:hover:bg-gray-700/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                           aria-expanded={isOpen}
                           aria-label={isOpen ? 'Collapse row' : 'Expand row'}
                           data-testid="ccl-expand-toggle"
@@ -342,7 +342,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                           }
                         </button>
                       </td>
-                      <td className="px-3 py-2 text-gray-200 max-w-md">
+                      <td className="px-3 py-2 text-gray-800 dark:text-gray-200 max-w-md">
                         <div className="flex items-start gap-1.5">
                           {r.had_error && (
                             <IconAlertTriangle
@@ -360,19 +360,19 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                       <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
                         {formatTime(r.timestamp)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-100 font-medium tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100 font-medium tabular-nums">
                         {formatCost(r.cost)}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-500 tabular-nums text-xs">
                         {pctOfTotal >= 0.1 ? `${pctOfTotal.toFixed(1)}%` : '—'}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {formatTokenCount(tokens)}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {r.tools_used}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">
+                      <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {r.steps}
                       </td>
                     </tr>
@@ -383,7 +383,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
             </tbody>
             <tfoot>
               <tr
-                className="border-t border-gray-700 text-gray-300 text-xs bg-gray-800/40"
+                className="border-t border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs bg-gray-100/60 dark:bg-gray-800/40"
                 data-testid="ccl-footer"
               >
                 <td colSpan={3} className="px-3 py-2 text-left uppercase tracking-wider text-gray-500">
@@ -395,7 +395,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                 <td className="px-3 py-2 text-right text-gray-500 tabular-nums">100%</td>
                 <td
                   colSpan={3}
-                  className="px-3 py-2 text-right text-gray-400 tabular-nums text-[11px]"
+                  className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 tabular-nums text-[11px]"
                 >
                   median {formatCost(costStats.median)} · p95 {formatCost(costStats.p95)}
                 </td>

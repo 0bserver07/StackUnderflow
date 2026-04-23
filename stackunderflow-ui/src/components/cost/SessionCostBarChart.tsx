@@ -180,8 +180,8 @@ function SessionTooltip({
 export default function SessionCostBarChart({ data, onSelect }: SessionCostBarChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-        <h3 className="text-sm font-medium text-gray-300 mb-3">Top Sessions by Cost</h3>
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Top Sessions by Cost</h3>
         <div className="text-xs text-gray-500 py-8 text-center">No session cost data yet</div>
       </div>
     )
@@ -218,8 +218,8 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
   }
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
         Top Sessions by Cost
         <span className="ml-2 text-xs text-gray-500 font-normal">top {chartData.length}</span>
       </h3>

@@ -140,7 +140,7 @@ export default function TrendDeltaStrip({ trends, endDate, onTileClick }: TrendD
     return (
       <div
         data-testid="trend-delta-strip-empty"
-        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800"
       >
         <div className="text-xs text-gray-500">No trend data yet — need at least two weeks of activity.</div>
       </div>
@@ -165,9 +165,9 @@ export default function TrendDeltaStrip({ trends, endDate, onTileClick }: TrendD
   return (
     <div
       data-testid="trend-delta-strip"
-      className="bg-gray-800/50 rounded-lg border border-gray-800"
+      className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-800"
     >
-      <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-800">
+      <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-200 dark:divide-gray-800">
         {TILES.map((tile) => {
           const current = current_week[tile.key] ?? 0
           const prior = prior_week[tile.key] ?? 0
@@ -185,14 +185,14 @@ export default function TrendDeltaStrip({ trends, endDate, onTileClick }: TrendD
               onClick={() => handleActivate(tile.key)}
               title={titleText}
               aria-label={`${tile.label}, current ${tile.format(current)}, prior ${tile.format(prior)}. Click to filter to current week.`}
-              className="relative group text-left px-4 py-3 cursor-pointer hover:bg-gray-800/40 focus:bg-gray-800/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-600 transition-colors"
+              className="relative group text-left px-4 py-3 cursor-pointer hover:bg-gray-100/60 dark:hover:bg-gray-800/40 focus:bg-gray-100/60 dark:focus:bg-gray-800/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400 dark:focus-visible:ring-gray-600 transition-colors"
             >
               <div className="flex items-center gap-1.5 text-[10px] text-gray-500 uppercase tracking-wider">
                 <span className="text-gray-500">{tile.icon}</span>
                 {tile.label}
               </div>
               <div className="flex items-baseline gap-2 mt-1">
-                <span className="text-xl font-semibold text-gray-100 tabular-nums">
+                <span className="text-xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
                   {tile.format(current)}
                 </span>
                 <span className={`inline-flex items-center gap-0.5 text-xs font-medium tabular-nums ${deltaColor(delta, tile.riseIsBad)}`}>
@@ -209,19 +209,19 @@ export default function TrendDeltaStrip({ trends, endDate, onTileClick }: TrendD
                 data-testid={`trend-tile-tooltip-${tile.key}`}
                 className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-20 w-56 opacity-0 group-hover:opacity-100 group-focus:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
-                <div className="rounded-md border border-gray-700 bg-gray-900/95 shadow-lg px-3 py-2 text-[11px] leading-snug text-gray-200">
-                  <div className="font-semibold text-gray-100 mb-1">{tile.label}</div>
+                <div className="rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50/95 dark:bg-gray-900/95 shadow-lg px-3 py-2 text-[11px] leading-snug text-gray-800 dark:text-gray-200">
+                  <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1">{tile.label}</div>
                   <div className="flex justify-between gap-2">
-                    <span className="text-gray-400">Current</span>
-                    <span className="tabular-nums text-gray-100">{tile.format(current)}</span>
+                    <span className="text-gray-600 dark:text-gray-400">Current</span>
+                    <span className="tabular-nums text-gray-900 dark:text-gray-100">{tile.format(current)}</span>
                   </div>
                   <div className="text-[10px] text-gray-500 mb-1">{currentLabel}</div>
                   <div className="flex justify-between gap-2">
-                    <span className="text-gray-400">Prior</span>
-                    <span className="tabular-nums text-gray-100">{tile.format(prior)}</span>
+                    <span className="text-gray-600 dark:text-gray-400">Prior</span>
+                    <span className="tabular-nums text-gray-900 dark:text-gray-100">{tile.format(prior)}</span>
                   </div>
                   <div className="text-[10px] text-gray-500 mb-1.5">{priorLabel}</div>
-                  <div className="border-t border-gray-800 pt-1 text-[10px] text-gray-500">
+                  <div className="border-t border-gray-200 dark:border-gray-800 pt-1 text-[10px] text-gray-500">
                     Click to filter to current week
                   </div>
                 </div>
