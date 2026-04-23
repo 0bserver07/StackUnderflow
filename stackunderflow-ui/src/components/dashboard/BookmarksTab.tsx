@@ -31,17 +31,17 @@ function BookmarkItem({
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
-    <div className="px-4 py-3 border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
+    <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 hover:bg-gray-100/50 dark:hover:bg-gray-800/30 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-medium text-gray-200 truncate">{bookmark.title}</h3>
+          <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{bookmark.title}</h3>
 
           <p className="text-[10px] text-gray-500 font-mono mt-0.5 truncate">
             {bookmark.session_id}
           </p>
 
           {bookmark.notes && (
-            <p className="text-xs text-gray-400 mt-1 line-clamp-2">{bookmark.notes}</p>
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2">{bookmark.notes}</p>
           )}
 
           <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -55,7 +55,7 @@ function BookmarkItem({
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={onEdit}
-            className="p-1 text-gray-500 hover:text-gray-300 rounded hover:bg-gray-700 transition-colors"
+            className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             title="Edit bookmark"
           >
             <IconEdit size={14} />
@@ -75,7 +75,7 @@ function BookmarkItem({
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}
-                className="p-1 text-gray-500 hover:text-gray-300 rounded hover:bg-gray-700 transition-colors"
+                className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                 title="Cancel"
               >
                 <IconX size={14} />
@@ -84,7 +84,7 @@ function BookmarkItem({
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-gray-700 transition-colors"
+              className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
               title="Delete bookmark"
             >
               <IconTrash size={14} />
@@ -126,28 +126,28 @@ function EditBookmarkModal({
     <Modal isOpen={isOpen} onClose={onClose} title="Edit Bookmark">
       <form onSubmit={handleSubmit} className="space-y-3">
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Title</label>
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Title</label>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-sm text-gray-200 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
+            className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
             required
           />
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Notes</label>
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Notes</label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
-            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-sm text-gray-200 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors resize-none"
+            className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors resize-none"
           />
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
             Tags (comma-separated)
           </label>
           <input
@@ -155,7 +155,7 @@ function EditBookmarkModal({
             value={tagsInput}
             onChange={(e) => setTagsInput(e.target.value)}
             placeholder="tag1, tag2, tag3"
-            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
+            className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-sm text-gray-800 dark:text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
           />
         </div>
 
@@ -163,7 +163,7 @@ function EditBookmarkModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-xs font-medium text-gray-400 bg-gray-800 border border-gray-700 rounded-md hover:text-gray-200 hover:border-gray-600 transition-colors"
+            className="px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600 transition-colors"
           >
             Cancel
           </button>
@@ -225,7 +225,7 @@ export default function BookmarksTab() {
   return (
     <div className="flex flex-col h-full">
       {/* Controls */}
-      <div className="px-4 py-3 border-b border-gray-800">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2">
           {/* Tag filter */}
           <div className="relative flex-1">
@@ -236,7 +236,7 @@ export default function BookmarksTab() {
             <select
               value={filterTag}
               onChange={(e) => setFilterTag(e.target.value)}
-              className="w-full appearance-none pl-8 pr-6 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
+              className="w-full appearance-none pl-8 pr-6 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
             >
               <option value="">All tags</option>
               {allTags.map((tag) => (
@@ -252,7 +252,7 @@ export default function BookmarksTab() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortBy)}
-              className="appearance-none pl-7 pr-6 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
+              className="appearance-none pl-7 pr-6 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
             >
               <option value="created_at">Date</option>
               <option value="title">Title</option>

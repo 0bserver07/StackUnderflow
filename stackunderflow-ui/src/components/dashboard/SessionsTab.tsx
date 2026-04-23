@@ -212,10 +212,10 @@ function SessionCard({
   const baseClasses =
     'w-full text-left rounded-lg border transition-colors p-4 flex items-start gap-3'
   const stateClasses = selected
-    ? 'bg-gray-800 border-indigo-500/50'
+    ? 'bg-white dark:bg-gray-800 border-indigo-500/50'
     : checked
     ? 'bg-indigo-950/30 border-indigo-500/60'
-    : 'bg-gray-900/40 border-gray-800 hover:border-gray-700 hover:bg-gray-900/70'
+    : 'bg-gray-50/40 dark:bg-gray-900/40 border-gray-200 dark:border-gray-800 hover:border-gray-200 dark:hover:border-gray-700 hover:bg-gray-50/70 dark:hover:bg-gray-900/70'
   const highlightClasses = highlighted
     ? ' ring-2 ring-indigo-400/70 animate-pulse'
     : ''
@@ -245,7 +245,7 @@ function SessionCard({
             onClick={(e) => e.stopPropagation()}
             aria-label={`Select session ${sessionId} to compare`}
             data-testid={`session-compare-checkbox-${sessionId}`}
-            className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-indigo-500 focus:ring-indigo-500 disabled:opacity-40"
+            className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-indigo-500 focus:ring-indigo-500 disabled:opacity-40"
           />
         </div>
       )}
@@ -254,9 +254,9 @@ function SessionCard({
         <div className="flex items-start justify-between gap-3 mb-1.5">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {file.title ? (
-              <div className="text-sm text-gray-200 line-clamp-2">{file.title}</div>
+              <div className="text-sm text-gray-800 dark:text-gray-200 line-clamp-2">{file.title}</div>
             ) : (
-              <div className="text-sm text-gray-400 font-mono">{file.name.split('.')[0]}</div>
+              <div className="text-sm text-gray-600 dark:text-gray-400 font-mono">{file.name.split('.')[0]}</div>
             )}
             {file.is_subagent && (
               <span className="shrink-0 text-[10px] font-medium text-purple-400 bg-purple-500/15 border border-purple-500/30 px-1.5 py-0.5 rounded">
@@ -298,13 +298,13 @@ function SessionCard({
             <span className="text-emerald-400/80 font-medium">{fmtCost(file.estimated_cost)}</span>
           )}
           {file.model && (
-            <span className="text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
+            <span className="text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
           )}
-          <span className="text-gray-400">{fmtBytes(file.size)}</span>
+          <span className="text-gray-600 dark:text-gray-400">{fmtBytes(file.size)}</span>
         </div>
 
         {/* Dates row */}
-        <div className="flex items-center gap-4 text-[10px] text-gray-400 mt-1.5">
+        <div className="flex items-center gap-4 text-[10px] text-gray-600 dark:text-gray-400 mt-1.5">
           <span>Created {fmtTs(file.created)}</span>
           <span>Modified {fmtTs(file.modified)}</span>
         </div>
@@ -398,13 +398,13 @@ function ConversationMessage({
 
   if (showRaw) {
     return sidechainWrapper(
-      <div className="border border-gray-800 rounded-lg p-3 bg-gray-900/30">
+      <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-3 bg-gray-50/30 dark:bg-gray-900/30">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-[10px] text-gray-500 font-mono">#{index + 1}</span>
           <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
           {ts && <span className="text-[10px] text-gray-500">{fmtTs(ts)}</span>}
         </div>
-        <pre className="text-[11px] text-gray-400 overflow-x-auto whitespace-pre-wrap font-mono bg-gray-950/50 rounded p-2 max-h-96 overflow-y-auto">
+        <pre className="text-[11px] text-gray-600 dark:text-gray-400 overflow-x-auto whitespace-pre-wrap font-mono bg-gray-50/50 dark:bg-gray-950/50 rounded p-2 max-h-96 overflow-y-auto">
           {JSON.stringify(line, null, 2)}
         </pre>
       </div>
@@ -412,23 +412,23 @@ function ConversationMessage({
   }
 
   return sidechainWrapper(
-    <div className={`rounded-lg border border-gray-800/50 ${style.bg}`}>
+    <div className={`rounded-lg border border-gray-200/50 dark:border-gray-800/50 ${style.bg}`}>
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/30">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100/30 dark:border-gray-800/30">
         <Icon size={14} className={style.color} />
         <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
-        {model && <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">{model}</span>}
+        {model && <span className="text-[10px] text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded">{model}</span>}
         {tokens && (
-          <span className="text-[10px] text-gray-400">
+          <span className="text-[10px] text-gray-600 dark:text-gray-400">
             {tokens.input.toLocaleString()} in / {tokens.output.toLocaleString()} out
           </span>
         )}
         <span className="flex-1" />
-        {ts && <span className="text-[10px] text-gray-400">{fmtTs(ts)}</span>}
+        {ts && <span className="text-[10px] text-gray-600 dark:text-gray-400">{fmtTs(ts)}</span>}
       </div>
       {/* Body */}
       <div className="px-4 py-3">
-        <div className="text-sm text-gray-300 whitespace-pre-wrap break-words">
+        <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words">
           <Markdown content={displayContent} />
         </div>
         {isLong && !expanded && (
@@ -500,7 +500,7 @@ function SessionViewer({
       <div className="flex items-center gap-3 flex-wrap">
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-300 hover:bg-gray-700"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
         >
           <IconArrowLeft size={14} />
           Sessions
@@ -524,7 +524,7 @@ function SessionViewer({
           className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border transition-colors ${
             showRaw
               ? 'bg-amber-600/20 border-amber-600/50 text-amber-400'
-              : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
           }`}
         >
           {showRaw ? <IconCode size={13} /> : <IconEye size={13} />}
@@ -533,22 +533,22 @@ function SessionViewer({
       </div>
 
       {/* Session info */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-gray-900/60 border border-gray-800 rounded-lg text-xs">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-gray-50/60 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-800 rounded-lg text-xs">
         <div>
           <span className="text-gray-500 block mb-0.5">Started</span>
-          <span className="text-gray-200">{fmtTs(meta.first_timestamp ?? meta.created)}</span>
+          <span className="text-gray-800 dark:text-gray-200">{fmtTs(meta.first_timestamp ?? meta.created)}</span>
         </div>
         <div>
           <span className="text-gray-500 block mb-0.5">Ended</span>
-          <span className="text-gray-200">{fmtTs(meta.last_timestamp ?? meta.modified)}</span>
+          <span className="text-gray-800 dark:text-gray-200">{fmtTs(meta.last_timestamp ?? meta.modified)}</span>
         </div>
         <div>
           <span className="text-gray-500 block mb-0.5">Duration</span>
-          <span className="text-gray-200">{fmtDuration(meta.duration_minutes)}</span>
+          <span className="text-gray-800 dark:text-gray-200">{fmtDuration(meta.duration_minutes)}</span>
         </div>
         <div>
           <span className="text-gray-500 block mb-0.5">Working Dir</span>
-          <span className="text-gray-200 font-mono text-[10px] truncate block">{meta.cwd}</span>
+          <span className="text-gray-800 dark:text-gray-200 font-mono text-[10px] truncate block">{meta.cwd}</span>
         </div>
       </div>
 
@@ -561,13 +561,13 @@ function SessionViewer({
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(0) }}
             placeholder="Search in conversation..."
-            className="w-full pl-8 pr-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+            className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs text-gray-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
         <select
           value={typeFilter}
           onChange={e => { setTypeFilter(e.target.value); setPage(0) }}
-          className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 focus:outline-none"
+          className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
         >
           <option value="all">Conversation</option>
           <option value="human">Your prompts</option>
@@ -610,15 +610,15 @@ function SessionViewer({
             <button
               onClick={() => setPage(x => Math.max(0, x - 1))}
               disabled={p === 0}
-              className="p-1 rounded bg-gray-800 border border-gray-700 text-gray-400 disabled:opacity-40"
+              className="p-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-40"
             >
               <IconChevronLeft size={14} />
             </button>
-            <span className="px-2 text-xs text-gray-400">{p + 1}/{totalPages}</span>
+            <span className="px-2 text-xs text-gray-600 dark:text-gray-400">{p + 1}/{totalPages}</span>
             <button
               onClick={() => setPage(x => Math.min(totalPages - 1, x + 1))}
               disabled={p >= totalPages - 1}
-              className="p-1 rounded bg-gray-800 border border-gray-700 text-gray-400 disabled:opacity-40"
+              className="p-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-40"
             >
               <IconChevronRightNav size={14} />
             </button>
@@ -739,7 +739,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
     if (contentQuery.isLoading) return <LoadingSpinner message="Loading conversation..." />
     if (contentQuery.isError) return (
       <div className="space-y-3">
-        <button onClick={() => setSelectedFile(null)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-300 hover:bg-gray-700">
+        <button onClick={() => setSelectedFile(null)} className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700">
           <IconArrowLeft size={14} /> Back
         </button>
         <div className="text-red-400 p-4">Failed to load conversation</div>
@@ -779,9 +779,9 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
       )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 text-sm text-gray-400">
+        <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <IconHash size={14} />
-          <span><span className="text-gray-100 font-medium">{files.length}</span> sessions</span>
+          <span><span className="text-gray-900 dark:text-gray-100 font-medium">{files.length}</span> sessions</span>
           {compareMode && (
             <span className="text-xs text-indigo-400">
               · {comparePair.length}/2 selected
@@ -803,7 +803,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded border transition-colors ${
               compareMode
                 ? 'bg-indigo-600/20 border-indigo-500/60 text-indigo-300'
-                : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             <IconArrowsLeftRight size={13} />
@@ -814,7 +814,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
               <button
                 key={s}
                 onClick={() => setSortBy(s)}
-                className={`px-2 py-1 rounded ${sortBy === s ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
+                className={`px-2 py-1 rounded ${sortBy === s ? 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
               >
                 {s === 'modified' ? 'Recent' : s === 'created' ? 'Oldest' : 'Size'}
               </button>

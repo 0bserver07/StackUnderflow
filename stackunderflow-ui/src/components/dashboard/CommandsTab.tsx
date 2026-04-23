@@ -109,7 +109,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
           ) : (
             <IconChevronRight size={14} className="text-gray-500 mt-0.5 shrink-0" />
           )}
-          <span className="text-gray-300 truncate">
+          <span className="text-gray-700 dark:text-gray-300 truncate">
             {row.command.content.length > 200
               ? row.command.content.slice(0, 200) + '...'
               : row.command.content}
@@ -122,7 +122,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
       label: 'Timestamp',
       width: '140px',
       render: (row) => (
-        <span className="text-gray-400 text-xs whitespace-nowrap">
+        <span className="text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">
           {formatTimestamp(row.timestamp)}
         </span>
       ),
@@ -134,7 +134,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
       width: '160px',
       render: (row) => (
         row.model
-          ? <span className="text-gray-400 text-xs font-mono">{row.model}</span>
+          ? <span className="text-gray-600 dark:text-gray-400 text-xs font-mono">{row.model}</span>
           : <span className="text-gray-500 text-xs">-</span>
       ),
     },
@@ -166,7 +166,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
         if (t) {
           const total = t.input + t.output
           return (
-            <span className="text-gray-400 text-xs" title={`In: ${t.input} / Out: ${t.output}`}>
+            <span className="text-gray-600 dark:text-gray-400 text-xs" title={`In: ${t.input} / Out: ${t.output}`}>
               {total.toLocaleString()}
             </span>
           )
@@ -198,7 +198,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-200">
+        <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
           User Commands
           <span className="ml-2 text-xs text-gray-500 font-normal">
             {commands.length} command{commands.length !== 1 ? 's' : ''}
@@ -230,22 +230,22 @@ export default function CommandsTab({ data }: CommandsTabProps) {
         const row = commands.find(c => c.groupKey === expandedId)
         if (!row) return null
         return (
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 text-sm">
+          <div className="bg-gray-100/70 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-sm">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-medium uppercase tracking-wider">
                 Full Command Text
               </span>
               <button
                 onClick={() => setExpandedId(null)}
-                className="text-xs text-gray-500 hover:text-gray-300"
+                className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
               >
                 Close
               </button>
             </div>
-            <pre className="text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-96 overflow-y-auto">
+            <pre className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed max-h-96 overflow-y-auto">
               {row.command.content}
             </pre>
-            <div className="mt-3 pt-3 border-t border-gray-700">
+            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
               <span className="text-xs text-gray-500">
                 Session: {row.command.session_id}
                 {row.model && <> | Model: {row.model}</>}
