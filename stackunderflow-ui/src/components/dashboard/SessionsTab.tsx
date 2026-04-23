@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   IconArrowLeft,
+  IconArrowsLeftRight,
   IconClock,
   IconCode,
   IconEye,
@@ -11,17 +12,17 @@ import {
   IconTool,
   IconUser,
   IconRobot,
-  IconChevronDown,
-  IconChevronRight,
   IconChevronLeft,
   IconChevronRight as IconChevronRightNav,
 } from '@tabler/icons-react'
-import { getJsonlFiles, getJsonlContent } from '../../services/api'
+import { getJsonlFiles, getJsonlContent, setProjectByDir } from '../../services/api'
 import type { JsonlFile, JsonlContentResponse, SessionEfficiency } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import Markdown from '../common/Markdown'
 import SessionEfficiencyTable from '../cost/SessionEfficiencyTable'
+import SessionCompareView from '../cost/SessionCompareView'
+import { NAV_EVENT, getParam, clearParam, type NavDetail } from '../../services/navigation'
 
 interface SessionsTabProps {
   projectName: string
@@ -185,83 +186,172 @@ function SessionCard({
   file,
   selected,
   onClick,
+  compareMode = false,
+  checked = false,
+  checkboxDisabled = false,
+  onCheckToggle,
+  highlighted = false,
+  rowRef,
+  sessionId,
 }: {
   file: JsonlFile
   selected: boolean
   onClick: () => void
+  compareMode?: boolean
+  checked?: boolean
+  checkboxDisabled?: boolean
+  onCheckToggle?: () => void
+  highlighted?: boolean
+  rowRef?: (el: HTMLDivElement | null) => void
+  sessionId: string
 }) {
   const duration = file.modified - file.created
   const durationMins = duration / 60
   const totalTokens = (file.input_tokens ?? 0) + (file.output_tokens ?? 0)
 
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left rounded-lg border transition-colors p-4 ${
-        selected
-          ? 'bg-gray-800 border-indigo-500/50'
-          : 'bg-gray-900/40 border-gray-800 hover:border-gray-700 hover:bg-gray-900/70'
-      }`}
-    >
-      {/* Title row */}
-      <div className="flex items-start justify-between gap-3 mb-1.5">
-        <div className="flex-1 min-w-0 flex items-center gap-2">
-          {file.title ? (
-            <div className="text-sm text-gray-200 line-clamp-2">{file.title}</div>
-          ) : (
-            <div className="text-sm text-gray-400 font-mono">{file.name.split('.')[0]}</div>
-          )}
-          {file.is_subagent && (
-            <span className="shrink-0 text-[10px] font-medium text-purple-400 bg-purple-500/15 border border-purple-500/30 px-1.5 py-0.5 rounded">
-              Sub-agent
+  const baseClasses =
+    'w-full text-left rounded-lg border transition-colors p-4 flex items-start gap-3'
+  const stateClasses = selected
+    ? 'bg-gray-800 border-indigo-500/50'
+    : checked
+    ? 'bg-indigo-950/30 border-indigo-500/60'
+    : 'bg-gray-900/40 border-gray-800 hover:border-gray-700 hover:bg-gray-900/70'
+  const highlightClasses = highlighted
+    ? ' ring-2 ring-indigo-400/70 animate-pulse'
+    : ''
+
+  const handleRootClick = () => {
+    if (compareMode) {
+      if (!checkboxDisabled || checked) {
+        onCheckToggle?.()
+      }
+      return
+    }
+    onClick()
+  }
+
+  const contents = (
+    <>
+      {compareMode && (
+        <div className="pt-0.5 shrink-0">
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={checkboxDisabled && !checked}
+            onChange={(e) => {
+              e.stopPropagation()
+              onCheckToggle?.()
+            }}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select session ${sessionId} to compare`}
+            data-testid={`session-compare-checkbox-${sessionId}`}
+            className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-indigo-500 focus:ring-indigo-500 disabled:opacity-40"
+          />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        {/* Title row */}
+        <div className="flex items-start justify-between gap-3 mb-1.5">
+          <div className="flex-1 min-w-0 flex items-center gap-2">
+            {file.title ? (
+              <div className="text-sm text-gray-200 line-clamp-2">{file.title}</div>
+            ) : (
+              <div className="text-sm text-gray-400 font-mono">{file.name.split('.')[0]}</div>
+            )}
+            {file.is_subagent && (
+              <span className="shrink-0 text-[10px] font-medium text-purple-400 bg-purple-500/15 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                Sub-agent
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-gray-500 shrink-0">{relativeTime(file.modified)}</span>
+        </div>
+
+        {/* Stats row */}
+        <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-wrap">
+          <span className="flex items-center gap-1">
+            <IconClock size={11} />
+            {fmtDuration(durationMins > 0.5 ? durationMins : null)}
+          </span>
+          {file.messages != null && (
+            <span className="flex items-center gap-1">
+              <IconMessage size={11} />
+              {file.messages} msgs
             </span>
           )}
+          {file.user_messages != null && (
+            <span className="flex items-center gap-1">
+              <IconUser size={11} className="text-blue-400/70" />
+              {file.user_messages} prompts
+            </span>
+          )}
+          {file.tool_calls != null && file.tool_calls > 0 && (
+            <span className="flex items-center gap-1">
+              <IconTool size={11} className="text-purple-400/70" />
+              {file.tool_calls} tools
+            </span>
+          )}
+          {totalTokens > 0 && (
+            <span>{fmtTokensShort(totalTokens)} tokens</span>
+          )}
+          {file.estimated_cost != null && file.estimated_cost > 0 && (
+            <span className="text-emerald-400/80 font-medium">{fmtCost(file.estimated_cost)}</span>
+          )}
+          {file.model && (
+            <span className="text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
+          )}
+          <span className="text-gray-600">{fmtBytes(file.size)}</span>
         </div>
-        <span className="text-xs text-gray-500 shrink-0">{relativeTime(file.modified)}</span>
-      </div>
 
-      {/* Stats row */}
-      <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-wrap">
-        <span className="flex items-center gap-1">
-          <IconClock size={11} />
-          {fmtDuration(durationMins > 0.5 ? durationMins : null)}
-        </span>
-        {file.messages != null && (
-          <span className="flex items-center gap-1">
-            <IconMessage size={11} />
-            {file.messages} msgs
-          </span>
-        )}
-        {file.user_messages != null && (
-          <span className="flex items-center gap-1">
-            <IconUser size={11} className="text-blue-400/70" />
-            {file.user_messages} prompts
-          </span>
-        )}
-        {file.tool_calls != null && file.tool_calls > 0 && (
-          <span className="flex items-center gap-1">
-            <IconTool size={11} className="text-purple-400/70" />
-            {file.tool_calls} tools
-          </span>
-        )}
-        {totalTokens > 0 && (
-          <span>{fmtTokensShort(totalTokens)} tokens</span>
-        )}
-        {file.estimated_cost != null && file.estimated_cost > 0 && (
-          <span className="text-emerald-400/80 font-medium">{fmtCost(file.estimated_cost)}</span>
-        )}
-        {file.model && (
-          <span className="text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
-        )}
-        <span className="text-gray-600">{fmtBytes(file.size)}</span>
+        {/* Dates row */}
+        <div className="flex items-center gap-4 text-[10px] text-gray-600 mt-1.5">
+          <span>Created {fmtTs(file.created)}</span>
+          <span>Modified {fmtTs(file.modified)}</span>
+        </div>
       </div>
+    </>
+  )
 
-      {/* Dates row */}
-      <div className="flex items-center gap-4 text-[10px] text-gray-600 mt-1.5">
-        <span>Created {fmtTs(file.created)}</span>
-        <span>Modified {fmtTs(file.modified)}</span>
+  // Wrap in a div (not a button) when in compare mode so the checkbox can live
+  // as a nested interactive element without breaking HTML validity.
+  if (compareMode) {
+    return (
+      <div
+        ref={rowRef}
+        role="button"
+        tabIndex={0}
+        data-session-id={sessionId}
+        data-testid={`session-row-${sessionId}`}
+        onClick={handleRootClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            handleRootClick()
+          }
+        }}
+        className={`${baseClasses} ${stateClasses}${highlightClasses} ${
+          checkboxDisabled && !checked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+        }`}
+      >
+        {contents}
       </div>
-    </button>
+    )
+  }
+
+  return (
+    <div
+      ref={rowRef}
+      data-session-id={sessionId}
+      data-testid={`session-row-${sessionId}`}
+      className={highlightClasses ? `rounded-lg${highlightClasses}` : undefined}
+    >
+      <button
+        onClick={handleRootClick}
+        className={`${baseClasses} ${stateClasses}`}
+      >
+        {contents}
+      </button>
+    </div>
   )
 }
 
@@ -541,9 +631,21 @@ function SessionViewer({
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
+/**
+ * Strip `.jsonl` (or any single extension) to get a bare session id that
+ * matches the ids emitted by analytics collectors + navigation service.
+ */
+function toSessionId(fileName: string): string {
+  return fileName.replace(/\.jsonl$/i, '')
+}
+
 export default function SessionsTab({ projectName, sessionEfficiency }: SessionsTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<'modified' | 'created' | 'size'>('modified')
+  const [compareMode, setCompareMode] = useState(false)
+  const [comparePair, setComparePair] = useState<string[]>([])
+  const [highlightedSession, setHighlightedSession] = useState<string | null>(null)
+  const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
 
   const filesQuery = useQuery({
     queryKey: ['jsonlFiles', projectName],
@@ -556,12 +658,83 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
     enabled: !!selectedFile,
   })
 
+  // Reuse ProjectDashboard's cached project resolution to get the backend log path
+  // required by SessionCompareView. Same queryKey → zero extra network calls.
+  const projectInfoQuery = useQuery({
+    queryKey: ['setProject', projectName],
+    queryFn: () => setProjectByDir(projectName),
+    enabled: !!projectName,
+    staleTime: 60_000,
+  })
+  const currentLogPath = projectInfoQuery.data?.log_path ?? ''
+
+  // Highlight + scroll helper — drives both the `?session=` deep-link and
+  // cross-tab NAV_EVENT handling.
+  const highlightSession = useCallback((sessionId: string | null) => {
+    if (!sessionId) return
+    setHighlightedSession(sessionId)
+    // Wait a tick for the DOM to render the row, then scroll to it.
+    requestAnimationFrame(() => {
+      const el = rowRefs.current.get(sessionId)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    window.setTimeout(() => {
+      setHighlightedSession((curr) => (curr === sessionId ? null : curr))
+    }, 2000)
+  }, [])
+
+  // Respond to `?session=ID` on mount and whenever the URL changes.
+  useEffect(() => {
+    const sid = getParam('session')
+    if (sid) {
+      highlightSession(sid)
+      // Clear the param so a refresh or further navigation doesn't keep
+      // re-highlighting. Deep-link goal already satisfied.
+      clearParam('session')
+    }
+  }, [highlightSession])
+
+  useEffect(() => {
+    const onPopState = () => {
+      const sid = getParam('session')
+      if (sid) {
+        highlightSession(sid)
+        clearParam('session')
+      }
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [highlightSession])
+
+  // React to external `openSession(...)` calls from navigation.ts.
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent<NavDetail>).detail
+      if (!detail) return
+      if (detail.tab === 'sessions' && typeof detail.session === 'string') {
+        highlightSession(detail.session)
+      }
+    }
+    window.addEventListener(NAV_EVENT, onNav)
+    return () => window.removeEventListener(NAV_EVENT, onNav)
+  }, [highlightSession])
+
+  const toggleCompareSelection = useCallback((sessionId: string) => {
+    setComparePair((prev) => {
+      if (prev.includes(sessionId)) return prev.filter((x) => x !== sessionId)
+      if (prev.length >= 2) return prev // hard cap at 2
+      return [...prev, sessionId]
+    })
+  }, [])
+
+  const resetCompareSelection = useCallback(() => setComparePair([]), [])
+
   if (filesQuery.isLoading) return <LoadingSpinner message="Loading sessions..." />
   if (filesQuery.isError) return <div className="text-red-400 p-4">Failed to load sessions</div>
 
   const files = filesQuery.data!
 
-  // Session content view
+  // Session content view — exit early, skips compare UI while viewing one session.
   if (selectedFile) {
     if (contentQuery.isLoading) return <LoadingSpinner message="Loading conversation..." />
     if (contentQuery.isError) return (
@@ -577,7 +750,6 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
     }
   }
 
-  // File list
   if (files.length === 0) {
     return <EmptyState title="No sessions" description="No session files found." />
   }
@@ -588,37 +760,92 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
     return b.modified - a.modified
   })
 
+  const bothSelected = comparePair.length === 2
+  const [aId, bId] = comparePair
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-testid="sessions-tab">
       {/* Session efficiency table — analytics-expansion spec §2.5 */}
       <SessionEfficiencyTable data={sessionEfficiency ?? []} />
 
-      <div className="flex items-center justify-between">
+      {/* Compare panel — rendered above the session list when 2 sessions are checked */}
+      {compareMode && bothSelected && aId && bId && (
+        <SessionCompareView
+          logPath={currentLogPath}
+          sessionAId={aId}
+          sessionBId={bId}
+          onClose={resetCompareSelection}
+        />
+      )}
+
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-sm text-gray-400">
           <IconHash size={14} />
           <span><span className="text-gray-100 font-medium">{files.length}</span> sessions</span>
+          {compareMode && (
+            <span className="text-xs text-indigo-400">
+              · {comparePair.length}/2 selected
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-1 text-xs">
-          {(['modified', 'created', 'size'] as const).map(s => (
-            <button
-              key={s}
-              onClick={() => setSortBy(s)}
-              className={`px-2 py-1 rounded ${sortBy === s ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
-            >
-              {s === 'modified' ? 'Recent' : s === 'created' ? 'Oldest' : 'Size'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setCompareMode((v) => {
+                const next = !v
+                if (!next) setComparePair([])
+                return next
+              })
+            }}
+            aria-pressed={compareMode}
+            data-testid="sessions-compare-toggle"
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded border transition-colors ${
+              compareMode
+                ? 'bg-indigo-600/20 border-indigo-500/60 text-indigo-300'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            <IconArrowsLeftRight size={13} />
+            Compare
+          </button>
+          <div className="flex items-center gap-1">
+            {(['modified', 'created', 'size'] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                className={`px-2 py-1 rounded ${sortBy === s ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                {s === 'modified' ? 'Recent' : s === 'created' ? 'Oldest' : 'Size'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
       <div className="space-y-1.5">
-        {sorted.map(f => (
-          <SessionCard
-            key={f.name}
-            file={f}
-            selected={selectedFile === f.name}
-            onClick={() => setSelectedFile(f.name)}
-          />
-        ))}
+        {sorted.map((f) => {
+          const sid = toSessionId(f.name)
+          const isChecked = comparePair.includes(sid)
+          return (
+            <SessionCard
+              key={f.name}
+              file={f}
+              sessionId={sid}
+              selected={selectedFile === f.name}
+              onClick={() => setSelectedFile(f.name)}
+              compareMode={compareMode}
+              checked={isChecked}
+              checkboxDisabled={comparePair.length >= 2}
+              onCheckToggle={() => toggleCompareSelection(sid)}
+              highlighted={highlightedSession === sid}
+              rowRef={(el) => {
+                if (el) rowRefs.current.set(sid, el)
+                else rowRefs.current.delete(sid)
+              }}
+            />
+          )
+        })}
       </div>
     </div>
   )
