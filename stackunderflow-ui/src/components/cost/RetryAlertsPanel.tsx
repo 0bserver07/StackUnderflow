@@ -1,9 +1,33 @@
+import { useMemo, useState } from 'react'
 import { IconAlertTriangle, IconRefresh } from '@tabler/icons-react'
 import type { RetrySignal } from '../../types/api'
+
+// TODO(c-retry): replace with `import { openInteraction } from '../../services/navigation'`
+// once A8 `prim-nav` lands. Constraint §B19 restricts this commit to a single file, so we
+// stub the behaviour inline — the external API will be identical (takes an interaction_id,
+// pushes a URL, dispatches `stackunderflow:nav`).
+function openInteraction(interactionId: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', 'messages')
+    url.searchParams.set('interaction', interactionId)
+    window.history.pushState({}, '', url.toString())
+    window.dispatchEvent(
+      new CustomEvent('stackunderflow:nav', {
+        detail: { tab: 'messages', interaction: interactionId },
+      }),
+    )
+  } catch {
+    // Ignore — worst case the click is a no-op until A8 wires real navigation.
+  }
+}
 
 interface RetryAlertsPanelProps {
   signals: RetrySignal[] | null | undefined
 }
+
+type SeverityFilter = 'all' | 'ge2' | 'ge3'
 
 function formatCost(cost: number): string {
   if (cost >= 100) return `$${cost.toFixed(0)}`
@@ -49,59 +73,132 @@ const STYLES = {
   },
 } as const
 
+const FILTERS: Array<{ id: SeverityFilter; label: string; predicate: (s: RetrySignal) => boolean }> = [
+  { id: 'all', label: 'All', predicate: () => true },
+  { id: 'ge2', label: '≥2 failures', predicate: (s) => s.consecutive_failures >= 2 },
+  { id: 'ge3', label: '≥3 failures', predicate: (s) => s.consecutive_failures >= 3 },
+]
+
 export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
+  const [filter, setFilter] = useState<SeverityFilter>('all')
+
+  const sortedAll = useMemo(() => {
+    if (!signals || signals.length === 0) return []
+    return [...signals].sort(
+      (a, b) =>
+        b.estimated_wasted_cost - a.estimated_wasted_cost ||
+        b.consecutive_failures - a.consecutive_failures,
+    )
+  }, [signals])
+
+  const visible = useMemo(() => {
+    const pred = FILTERS.find((f) => f.id === filter)?.predicate ?? (() => true)
+    return sortedAll.filter(pred)
+  }, [sortedAll, filter])
+
+  const totalWasted = useMemo(
+    () => visible.reduce((sum, sig) => sum + (sig.estimated_wasted_cost ?? 0), 0),
+    [visible],
+  )
+
   if (!signals || signals.length === 0) {
     return (
-      <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+      <div
+        className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+        data-testid="retry-alerts-panel"
+      >
         <h3 className="text-sm font-medium text-gray-300 mb-3">Retry Alerts</h3>
-        <div className="text-xs text-gray-500 py-8 text-center">No retry storms detected — nice.</div>
+        <div className="text-xs text-gray-500 py-8 text-center">
+          No retry storms detected — nice.
+        </div>
       </div>
     )
   }
 
-  const sorted = [...signals].sort(
-    (a, b) => b.estimated_wasted_cost - a.estimated_wasted_cost ||
-              b.consecutive_failures - a.consecutive_failures,
-  )
-
-  const totalWasted = sorted.reduce((s, sig) => s + (sig.estimated_wasted_cost ?? 0), 0)
-
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
-        Retry Alerts
-        <span className="ml-2 text-xs text-gray-500 font-normal">
-          {sorted.length} signal{sorted.length === 1 ? '' : 's'} · ~{formatCost(totalWasted)} wasted
-        </span>
-      </h3>
-      <div className="space-y-2">
-        {sorted.map((sig, idx) => {
-          const style = STYLES[severity(sig)]
-          return (
-            <div
-              key={`${sig.interaction_id}-${sig.tool}-${idx}`}
-              className={`flex items-start gap-3 p-3 rounded border ${style.wrapper}`}
-            >
-              <IconAlertTriangle size={16} className={`${style.icon} mt-0.5 flex-shrink-0`} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-sm font-medium ${style.label}`}>
-                    {sig.tool}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 bg-gray-800/80 border border-gray-700 rounded-full px-2 py-0.5">
-                    <IconRefresh size={10} />
-                    {sig.consecutive_failures}× failed · {sig.total_invocations} total
-                  </span>
-                  <span className="text-[10px] text-gray-500">{formatTime(sig.timestamp)}</span>
-                </div>
-                <div className="text-xs text-gray-400 mt-1 tabular-nums">
-                  ~{formatTokens(sig.estimated_wasted_tokens)} wasted tokens · {formatCost(sig.estimated_wasted_cost)} wasted cost
-                </div>
-              </div>
-            </div>
-          )
-        })}
+    <div
+      className="bg-gray-800/50 rounded-lg p-4 border border-gray-800"
+      data-testid="retry-alerts-panel"
+    >
+      <div className="flex items-baseline justify-between mb-3 gap-2 flex-wrap">
+        <h3 className="text-sm font-medium text-gray-300" data-testid="retry-alerts-summary">
+          {visible.length} retr{visible.length === 1 ? 'y' : 'ies'} wasted{' '}
+          <span className="tabular-nums">{formatCost(totalWasted)}</span> total
+        </h3>
+        <div
+          className="flex items-center gap-1"
+          role="group"
+          aria-label="Severity filter"
+          data-testid="retry-alerts-filters"
+        >
+          {FILTERS.map((f) => {
+            const active = filter === f.id
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id)}
+                aria-pressed={active}
+                data-testid={`retry-alerts-filter-${f.id}`}
+                className={
+                  'text-[11px] px-2 py-0.5 rounded-full border transition-colors ' +
+                  (active
+                    ? 'bg-indigo-500/20 border-indigo-500/60 text-indigo-200'
+                    : 'bg-gray-800/80 border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600')
+                }
+              >
+                {f.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
+
+      {visible.length === 0 ? (
+        <div
+          className="text-xs text-gray-500 py-6 text-center"
+          data-testid="retry-alerts-empty-filtered"
+        >
+          No signals match this severity filter.
+        </div>
+      ) : (
+        <div className="space-y-2" data-testid="retry-alerts-list">
+          {visible.map((sig, idx) => {
+            const style = STYLES[severity(sig)]
+            return (
+              <button
+                key={`${sig.interaction_id}-${sig.tool}-${idx}`}
+                type="button"
+                onClick={() => openInteraction(sig.interaction_id)}
+                data-testid="retry-alerts-row"
+                className={
+                  'w-full text-left flex items-start gap-3 p-3 rounded border transition-colors ' +
+                  `${style.wrapper} hover:brightness-125 focus:outline-none focus:ring-2 focus:ring-indigo-500/60`
+                }
+              >
+                <IconAlertTriangle
+                  size={16}
+                  className={`${style.icon} mt-0.5 flex-shrink-0`}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-sm font-medium ${style.label}`}>{sig.tool}</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 bg-gray-800/80 border border-gray-700 rounded-full px-2 py-0.5">
+                      <IconRefresh size={10} />
+                      {sig.consecutive_failures}× failed · {sig.total_invocations} total
+                    </span>
+                    <span className="text-[10px] text-gray-500">{formatTime(sig.timestamp)}</span>
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1 tabular-nums">
+                    ~{formatTokens(sig.estimated_wasted_tokens)} wasted tokens ·{' '}
+                    {formatCost(sig.estimated_wasted_cost)} wasted cost
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
