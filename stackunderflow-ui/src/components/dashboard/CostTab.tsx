@@ -17,7 +17,7 @@ import type {
   ToolCost,
   Trends,
 } from '../../types/api'
-import { openInteraction, openSession } from '../../services/navigation'
+import { getParam, openInteraction, openSession } from '../../services/navigation'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
 import ErrorCostCard from '../cost/ErrorCostCard'
@@ -86,6 +86,40 @@ function parseTs(iso: string | undefined | null): number | null {
   if (!iso) return null
   const t = Date.parse(iso)
   return Number.isNaN(t) ? null : t
+}
+
+/** §D4: coerce an arbitrary URL string to a valid RangeKey, default 'all'. */
+function parseRange(raw: string | null): RangeKey {
+  return raw === '7d' || raw === '30d' || raw === 'all' ? raw : 'all'
+}
+
+/** §D4: sync filter state to the URL via `history.replaceState` — never
+ * `pushState`, so filter toggles don't create back-button traps. Only
+ * non-default params are emitted (`range=all` is the default → omitted).
+ * Leaves any unrelated params (`tab`, `interaction`, …) untouched. */
+function replaceFilterParams(range: RangeKey, sessionFilter: string | null, toolFilter: string | null): void {
+  if (typeof window === 'undefined' || typeof window.history === 'undefined') return
+  const url = new URL(window.location.href)
+  if (range === 'all') {
+    url.searchParams.delete('range')
+  } else {
+    url.searchParams.set('range', range)
+  }
+  if (sessionFilter) {
+    url.searchParams.set('session', sessionFilter)
+  } else {
+    url.searchParams.delete('session')
+  }
+  if (toolFilter) {
+    url.searchParams.set('tool', toolFilter)
+  } else {
+    url.searchParams.delete('tool')
+  }
+  const next = `${url.pathname}${url.search}${url.hash}`
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (next !== current) {
+    window.history.replaceState({}, '', next)
+  }
 }
 
 /** Derive the filter-window cutoff epoch-ms for a given range. Uses the
@@ -223,11 +257,13 @@ export default function CostTab({ stats }: CostTabProps) {
   const [data, setData] = useState<CostData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<FilterState>({
-    range: 'all',
-    sessionFilter: null,
-    toolFilter: null,
-  })
+  // §D4: seed from URL so a reload / shared link restores filter state.
+  // Params: ?range=7d|30d|all · ?session=<id> · ?tool=<name>
+  const [filter, setFilter] = useState<FilterState>(() => ({
+    range: parseRange(getParam('range')),
+    sessionFilter: getParam('session'),
+    toolFilter: getParam('tool'),
+  }))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -254,6 +290,12 @@ export default function CostTab({ stats }: CostTabProps) {
   useEffect(() => {
     load()
   }, [load])
+
+  // §D4: mirror filter state into the URL via `replaceState` (never push),
+  // so filter toggles don't balloon the history stack or trap back-nav.
+  useEffect(() => {
+    replaceFilterParams(filter.range, filter.sessionFilter, filter.toolFilter)
+  }, [filter.range, filter.sessionFilter, filter.toolFilter])
 
   // Listen for window/tool filter events from Wave-B components
   useEffect(() => {
