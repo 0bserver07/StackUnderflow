@@ -16,7 +16,7 @@ export default function Markdown({ content, className = '' }: MarkdownProps) {
         prose-p:text-gray-700 dark:prose-p:text-gray-300 prose-p:leading-relaxed
         prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
         prose-strong:text-gray-800 dark:prose-strong:text-gray-200
-        prose-code:text-blue-300 prose-code:bg-white dark:prose-code:bg-gray-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none
+        prose-code:text-blue-700 dark:prose-code:text-blue-300 prose-code:bg-gray-100 dark:prose-code:bg-gray-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none
         prose-pre:bg-transparent prose-pre:p-0
         prose-blockquote:border-gray-300 dark:prose-blockquote:border-gray-700 prose-blockquote:text-gray-600 dark:prose-blockquote:text-gray-400
         prose-li:text-gray-700 dark:prose-li:text-gray-300

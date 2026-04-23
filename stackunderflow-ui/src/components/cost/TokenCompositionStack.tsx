@@ -247,7 +247,7 @@ export default function TokenCompositionStack({ daily }: TokenCompositionStackPr
             type="button"
             onClick={() => setIsolated(null)}
             data-testid="token-stack-legend-reset"
-            className="text-[11px] text-indigo-300 hover:text-indigo-200 underline underline-offset-2"
+            className="text-[11px] text-indigo-700 dark:text-indigo-300 hover:text-indigo-800 dark:hover:text-indigo-200 underline underline-offset-2"
           >
             reset
           </button>

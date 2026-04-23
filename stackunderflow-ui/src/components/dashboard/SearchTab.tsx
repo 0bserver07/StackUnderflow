@@ -74,7 +74,7 @@ function HighlightedSnippet({ html }: { html: string }) {
 
     if (inMark) {
       elements.push(
-        <mark key={i} className="bg-yellow-500/30 text-yellow-200 rounded-sm px-0.5">
+        <mark key={i} className="bg-yellow-200 dark:bg-yellow-500/30 text-yellow-900 dark:text-yellow-200 rounded-sm px-0.5">
           {part}
         </mark>,
       )

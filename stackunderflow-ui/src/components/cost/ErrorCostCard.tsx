@@ -82,7 +82,7 @@ function TopErrorCommandRow({ cmd }: TopErrorCommandRowProps) {
       <span className="flex-1 text-xs text-gray-700 dark:text-gray-300 truncate" title={cmd.prompt_preview ?? ''}>
         {truncate(cmd.prompt_preview ?? '(no prompt)', 72)}
       </span>
-      <span className="text-[10px] text-red-300 tabular-nums whitespace-nowrap">
+      <span className="text-[10px] text-red-700 dark:text-red-300 tabular-nums whitespace-nowrap">
         {errorCount} err
       </span>
       <span className="text-[10px] text-gray-600 dark:text-gray-400 tabular-nums whitespace-nowrap w-14 text-right">
@@ -133,14 +133,14 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
 
       {/* Hero — wasted retry $ is the lede; total error count is supporting detail. */}
       <div>
-        <div className="text-4xl font-bold text-red-300 leading-none tabular-nums">
+        <div className="text-4xl font-bold text-red-700 dark:text-red-300 leading-none tabular-nums">
           {formatCost(retryCost)}
         </div>
         <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">
           wasted on{' '}
-          <span className="text-red-200 font-medium">{totals.toLocaleString()}</span> error
+          <span className="text-red-700 dark:text-red-200 font-medium">{totals.toLocaleString()}</span> error
           {totals === 1 ? '' : 's'} across{' '}
-          <span className="text-red-200 font-medium">{distinctToolCount}</span> tool
+          <span className="text-red-700 dark:text-red-200 font-medium">{distinctToolCount}</span> tool
           {distinctToolCount === 1 ? '' : 's'}
         </div>
         <div className="text-[10px] text-gray-500 mt-1 tabular-nums">
@@ -160,7 +160,7 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="mt-2 inline-flex items-center gap-1 text-[11px] text-red-300/80 hover:text-red-200 focus:outline-none"
+              className="mt-2 inline-flex items-center gap-1 text-[11px] text-red-700/80 dark:text-red-300/80 hover:text-red-800 dark:hover:text-red-200 focus:outline-none"
               aria-expanded={expanded}
             >
               {expanded ? (
@@ -193,7 +193,7 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
             <button
               type="button"
               onClick={() => setTopErrorsExpanded((v) => !v)}
-              className="mt-2 inline-flex items-center gap-1 text-[11px] text-red-300/80 hover:text-red-200 focus:outline-none"
+              className="mt-2 inline-flex items-center gap-1 text-[11px] text-red-700/80 dark:text-red-300/80 hover:text-red-800 dark:hover:text-red-200 focus:outline-none"
               aria-expanded={topErrorsExpanded}
             >
               {topErrorsExpanded ? (

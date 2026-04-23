@@ -233,12 +233,12 @@ interface ErrorBannerProps {
 }
 function ErrorBanner({ message, onRetry }: ErrorBannerProps) {
   return (
-    <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 flex items-center justify-between gap-3">
+    <div className="bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg p-4 flex items-center justify-between gap-3">
       <div className="flex items-start gap-2 min-w-0">
-        <IconAlertTriangle size={16} className="text-red-400 mt-0.5 shrink-0" />
+        <IconAlertTriangle size={16} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
         <div className="min-w-0">
-          <div className="text-sm text-red-300 font-medium">Failed to load cost analytics</div>
-          <div className="text-xs text-red-400/80 truncate">{message}</div>
+          <div className="text-sm text-red-700 dark:text-red-300 font-medium">Failed to load cost analytics</div>
+          <div className="text-xs text-red-700/80 dark:text-red-400/80 truncate">{message}</div>
         </div>
       </div>
       <button

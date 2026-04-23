@@ -42,14 +42,14 @@ function severity(sig: RetrySignal): 'red' | 'amber' {
 
 const STYLES = {
   red: {
-    wrapper: 'bg-red-900/20 border-red-800/60',
-    icon: 'text-red-400',
-    label: 'text-red-300',
+    wrapper: 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-800/60',
+    icon: 'text-red-600 dark:text-red-400',
+    label: 'text-red-700 dark:text-red-300',
   },
   amber: {
-    wrapper: 'bg-amber-900/20 border-amber-800/60',
-    icon: 'text-amber-400',
-    label: 'text-amber-300',
+    wrapper: 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-800/60',
+    icon: 'text-amber-600 dark:text-amber-400',
+    label: 'text-amber-700 dark:text-amber-300',
   },
 } as const
 

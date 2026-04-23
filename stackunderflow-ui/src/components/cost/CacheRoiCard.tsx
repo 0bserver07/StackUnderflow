@@ -171,11 +171,11 @@ export default function CacheRoiCard({
         <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">Cache ROI</span>
         <div className="flex-1" />
         {breakEven ? (
-          <span className="inline-flex items-center gap-1 text-[10px] text-green-300 bg-green-900/40 border border-green-800 rounded-full px-2 py-0.5">
+          <span className="inline-flex items-center gap-1 text-[10px] text-green-800 dark:text-green-300 bg-green-100 dark:bg-green-900/40 border border-green-300 dark:border-green-800 rounded-full px-2 py-0.5">
             <IconCircleCheck size={10} /> break-even
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 text-[10px] text-amber-300 bg-amber-900/30 border border-amber-800 rounded-full px-2 py-0.5">
+          <span className="inline-flex items-center gap-1 text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-800 rounded-full px-2 py-0.5">
             <IconCircleDashed size={10} /> below break-even
           </span>
         )}
@@ -183,9 +183,9 @@ export default function CacheRoiCard({
 
       <div className="flex items-end gap-5">
         <div className="flex-1 min-w-0">
-          <div className="text-5xl font-bold text-indigo-300 leading-none">
+          <div className="text-5xl font-bold text-indigo-700 dark:text-indigo-300 leading-none">
             {roiPct.toFixed(0)}
-            <span className="text-2xl text-indigo-400/80 align-top ml-1">%</span>
+            <span className="text-2xl text-indigo-600/80 dark:text-indigo-400/80 align-top ml-1">%</span>
           </div>
           <div className="text-xs text-gray-500 mt-1">return on cache writes</div>
         </div>
@@ -229,7 +229,7 @@ export default function CacheRoiCard({
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Cost Saved</div>
-          <div className="text-lg font-semibold text-green-300 mt-0.5">{formatCost(costSaved)}</div>
+          <div className="text-lg font-semibold text-green-700 dark:text-green-300 mt-0.5">{formatCost(costSaved)}</div>
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Hit Rate</div>
@@ -243,7 +243,7 @@ export default function CacheRoiCard({
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            className="w-full flex items-center gap-1.5 text-[11px] text-indigo-300 hover:text-indigo-200 uppercase tracking-wider focus:outline-none focus:text-indigo-200"
+            className="w-full flex items-center gap-1.5 text-[11px] text-indigo-700 dark:text-indigo-300 hover:text-indigo-800 dark:hover:text-indigo-200 uppercase tracking-wider focus:outline-none focus:text-indigo-800 dark:focus:text-indigo-200"
             data-testid="cache-roi-toggle"
           >
             <IconChevronRight
@@ -265,7 +265,7 @@ export default function CacheRoiCard({
                   key={s.session_id}
                   className="flex items-center justify-between px-3 py-2 text-xs"
                 >
-                  <code className="text-indigo-300 font-mono">{shortId(s.session_id)}</code>
+                  <code className="text-indigo-700 dark:text-indigo-300 font-mono">{shortId(s.session_id)}</code>
                   <div className="flex items-center gap-4 text-right">
                     <div>
                       <div className="text-gray-900 dark:text-gray-100 font-semibold">
@@ -276,7 +276,7 @@ export default function CacheRoiCard({
                       </div>
                     </div>
                     <div>
-                      <div className="text-green-300 font-semibold">
+                      <div className="text-green-700 dark:text-green-300 font-semibold">
                         {formatCost(s.cost_saved)}
                       </div>
                       <div className="text-[10px] text-gray-500 uppercase tracking-wider">

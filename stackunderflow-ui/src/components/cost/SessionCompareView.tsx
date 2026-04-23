@@ -326,10 +326,10 @@ export default function SessionCompareView({
               <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <th className="px-3 py-2 text-left">Metric</th>
                 <th className="px-3 py-2 text-right">
-                  <span className="font-mono text-indigo-300">A · {shortSession(data.a.session_id)}</span>
+                  <span className="font-mono text-indigo-700 dark:text-indigo-300">A · {shortSession(data.a.session_id)}</span>
                 </th>
                 <th className="px-3 py-2 text-right">
-                  <span className="font-mono text-indigo-300">B · {shortSession(data.b.session_id)}</span>
+                  <span className="font-mono text-indigo-700 dark:text-indigo-300">B · {shortSession(data.b.session_id)}</span>
                 </th>
                 <th className="px-3 py-2 text-right">Δ (B − A)</th>
               </tr>
