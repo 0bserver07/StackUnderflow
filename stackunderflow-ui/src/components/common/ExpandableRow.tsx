@@ -25,10 +25,10 @@ export interface ExpandableRowProps {
 }
 
 const DEFAULT_ROW_CLASS =
-  'border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer focus:outline-none focus:bg-gray-800/50'
+  'border-b border-gray-200/50 dark:border-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer focus:outline-none focus:bg-gray-100/70 dark:focus:bg-gray-800/50'
 
 const DEFAULT_DETAIL_CLASS =
-  'bg-gray-900/60 text-gray-300 px-6 py-3 border-b border-gray-800'
+  'bg-gray-50/80 dark:bg-gray-900/60 text-gray-700 dark:text-gray-300 px-6 py-3 border-b border-gray-200 dark:border-gray-800'
 
 /**
  * Keyboard-accessible expandable table row. Renders two `<tr>`s:
