@@ -27,17 +27,17 @@ type ResolutionFilter = 'all' | ResolutionStatus
 const RESOLUTION_STYLES: Record<ResolutionStatus, { label: string; className: string; title: string }> = {
   resolved: {
     label: 'resolved',
-    className: 'bg-emerald-900/40 text-emerald-300 border-emerald-800',
+    className: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-800',
     title: 'Answer appears to have worked — no follow-up frustration detected.',
   },
   looped: {
     label: 'looped',
-    className: 'bg-amber-900/40 text-amber-300 border-amber-800',
+    className: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800',
     title: 'User kept asking variants of the same question — agent may have gone in circles.',
   },
   abandoned: {
     label: 'abandoned',
-    className: 'bg-rose-900/40 text-rose-300 border-rose-800',
+    className: 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-800',
     title: 'Question never got a follow-up or resolution signal.',
   },
   open: {
@@ -85,7 +85,7 @@ function QAItem({
         )}
 
         {qa.code_snippets.length > 0 && (
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full border bg-purple-900/50 text-purple-300 border-purple-800">
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full border bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/50 dark:text-purple-300 dark:border-purple-800">
             <IconCode size={10} />
             code
           </span>
