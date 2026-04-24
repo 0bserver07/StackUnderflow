@@ -69,7 +69,7 @@ function TopErrorCommandRow({ cmd }: TopErrorCommandRowProps) {
     <button
       type="button"
       onClick={() => openInteraction(cmd.interaction_id)}
-      className="w-full flex items-start gap-2 px-2 py-1.5 rounded hover:bg-red-900/20 focus:outline-none focus:bg-red-900/20 text-left transition-colors group"
+      className="w-full flex items-start gap-2 px-2 py-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 focus:outline-none focus:bg-red-100 dark:focus:bg-red-900/20 text-left transition-colors group"
       title="Open in Messages"
     >
       <IconExternalLink
