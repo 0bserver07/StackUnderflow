@@ -22,8 +22,12 @@ the shape `{"error": "<message>"}` with an appropriate non-2xx status code.
 | GET | `/api/messages` | Dashboard data |
 | GET | `/api/messages/summary` | Dashboard data |
 | POST | `/api/refresh` | Dashboard data |
+| GET | `/api/cost-data` | Cost analytics |
+| GET | `/api/commands` | Cost analytics |
+| GET | `/api/interaction/{id}` | Cost analytics |
 | GET | `/api/jsonl-files` | Sessions |
 | GET | `/api/jsonl-content` | Sessions |
+| GET | `/api/sessions/compare` | Sessions |
 | GET | `/api/search` | Search |
 | POST | `/api/search/reindex` | Search |
 | GET | `/api/search/stats` | Search |
@@ -399,6 +403,130 @@ currently validated.
 
 ---
 
+## Cost Analytics
+
+The Cost tab loads its heavy attribution sections from a separate endpoint so the
+initial dashboard payload stays small. All three endpoints accept an optional
+`log_path` query parameter; when omitted they fall back to the project most recently
+set via `POST /api/project-by-dir`.
+
+### GET /api/cost-data
+
+Return only the analytics sections that were split off `/api/dashboard-data`.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `log_path` | string | current project | Override the active project |
+| `timezone_offset` | int | `0` | UTC offset in minutes for daily bucketing |
+
+**Response** — an object keyed by the nine analytics sections. Missing sections
+default to `[]` or `{}` (never `null`).
+
+```json
+{
+  "session_costs":      [{"session_id": "...", "cost": 4.21, "tokens": {}, "commands": 12, "errors": 0, "duration_s": 940}],
+  "command_costs":      [{"interaction_id": "...", "session_id": "...", "timestamp": "...", "prompt_preview": "...", "cost": 0.18, "tokens": {}, "tools_used": 3, "steps": 2, "models_used": ["..."], "had_error": false}],
+  "tool_costs":         {"Bash": {"calls": 120, "cost": 1.40}},
+  "token_composition":  {"input": 24000, "output": 96000, "cache_read": 1200, "cache_write": 800},
+  "outliers":           {"...": "..."},
+  "retry_signals":      [{"...": "..."}],
+  "session_efficiency": [{"...": "..."}],
+  "error_cost":         {"total": 0.42, "by_category": {}},
+  "trends":             {"week_over_week": {}}
+}
+```
+
+**Status codes:** `200` success; `400` no project selected and no `log_path`;
+`404` project not in store (run `/api/refresh` first).
+
+---
+
+### GET /api/commands
+
+Paginated, sorted slice of the project's command list. Used by the Cost tab's
+"Most expensive commands" panel; clicking a row deep-links to the corresponding
+interaction in the Messages tab.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `log_path` | string | current project | Override the active project |
+| `offset` | int | `0` | Pagination offset (clamped to ≥ 0) |
+| `limit` | int | `50` | Page size (clamped to `[1, 500]`) |
+| `sort` | string | `cost` | One of `cost`, `tokens`, `tools`, `steps`, `time`. Unknown values fall back to `cost`. |
+| `order` | string | `desc` | `desc` or `asc` |
+
+**Response**
+
+```json
+{
+  "commands": [
+    {
+      "interaction_id": "abc123...",
+      "session_id": "020a13e5-...",
+      "timestamp": "2026-04-19T12:34:56Z",
+      "prompt_preview": "How do I refactor this function?",
+      "cost": 0.42,
+      "tokens": {"input": 1200, "output": 800, "cache_read": 0, "cache_write": 0},
+      "tools_used": 3,
+      "steps": 2,
+      "models_used": ["claude-opus-4-6"],
+      "had_error": false
+    }
+  ],
+  "total": 482,
+  "offset": 0,
+  "limit": 50
+}
+```
+
+**Status codes:** `200` success; `400` no project selected and no `log_path`;
+`404` project not in store.
+
+---
+
+### GET /api/interaction/{interaction_id}
+
+Return one enriched interaction (the originating user command + every assistant
+response + every tool result between them). Lets the Messages tab deep-link to a
+specific prompt without paging through the full message list.
+
+**Path parameter:** `interaction_id` — the `interaction_id` from `/api/commands`.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `log_path` | string | current project | Override the active project |
+
+**Response** — a JSON object describing the interaction:
+
+```json
+{
+  "interaction_id": "abc123...",
+  "session_id": "020a13e5-...",
+  "start_time": "2026-04-19T12:34:56Z",
+  "end_time":   "2026-04-19T12:35:48Z",
+  "model": "claude-opus-4-6",
+  "tool_count": 3,
+  "assistant_steps": 2,
+  "is_continuation": false,
+  "tools_used": ["Bash", "Read"],
+  "has_task_tool": false,
+  "command":      {"kind": "user", "content": "...", "tokens": {}, "tools": [], "...": "..."},
+  "responses":    [{"kind": "assistant", "content": "...", "tokens": {}, "...": "..."}],
+  "tool_results": [{"kind": "tool_result", "content": "...", "...": "..."}]
+}
+```
+
+**Status codes:** `200` success; `400` no project selected and no `log_path`;
+`404` project (or interaction) not found.
+
+---
+
 ## Sessions
 
 ### GET /api/jsonl-files
@@ -474,6 +602,37 @@ Return the raw parsed messages for a single session, identified by filename.
 
 **Status codes:** `200` success; `400` no project or invalid `file` param;
 `404` project or session not found in store; `500` internal error.
+
+---
+
+### GET /api/sessions/compare
+
+Side-by-side diff of two sessions, reusing the same `session_costs` rows the Cost
+tab consumes so cost attribution stays consistent.
+
+**Query parameters**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `a` | string | yes | Baseline `session_id` |
+| `b` | string | yes | Comparison `session_id` |
+| `log_path` | string | no | Override the active project |
+
+**Response**
+
+```json
+{
+  "a":    {"session_id": "020a13e5-...", "cost": 4.21, "tokens": {}, "commands": 12, "errors": 0, "duration_s": 940},
+  "b":    {"session_id": "7f72e05c-...", "cost": 5.83, "tokens": {}, "commands": 14, "errors": 1, "duration_s": 1120},
+  "diff": {"cost": 1.62, "tokens": {}, "commands": 2, "errors": 1, "duration_s": 180}
+}
+```
+
+`diff` values are `b - a`. Token diffs are computed for the union of token keys
+present in either side.
+
+**Status codes:** `200` success; `400` no project selected and no `log_path`;
+`404` project or one/both `session_id`s not found; `500` internal error.
 
 ---
 
