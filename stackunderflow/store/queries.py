@@ -95,29 +95,28 @@ def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
     }
 
 
-def get_project_stats(
+def build_enriched_dataset(
     conn: sqlite3.Connection,
     *,
     project_id: int,
-    tz_offset: int = 0,
-) -> tuple[list[dict], dict]:
-    """Run the pipeline on stored messages and return (messages, statistics).
+):
+    """Reconstruct an ``EnrichedDataset`` for a project from the store.
 
-    Reconstructs pipeline RawEntry objects from raw_json stored in the messages
-    table, then runs the full dedup → classify → enrich → aggregate chain.
-    The return shape is identical to pipeline.process(log_dir).
+    Shared by ``get_project_stats`` (for the full stats dict) and the
+    ``/api/interaction/{id}`` route (which needs the raw Interaction chain).
+    Returns ``(dataset, log_dir)`` or ``(None, "")`` if the project is missing.
     """
     import json as _json
     from pathlib import Path
 
-    from stackunderflow.stats import aggregator, classifier, enricher, formatter
+    from stackunderflow.stats import classifier, enricher
     from stackunderflow.stats.classifier import RawEntry
 
     row = conn.execute(
         "SELECT path, slug FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     if row is None:
-        return [], {}
+        return None, ""
 
     log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
 
@@ -148,6 +147,27 @@ def get_project_stats(
 
     tagged = classifier.tag(raw_entries)
     dataset = enricher.build(tagged, log_dir)
+    return dataset, log_dir
+
+
+def get_project_stats(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    tz_offset: int = 0,
+) -> tuple[list[dict], dict]:
+    """Run the pipeline on stored messages and return (messages, statistics).
+
+    Reconstructs pipeline RawEntry objects from raw_json stored in the messages
+    table, then runs the full dedup → classify → enrich → aggregate chain.
+    The return shape is identical to pipeline.process(log_dir).
+    """
+    from stackunderflow.stats import aggregator, formatter
+
+    dataset, log_dir = build_enriched_dataset(conn, project_id=project_id)
+    if dataset is None:
+        return [], {}
+
     messages = formatter.to_dicts(dataset)
     stats = aggregator.summarise(dataset, log_dir, tz_offset=tz_offset)
     return messages, stats

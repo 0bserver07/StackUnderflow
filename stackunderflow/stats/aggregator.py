@@ -31,11 +31,18 @@ def summarise(
     """Produce the full statistics dict matching the API contract."""
 
     # single-pass collectors
-    tools_c     = _ToolsCollector()
-    models_c    = _ModelsCollector()
-    sessions_c  = _SessionsCollector()
-    errors_c    = _ErrorsCollector()
-    cache_c     = _CacheCollector()
+    tools_c       = _ToolsCollector()
+    models_c      = _ModelsCollector()
+    sessions_c    = _SessionsCollector()
+    errors_c      = _ErrorsCollector()
+    cache_c       = _CacheCollector()
+
+    # analytics-expansion collectors (§1.1 – §1.8)
+    sess_cost_c   = _SessionCostCollector()
+    tool_cost_c   = _ToolCostCollector()
+    token_comp_c  = _TokenCompositionCollector(tz_offset)
+    sess_eff_c    = _SessionEfficiencyCollector()
+    err_cost_c    = _ErrorCostCollector()
 
     for rec in ds.records:
         tools_c.ingest(rec)
@@ -43,18 +50,52 @@ def summarise(
         sessions_c.ingest(rec)
         errors_c.ingest(rec)
         cache_c.ingest(rec)
+        sess_cost_c.ingest(rec)
+        tool_cost_c.ingest(rec)
+        token_comp_c.ingest(rec)
+        sess_eff_c.ingest(rec)
+        err_cost_c.ingest(rec)
+
+    # interaction-driven collectors (§1.2, §1.5, §1.6)
+    cmd_cost_c    = _CommandCostCollector()
+    outlier_c     = _OutlierCollector()
+    retry_c       = _RetryCollector()
+
+    for ix in ds.interactions:
+        cmd_cost_c.ingest_interaction(ix)
+        outlier_c.ingest_interaction(ix)
+        retry_c.ingest_interaction(ix)
 
     return {
-        "overview":          _build_overview(ds, log_dir, tools_c),
-        "tools":             tools_c.result(),
-        "sessions":          sessions_c.result(),
-        "daily_stats":       _daily(ds.records, ds.interactions, tz_offset),
-        "hourly_pattern":    _hourly(ds.records, tz_offset),
-        "errors":            errors_c.result(ds.records),
-        "models":            models_c.result(),
-        "user_interactions": _command_analysis(ds.records, ds.interactions),
-        "cache":             cache_c.result(),
+        "overview":           _build_overview(ds, log_dir, tools_c),
+        "tools":              tools_c.result(),
+        "sessions":           sessions_c.result(),
+        "daily_stats":        _daily(ds.records, ds.interactions, tz_offset),
+        "hourly_pattern":     _hourly(ds.records, tz_offset),
+        "errors":             errors_c.result(ds.records),
+        "models":             models_c.result(),
+        "user_interactions":  _command_analysis(ds.records, ds.interactions),
+        "cache":              cache_c.result(),
+        # ── analytics expansion (docs/specs/analytics-expansion.md §1) ────
+        "session_costs":      _safe(lambda: sess_cost_c.result(ds.interactions), []),
+        "command_costs":      _safe(cmd_cost_c.result, []),
+        "tool_costs":         _safe(tool_cost_c.result, {}),
+        "token_composition":  _safe(token_comp_c.result, _empty_token_composition()),
+        "outliers":           _safe(outlier_c.result, {"high_tool_commands": [], "high_step_commands": []}),
+        "retry_signals":      _safe(retry_c.result, []),
+        "session_efficiency": _safe(sess_eff_c.result, []),
+        "error_cost":         _safe(lambda: err_cost_c.result(ds.interactions), _empty_error_cost()),
+        "trends":             _safe(lambda: _trends(ds.records, ds.interactions, tz_offset), _empty_trends()),
     }
+
+
+def _safe(fn, fallback):
+    """Invoke ``fn()`` and swallow any exception — collectors must never break
+    the whole dashboard payload if a single section fails."""
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001 — graceful degradation per spec §4
+        return fallback
 
 
 # ── overview (needs data from multiple collectors) ───────────────────────────
@@ -195,6 +236,591 @@ class _ErrorsCollector:
             "error_details": self._details,
             "assistant_details": asst_details,
         }
+
+
+# ── analytics expansion collectors (docs/specs/analytics-expansion.md §1) ───
+
+class _SessionCostCollector:
+    """§1.1 — per-session cost/tokens/messages/errors, ranked desc by cost."""
+
+    def __init__(self) -> None:
+        self._s: dict[str, dict] = {}
+
+    def ingest(self, r: Record) -> None:
+        s = self._s.setdefault(r.session_id, {
+            "t0": "", "t1": "",
+            "msgs": 0, "errs": 0,
+            "tokens": Counter(),
+            "by_model": {},
+            "models": set(),
+        })
+        s["msgs"] += 1
+        if r.is_error:
+            s["errs"] += 1
+        if r.timestamp:
+            if not s["t0"] or r.timestamp < s["t0"]:
+                s["t0"] = r.timestamp
+            if not s["t1"] or r.timestamp > s["t1"]:
+                s["t1"] = r.timestamp
+        for k, v in r.tokens.items():
+            s["tokens"][k] += v
+        if r.kind == "assistant" and r.model and r.model != "N/A":
+            s["models"].add(r.model)
+            m = s["by_model"].setdefault(r.model, Counter())
+            for k, v in r.tokens.items():
+                m[k] += v
+
+    def result(self, interactions: list[Interaction]) -> list[dict]:
+        cmds_by_session: Counter[str] = Counter()
+        first_prompt_by_session: dict[str, tuple[str, str]] = {}
+        for ix in sorted(interactions, key=lambda ix: ix.start_time or ""):
+            sid = ix.session_id
+            cmds_by_session[sid] += 1
+            if sid not in first_prompt_by_session:
+                first_prompt_by_session[sid] = (ix.start_time or "", ix.command.content or "")
+
+        out: list[dict] = []
+        for sid, s in self._s.items():
+            duration = 0.0
+            if s["t0"] and s["t1"]:
+                try:
+                    duration = max(0.0, (_parse_ts(s["t1"]) - _parse_ts(s["t0"])).total_seconds())
+                except (ValueError, TypeError):
+                    duration = 0.0
+
+            cost = 0.0
+            for model, tok_c in s["by_model"].items():
+                cost += compute_cost(dict(tok_c), model)["total_cost"]
+
+            first = first_prompt_by_session.get(sid, ("", ""))[1]
+            preview = _preview(first, 140)
+
+            out.append({
+                "session_id": sid,
+                "started_at": s["t0"],
+                "ended_at": s["t1"],
+                "duration_s": duration,
+                "cost": cost,
+                "tokens": dict(s["tokens"]),
+                "messages": s["msgs"],
+                "commands": cmds_by_session.get(sid, 0),
+                "errors": s["errs"],
+                "first_prompt_preview": preview,
+                "models_used": sorted(s["models"]),
+            })
+        out.sort(key=lambda x: x["cost"], reverse=True)
+        return out
+
+
+class _CommandCostCollector:
+    """§1.2 — one entry per real user prompt (Interaction), top 50 desc by cost."""
+
+    def __init__(self) -> None:
+        self._items: list[dict] = []
+
+    def ingest_interaction(self, ix: Interaction) -> None:
+        tokens: Counter[str] = Counter()
+        by_model: dict[str, Counter[str]] = {}
+        had_error = False
+        models_used: set[str] = set()
+        for r in ix.responses + ix.tool_results:
+            if r.is_error:
+                had_error = True
+            for k, v in r.tokens.items():
+                tokens[k] += v
+            if r.kind == "assistant" and r.model and r.model != "N/A":
+                models_used.add(r.model)
+                m = by_model.setdefault(r.model, Counter())
+                for k, v in r.tokens.items():
+                    m[k] += v
+
+        cost = sum(compute_cost(dict(tok_c), model)["total_cost"] for model, tok_c in by_model.items())
+
+        self._items.append({
+            "interaction_id": ix.interaction_id,
+            "session_id": ix.session_id,
+            "timestamp": ix.start_time or "",
+            "prompt_preview": _preview(ix.command.content or "", 200),
+            "cost": cost,
+            "tokens": dict(tokens),
+            "tools_used": ix.tool_count,
+            "steps": ix.assistant_steps,
+            "models_used": sorted(models_used),
+            "had_error": had_error,
+        })
+
+    def result(self) -> list[dict]:
+        return sorted(self._items, key=lambda x: x["cost"], reverse=True)[:50]
+
+
+class _ToolCostCollector:
+    """§1.3 — per-tool cost with 1/N cost attribution across distinct tools per msg."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, dict[str, float]] = {}
+
+    def ingest(self, r: Record) -> None:
+        if r.kind != "assistant" or not r.tools:
+            return
+        name_counts: Counter[str] = Counter(t.get("name", "?") for t in r.tools)
+        distinct = list(name_counts.keys())
+        if not distinct:
+            return
+        n = len(distinct)
+        share = 1.0 / n
+        msg_cost = 0.0
+        if r.model and r.model != "N/A":
+            msg_cost = compute_cost(r.tokens, r.model)["total_cost"]
+        for name in distinct:
+            d = self._data.setdefault(name, {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost": 0.0,
+            })
+            d["calls"] += name_counts[name]
+            d["input_tokens"] += r.tokens.get("input", 0)
+            d["output_tokens"] += r.tokens.get("output", 0)
+            d["cache_read_tokens"] += r.tokens.get("cache_read", 0)
+            d["cache_creation_tokens"] += r.tokens.get("cache_creation", 0)
+            d["cost"] += msg_cost * share
+
+    def result(self) -> dict:
+        return {k: dict(v) for k, v in self._data.items()}
+
+
+class _TokenCompositionCollector:
+    """§1.4 — token totals per day, globally, and per session."""
+
+    def __init__(self, tz_offset: int = 0) -> None:
+        self._tz = tz_offset
+        self._daily: dict[str, Counter[str]] = {}
+        self._totals: Counter[str] = Counter()
+        self._per_session: dict[str, Counter[str]] = {}
+
+    def ingest(self, r: Record) -> None:
+        if not r.tokens:
+            return
+        for k, v in r.tokens.items():
+            self._totals[k] += v
+        sess = self._per_session.setdefault(r.session_id, Counter())
+        for k, v in r.tokens.items():
+            sess[k] += v
+        day = _local_day(r.timestamp, self._tz)
+        if day is not None:
+            d = self._daily.setdefault(day, Counter())
+            for k, v in r.tokens.items():
+                d[k] += v
+
+    def result(self) -> dict:
+        return {
+            "daily":       {k: dict(v) for k, v in self._daily.items()},
+            "totals":      dict(self._totals),
+            "per_session": {k: dict(v) for k, v in self._per_session.items()},
+        }
+
+
+class _OutlierCollector:
+    """§1.5 — interactions with abnormally high tool/step counts."""
+
+    def __init__(self) -> None:
+        self._high_tool: list[dict] = []
+        self._high_step: list[dict] = []
+
+    def ingest_interaction(self, ix: Interaction) -> None:
+        tc, steps = ix.tool_count, ix.assistant_steps
+        if tc <= 20 and steps <= 15:
+            return
+        by_model: dict[str, Counter[str]] = {}
+        for r in ix.responses + ix.tool_results:
+            if r.kind == "assistant" and r.model and r.model != "N/A":
+                m = by_model.setdefault(r.model, Counter())
+                for k, v in r.tokens.items():
+                    m[k] += v
+        cost = sum(compute_cost(dict(tok_c), model)["total_cost"] for model, tok_c in by_model.items())
+        entry = {
+            "interaction_id": ix.interaction_id,
+            "session_id": ix.session_id,
+            "timestamp": ix.start_time or "",
+            "prompt_preview": _preview(ix.command.content or "", 200),
+            "tool_count": tc,
+            "step_count": steps,
+            "cost": cost,
+        }
+        if tc > 20:
+            self._high_tool.append(entry)
+        if steps > 15:
+            self._high_step.append(entry)
+
+    def result(self) -> dict:
+        return {
+            "high_tool_commands": sorted(self._high_tool, key=lambda x: x["tool_count"], reverse=True),
+            "high_step_commands": sorted(self._high_step, key=lambda x: x["step_count"], reverse=True),
+        }
+
+
+class _RetryCollector:
+    """§1.6 / polish §A1 — retry signals inside an Interaction.
+
+    A retry fires when the same tool is invoked ≥2 times AND at least one
+    preceding invocation was *followed by an error*. The follow-up error can
+    surface in three places (none of them on the assistant record itself,
+    which is why the v1 detection missed every chimera retry):
+
+    1. The next ``tool_result`` record has ``is_error=True``.
+    2. The next ``tool_result``'s textual content starts with ``"Error"`` or
+       ``"failed"`` (covers stderr-only outputs that the classifier didn't
+       pick up).
+    3. A subsequent assistant message in the same Interaction matches
+       ``INTERRUPT_API`` / ``INTERRUPT_PREFIX``.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[dict] = []
+
+    def ingest_interaction(self, ix: Interaction) -> None:
+        events = sorted(
+            list(ix.responses) + list(ix.tool_results),
+            key=lambda r: r.timestamp or "",
+        )
+        if not events:
+            return
+
+        # Per-tool: ordered list of failure flags, one per invocation.
+        per_tool_flags: dict[str, list[bool]] = {}
+        per_tool_wasted: dict[str, int] = {}
+
+        for i, r in enumerate(events):
+            if r.kind != "assistant" or not r.tools:
+                continue
+            failed = _next_record_signals_error(events, i)
+            out_tok = r.tokens.get("output", 0)
+            for t in r.tools:
+                name = t.get("name", "?")
+                per_tool_flags.setdefault(name, []).append(failed)
+                if failed:
+                    per_tool_wasted[name] = per_tool_wasted.get(name, 0) + out_tok
+
+        for name, flags in per_tool_flags.items():
+            if len(flags) < 2:
+                continue
+            # "at least one *preceding* invocation was followed by an error" —
+            # a retry signal needs a follow-up invocation, so the failure
+            # must occur in any but the last slot.
+            if not any(flags[:-1]):
+                continue
+            # consecutive_failures = longest run of failed invocations of this tool.
+            run = max_run = 0
+            for f in flags:
+                if f:
+                    run += 1
+                    if run > max_run:
+                        max_run = run
+                else:
+                    run = 0
+            wt = per_tool_wasted.get(name, 0)
+            wc = 0.0
+            if ix.model and ix.model != "N/A" and wt:
+                wc = compute_cost(
+                    {"input": 0, "output": wt, "cache_creation": 0, "cache_read": 0},
+                    ix.model,
+                )["total_cost"]
+            self._items.append({
+                "interaction_id": ix.interaction_id,
+                "session_id": ix.session_id,
+                "timestamp": ix.start_time or "",
+                "tool": name,
+                "consecutive_failures": max_run,
+                "total_invocations": len(flags),
+                "estimated_wasted_tokens": wt,
+                "estimated_wasted_cost": wc,
+            })
+
+    def result(self) -> list[dict]:
+        return list(self._items)
+
+
+def _next_record_signals_error(events: list[Record], idx: int) -> bool:
+    """True iff the records following ``events[idx]`` indicate the tool batch
+    just invoked ended in failure. See ``_RetryCollector`` for the full rule."""
+    j = idx + 1
+    while j < len(events):
+        r = events[j]
+        if r.kind == "assistant":
+            txt = r.content or ""
+            if txt.startswith(INTERRUPT_API) or txt.startswith(INTERRUPT_PREFIX):
+                return True
+            # Hit the next assistant turn without seeing an error in between.
+            return False
+        # tool_result record
+        if r.is_error:
+            return True
+        stripped = (r.content or "").lstrip()
+        if stripped.startswith("Error") or stripped.startswith("failed"):
+            return True
+        j += 1
+    return False
+
+
+# Search tool heuristic for §1.7 classification.
+_SEARCH_BY_NAME = {"Grep", "Glob"}
+
+
+def _is_search_tool_name(name: str) -> bool:
+    return name in _SEARCH_BY_NAME or "search" in name.lower()
+
+
+class _SessionEfficiencyCollector:
+    """§1.7 — per-session tool-mix ratios, idle gaps, classification."""
+
+    _IDLE_THRESHOLD_S = 30.0
+    _IDLE_CLASS_RATIO = 0.4
+    _EDIT_HEAVY_MIN = 0.25
+    _RESEARCH_SUM_MIN = 0.6
+    _RESEARCH_EDIT_MAX = 0.1
+
+    def __init__(self) -> None:
+        self._s: dict[str, dict] = {}
+
+    def ingest(self, r: Record) -> None:
+        s = self._s.setdefault(r.session_id, {
+            "timestamps": [],
+            "tools": Counter(),
+        })
+        if r.timestamp:
+            s["timestamps"].append(r.timestamp)
+        for t in r.tools:
+            s["tools"][t.get("name", "?")] += 1
+
+    def result(self) -> list[dict]:
+        out: list[dict] = []
+        for sid, s in self._s.items():
+            total = sum(s["tools"].values())
+            search = sum(c for n, c in s["tools"].items() if _is_search_tool_name(n))
+            edit = s["tools"].get("Edit", 0) + s["tools"].get("Write", 0)
+            read = s["tools"].get("Read", 0)
+            bash = s["tools"].get("Bash", 0)
+            sr = search / total if total else 0.0
+            er = edit / total if total else 0.0
+            rr = read / total if total else 0.0
+            br = bash / total if total else 0.0
+
+            times = sorted(t for t in s["timestamps"] if t)
+            total_idle = max_idle = 0.0
+            duration_s = 0.0
+            if times:
+                try:
+                    duration_s = max(
+                        0.0, (_parse_ts(times[-1]) - _parse_ts(times[0])).total_seconds()
+                    )
+                except (ValueError, TypeError):
+                    duration_s = 0.0
+            for a, b in zip(times, times[1:]):
+                try:
+                    gap = (_parse_ts(b) - _parse_ts(a)).total_seconds()
+                except (ValueError, TypeError):
+                    continue
+                if gap >= self._IDLE_THRESHOLD_S:
+                    total_idle += gap
+                    if gap > max_idle:
+                        max_idle = gap
+
+            if er >= self._EDIT_HEAVY_MIN:
+                classification = "edit-heavy"
+            elif sr + rr >= self._RESEARCH_SUM_MIN and er < self._RESEARCH_EDIT_MAX:
+                classification = "research-heavy"
+            elif duration_s > 0 and total_idle > duration_s * self._IDLE_CLASS_RATIO:
+                classification = "idle-heavy"
+            else:
+                classification = "balanced"
+
+            out.append({
+                "session_id": sid,
+                "search_ratio": sr,
+                "edit_ratio": er,
+                "read_ratio": rr,
+                "bash_ratio": br,
+                "idle_gap_total_s": total_idle,
+                "idle_gap_max_s": max_idle,
+                "classification": classification,
+            })
+        return out
+
+
+class _ErrorCostCollector:
+    """§1.8 — total errors, retry-cost estimate, errors-by-tool, top interactions.
+
+    The retry-cost estimate is *decoupled* from retry-signal detection: every
+    error record is charged the output-token cost of the next assistant message
+    in the same Interaction (or the error record's own output tokens if it is
+    itself an assistant). Errors are expensive whether or not the agent loops.
+
+    Tool attribution works by matching ``tool_use_id`` on error ``tool_result``
+    blocks back to the ``tool_use`` blocks we observed on prior assistant
+    records — tool_result error records themselves have no ``tools`` list.
+    """
+
+    def __init__(self) -> None:
+        self.total_errors = 0
+        # tool_use_id → tool_name, populated from every assistant record we see
+        # so errors_by_tool can attribute tool_result errors correctly
+        self._tool_id_to_name: dict[str, str] = {}
+
+    def ingest(self, r: Record) -> None:
+        if r.kind == "assistant":
+            for t in r.tools:
+                tid = t.get("id")
+                name = t.get("name")
+                if tid and name:
+                    self._tool_id_to_name[tid] = name
+        if r.is_error:
+            self.total_errors += 1
+
+    def result(self, interactions: list[Interaction]) -> dict:
+        errors_by_tool: Counter[str] = Counter()
+        est_retry_tokens = 0
+        est_retry_cost = 0.0
+        ranked: list[tuple[int, Interaction]] = []
+
+        for ix in interactions:
+            timeline = sorted(
+                ix.responses + ix.tool_results,
+                key=lambda rec: rec.timestamp or "",
+            )
+            err_count = 0
+            for idx, rec in enumerate(timeline):
+                if not rec.is_error:
+                    continue
+                err_count += 1
+                # Tool attribution: match tool_use_id on error tool_result blocks.
+                for name in self._tool_names_for_error(rec):
+                    errors_by_tool[name] += 1
+                # Fallback: if the error record carries its own tool_use blocks
+                # (rare — mainly assistants flagged as errors), count those too.
+                if rec.kind != "user":
+                    for t in rec.tools:
+                        nm = t.get("name")
+                        if nm:
+                            errors_by_tool[nm] += 1
+                # Retry cost: own output tokens if assistant, else next assistant.
+                tokens, model = self._retry_tokens_and_model(rec, timeline, idx)
+                if tokens and model and model != "N/A":
+                    est_retry_tokens += tokens
+                    est_retry_cost += compute_cost(
+                        {"input": 0, "output": tokens,
+                         "cache_creation": 0, "cache_read": 0},
+                        model,
+                    )["total_cost"]
+            if err_count > 0:
+                ranked.append((err_count, ix))
+
+        ranked.sort(key=lambda p: p[0], reverse=True)
+        top_error_commands: list[dict] = [
+            _interaction_to_outlier_command(ix) for _, ix in ranked[:10]
+        ]
+
+        return {
+            "total_errors": self.total_errors,
+            "estimated_retry_tokens": est_retry_tokens,
+            "estimated_retry_cost": est_retry_cost,
+            "errors_by_tool": dict(errors_by_tool),
+            "top_error_commands": top_error_commands,
+        }
+
+    def _tool_names_for_error(self, r: Record) -> list[str]:
+        """Resolve tool name(s) for an error record by inspecting the raw
+        ``tool_result`` blocks and looking up their ``tool_use_id`` in the
+        accumulated id→name map built from prior assistant tool_use blocks.
+        Returns only tool names that could be resolved — we'd rather drop a
+        noisy "Unknown" bucket than pollute the attribution.
+        """
+        raw = r.raw_data
+        if not isinstance(raw, dict):
+            return []
+        msg = raw.get("message")
+        if not isinstance(msg, dict):
+            return []
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return []
+        names: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_result" or not block.get("is_error"):
+                continue
+            tid = block.get("tool_use_id")
+            if tid and tid in self._tool_id_to_name:
+                names.append(self._tool_id_to_name[tid])
+        return names
+
+    @staticmethod
+    def _retry_tokens_and_model(
+        error_rec: Record,
+        timeline: list[Record],
+        idx: int,
+    ) -> tuple[int, str]:
+        """Return ``(output_tokens, model)`` to charge for this error record.
+
+        If the error is itself an assistant with output tokens, use those and
+        its own model. Otherwise, scan forward in the interaction timeline for
+        the next assistant message and use its output tokens + model.
+        """
+        if error_rec.kind == "assistant":
+            out = int(error_rec.tokens.get("output", 0) or 0)
+            if out and error_rec.model and error_rec.model != "N/A":
+                return out, error_rec.model
+        for j in range(idx + 1, len(timeline)):
+            cand = timeline[j]
+            if cand.kind == "assistant" and cand.model and cand.model != "N/A":
+                return int(cand.tokens.get("output", 0) or 0), cand.model
+        return 0, ""
+
+
+def _interaction_to_outlier_command(ix: Interaction) -> dict:
+    """Render an Interaction as an ``OutlierCommand`` dict (shape shared with
+    ``_OutlierCollector`` and the frontend ``OutlierCommand`` TypedDict)."""
+    by_model: dict[str, Counter[str]] = {}
+    for r in ix.responses + ix.tool_results:
+        if r.kind == "assistant" and r.model and r.model != "N/A":
+            m = by_model.setdefault(r.model, Counter())
+            for k, v in r.tokens.items():
+                m[k] += v
+    cost = sum(
+        compute_cost(dict(tok_c), model)["total_cost"]
+        for model, tok_c in by_model.items()
+    )
+    return {
+        "interaction_id": ix.interaction_id,
+        "session_id": ix.session_id,
+        "timestamp": ix.start_time or "",
+        "prompt_preview": _preview(ix.command.content or "", 200),
+        "tool_count": ix.tool_count,
+        "step_count": ix.assistant_steps,
+        "cost": cost,
+    }
+
+
+def _empty_token_composition() -> dict:
+    return {"daily": {}, "totals": {}, "per_session": {}}
+
+
+def _empty_error_cost() -> dict:
+    return {
+        "total_errors": 0,
+        "estimated_retry_tokens": 0,
+        "estimated_retry_cost": 0.0,
+        "errors_by_tool": {},
+        "top_error_commands": [],
+    }
+
+
+def _preview(text: str, limit: int) -> str:
+    if not text:
+        return ""
+    return text.replace("\n", " ").replace("\r", " ").strip()[:limit]
 
 
 class _CacheCollector:
@@ -605,3 +1231,104 @@ def _next_is_interrupt(ordered: list[Record], idx: int) -> bool:
             return _is_interrupt_text(nxt.content)
         j += 1
     return False
+
+
+# ── trends (§1.9) ───────────────────────────────────────────────────────────
+
+_TREND_ZERO: dict[str, float] = {
+    "cost_per_command": 0.0,
+    "errors_per_command": 0.0,
+    "tools_per_command": 0.0,
+    "tokens_per_command": 0.0,
+    "commands": 0,
+    "cost": 0.0,
+}
+
+
+def _empty_trends() -> dict:
+    return {
+        "current_week": dict(_TREND_ZERO),
+        "prior_week":   dict(_TREND_ZERO),
+        "delta_pct":    dict(_TREND_ZERO),
+    }
+
+
+def _trends(
+    records: list[Record],
+    interactions: list[Interaction],
+    tz_offset: int,  # noqa: ARG001 — signature parity with other sections
+) -> dict:
+    """Compare the last 7 days to the prior 7 days using ``overview.date_range.end``."""
+    stamps = [r.timestamp for r in records if r.timestamp]
+    if not stamps:
+        return _empty_trends()
+    try:
+        end = _parse_ts(max(stamps))
+    except (ValueError, TypeError):
+        return _empty_trends()
+
+    cur_start = end - timedelta(days=7)
+    prior_start = end - timedelta(days=14)
+
+    current: list[Interaction] = []
+    prior:   list[Interaction] = []
+    for ix in interactions:
+        if not ix.start_time:
+            continue
+        try:
+            t = _parse_ts(ix.start_time)
+        except (ValueError, TypeError):
+            continue
+        if cur_start < t <= end:
+            current.append(ix)
+        elif prior_start < t <= cur_start:
+            prior.append(ix)
+
+    cur_m = _trend_metrics(current)
+    prior_m = _trend_metrics(prior)
+
+    delta: dict[str, float] = {}
+    for k, cur_v in cur_m.items():
+        prior_v = prior_m[k]
+        if k == "commands":
+            delta[k] = cur_v - prior_v
+        elif prior_v == 0:
+            delta[k] = 0.0
+        else:
+            delta[k] = (cur_v - prior_v) / prior_v * 100
+
+    return {"current_week": cur_m, "prior_week": prior_m, "delta_pct": delta}
+
+
+def _trend_metrics(ixs: list[Interaction]) -> dict:
+    if not ixs:
+        return dict(_TREND_ZERO)
+    total_cost = 0.0
+    total_errors = 0
+    total_tools = 0
+    total_tokens = 0
+    for ix in ixs:
+        by_model: dict[str, Counter[str]] = {}
+        for r in ix.responses + ix.tool_results:
+            if r.is_error:
+                total_errors += 1
+            for v in r.tokens.values():
+                total_tokens += v
+            if r.kind == "assistant" and r.model and r.model != "N/A":
+                m = by_model.setdefault(r.model, Counter())
+                for k, v in r.tokens.items():
+                    m[k] += v
+        total_tools += ix.tool_count
+        total_cost += sum(
+            compute_cost(dict(tok_c), model)["total_cost"]
+            for model, tok_c in by_model.items()
+        )
+    n = len(ixs)
+    return {
+        "cost_per_command":   total_cost / n,
+        "errors_per_command": total_errors / n,
+        "tools_per_command":  total_tools / n,
+        "tokens_per_command": total_tokens / n,
+        "commands": n,
+        "cost": total_cost,
+    }

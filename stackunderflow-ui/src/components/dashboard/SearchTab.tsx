@@ -74,7 +74,7 @@ function HighlightedSnippet({ html }: { html: string }) {
 
     if (inMark) {
       elements.push(
-        <mark key={i} className="bg-yellow-500/30 text-yellow-200 rounded-sm px-0.5">
+        <mark key={i} className="bg-yellow-200 dark:bg-yellow-500/30 text-yellow-900 dark:text-yellow-200 rounded-sm px-0.5">
           {part}
         </mark>,
       )
@@ -84,7 +84,7 @@ function HighlightedSnippet({ html }: { html: string }) {
   }
 
   return (
-    <span className="text-sm text-gray-300 leading-relaxed">
+    <span className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
       {elements}
     </span>
   )
@@ -92,14 +92,14 @@ function HighlightedSnippet({ html }: { html: string }) {
 
 function SearchResultItem({ result }: { result: SearchResult }) {
   return (
-    <div className="px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+    <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="mb-1.5">
             {result.snippet ? (
               <HighlightedSnippet html={result.snippet} />
             ) : (
-              <p className="text-sm text-gray-300 leading-relaxed line-clamp-3">
+              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
                 {result.content.length > 300 ? result.content.slice(0, 300) + '...' : result.content}
               </p>
             )}
@@ -110,7 +110,7 @@ function SearchResultItem({ result }: { result: SearchResult }) {
             {result.model && result.model !== 'N/A' && (
               <span className="text-[10px] text-gray-500 font-mono">{result.model}</span>
             )}
-            <span className="text-[10px] text-gray-600 font-mono truncate max-w-[180px]">
+            <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono truncate max-w-[180px]">
               {result.session_id}
             </span>
             <TimeAgo timestamp={result.timestamp} />
@@ -171,7 +171,7 @@ export default function SearchTab({ projectName, initialQuery = '' }: SearchTabP
   return (
     <div className="flex flex-col h-full">
       {/* Search bar */}
-      <div className="px-4 py-3 border-b border-gray-800">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <IconSearch
@@ -184,13 +184,13 @@ export default function SearchTab({ projectName, initialQuery = '' }: SearchTabP
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search messages..."
-              className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
+              className="w-full pl-9 pr-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-sm text-gray-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
             />
           </div>
           <button
             onClick={handleReindex}
             disabled={reindexing}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 bg-gray-800 border border-gray-700 rounded-md hover:text-gray-200 hover:border-gray-600 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600 disabled:opacity-50 transition-colors"
             title="Reindex search"
           >
             <IconRefresh size={14} className={reindexing ? 'animate-spin' : ''} />
@@ -249,11 +249,11 @@ export default function SearchTab({ projectName, initialQuery = '' }: SearchTabP
 
       {/* Pagination */}
       {data && totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-800">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 dark:border-gray-800">
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <IconChevronLeft size={14} />
             Prev
@@ -266,7 +266,7 @@ export default function SearchTab({ projectName, initialQuery = '' }: SearchTabP
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             Next
             <IconChevronRight size={14} />

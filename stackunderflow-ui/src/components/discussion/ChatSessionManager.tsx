@@ -50,13 +50,13 @@ export default function ChatSessionManager({
               onClick={() => onSwitch(session.id)}
             >
               <span className="flex-1 truncate">{session.contextLabel}</span>
-              <span className="text-[10px] text-gray-600 shrink-0">{formatDate(session.updatedAt)}</span>
+              <span className="text-[10px] text-gray-400 shrink-0">{formatDate(session.updatedAt)}</span>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   onDelete(session.id)
                 }}
-                className="p-0.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                className="p-0.5 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
                 title="Delete session"
               >
                 <IconTrash size={12} />

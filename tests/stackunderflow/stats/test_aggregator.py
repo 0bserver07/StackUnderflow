@@ -6,9 +6,17 @@ import pytest
 
 from stackunderflow.stats.aggregator import (
     _CacheCollector,
+    _CommandCostCollector,
+    _ErrorCostCollector,
     _ErrorsCollector,
     _ModelsCollector,
+    _OutlierCollector,
+    _RetryCollector,
+    _SessionCostCollector,
+    _SessionEfficiencyCollector,
     _SessionsCollector,
+    _TokenCompositionCollector,
+    _ToolCostCollector,
     _ToolsCollector,
     _cmd_has_search_verb,
     _daily,
@@ -17,6 +25,7 @@ from stackunderflow.stats.aggregator import (
     _local_day,
     _local_hour,
     _time_bounds,
+    _trends,
     recompute_tz_stats,
     summarise,
 )
@@ -485,3 +494,656 @@ def test_recompute_tz_stats_empty():
     assert "daily_stats" in result
     assert "hourly_pattern" in result
     assert result["daily_stats"] == {}
+
+
+# ── analytics-expansion helpers ──────────────────────────────────────────────
+
+def _ix(
+    *,
+    interaction_id: str = "ix1",
+    session_id: str = "s1",
+    start_time: str = "2026-02-01T10:00:00Z",
+    model: str = _MODEL,
+    command_content: str = "do the thing",
+    responses: list[Record] | None = None,
+    tool_results: list[Record] | None = None,
+    tools_used: list[dict] | None = None,
+    tool_count: int | None = None,
+    assistant_steps: int | None = None,
+) -> Interaction:
+    cmd = _rec(
+        kind="user",
+        session_id=session_id,
+        timestamp=start_time,
+        content=command_content,
+        model="N/A",
+    )
+    responses = responses or []
+    tool_results = tool_results or []
+    tools_used = tools_used or []
+    if tool_count is None:
+        tool_count = len(tools_used)
+    if assistant_steps is None:
+        assistant_steps = len(responses)
+    return Interaction(
+        interaction_id=interaction_id,
+        command=cmd,
+        responses=list(responses),
+        tool_results=list(tool_results),
+        session_id=session_id,
+        start_time=start_time,
+        end_time=start_time,
+        model=model,
+        tool_count=tool_count,
+        assistant_steps=assistant_steps,
+        tools_used=list(tools_used),
+    )
+
+
+# ── _SessionCostCollector (§1.1) ─────────────────────────────────────────────
+
+def test_session_cost_collector_ranks_by_cost():
+    c = _SessionCostCollector()
+    # Cheap session
+    c.ingest(_rec(session_id="a", kind="assistant",
+                  tokens={"input": 10, "output": 5, "cache_creation": 0, "cache_read": 0},
+                  timestamp="2026-02-01T00:00:00Z"))
+    # Expensive session
+    c.ingest(_rec(session_id="b", kind="assistant",
+                  tokens={"input": 10_000, "output": 5_000, "cache_creation": 0, "cache_read": 0},
+                  timestamp="2026-02-01T00:00:00Z"))
+    c.ingest(_rec(session_id="b", kind="assistant",
+                  tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+                  timestamp="2026-02-01T00:05:00Z"))
+    out = c.result(interactions=[])
+    assert [s["session_id"] for s in out] == ["b", "a"]
+    assert out[0]["duration_s"] == 300.0
+    assert out[0]["tokens"]["input"] == 10_000
+    assert out[0]["messages"] == 2
+
+
+def test_session_cost_collector_first_prompt_preview_and_commands():
+    c = _SessionCostCollector()
+    c.ingest(_rec(session_id="s", kind="user", timestamp="2026-02-01T00:00:00Z"))
+    c.ingest(_rec(session_id="s", kind="assistant", timestamp="2026-02-01T00:01:00Z"))
+    interactions = [
+        _ix(interaction_id="i1", session_id="s",
+            start_time="2026-02-01T00:00:00Z", command_content="first prompt\nwith newline"),
+        _ix(interaction_id="i2", session_id="s",
+            start_time="2026-02-01T00:02:00Z", command_content="second prompt"),
+    ]
+    out = c.result(interactions)
+    assert out[0]["commands"] == 2
+    assert out[0]["first_prompt_preview"] == "first prompt with newline"
+
+
+def test_session_cost_collector_empty():
+    assert _SessionCostCollector().result(interactions=[]) == []
+
+
+# ── _CommandCostCollector (§1.2) ─────────────────────────────────────────────
+
+def test_command_cost_collector_basic():
+    c = _CommandCostCollector()
+    asst = _rec(kind="assistant", model=_MODEL,
+                tokens={"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0})
+    ix = _ix(interaction_id="x1", session_id="s1", responses=[asst],
+             tools_used=[{"name": "Bash", "id": "t1", "input": {}}], tool_count=1)
+    c.ingest_interaction(ix)
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["interaction_id"] == "x1"
+    assert out[0]["cost"] > 0
+    assert out[0]["tokens"]["input"] == 1000
+    assert out[0]["tools_used"] == 1
+    assert out[0]["had_error"] is False
+
+
+def test_command_cost_collector_caps_at_50_and_sorts_desc():
+    c = _CommandCostCollector()
+    for i in range(60):
+        asst = _rec(kind="assistant", model=_MODEL,
+                    tokens={"input": i, "output": 0, "cache_creation": 0, "cache_read": 0})
+        c.ingest_interaction(_ix(interaction_id=f"i{i}", responses=[asst]))
+    out = c.result()
+    assert len(out) == 50
+    # Highest token count (i=59) must be first
+    assert out[0]["interaction_id"] == "i59"
+
+
+def test_command_cost_collector_empty():
+    assert _CommandCostCollector().result() == []
+
+
+# ── _ToolCostCollector (§1.3) ────────────────────────────────────────────────
+
+def test_tool_cost_collector_attributes_1_over_n():
+    c = _ToolCostCollector()
+    # One assistant message invoking 2 distinct tools → each gets 1/2 of the cost
+    tokens = {"input": 1_000_000, "output": 0, "cache_creation": 0, "cache_read": 0}
+    c.ingest(_rec(
+        kind="assistant", model=_MODEL, tokens=tokens,
+        tools=[{"name": "Bash", "id": "t1", "input": {}},
+               {"name": "Grep", "id": "t2", "input": {}}],
+    ))
+    out = c.result()
+    assert set(out.keys()) == {"Bash", "Grep"}
+    assert out["Bash"]["calls"] == 1
+    assert out["Grep"]["calls"] == 1
+    assert out["Bash"]["cost"] == pytest.approx(out["Grep"]["cost"], rel=1e-9)
+    # Sum of shares equals the full message cost
+    total = out["Bash"]["cost"] + out["Grep"]["cost"]
+    assert total == pytest.approx(3.0, rel=1e-6)  # 1M input × $3/M for sonnet-4
+
+
+def test_tool_cost_collector_counts_repeated_invocations():
+    c = _ToolCostCollector()
+    # Same tool invoked twice in one message → only 1 distinct, calls=2
+    c.ingest(_rec(kind="assistant", model=_MODEL,
+                  tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+                  tools=[{"name": "Bash", "id": "t1", "input": {}},
+                         {"name": "Bash", "id": "t2", "input": {}}]))
+    out = c.result()
+    assert out["Bash"]["calls"] == 2
+
+
+def test_tool_cost_collector_skips_user_records():
+    c = _ToolCostCollector()
+    c.ingest(_rec(kind="user", tools=[{"name": "X", "id": "1", "input": {}}]))
+    assert c.result() == {}
+
+
+def test_tool_cost_collector_empty():
+    assert _ToolCostCollector().result() == {}
+
+
+# ── _TokenCompositionCollector (§1.4) ────────────────────────────────────────
+
+def test_token_composition_shape_and_totals():
+    c = _TokenCompositionCollector(tz_offset=0)
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-23T10:00:00Z",
+                  tokens={"input": 100, "output": 50, "cache_creation": 0, "cache_read": 0}))
+    c.ingest(_rec(session_id="s2", timestamp="2026-02-23T12:00:00Z",
+                  tokens={"input": 200, "output": 100, "cache_creation": 0, "cache_read": 0}))
+    out = c.result()
+    assert set(out.keys()) == {"daily", "totals", "per_session"}
+    assert out["daily"]["2026-02-23"]["input"] == 300
+    assert out["totals"]["output"] == 150
+    assert out["per_session"]["s1"]["input"] == 100
+    assert out["per_session"]["s2"]["input"] == 200
+
+
+def test_token_composition_empty():
+    r = _TokenCompositionCollector().result()
+    assert r == {"daily": {}, "totals": {}, "per_session": {}}
+
+
+# ── _OutlierCollector (§1.5) ─────────────────────────────────────────────────
+
+def test_outlier_collector_flags_high_tool_and_step():
+    c = _OutlierCollector()
+    # 21 tools + 16 steps → both
+    responses = [_rec(kind="assistant", model=_MODEL) for _ in range(16)]
+    c.ingest_interaction(_ix(interaction_id="big", tool_count=21, assistant_steps=16,
+                             responses=responses))
+    # within thresholds → neither
+    c.ingest_interaction(_ix(interaction_id="small", tool_count=5, assistant_steps=3))
+    out = c.result()
+    assert [e["interaction_id"] for e in out["high_tool_commands"]] == ["big"]
+    assert [e["interaction_id"] for e in out["high_step_commands"]] == ["big"]
+
+
+def test_outlier_collector_empty():
+    r = _OutlierCollector().result()
+    assert r == {"high_tool_commands": [], "high_step_commands": []}
+
+
+# ── _RetryCollector (§1.6 / polish §A1) ─────────────────────────────────────
+
+def _tr(*, timestamp: str, content: str = "", is_error: bool = False,
+        session_id: str = "s1") -> Record:
+    """Convenience: build a tool_result record (kind='user', has_tool_result=True)."""
+    return _rec(
+        session_id=session_id,
+        kind="user",
+        timestamp=timestamp,
+        model="N/A",
+        content=content,
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        is_error=is_error,
+        has_tool_result=True,
+    )
+
+
+def _asst_with_tool(*, tool: str, timestamp: str, output_tokens: int = 0,
+                    tool_id: str = "t") -> Record:
+    return _rec(
+        kind="assistant", model=_MODEL, timestamp=timestamp,
+        tokens={"input": 0, "output": output_tokens, "cache_creation": 0, "cache_read": 0},
+        tools=[{"name": tool, "id": tool_id, "input": {}}],
+    )
+
+
+def test_retry_collector_legit_retry_chain_via_tool_result_error():
+    """Real chimera pattern: Bash invoked, tool_result.is_error=True, Bash retried."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=300, tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="Exit code 1 boom",
+              is_error=True)
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z",
+                         output_tokens=200, tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    ix = _ix(interaction_id="retry", responses=[a1, a2], tool_results=[tr1, tr2])
+    c.ingest_interaction(ix)
+    out = c.result()
+    assert len(out) == 1
+    sig = out[0]
+    assert sig["tool"] == "Bash"
+    assert sig["total_invocations"] == 2
+    assert sig["consecutive_failures"] == 1
+    # only the first invocation was followed by an error → 300 tokens wasted
+    assert sig["estimated_wasted_tokens"] == 300
+    assert sig["estimated_wasted_cost"] > 0
+
+
+def test_retry_collector_single_success_no_signal():
+    """One Bash invocation with successful tool_result → no retry signal."""
+    c = _RetryCollector()
+    a = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z")
+    tr = _tr(timestamp="2026-02-01T00:00:01Z", content="OK", is_error=False)
+    c.ingest_interaction(_ix(responses=[a], tool_results=[tr]))
+    assert c.result() == []
+
+
+def test_retry_collector_retry_after_success_no_signal():
+    """Two clean Bash invocations (no error between) → no retry signal."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="OK")
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    assert c.result() == []
+
+
+def test_retry_collector_text_starts_with_error_counts_as_failure():
+    """Tool result without is_error flag but content starts with 'Error' → retry."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Read", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=50, tool_id="r1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z",
+              content="Error: file not found", is_error=False)
+    a2 = _asst_with_tool(tool="Read", timestamp="2026-02-01T00:00:10Z",
+                         tool_id="r2")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["tool"] == "Read"
+    assert out[0]["estimated_wasted_tokens"] == 50
+
+
+def test_retry_collector_text_starts_with_failed_counts_as_failure():
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z",
+              content="failed: connection refused", is_error=False)
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1]))
+    assert len(c.result()) == 1
+
+
+def test_retry_collector_interrupt_assistant_marks_failure():
+    """Assistant interrupt message (INTERRUPT_API/PREFIX) flags preceding tool as failed."""
+    from stackunderflow.stats.classifier import INTERRUPT_PREFIX
+
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=400, tool_id="b1")
+    interrupt = _rec(
+        kind="assistant", model=_MODEL,
+        timestamp="2026-02-01T00:00:01Z",
+        content=INTERRUPT_PREFIX + " stop",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+    )
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    c.ingest_interaction(_ix(responses=[a1, interrupt, a2]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["tool"] == "Bash"
+    assert out[0]["estimated_wasted_tokens"] == 400
+
+
+def test_retry_collector_first_invocation_failed_last_succeeded():
+    """[failed, succeeded] is the canonical retry shape — must signal."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Edit", timestamp="2026-02-01T00:00:00Z",
+                         output_tokens=120, tool_id="e1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="oops", is_error=True)
+    a2 = _asst_with_tool(tool="Edit", timestamp="2026-02-01T00:00:10Z", tool_id="e2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="OK")
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["consecutive_failures"] == 1
+
+
+def test_retry_collector_only_last_invocation_failed_no_signal():
+    """[succeeded, failed] — no preceding invocation failed, so no retry."""
+    c = _RetryCollector()
+    a1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z", tool_id="b1")
+    tr1 = _tr(timestamp="2026-02-01T00:00:01Z", content="OK")
+    a2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    tr2 = _tr(timestamp="2026-02-01T00:00:11Z", content="boom", is_error=True)
+    c.ingest_interaction(_ix(responses=[a1, a2], tool_results=[tr1, tr2]))
+    assert c.result() == []
+
+
+def test_retry_collector_distinct_tools_track_separately():
+    c = _RetryCollector()
+    bash1 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:00Z",
+                            output_tokens=50, tool_id="b1")
+    tr_bash = _tr(timestamp="2026-02-01T00:00:01Z", content="boom", is_error=True)
+    bash2 = _asst_with_tool(tool="Bash", timestamp="2026-02-01T00:00:10Z", tool_id="b2")
+    grep1 = _asst_with_tool(tool="Grep", timestamp="2026-02-01T00:00:20Z", tool_id="g1")
+    tr_grep = _tr(timestamp="2026-02-01T00:00:21Z", content="OK")
+    c.ingest_interaction(_ix(
+        responses=[bash1, bash2, grep1],
+        tool_results=[tr_bash, tr_grep],
+    ))
+    out = c.result()
+    tools = [s["tool"] for s in out]
+    assert "Bash" in tools
+    assert "Grep" not in tools  # only one Grep invocation
+
+
+def test_retry_collector_empty():
+    assert _RetryCollector().result() == []
+
+
+# ── _SessionEfficiencyCollector (§1.7) ───────────────────────────────────────
+
+def test_session_efficiency_classifies_edit_heavy():
+    c = _SessionEfficiencyCollector()
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:00:00Z",
+                  tools=[{"name": "Edit", "id": "1", "input": {}},
+                         {"name": "Write", "id": "2", "input": {}},
+                         {"name": "Read", "id": "3", "input": {}},
+                         {"name": "Bash", "id": "4", "input": {}}]))
+    out = c.result()
+    assert len(out) == 1
+    assert out[0]["classification"] == "edit-heavy"
+    assert out[0]["edit_ratio"] == 0.5
+
+
+def test_session_efficiency_classifies_research_heavy():
+    c = _SessionEfficiencyCollector()
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:00:00Z",
+                  tools=[{"name": "Grep", "id": "1", "input": {}},
+                         {"name": "Glob", "id": "2", "input": {}},
+                         {"name": "Read", "id": "3", "input": {}},
+                         {"name": "Bash", "id": "4", "input": {}}]))
+    out = c.result()
+    # search_ratio (0.5) + read_ratio (0.25) = 0.75 ≥ 0.6, edit_ratio = 0 < 0.1
+    assert out[0]["classification"] == "research-heavy"
+
+
+def test_session_efficiency_classifies_idle_heavy():
+    c = _SessionEfficiencyCollector()
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:00:00Z"))
+    # 100s gap, exceeds both 30s threshold and 40% of 100s duration
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:01:40Z"))
+    out = c.result()
+    assert out[0]["classification"] == "idle-heavy"
+    assert out[0]["idle_gap_total_s"] == 100.0
+    assert out[0]["idle_gap_max_s"] == 100.0
+
+
+def test_session_efficiency_balanced_fallback():
+    c = _SessionEfficiencyCollector()
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:00:00Z",
+                  tools=[{"name": "Bash", "id": "1", "input": {}},
+                         {"name": "Read", "id": "2", "input": {}}]))
+    # 15s gap → under idle threshold; only 50% read ratio → not research-heavy
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-01T00:00:15Z"))
+    out = c.result()
+    assert out[0]["classification"] == "balanced"
+
+
+def test_session_efficiency_empty():
+    assert _SessionEfficiencyCollector().result() == []
+
+
+# ── _ErrorCostCollector (§1.8) ───────────────────────────────────────────────
+
+def _tool_result_error_rec(
+    *,
+    tool_use_id: str,
+    session_id: str = "s1",
+    timestamp: str = "2026-01-01T12:00:01Z",
+) -> Record:
+    """Build a user tool_result error record shaped like a real log entry
+    (is_error on the tool_result block + a tool_use_id back-pointer)."""
+    raw = {
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "is_error": True,
+                    "content": "Error: command failed",
+                }
+            ],
+        }
+    }
+    r = _rec(
+        kind="user",
+        session_id=session_id,
+        timestamp=timestamp,
+        model="N/A",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        is_error=True,
+        has_tool_result=True,
+    )
+    r.raw_data = raw
+    return r
+
+
+def test_error_cost_collector_charges_next_assistant():
+    """An error tool_result in a user message is charged the output tokens of
+    the next assistant message in the same interaction — NOT zero, and NOT
+    gated on retry-signal detection."""
+    c = _ErrorCostCollector()
+    # Interaction timeline: assistant#1 (tool_use Bash) → user(tool_result error) → assistant#2 (retry)
+    asst1 = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:00Z",
+        tokens={"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        tools=[{"name": "Bash", "id": "tid-1", "input": {}}],
+    )
+    err = _tool_result_error_rec(tool_use_id="tid-1",
+                                 timestamp="2026-01-01T12:00:01Z")
+    asst2 = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:02Z",
+        tokens={"input": 0, "output": 400, "cache_creation": 0, "cache_read": 0},
+    )
+    # ingest feeds the tool_id→name map and the total_errors count
+    for r in (asst1, err, asst2):
+        c.ingest(r)
+    ix = _ix(interaction_id="ix-err",
+             responses=[asst1, asst2],
+             tool_results=[err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    # tool attribution via tool_use_id lookup
+    assert out["errors_by_tool"] == {"Bash": 1}
+    # retry cost = output tokens of the NEXT assistant
+    assert out["estimated_retry_tokens"] == 400
+    assert out["estimated_retry_cost"] > 0
+    # top_error_commands populated (decoupled from any retry_signal logic)
+    assert len(out["top_error_commands"]) == 1
+    assert out["top_error_commands"][0]["interaction_id"] == "ix-err"
+
+
+def test_error_cost_collector_assistant_error_uses_own_tokens():
+    """If the error record is itself an assistant (e.g., an interruption),
+    charge its own output tokens rather than scanning forward."""
+    c = _ErrorCostCollector()
+    asst_err = _rec(
+        kind="assistant",
+        model=_MODEL,
+        is_error=True,
+        tokens={"input": 0, "output": 250, "cache_creation": 0, "cache_read": 0},
+    )
+    c.ingest(asst_err)
+    ix = _ix(interaction_id="ix-asst-err", responses=[asst_err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    assert out["estimated_retry_tokens"] == 250
+    assert out["estimated_retry_cost"] > 0
+
+
+def test_error_cost_collector_ranks_top_error_commands():
+    """top_error_commands ranks by error-record count per Interaction,
+    capped at 10, with the OutlierCommand shape the frontend expects."""
+    c = _ErrorCostCollector()
+    # Track three assistants with tool_use, then three error tool_results
+    asst_tools = [
+        _rec(kind="assistant", model=_MODEL,
+             timestamp=f"2026-01-01T12:0{i}:00Z",
+             tools=[{"name": "Bash", "id": f"tid-{i}", "input": {}}])
+        for i in range(3)
+    ]
+    errs = [
+        _tool_result_error_rec(tool_use_id=f"tid-{i}",
+                               timestamp=f"2026-01-01T12:0{i}:30Z")
+        for i in range(3)
+    ]
+    # Interaction "many" has 2 errors; "few" has 1 error.
+    for r in asst_tools[:2] + errs[:2] + [asst_tools[2]] + [errs[2]]:
+        c.ingest(r)
+    ix_many = _ix(
+        interaction_id="many",
+        responses=asst_tools[:2],
+        tool_results=errs[:2],
+    )
+    ix_few = _ix(
+        interaction_id="few",
+        responses=[asst_tools[2]],
+        tool_results=[errs[2]],
+    )
+    out = c.result(interactions=[ix_many, ix_few])
+
+    assert out["total_errors"] == 3
+    assert out["errors_by_tool"]["Bash"] == 3
+    assert [e["interaction_id"] for e in out["top_error_commands"]] == ["many", "few"]
+    # shape check — must match OutlierCommand TypedDict the frontend imports
+    top = out["top_error_commands"][0]
+    assert set(top.keys()) == {
+        "interaction_id", "session_id", "timestamp",
+        "prompt_preview", "tool_count", "step_count", "cost",
+    }
+
+
+def test_error_cost_collector_empty():
+    out = _ErrorCostCollector().result(interactions=[])
+    assert out["total_errors"] == 0
+    assert out["estimated_retry_tokens"] == 0
+    assert out["estimated_retry_cost"] == 0.0
+    assert out["errors_by_tool"] == {}
+    assert out["top_error_commands"] == []
+
+
+def test_error_cost_collector_unresolved_tool_id_drops_bucket():
+    """If a tool_result error references a tool_use_id we never saw (out of
+    scope or corrupt log), we don't invent an 'Unknown' bucket — total_errors
+    still increments but errors_by_tool stays empty for that record."""
+    c = _ErrorCostCollector()
+    err = _tool_result_error_rec(tool_use_id="never-seen")
+    asst = _rec(
+        kind="assistant",
+        model=_MODEL,
+        timestamp="2026-01-01T12:00:02Z",
+        tokens={"input": 0, "output": 100, "cache_creation": 0, "cache_read": 0},
+    )
+    c.ingest(err)
+    c.ingest(asst)
+    ix = _ix(responses=[asst], tool_results=[err])
+    out = c.result(interactions=[ix])
+
+    assert out["total_errors"] == 1
+    assert out["errors_by_tool"] == {}
+    assert out["estimated_retry_tokens"] == 100
+    assert out["estimated_retry_cost"] > 0
+
+
+# ── _trends (§1.9) ───────────────────────────────────────────────────────────
+
+def test_trends_compares_windows():
+    # end = 2026-02-15; current = (02-08, 02-15]; prior = (02-01, 02-08]
+    records = [_rec(timestamp="2026-02-15T23:59:00Z")]
+    asst_cur = _rec(kind="assistant", model=_MODEL,
+                    tokens={"input": 1000, "output": 0, "cache_creation": 0, "cache_read": 0})
+    asst_prior = _rec(kind="assistant", model=_MODEL,
+                      tokens={"input": 500, "output": 0, "cache_creation": 0, "cache_read": 0})
+    ix_current = _ix(interaction_id="cur", start_time="2026-02-14T10:00:00Z",
+                     responses=[asst_cur])
+    ix_prior = _ix(interaction_id="prev", start_time="2026-02-05T10:00:00Z",
+                   responses=[asst_prior])
+    out = _trends(records, [ix_current, ix_prior], tz_offset=0)
+    assert out["current_week"]["commands"] == 1
+    assert out["prior_week"]["commands"] == 1
+    # delta is %; current has higher cost than prior
+    assert out["delta_pct"]["cost"] > 0
+
+
+def test_trends_empty_records():
+    out = _trends([], [], tz_offset=0)
+    assert out["current_week"]["commands"] == 0
+    assert out["prior_week"]["commands"] == 0
+    assert out["delta_pct"]["cost"] == 0.0
+
+
+def test_trends_prior_empty_under_14d_span():
+    # Dataset only 3 days long → nothing in prior week
+    records = [_rec(timestamp="2026-02-03T00:00:00Z")]
+    ix = _ix(interaction_id="only", start_time="2026-02-02T00:00:00Z",
+             responses=[_rec(kind="assistant", model=_MODEL,
+                             tokens={"input": 100, "output": 0,
+                                     "cache_creation": 0, "cache_read": 0})])
+    out = _trends(records, [ix], tz_offset=0)
+    assert out["prior_week"]["commands"] == 0
+    # Guard: prior zero → delta zero
+    assert out["delta_pct"]["cost"] == 0.0
+
+
+# ── summarise wiring of new sections ─────────────────────────────────────────
+
+def test_summarise_includes_new_sections():
+    ds = _ds([_rec(kind="user", timestamp="2026-01-01T12:00:00Z")])
+    result = summarise(ds, log_dir="/tmp/test")
+    required = {
+        "session_costs", "command_costs", "tool_costs", "token_composition",
+        "outliers", "retry_signals", "session_efficiency", "error_cost", "trends",
+    }
+    assert required <= set(result.keys())
+
+
+def test_summarise_new_sections_empty_fallback():
+    ds = _ds([])
+    result = summarise(ds, log_dir="/tmp")
+    assert result["session_costs"] == []
+    assert result["command_costs"] == []
+    assert result["tool_costs"] == {}
+    assert result["token_composition"] == {"daily": {}, "totals": {}, "per_session": {}}
+    assert result["outliers"] == {"high_tool_commands": [], "high_step_commands": []}
+    assert result["retry_signals"] == []
+    assert result["session_efficiency"] == []
+    assert result["error_cost"]["total_errors"] == 0
+    assert result["trends"]["current_week"]["commands"] == 0

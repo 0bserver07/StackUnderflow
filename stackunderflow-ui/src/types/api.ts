@@ -1,3 +1,33 @@
+// ---------------------------------------------------------------------------
+// Analytics expansion re-exports (see ./analytics.ts)
+// ---------------------------------------------------------------------------
+
+export type {
+  SessionCost,
+  CommandCost,
+  ToolCost,
+  TokenComposition,
+  OutlierCommand,
+  Outliers,
+  RetrySignal,
+  SessionEfficiency,
+  ErrorCost,
+  TrendMetrics,
+  Trends,
+} from './analytics'
+
+import type {
+  SessionCost,
+  CommandCost,
+  ToolCost,
+  TokenComposition,
+  Outliers,
+  RetrySignal,
+  SessionEfficiency,
+  ErrorCost,
+  Trends,
+} from './analytics'
+
 export interface Project {
   dir_name: string
   display_name: string
@@ -155,6 +185,16 @@ export interface DashboardStats {
   models: Record<string, ModelData>
   user_interactions: UserInteractionStats
   cache: CacheStats
+  // Analytics expansion — optional during rollout (spec §1)
+  session_costs?: SessionCost[]
+  command_costs?: CommandCost[]
+  tool_costs?: Record<string, ToolCost>
+  token_composition?: TokenComposition
+  outliers?: Outliers
+  retry_signals?: RetrySignal[]
+  session_efficiency?: SessionEfficiency[]
+  error_cost?: ErrorCost
+  trends?: Trends
 }
 
 export interface OverviewStats {

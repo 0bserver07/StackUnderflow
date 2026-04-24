@@ -34,8 +34,8 @@ export default function ErrorCategoryChart({ errorCategories }: ErrorCategoryCha
   if (data.length === 0) return null
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">Error Categories</h3>
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Error Categories</h3>
       <ResponsiveContainer width="100%" height={280}>
         <PieChart>
           <Pie
@@ -66,7 +66,7 @@ export default function ErrorCategoryChart({ errorCategories }: ErrorCategoryCha
           />
           <Legend
             wrapperStyle={{ fontSize: '11px', color: '#9CA3AF' }}
-            formatter={(value: string) => <span className="text-gray-400">{value}</span>}
+            formatter={(value: string) => <span className="text-gray-600 dark:text-gray-400">{value}</span>}
           />
         </PieChart>
       </ResponsiveContainer>

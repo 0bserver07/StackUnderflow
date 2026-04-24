@@ -29,8 +29,8 @@ export default function ToolUsageChart({ toolStats }: ToolUsageChartProps) {
   if (data.length === 0) return null
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">Top Tool Usage</h3>
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Top Tool Usage</h3>
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={data} layout="vertical" margin={{ left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />

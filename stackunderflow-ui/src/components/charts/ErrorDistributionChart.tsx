@@ -28,8 +28,8 @@ export default function ErrorDistributionChart({ errorCategories }: ErrorDistrib
   const total = data.reduce((sum, d) => sum + d.count, 0)
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
         Error Categories
         <span className="ml-2 text-xs text-gray-500 font-normal">{total} total</span>
       </h3>
