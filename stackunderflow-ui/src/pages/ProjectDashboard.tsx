@@ -34,61 +34,8 @@ import BookmarksTab from '../components/dashboard/BookmarksTab'
 import TagsTab from '../components/dashboard/TagsTab'
 import SessionsTab from '../components/dashboard/SessionsTab'
 import CostTab from '../components/dashboard/CostTab'
-
-// TODO(beta-foundation): replace inline stubs below with
-//   import { useBetaFeatures } from '../hooks/useBetaFeatures'
-//   import BetaBadge from '../components/common/BetaBadge'
-// once the `beta-foundation` agent's files land on feat/beta-features.
-const BETA_ENABLED_KEY = 'suf:beta'
-const TAB_VISIBILITY_KEY = 'suf:tabs'
-type StubTabVisibility = 'shown' | 'hidden' | 'default'
-
-function useBetaFeatures(): {
-  betaEnabled: boolean
-  tabOverrides: Record<string, StubTabVisibility>
-  isTabVisible: (tabId: string, isBeta: boolean) => boolean
-} {
-  const betaEnabled = useMemo(() => {
-    if (typeof window === 'undefined') return true
-    try {
-      const v = window.localStorage.getItem(BETA_ENABLED_KEY)
-      if (v === null) return true // existing users keep full visibility
-      return v === 'true'
-    } catch {
-      return true
-    }
-  }, [])
-  const tabOverrides = useMemo<Record<string, StubTabVisibility>>(() => {
-    if (typeof window === 'undefined') return {}
-    try {
-      const raw = window.localStorage.getItem(TAB_VISIBILITY_KEY)
-      return raw ? (JSON.parse(raw) as Record<string, StubTabVisibility>) : {}
-    } catch {
-      return {}
-    }
-  }, [])
-  const isTabVisible = useCallback(
-    (tabId: string, isBeta: boolean): boolean => {
-      const override = tabOverrides[tabId]
-      if (override === 'shown') return true
-      if (override === 'hidden') return false
-      if (!isBeta) return true
-      return betaEnabled
-    },
-    [betaEnabled, tabOverrides],
-  )
-  return { betaEnabled, tabOverrides, isTabVisible }
-}
-
-function BetaBadge({ className = '' }: { className?: string }) {
-  return (
-    <span
-      className={`bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-semibold ${className}`}
-    >
-      Beta
-    </span>
-  )
-}
+import { useBetaFeatures } from '../hooks/useBetaFeatures'
+import BetaBadge from '../components/common/BetaBadge'
 
 type Tab = {
   id: string
