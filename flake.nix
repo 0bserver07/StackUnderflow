@@ -21,11 +21,7 @@
           pname = "stackunderflow-ui";
           version = "0.3.0";
           src = ./stackunderflow-ui;
-          # npmDepsHash must be recomputed: run `nix build .#frontend`, copy
-          # the reported `got:` hash, and paste it here. The existing hash is
-          # stale because stackunderflow-ui/package-lock.json was regenerated
-          # after this flake was first written.
-          npmDepsHash = "sha256-0000000000000000000000000000000000000000000=";
+          npmDepsHash = "sha256-QCAlYLx7LP2702pTBwi3N8Ft4hFqP88xMCRoV+h1jls=";
 
           installPhase = ''
             # vite.config.ts outDir = '../stackunderflow/static/react'
