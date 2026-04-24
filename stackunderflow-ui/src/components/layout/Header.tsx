@@ -1,32 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { IconStack2, IconSearch, IconMessageChatbot, IconChevronDown, IconSun, IconMoon } from '@tabler/icons-react'
+import { IconStack2, IconSearch, IconMessageChatbot, IconChevronDown } from '@tabler/icons-react'
 import { getProjects } from '../../services/api'
 import { formatProjectName, getNameMode } from '../../services/nameMode'
 import type { Project } from '../../types/api'
-
-// TODO: swap to shared <ThemeToggle /> from '../common/ThemeToggle' once D6 lands
-function ThemeToggle() {
-  const [dark, setDark] = useState(() =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  )
-  const handleClick = () => {
-    const root = document.documentElement
-    const next = !root.classList.contains('dark')
-    root.classList.toggle('dark', next)
-    setDark(next)
-  }
-  return (
-    <button
-      onClick={handleClick}
-      className="p-1.5 rounded text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800"
-      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      aria-label="Toggle theme"
-    >
-      {dark ? <IconSun size={18} /> : <IconMoon size={18} />}
-    </button>
-  )
-}
+import ThemeToggle from '../common/ThemeToggle'
 
 interface HeaderProps {
   onToggleChat: () => void
