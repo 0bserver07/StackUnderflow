@@ -20,6 +20,7 @@ data/claude_usage_stats.json
 
 # Worktrees (isolated parallel-work checkouts)
 .worktrees/
+.claude/
 
 
 # macOS
