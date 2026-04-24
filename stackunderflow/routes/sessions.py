@@ -104,6 +104,54 @@ async def get_jsonl_files(project: str | None = None):
         raise HTTPException(status_code=500, detail=f"Error reading log files: {str(e)}") from e
 
 
+@router.get("/api/sessions/compare")
+async def compare_sessions(a: str, b: str, log_path: str | None = None):
+    """Compare two sessions — returns cost/token/duration diffs per spec §1.10.
+
+    Reuses ``session_costs`` from the standard dashboard payload so both
+    sides share the exact same cost-attribution logic as the Cost tab.
+    """
+    path = log_path or deps.current_log_path
+    if not path:
+        raise HTTPException(status_code=400, detail="No project selected or log_path provided")
+
+    slug = Path(path).name
+    try:
+        conn = db.connect(deps.store_path)
+        try:
+            project_row = queries.get_project(conn, slug=slug)
+            if project_row is None:
+                raise HTTPException(status_code=404, detail=f"Project '{slug}' not found in store")
+            _, stats = queries.get_project_stats(conn, project_id=project_row.id)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load stats: {e}") from e
+
+    session_costs = stats.get("session_costs", []) or []
+    by_id = {s["session_id"]: s for s in session_costs}
+    sa = by_id.get(a)
+    sb = by_id.get(b)
+    if sa is None or sb is None:
+        missing = [sid for sid, hit in ((a, sa), (b, sb)) if hit is None]
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session(s) not found: {', '.join(missing)}",
+        )
+
+    keys = set(sa.get("tokens", {})) | set(sb.get("tokens", {}))
+    diff = {
+        "cost":       sb["cost"] - sa["cost"],
+        "tokens":     {k: sb["tokens"].get(k, 0) - sa["tokens"].get(k, 0) for k in keys},
+        "commands":   sb["commands"] - sa["commands"],
+        "errors":     sb["errors"] - sa["errors"],
+        "duration_s": sb["duration_s"] - sa["duration_s"],
+    }
+    return JSONResponse({"a": sa, "b": sb, "diff": diff})
+
+
 @router.get("/api/jsonl-content")
 async def get_jsonl_content(file: str, project: str | None = None):
     """Get content of a specific JSONL file"""

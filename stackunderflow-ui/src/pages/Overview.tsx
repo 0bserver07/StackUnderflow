@@ -253,7 +253,7 @@ export default function Overview() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-100">Projects Overview</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Projects Overview</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {filteredStats.projectCount} projects {dateRange !== 'all' ? `active in last ${dateRange.replace('d', ' days')}` : 'analyzed'}
             {dateRange === 'all' && firstUseDate && (
@@ -263,7 +263,7 @@ export default function Overview() {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {/* Date range presets */}
-          <div className="flex items-center bg-gray-800 rounded border border-gray-700 overflow-hidden">
+          <div className="flex items-center bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 overflow-hidden">
             {DATE_PRESETS.map(({ key, label }) => (
               <button
                 key={key}
@@ -271,7 +271,7 @@ export default function Overview() {
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   dateRange === key
                     ? 'bg-indigo-600 text-white'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
                 }`}
               >
                 {label}
@@ -280,13 +280,13 @@ export default function Overview() {
           </div>
           {/* Model filter */}
           {availableModels.length > 1 && (
-            <div className="flex items-center bg-gray-800 rounded border border-gray-700 overflow-hidden">
+            <div className="flex items-center bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 overflow-hidden">
               <button
                 onClick={() => setSelectedModel('all')}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   selectedModel === 'all'
                     ? 'bg-emerald-600 text-white'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
                 }`}
               >
                 All models
@@ -298,7 +298,7 @@ export default function Overview() {
                   className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                     selectedModel === m
                       ? 'bg-emerald-600 text-white'
-                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
                   }`}
                 >
                   {shortModelName(m)}
@@ -309,7 +309,7 @@ export default function Overview() {
           <button
             onClick={() => refreshMutation.mutate()}
             disabled={refreshMutation.isPending}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 text-gray-300 hover:text-white rounded text-sm border border-gray-700 hover:border-gray-600 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded text-sm border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50"
           >
             <IconRefresh size={14} className={refreshMutation.isPending ? 'animate-spin' : ''} />
             Refresh
@@ -319,31 +319,31 @@ export default function Overview() {
 
       {/* Global Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Projects</div>
-          <div className="text-2xl font-bold text-gray-100 mt-1">{filteredStats.projectCount}</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{filteredStats.projectCount}</div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Total Tokens</div>
-          <div className="text-2xl font-bold text-gray-100 mt-1">{formatTokens(filteredStats.totalTokens)}</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatTokens(filteredStats.totalTokens)}</div>
           <div className="text-[10px] text-gray-500 mt-0.5">
             In: {formatTokens(filteredStats.inputTokens)} / Out: {formatTokens(filteredStats.outputTokens)}
             {filteredStats.cacheTokens > 0 && <> / Cache: {formatTokens(filteredStats.cacheTokens)}</>}
           </div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Est. API Cost</div>
-          <div className="text-2xl font-bold text-gray-100 mt-1">{formatCost(filteredStats.totalCost)}</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatCost(filteredStats.totalCost)}</div>
           <div className="text-[10px] text-gray-500 mt-0.5">{rangeLabel(dateRange, firstUseDate)}</div>
-          <div className="text-[9px] text-gray-600 mt-0.5">pay-per-token equivalent</div>
+          <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">pay-per-token equivalent</div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Commands</div>
-          <div className="text-2xl font-bold text-gray-100 mt-1">{filteredStats.totalCommands.toLocaleString()}</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{filteredStats.totalCommands.toLocaleString()}</div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Cached</div>
-          <div className="text-2xl font-bold text-gray-100 mt-1">
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
             {projectsData?.cache_status?.cached_count ?? 0}/{projects.length}
           </div>
         </div>
@@ -351,8 +351,8 @@ export default function Overview() {
 
       {/* Token Usage Chart — full width */}
       {dailyTokens.length > 0 && (
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Token Usage Over Time</h3>
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Token Usage Over Time</h3>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={dailyTokens}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -371,8 +371,8 @@ export default function Overview() {
 
       {/* Daily Cost Chart — full width */}
       {dailyCosts.length > 0 && (
-        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-800">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Daily Cost</h3>
+        <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Daily Cost</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={dailyCosts}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -394,11 +394,11 @@ export default function Overview() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Filter projects..."
-            className="w-full bg-gray-800 border border-gray-700 rounded pl-8 pr-3 py-1.5 text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+            className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded pl-8 pr-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
         {/* Name display mode */}
-        <div className="flex items-center bg-gray-800 rounded border border-gray-700 overflow-hidden">
+        <div className="flex items-center bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 overflow-hidden">
           {NAME_MODES.map(({ key, label }) => (
             <button
               key={key}
@@ -406,7 +406,7 @@ export default function Overview() {
               className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
                 nameMode === key
                   ? 'bg-violet-600 text-white'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
               }`}
             >
               {label}
@@ -416,7 +416,7 @@ export default function Overview() {
         <select
           value={perPage}
           onChange={e => setPerPage(Number(e.target.value))}
-          className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
+          className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300"
         >
           <option value={10}>10</option>
           <option value={20}>20</option>
@@ -426,27 +426,27 @@ export default function Overview() {
       </div>
 
       {/* Projects Table */}
-      <div className="bg-gray-800/30 rounded-lg border border-gray-800 overflow-hidden">
+      <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
-                <th className="text-left px-4 py-3 cursor-pointer hover:text-gray-200" onClick={() => toggleSort('display_name')}>
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200" onClick={() => toggleSort('display_name')}>
                   Project <SortIcon field="display_name" />
                 </th>
-                <th className="text-left px-4 py-3 cursor-pointer hover:text-gray-200" onClick={() => toggleSort('last_modified')}>
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200" onClick={() => toggleSort('last_modified')}>
                   Last Active <SortIcon field="last_modified" />
                 </th>
                 <th className="text-right px-4 py-3">Span</th>
-                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-200" onClick={() => toggleSort('total_commands')}>
+                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200" onClick={() => toggleSort('total_commands')}>
                   Commands <SortIcon field="total_commands" />
                 </th>
                 <th className="text-right px-4 py-3">Tokens</th>
                 <th className="text-right px-4 py-3">Steps/Cmd</th>
-                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-200" onClick={() => toggleSort('total_cost')}>
+                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200" onClick={() => toggleSort('total_cost')}>
                   Est. Cost <SortIcon field="total_cost" />
                 </th>
-                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-200" onClick={() => toggleSort('total_size_mb')}>
+                <th className="text-right px-4 py-3 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200" onClick={() => toggleSort('total_size_mb')}>
                   Size <SortIcon field="total_size_mb" />
                 </th>
               </tr>
@@ -458,34 +458,34 @@ export default function Overview() {
                   <tr
                     key={p.dir_name}
                     onClick={() => navigate(`/project/${encodeURIComponent(p.dir_name)}`)}
-                    className="border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer"
+                    className="border-b border-gray-200/50 dark:border-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer"
                   >
                     <td className="px-4 py-3">
-                      <div className="text-gray-200 font-medium">{projectDisplayName(p, (page - 1) * perPage + idx)}</div>
+                      <div className="text-gray-800 dark:text-gray-200 font-medium">{projectDisplayName(p, (page - 1) * perPage + idx)}</div>
                       <div className="text-xs text-gray-500">{p.file_count} sessions</div>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs">
                       {formatDate(p.last_modified)}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-500 text-xs">
                       {formatDuration(p.stats?.first_message_date ?? undefined, p.stats?.last_message_date ?? undefined)}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-300">{p.stats?.total_commands?.toLocaleString() ?? '-'}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">
+                    <td className="px-4 py-3 text-right text-gray-700 dark:text-gray-300">{p.stats?.total_commands?.toLocaleString() ?? '-'}</td>
+                    <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">
                       <div>{totalTok > 0 ? formatTokens(totalTok) : '-'}</div>
                       {totalTok > 0 && (
-                        <div className="text-[10px] text-gray-600">
+                        <div className="text-[10px] text-gray-400 dark:text-gray-600">
                           {formatTokens(p.stats?.total_input_tokens ?? 0)} in / {formatTokens(p.stats?.total_output_tokens ?? 0)} out
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-400">
+                    <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">
                       {p.stats?.avg_steps_per_command ? p.stats.avg_steps_per_command.toFixed(1) : '-'}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-300">
+                    <td className="px-4 py-3 text-right text-gray-700 dark:text-gray-300">
                       {p.stats?.total_cost != null ? formatCost(p.stats.total_cost) : '-'}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-400">
+                    <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">
                       {p.total_size_mb.toFixed(1)} MB
                     </td>
                   </tr>
@@ -498,7 +498,7 @@ export default function Overview() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-gray-400">
+        <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
           <span>
             Showing {(page - 1) * perPage + 1}-{Math.min(page * perPage, filtered.length)} of {filtered.length}
           </span>
@@ -506,7 +506,7 @@ export default function Overview() {
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page <= 1}
-              className="px-3 py-1 bg-gray-800 rounded border border-gray-700 hover:border-gray-600 disabled:opacity-50"
+              className="px-3 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50"
             >
               Prev
             </button>
@@ -514,7 +514,7 @@ export default function Overview() {
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              className="px-3 py-1 bg-gray-800 rounded border border-gray-700 hover:border-gray-600 disabled:opacity-50"
+              className="px-3 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50"
             >
               Next
             </button>

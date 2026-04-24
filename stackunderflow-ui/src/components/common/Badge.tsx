@@ -12,7 +12,7 @@ const colorClasses = {
   yellow: 'bg-yellow-900/50 text-yellow-300 border-yellow-800',
   red: 'bg-red-900/50 text-red-300 border-red-800',
   purple: 'bg-purple-900/50 text-purple-300 border-purple-800',
-  gray: 'bg-gray-800 text-gray-400 border-gray-700',
+  gray: 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700',
 }
 
 const sizeClasses = {

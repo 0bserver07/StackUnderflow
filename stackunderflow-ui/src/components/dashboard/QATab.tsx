@@ -42,7 +42,7 @@ const RESOLUTION_STYLES: Record<ResolutionStatus, { label: string; className: st
   },
   open: {
     label: 'open',
-    className: 'bg-gray-800 text-gray-400 border-gray-700',
+    className: 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700',
     title: 'Not enough signal to classify.',
   },
 }
@@ -61,15 +61,15 @@ function QAItem({
 
   return (
     <div
-      className="w-full px-4 py-3 border-b border-gray-800"
+      className="w-full px-4 py-3 border-b border-gray-200 dark:border-gray-800"
     >
       <div className="mb-1.5">
-        <p className="text-sm text-gray-200 font-medium line-clamp-2">
+        <p className="text-sm text-gray-800 dark:text-gray-200 font-medium line-clamp-2">
           {questionPreview}
         </p>
       </div>
 
-      <p className="text-xs text-gray-400 line-clamp-2 mb-2">
+      <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2 mb-2">
         {answerPreview}
       </p>
 
@@ -99,7 +99,7 @@ function QAItem({
         )}
 
         {qa.model && (
-          <span className="text-[10px] text-gray-600 font-mono">{qa.model}</span>
+          <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">{qa.model}</span>
         )}
 
         <span className="ml-auto">
@@ -172,7 +172,7 @@ export default function QATab({ projectName }: QATabProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Controls */}
-      <div className="px-4 py-3 border-b border-gray-800">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <IconSearch
@@ -184,7 +184,7 @@ export default function QATab({ projectName }: QATabProps) {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Filter Q&A pairs..."
-              className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
+              className="w-full pl-9 pr-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-sm text-gray-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors"
             />
           </div>
 
@@ -192,7 +192,7 @@ export default function QATab({ projectName }: QATabProps) {
           <select
             value={resolutionFilter}
             onChange={(e) => setResolutionFilter(e.target.value as ResolutionFilter)}
-            className="appearance-none px-2 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
+            className="appearance-none px-2 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
             title="Filter by resolution status"
           >
             <option value="all">All</option>
@@ -207,7 +207,7 @@ export default function QATab({ projectName }: QATabProps) {
             <select
               value={sortMode}
               onChange={(e) => setSortMode(e.target.value as SortMode)}
-              className="appearance-none pl-7 pr-6 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
+              className="appearance-none pl-7 pr-6 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-600 cursor-pointer"
             >
               <option value="recent">Recent</option>
               <option value="tools">Most Tools</option>
@@ -222,7 +222,7 @@ export default function QATab({ projectName }: QATabProps) {
           <button
             onClick={handleReindex}
             disabled={reindexing}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 bg-gray-800 border border-gray-700 rounded-md hover:text-gray-200 hover:border-gray-600 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600 disabled:opacity-50 transition-colors"
             title="Reindex Q&A"
           >
             <IconRefresh size={14} className={reindexing ? 'animate-spin' : ''} />
@@ -267,11 +267,11 @@ export default function QATab({ projectName }: QATabProps) {
 
       {/* Pagination */}
       {data && totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-800">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 dark:border-gray-800">
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <IconChevronLeft size={14} />
             Prev
@@ -284,7 +284,7 @@ export default function QATab({ projectName }: QATabProps) {
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             Next
             <IconChevronRight size={14} />

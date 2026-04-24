@@ -1,12 +1,10 @@
+import { useEffect, useState } from 'react'
 import {
   IconHash,
   IconCurrencyDollar,
   IconTerminal2,
   IconMessageCircle,
-  IconDatabase,
   IconCpu,
-  IconArrowDownRight,
-  IconArrowUpRight,
   IconClockHour4,
   IconUser,
   IconRobot,
@@ -14,7 +12,7 @@ import {
   IconMessage,
   IconCalendar,
 } from '@tabler/icons-react'
-import type { DashboardStats } from '../../types/api'
+import type { DashboardStats, Trends } from '../../types/api'
 import StatsCards from '../analytics/StatsCards'
 import TokenUsageChart from '../charts/TokenUsageChart'
 import DailyCostChart from '../charts/DailyCostChart'
@@ -27,6 +25,10 @@ import CommandToolDistChart from '../charts/CommandToolDistChart'
 import InterruptionRateChart from '../charts/InterruptionRateChart'
 import ErrorRateChart from '../charts/ErrorRateChart'
 import ErrorCategoryChart from '../charts/ErrorCategoryChart'
+import TrendDeltaStrip from '../cost/TrendDeltaStrip'
+import CacheRoiCard from '../cost/CacheRoiCard'
+import TokenCompositionDonut from '../cost/TokenCompositionDonut'
+import { setTab } from '../../services/navigation'
 
 interface OverviewTabProps {
   stats: DashboardStats
@@ -50,20 +52,52 @@ interface MiniStatCardProps {
   color?: string
 }
 
-function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-400' }: MiniStatCardProps) {
+function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-600 dark:text-gray-400' }: MiniStatCardProps) {
   return (
-    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-800">
+    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-3 border border-gray-200 dark:border-gray-800">
       <div className="flex items-center gap-1.5 mb-1">
         <span className={color}>{icon}</span>
         <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
       </div>
-      <div className="text-lg font-bold text-gray-100">{value}</div>
+      <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{value}</div>
       {sublabel && <div className="text-[10px] text-gray-500 mt-0.5">{sublabel}</div>}
     </div>
   )
 }
 
 export default function OverviewTab({ stats }: OverviewTabProps) {
+  // Trends moved off /api/dashboard-data into /api/cost-data (spec §A3) — lazy
+  // fetch them in a non-blocking effect so the rest of the overview renders
+  // immediately. `stats.trends` will normally be undefined here; we still seed
+  // from it so an older payload (or a future re-merge) keeps working.
+  const [trends, setTrends] = useState<Trends | null>(stats.trends ?? null)
+
+  useEffect(() => {
+    if (stats.trends) {
+      setTrends(stats.trends)
+      return
+    }
+    let cancelled = false
+    fetch('/api/cost-data')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        // /api/cost-data returns {} for missing trends — treat that as null so
+        // TrendDeltaStrip renders its empty state instead of NaN tiles.
+        const t = data.trends as Trends | undefined
+        if (t && t.current_week && t.prior_week && t.delta_pct) {
+          setTrends(t)
+        }
+      })
+      .catch(() => {
+        // Non-blocking: leave `trends` as null and let the strip show its
+        // empty state. We deliberately don't surface this in the UI.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [stats.trends])
+
   if (!stats?.overview) return null
 
   const tokens = stats.overview.total_tokens ?? { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
@@ -78,42 +112,48 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
   const toolUseMessages = messageTypes['tool_use'] ?? 0
   const toolResultMessages = messageTypes['tool_result'] ?? 0
 
+  // `token_composition` also moved to /api/cost-data; per task brief, prefer
+  // the simpler fallback derived from the still-present overview.total_tokens.
+  const tokenTotals = stats.token_composition?.totals ?? {
+    input: tokens.input,
+    output: tokens.output,
+    cache_read: tokens.cache_read,
+    cache_creation: tokens.cache_creation,
+  }
+
+  // Click on any TrendDeltaStrip tile → jump to the Cost tab. The strip also
+  // dispatches a `stackunderflow:filter-window` event independently; the Cost
+  // tab can pick that up to apply a date filter once it lands.
+  const handleTrendTileClick = () => {
+    setTab('cost')
+  }
+
   return (
     <div className="space-y-6">
+      {/* Trend delta strip — full-width top banner (spec §2.4 / C22) */}
+      <TrendDeltaStrip
+        trends={trends}
+        endDate={dateRange.end || undefined}
+        onTileClick={handleTrendTileClick}
+      />
+
       {/* Primary stats from existing StatsCards component */}
       <StatsCards stats={stats} />
+
+      {/* Cache ROI hero card — uses the still-present `cache` field on
+          /api/dashboard-data; daily_stats supplies the ROI sparkline. */}
+      <CacheRoiCard cache={stats.cache} dailyStats={stats.daily_stats} />
+
+      {/* Token composition donut replaces the four mini token cards (spec §2.4) */}
+      <TokenCompositionDonut totals={tokenTotals} />
 
       {/* Extended stat cards grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <MiniStatCard
-          icon={<IconArrowDownRight size={14} />}
-          label="Input Tokens"
-          value={formatNumber(tokens.input)}
-          color="text-indigo-400"
-        />
-        <MiniStatCard
-          icon={<IconArrowUpRight size={14} />}
-          label="Output Tokens"
-          value={formatNumber(tokens.output)}
-          color="text-emerald-400"
-        />
-        <MiniStatCard
-          icon={<IconDatabase size={14} />}
-          label="Cache Read"
-          value={formatNumber(tokens.cache_read)}
-          color="text-amber-400"
-        />
-        <MiniStatCard
-          icon={<IconDatabase size={14} />}
-          label="Cache Creation"
-          value={formatNumber(tokens.cache_creation)}
-          color="text-orange-400"
-        />
-        <MiniStatCard
           icon={<IconHash size={14} />}
           label="Total Tokens"
           value={formatNumber(totalTokens)}
-          color="text-gray-400"
+          color="text-gray-600 dark:text-gray-400"
         />
         <MiniStatCard
           icon={<IconCurrencyDollar size={14} />}
@@ -175,7 +215,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
           label="Date Range"
           value={dateRange.start ? `${dateRange.start.slice(5)}` : 'N/A'}
           sublabel={dateRange.end ? `to ${dateRange.end.slice(5)}` : ''}
-          color="text-gray-400"
+          color="text-gray-600 dark:text-gray-400"
         />
       </div>
 

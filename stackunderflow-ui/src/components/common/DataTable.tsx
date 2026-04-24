@@ -97,7 +97,7 @@ export default function DataTable<T>({
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
               placeholder={searchPlaceholder ?? 'Search...'}
-              className="w-full bg-gray-800 border border-gray-700 rounded pl-8 pr-3 py-1.5 text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+              className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded pl-8 pr-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
         )}
@@ -105,27 +105,27 @@ export default function DataTable<T>({
         <select
           value={perPage}
           onChange={e => { setPerPage(Number(e.target.value)); setPage(1) }}
-          className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300"
+          className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-700 dark:text-gray-300"
         >
           {perPageOptions.map(n => <option key={n} value={n}>{n}</option>)}
         </select>
         {exportFn && exportFilename && (
-          <button onClick={handleExport} className="flex items-center gap-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 hover:text-white hover:border-gray-600">
+          <button onClick={handleExport} className="flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded text-xs text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:border-gray-400 dark:hover:border-gray-600">
             <IconDownload size={14} /> CSV
           </button>
         )}
       </div>
 
       {/* Table */}
-      <div className="bg-gray-800/30 rounded-lg border border-gray-800 overflow-hidden">
+      <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                 {columns.map(col => (
                   <th
                     key={col.key}
-                    className={`px-4 py-2.5 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'} ${col.sortValue ? 'cursor-pointer hover:text-gray-200' : ''}`}
+                    className={`px-4 py-2.5 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'} ${col.sortValue ? 'cursor-pointer hover:text-gray-800 dark:hover:text-gray-200' : ''}`}
                     style={col.width ? { width: col.width } : undefined}
                     onClick={() => col.sortValue && toggleSort(col.key)}
                   >
@@ -145,7 +145,7 @@ export default function DataTable<T>({
               ) : paged.map(row => (
                 <tr
                   key={keyFn(row)}
-                  className={`border-b border-gray-800/50 ${onRowClick ? 'hover:bg-gray-800/50 cursor-pointer' : ''}`}
+                  className={`border-b border-gray-200/50 dark:border-gray-800/50 ${onRowClick ? 'hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer' : ''}`}
                   onClick={() => onRowClick?.(row)}
                 >
                   {columns.map(col => (
@@ -162,14 +162,14 @@ export default function DataTable<T>({
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-gray-400">
+        <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
           <span>
             {(page - 1) * perPage + 1}-{Math.min(page * perPage, filtered.length)} of {filtered.length}
           </span>
           <div className="flex items-center gap-2">
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-gray-800 rounded border border-gray-700 disabled:opacity-50">Prev</button>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50">Prev</button>
             <span>{page}/{totalPages}</span>
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2 py-1 bg-gray-800 rounded border border-gray-700 disabled:opacity-50">Next</button>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50">Next</button>
           </div>
         </div>
       )}

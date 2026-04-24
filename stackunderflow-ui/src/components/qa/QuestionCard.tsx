@@ -48,7 +48,7 @@ export default function QuestionCard({ question, tags, timestamp, model }: Quest
         <span>{formatTimestamp(timestamp)}</span>
         {model && (
           <>
-            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">|</span>
             <span className="font-mono text-gray-500">{model}</span>
           </>
         )}

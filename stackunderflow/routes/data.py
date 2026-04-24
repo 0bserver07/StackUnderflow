@@ -12,6 +12,7 @@ import stackunderflow.deps as deps
 from stackunderflow.adapters import registered
 from stackunderflow.api.messages import get_messages_summary, get_paginated_messages
 from stackunderflow.ingest import run_ingest
+from stackunderflow.routes.cost import COST_KEYS
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
@@ -86,9 +87,22 @@ async def get_dashboard_data(timezone_offset: int = 0):
         conn.close()
 
     first_page = get_paginated_messages(messages, page=1, per_page=50)
+    # §A3: the heavy analytics sections moved to /api/cost-data. Strip them
+    # from this payload so the initial dashboard load stays under 1 MB.
+    lean_stats = {k: v for k, v in stats.items() if k not in COST_KEYS}
+    # §D1: user_interactions.command_details is the bulk of the remaining
+    # payload (~1.8 MB on chimera). Drop the per-command array so only the
+    # summary stats — counts, averages, percentages, tool_count_distribution —
+    # survive. The Commands tab now fetches that list paginated from
+    # /api/commands.
+    ui = lean_stats.get("user_interactions")
+    if isinstance(ui, dict):
+        lean_stats["user_interactions"] = {
+            k: v for k, v in ui.items() if k != "command_details"
+        }
     deps.logger.debug(f"dashboard-data [store] {(time.time()-t0)*1000:.1f}ms")
     return {
-        "statistics": stats,
+        "statistics": lean_stats,
         "messages_page": first_page,
         "message_count": len(messages),
         "is_reindexing": deps.is_reindexing,

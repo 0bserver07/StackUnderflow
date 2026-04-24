@@ -4,6 +4,7 @@ import { IconStack2, IconSearch, IconMessageChatbot, IconChevronDown } from '@ta
 import { getProjects } from '../../services/api'
 import { formatProjectName, getNameMode } from '../../services/nameMode'
 import type { Project } from '../../types/api'
+import ThemeToggle from '../common/ThemeToggle'
 
 interface HeaderProps {
   onToggleChat: () => void
@@ -62,7 +63,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
     : null
 
   return (
-    <header className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-4 shrink-0">
+    <header className="h-12 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-4 gap-4 shrink-0">
       {/* Logo */}
       <Link to="/" className="flex items-center gap-2 text-indigo-400 hover:text-indigo-300 shrink-0">
         <IconStack2 size={22} />
@@ -73,7 +74,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="flex items-center gap-1.5 text-sm text-gray-300 hover:text-gray-100 bg-gray-800 rounded px-2.5 py-1 max-w-[240px]"
+          className="flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 bg-white dark:bg-gray-800 rounded px-2.5 py-1 max-w-[240px]"
         >
           <span className="truncate">{displayName ?? 'Select project'}</span>
           <IconChevronDown size={14} className="shrink-0" />
@@ -88,15 +89,15 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
               )
             : projects
           return (
-            <div className="absolute top-full left-0 mt-1 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 flex flex-col max-h-96">
-              <div className="p-2 border-b border-gray-700">
+            <div className="absolute top-full left-0 mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg shadow-xl z-50 flex flex-col max-h-96">
+              <div className="p-2 border-b border-gray-300 dark:border-gray-700">
                 <input
                   type="text"
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
                   placeholder="Search projects..."
                   autoFocus
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-400 dark:border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-700 dark:text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
                 />
               </div>
               <div className="overflow-y-auto flex-1">
@@ -104,8 +105,8 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
                   <button
                     key={p.dir_name}
                     onClick={() => { handleProjectSelect(p.dir_name); setProjectFilter('') }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-700 ${
-                      p.dir_name === currentProject ? 'text-indigo-400 bg-gray-700/50' : 'text-gray-300'
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-300 dark:hover:bg-gray-700 ${
+                      p.dir_name === currentProject ? 'text-indigo-400 bg-gray-200/50 dark:bg-gray-700/50' : 'text-gray-700 dark:text-gray-300'
                     }`}
                   >
                     <div className="truncate">{formatProjectName(p.dir_name, i, mode)}</div>
@@ -127,8 +128,8 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
           to="/"
           className={`px-2.5 py-1 rounded text-xs font-medium ${
             location.pathname === '/'
-              ? 'bg-gray-800 text-indigo-400'
-              : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              ? 'bg-white dark:bg-gray-800 text-indigo-400'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100/70 dark:hover:bg-gray-800/50'
           }`}
         >
           Overview
@@ -138,8 +139,8 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
             to={`/project/${encodeURIComponent(currentProject)}`}
             className={`px-2.5 py-1 rounded text-xs font-medium ${
               location.pathname.startsWith('/project/')
-                ? 'bg-gray-800 text-indigo-400'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                ? 'bg-white dark:bg-gray-800 text-indigo-400'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100/70 dark:hover:bg-gray-800/50'
             }`}
           >
             Dashboard
@@ -159,10 +160,13 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search messages..."
-            className="bg-gray-800 border border-gray-700 rounded pl-7 pr-3 py-1 text-xs text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500 w-48"
+            className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded pl-7 pr-3 py-1 text-xs text-gray-700 dark:text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500 w-48"
           />
         </div>
       </form>
+
+      {/* Theme Toggle */}
+      <ThemeToggle />
 
       {/* Chat Toggle */}
       <button
@@ -170,7 +174,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
         className={`p-1.5 rounded ${
           chatOpen
             ? 'bg-indigo-600 text-white'
-            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800'
         }`}
         title="Toggle Ollama Chat"
       >

@@ -47,7 +47,7 @@ export default function TagChip({ tag, onClick, onRemove, size = 'sm' }: TagChip
             e.stopPropagation()
             onRemove()
           }}
-          className="hover:text-white transition-colors -mr-0.5"
+          className="hover:text-gray-900 dark:hover:text-white transition-colors -mr-0.5"
           aria-label={`Remove ${tag}`}
         >
           <IconX size={size === 'sm' ? 10 : 12} />

@@ -34,13 +34,13 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
       />
 
       {/* Modal */}
-      <div className="relative z-10 w-full max-w-lg mx-4 rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
+      <div className="relative z-10 w-full max-w-lg mx-4 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-200">{title}</h2>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-300 dark:border-gray-700">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">{title}</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-200 transition-colors p-0.5 rounded hover:bg-gray-700"
+            className="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
             aria-label="Close modal"
           >
             <IconX size={16} />

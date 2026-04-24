@@ -110,16 +110,16 @@ export default function TagsTab() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 text-sm text-zinc-400">
+            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
               <IconHash size={16} />
               <span>
-                <span className="text-zinc-100 font-medium">{data.tags.length}</span> tags
+                <span className="text-zinc-900 dark:text-zinc-100 font-medium">{data.tags.length}</span> tags
               </span>
             </div>
-            <div className="flex items-center gap-2 text-sm text-zinc-400">
+            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
               <IconUsers size={16} />
               <span>
-                <span className="text-zinc-100 font-medium">{data.total_sessions}</span>{' '}
+                <span className="text-zinc-900 dark:text-zinc-100 font-medium">{data.total_sessions}</span>{' '}
                 sessions
               </span>
             </div>
@@ -137,7 +137,7 @@ export default function TagsTab() {
                 placeholder="Filter tags..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 pr-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 w-52"
+                className="pl-9 pr-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 w-52"
               />
             </div>
 
@@ -145,7 +145,7 @@ export default function TagsTab() {
             <button
               onClick={() => reindexMutation.mutate()}
               disabled={reindexMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors"
             >
               <IconRefresh
                 size={16}
@@ -173,7 +173,7 @@ export default function TagsTab() {
             description={search ? 'Try a different filter.' : 'No tags available yet.'}
           />
         ) : (
-          <div className="flex flex-wrap gap-2 p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
+          <div className="flex flex-wrap gap-2 p-4 bg-zinc-50/50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 rounded-xl">
             {filtered.map((tag) => (
               <button
                 key={tag.name}
@@ -207,12 +207,12 @@ export default function TagsTab() {
       <div className="flex items-center gap-3">
         <button
           onClick={() => setView({ kind: 'cloud' })}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
         >
           <IconArrowLeft size={16} />
           Back
         </button>
-        <h3 className="text-lg font-medium text-zinc-100 flex items-center gap-2">
+        <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
           <IconTag size={20} />
           {view.tag}
         </h3>
@@ -227,8 +227,8 @@ export default function TagsTab() {
       )}
       {browseQuery.isSuccess && (
         <>
-          <p className="text-sm text-zinc-400">
-            <span className="text-zinc-100 font-medium">{browseQuery.data.count}</span>{' '}
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            <span className="text-zinc-900 dark:text-zinc-100 font-medium">{browseQuery.data.count}</span>{' '}
             session{browseQuery.data.count !== 1 && 's'} tagged with{' '}
             <span className="text-indigo-300 font-medium">{browseQuery.data.tag}</span>
           </p>
@@ -240,15 +240,15 @@ export default function TagsTab() {
               {browseQuery.data.sessions.map((session) => (
                 <div
                   key={session.session_id}
-                  className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-lg hover:border-zinc-700 transition-colors"
+                  className="p-4 bg-zinc-50/60 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-200 dark:hover:border-zinc-700 transition-colors"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <span className="text-sm font-mono text-zinc-200 truncate">
+                    <span className="text-sm font-mono text-zinc-800 dark:text-zinc-200 truncate">
                       {session.session_id}
                     </span>
                     <div className="flex items-center gap-2 text-xs text-zinc-500">
                       {session.source.map((s) => (
-                        <span key={s} className="px-2 py-0.5 bg-zinc-800 rounded text-zinc-400">
+                        <span key={s} className="px-2 py-0.5 bg-white dark:bg-zinc-800 rounded text-zinc-600 dark:text-zinc-400">
                           {s}
                         </span>
                       ))}

@@ -47,13 +47,13 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, sublabel, badge }: StatCardProps) {
   return (
-    <div className="bg-gray-800 rounded-lg p-4">
+    <div className="bg-white dark:bg-gray-800 rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-gray-400">{icon}</span>
-        <span className="text-xs text-gray-400 uppercase tracking-wider">{label}</span>
+        <span className="text-gray-600 dark:text-gray-400">{icon}</span>
+        <span className="text-xs text-gray-600 dark:text-gray-400 uppercase tracking-wider">{label}</span>
         {badge}
       </div>
-      <div className="text-2xl font-bold text-gray-100">{value}</div>
+      <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{value}</div>
       {sublabel && <div className="text-xs text-gray-500 mt-1">{sublabel}</div>}
     </div>
   )
