@@ -8,7 +8,7 @@ interface AnswerCardProps {
 
 export default function AnswerCard({ answer, hasCode, codeLanguages }: AnswerCardProps) {
   return (
-    <div className="bg-gray-800 rounded-lg border-l-4 border-green-500 p-5">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border-l-4 border-green-500 p-5">
       {hasCode && codeLanguages.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {codeLanguages.map((lang) => (

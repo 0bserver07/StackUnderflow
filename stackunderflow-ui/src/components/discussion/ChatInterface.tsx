@@ -280,7 +280,7 @@ export default function ChatInterface({ currentQA, currentSessionFile, selectedP
   }))
 
   return (
-    <div className="h-full flex flex-col bg-gray-950">
+    <div className="h-full flex flex-col bg-white dark:bg-gray-950">
       <ModelSelector
         models={models}
         currentModel={currentModel}
