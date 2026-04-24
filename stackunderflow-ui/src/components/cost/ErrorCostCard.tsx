@@ -1,13 +1,11 @@
 import { useState } from 'react'
 import { IconAlertTriangle, IconChevronDown, IconChevronUp, IconExternalLink } from '@tabler/icons-react'
 import type { ErrorCost, OutlierCommand } from '../../types/api'
-// Imported optimistically — primitive lands in parallel via §A8.
 import { openInteraction } from '../../services/navigation'
 
-// Note: spec §B17 references `../common/ExpandableRow` for the expandable
-// section, but that primitive is `<tr>`-based and intended for tables.
-// This card is a flex/grid layout, so we use an inline disclosure with the
-// same UX (chevron toggle + scrollable detail panel + Show all/Show fewer).
+// The shared `../common/ExpandableRow` primitive is `<tr>`-based and intended
+// for tables. This card is a flex/grid layout, so we use an inline disclosure
+// with the same UX (chevron toggle + scrollable detail panel + Show all/Show fewer).
 
 interface ErrorCostCardProps {
   errorCost: ErrorCost | null | undefined
