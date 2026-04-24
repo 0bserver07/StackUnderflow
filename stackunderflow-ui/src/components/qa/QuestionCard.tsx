@@ -43,8 +43,8 @@ function formatTimestamp(ts: string): string {
 
 export default function QuestionCard({ question, tags, timestamp, model }: QuestionCardProps) {
   return (
-    <div className="bg-gray-800 rounded-lg border-l-4 border-blue-500 p-5">
-      <div className="flex items-center gap-3 mb-3 text-xs text-gray-400">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border-l-4 border-blue-500 p-5">
+      <div className="flex items-center gap-3 mb-3 text-xs text-gray-600 dark:text-gray-400">
         <span>{formatTimestamp(timestamp)}</span>
         {model && (
           <>

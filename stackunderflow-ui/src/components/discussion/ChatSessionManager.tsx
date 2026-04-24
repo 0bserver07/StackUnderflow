@@ -26,7 +26,7 @@ export default function ChatSessionManager({
   onDelete,
 }: ChatSessionManagerProps) {
   return (
-    <div className="border-b border-gray-800">
+    <div className="border-b border-gray-200 dark:border-gray-800">
       <div className="flex items-center justify-between px-3 py-1.5">
         <span className="text-[10px] text-gray-500 uppercase tracking-wider">Sessions</span>
         <button
@@ -44,19 +44,19 @@ export default function ChatSessionManager({
               key={session.id}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer group ${
                 session.id === currentSessionId
-                  ? 'bg-gray-700 text-gray-200'
-                  : 'text-gray-400 hover:bg-gray-800 hover:text-gray-300'
+                  ? 'bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
               onClick={() => onSwitch(session.id)}
             >
               <span className="flex-1 truncate">{session.contextLabel}</span>
-              <span className="text-[10px] text-gray-400 shrink-0">{formatDate(session.updatedAt)}</span>
+              <span className="text-[10px] text-gray-600 dark:text-gray-400 shrink-0">{formatDate(session.updatedAt)}</span>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   onDelete(session.id)
                 }}
-                className="p-0.5 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                className="p-0.5 text-gray-600 dark:text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
                 title="Delete session"
               >
                 <IconTrash size={12} />
