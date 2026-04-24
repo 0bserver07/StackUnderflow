@@ -295,7 +295,7 @@ export default function ChatInterface({ currentQA, currentSessionFile, selectedP
         onDelete={handleDeleteSession}
       />
       {error && (
-        <div className="mx-3 mt-2 px-3 py-2 bg-red-900/20 border border-red-800 rounded text-xs text-red-400">
+        <div className="mx-3 mt-2 px-3 py-2 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded text-xs text-red-700 dark:text-red-400">
           {error}
         </div>
       )}
