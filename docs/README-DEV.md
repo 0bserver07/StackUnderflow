@@ -99,7 +99,9 @@ StackUnderflow/
 │   ├── routes/                  # FastAPI routers — one module per concern
 │   │   ├── projects.py          # /api/project, /api/projects, /api/global-stats
 │   │   ├── data.py              # /api/stats, /api/dashboard-data, /api/messages, /api/refresh
-│   │   ├── sessions.py          # /api/jsonl-files, /api/jsonl-content
+│   │   ├── sessions.py          # /api/jsonl-files, /api/jsonl-content, /api/sessions/compare
+│   │   ├── cost.py              # /api/cost-data, /api/interaction/{id}  (Cost-tab analytics)
+│   │   ├── commands.py          # /api/commands  (paginated per-command list)
 │   │   ├── search.py            # /api/search (+ reindex, stats)
 │   │   ├── qa.py                # /api/qa Q&A extraction
 │   │   ├── tags.py              # /api/tags session tagging
@@ -303,6 +305,35 @@ mypy stackunderflow/ --ignore-missing-imports
 - Ruff target Python 3.11
 - Ruff replaces Black for formatting
 
+## Cost-tab analytics
+
+The Cost tab (`stackunderflow-ui/src/pages/cost/`) renders attribution views — top
+sessions, expensive commands, tool ranking, token composition, cache ROI, outliers,
+retry signals, week-over-week trends, and an error-cost estimate. It pulls from a
+dedicated set of endpoints split off `/api/dashboard-data` so the initial dashboard
+load stays cheap:
+
+| Method | Path                                | Purpose                                                                                |
+| ------ | ----------------------------------- | -------------------------------------------------------------------------------------- |
+| GET    | `/api/cost-data`                    | The 9 analytics sections (`session_costs`, `command_costs`, `tool_costs`, `token_composition`, `outliers`, `retry_signals`, `session_efficiency`, `error_cost`, `trends`). Source: `routes/cost.py`. |
+| GET    | `/api/commands`                     | Paginated per-command list; `?offset=&limit=&sort=cost\|tokens\|tools\|steps\|time&order=desc\|asc`. Source: `routes/commands.py`. |
+| GET    | `/api/interaction/{interaction_id}` | One enriched interaction (command + responses + tool_results) for deep links from the Messages tab. Source: `routes/cost.py`. |
+| GET    | `/api/sessions/compare`             | Side-by-side diff of two sessions: `?a=&b=` returns `{a, b, diff}` over cost / tokens / commands / errors / duration. Source: `routes/sessions.py`. |
+
+All four accept an optional `log_path=` query param; when omitted they use the
+project most recently set via `POST /api/project-by-dir`. Full request / response
+shapes live in [api-reference.md](api-reference.md).
+
+Frontend conventions specific to the Cost tab:
+
+- Filter state (range / session / tool) is encoded in the URL query string so
+  views are shareable and survive refresh.
+- Deep-linked detail pages (a single session or interaction) render a breadcrumb
+  + back button so users can step out of the drill-down.
+- The header carries a light/dark theme toggle (sun/moon icon). The choice
+  persists in `localStorage['suf:theme']`; a missing key falls back to the
+  user's `prefers-color-scheme`.
+
 ## Frontend (`stackunderflow-ui/`)
 
 Stack: React 18, TypeScript, Tailwind, Vite, react-router-dom, @tanstack/react-query, recharts, react-markdown, react-syntax-highlighter.
@@ -317,6 +348,20 @@ npm run typecheck   # tsc --noEmit
 The backend serves the built React app from `stackunderflow/static/react/index.html` with a catch-all for client-side routing (`/project/{path:path}`).
 
 The Vite config also proxies `/ollama-api/*` to `http://localhost:11434/api/*` so the UI can talk to a local Ollama instance if the user has one running. Ollama is optional; the proxy silently returns 502 when it's not reachable.
+
+## Nix
+
+A `flake.nix` at the repo root packages both the Python backend and the Vite-built
+frontend so the project can be built and run reproducibly without touching pip or npm:
+
+```bash
+nix develop      # dev shell with python 3.11 + node + the project's deps
+nix build        # build the wheel + frontend; output at ./result
+nix run          # launch `stackunderflow init` from the build
+```
+
+The flake pins `npmDepsHash` against `stackunderflow-ui/package-lock.json`; bump it
+whenever the lockfile changes (the first build prints the expected hash).
 
 ## GitHub Actions
 
