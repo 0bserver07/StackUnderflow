@@ -290,15 +290,15 @@ export default function SessionCompareView({
   // Error state
   if (error) {
     return (
-      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-red-900/60">
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-red-300 dark:border-red-900/60">
         {header}
-        <div className="bg-red-950/30 border border-red-900/40 rounded p-3 text-xs text-red-200">
+        <div className="bg-red-100 dark:bg-red-950/30 border border-red-300 dark:border-red-900/40 rounded p-3 text-xs text-red-800 dark:text-red-200">
           <div className="font-medium mb-1">Failed to load comparison</div>
-          <div className="text-red-300/80 break-all">{error}</div>
+          <div className="text-red-700/90 dark:text-red-300/80 break-all">{error}</div>
           <button
             type="button"
             onClick={load}
-            className="mt-3 inline-flex items-center gap-1 px-2 py-1 rounded bg-red-900/50 hover:bg-red-900/70 border border-red-800 text-red-100 text-[11px] uppercase tracking-wider"
+            className="mt-3 inline-flex items-center gap-1 px-2 py-1 rounded bg-red-200 dark:bg-red-900/50 hover:bg-red-300 dark:hover:bg-red-900/70 border border-red-400 dark:border-red-800 text-red-800 dark:text-red-100 text-[11px] uppercase tracking-wider"
           >
             <IconRefresh size={12} /> Retry
           </button>

@@ -8,14 +8,14 @@ interface TagChipProps {
 }
 
 const tagColors = [
-  'bg-blue-900/40 text-blue-300 border-blue-800/60',
-  'bg-green-900/40 text-green-300 border-green-800/60',
-  'bg-purple-900/40 text-purple-300 border-purple-800/60',
-  'bg-yellow-900/40 text-yellow-300 border-yellow-800/60',
-  'bg-pink-900/40 text-pink-300 border-pink-800/60',
-  'bg-cyan-900/40 text-cyan-300 border-cyan-800/60',
-  'bg-orange-900/40 text-orange-300 border-orange-800/60',
-  'bg-indigo-900/40 text-indigo-300 border-indigo-800/60',
+  'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800/60',
+  'bg-green-100 text-green-800 border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-800/60',
+  'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-800/60',
+  'bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-800/60',
+  'bg-pink-100 text-pink-800 border-pink-300 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-800/60',
+  'bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-900/40 dark:text-cyan-300 dark:border-cyan-800/60',
+  'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-800/60',
+  'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-800/60',
 ]
 
 function hashString(str: string): number {

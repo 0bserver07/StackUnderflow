@@ -28,6 +28,18 @@ stackunderflow --help                 # everything else
 
 If port 8081 is taken: `stackunderflow cfg set port <free-port>` then re-run `init`.
 
+### Nix (reproducible)
+
+A flake is provided for Nix users — no Python or Node setup required:
+
+```bash
+nix run github:0bserver07/StackUnderflow      # launch the dashboard
+nix build github:0bserver07/StackUnderflow    # build, output at ./result
+nix develop                                   # dev shell with python + node
+```
+
+See [flake.nix](flake.nix) for the full derivation.
+
 ### Development setup
 
 If you want to hack on StackUnderflow (or install from source), you'll also need Node 18+ to build the React UI:
@@ -49,7 +61,9 @@ stackunderflow init
 ## Features
 
 - **Analytics dashboard** — token usage, cost breakdown, model distribution, error patterns, hourly activity
-- **Session viewer** — browse individual JSONL session files with conversation replay, sub-agent grouping, per-session cost
+- **Cost tab** — token-burn attribution: top sessions by cost, most expensive commands (click → Messages tab), tool-cost ranking, token composition (donut + stacked daily), cache ROI, outliers, retry-loop signals, week-over-week trends, and an error-cost estimate. Filter state (range / session / tool) is URL-encoded so views are shareable. Implementation: `stackunderflow-ui/src/pages/cost/` + `stackunderflow/routes/cost.py` + `stackunderflow/routes/commands.py`.
+- **Session viewer** — browse individual JSONL session files with conversation replay, sub-agent grouping, per-session cost. Deep-linked detail views show a breadcrumb + back button.
+- **Light / dark theme** — toggle in the header (sun/moon). Persists to `localStorage['suf:theme']`.
 - **Full-text search** — across all sessions, with filters for date, model, and role
 - **Q&A pair detection** — heuristic extraction of question-answer pairs based on text patterns and follow-up cues
 - **Auto-tagging** — tags sessions by language, framework, topic, and intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`) using keyword and pattern matching
