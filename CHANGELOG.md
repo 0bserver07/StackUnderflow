@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Beta features toggle** — new `/settings` page with theme controls, a global "Show beta features" switch, and per-tab Default/Shown/Hidden overrides. Q&A and Tags dashboard tabs are now marked BETA. Preferences persist to `localStorage['suf:beta']` and `localStorage['suf:tabs']`. Gear icon in the header opens the page.
+
 ## [0.3.1] - 2026-04-24
 
 Rolls up the analytics + Cost tab build, the NixOS flake, the final polish pass, and the previously-[Unreleased] OpenAI Codex adapter into one release.

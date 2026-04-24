@@ -155,6 +155,12 @@ async def spa_catch_all_project(full_path: str):
     return FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))
 
 
+@app.get("/settings")
+async def spa_settings():
+    """Serve React SPA for /settings client-side route."""
+    return FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))
+
+
 from stackunderflow.routes.data import refresh_all_projects, refresh_data  # noqa: E402, F401
 
 
