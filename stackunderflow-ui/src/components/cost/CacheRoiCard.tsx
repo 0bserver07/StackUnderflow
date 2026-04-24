@@ -126,9 +126,8 @@ export default function CacheRoiCard({
   sessionCosts,
   dailyStats,
 }: CacheRoiCardProps) {
-  // TODO(stackunderflow): once `../common/ExpandableRow` lands on main, migrate
-  // the session-saver disclosure to use that primitive. It's table-shaped
-  // (<tr> pair), so card-level toggling is kept inline here for now.
+  // Session-saver disclosure is kept inline (not via `../common/ExpandableRow`)
+  // because that primitive is `<tr>`-shaped and this card uses a flex/grid layout.
   const [expanded, setExpanded] = useState(false)
 
   const topSavers = useMemo(
