@@ -19,9 +19,13 @@
         #   with the real hash that nix reports on first build.
         frontend = pkgs.buildNpmPackage {
           pname = "stackunderflow-ui";
-          version = "0.2.0";
+          version = "0.3.0";
           src = ./stackunderflow-ui;
-          npmDepsHash = "sha256-0CvR9dNu+N2uGkCtnraVaY16mIyhJ5O7GMJaen9Tb0U=";
+          # npmDepsHash must be recomputed: run `nix build .#frontend`, copy
+          # the reported `got:` hash, and paste it here. The existing hash is
+          # stale because stackunderflow-ui/package-lock.json was regenerated
+          # after this flake was first written.
+          npmDepsHash = "sha256-0000000000000000000000000000000000000000000=";
 
           installPhase = ''
             # vite.config.ts outDir = '../stackunderflow/static/react'
@@ -48,7 +52,7 @@
         # ── Python package ──────────────────────────────────────────
         stackunderflow-pkg = pp.buildPythonPackage {
           pname = "stackunderflow";
-          version = "0.2.0";
+          version = "0.3.0";
           pyproject = true;
           src = srcWithFrontend;
 
@@ -56,7 +60,7 @@
 
           propagatedBuildInputs = with pp; [
             python-dotenv click fastapi uvicorn httpx
-            python-multipart orjson uvloop
+            python-multipart orjson uvloop rich
           ];
 
           doCheck = false; # tests use pytest separately
