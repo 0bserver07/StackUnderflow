@@ -68,7 +68,7 @@ function BookmarkItem({
                   onDelete()
                   setConfirmDelete(false)
                 }}
-                className="p-1 text-red-400 hover:text-red-300 rounded hover:bg-red-900/30 transition-colors"
+                className="p-1 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 rounded hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
                 title="Confirm delete"
               >
                 <IconCheck size={14} />

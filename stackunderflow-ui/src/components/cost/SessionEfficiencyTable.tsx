@@ -237,7 +237,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
               className={[
                 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors',
                 active
-                  ? 'bg-blue-900/60 text-blue-200 border-blue-700'
+                  ? 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/60 dark:text-blue-200 dark:border-blue-700'
                   : 'bg-gray-100/80 dark:bg-gray-800/60 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 hover:text-gray-800 dark:hover:text-gray-200',
                 disabled ? 'opacity-40 cursor-not-allowed hover:bg-gray-100/80 dark:hover:bg-gray-800/60 hover:text-gray-600 dark:hover:text-gray-400' : '',
               ]

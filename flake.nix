@@ -19,7 +19,7 @@
         #   with the real hash that nix reports on first build.
         frontend = pkgs.buildNpmPackage {
           pname = "stackunderflow-ui";
-          version = "0.3.0";
+          version = "0.3.1";
           src = ./stackunderflow-ui;
           npmDepsHash = "sha256-QCAlYLx7LP2702pTBwi3N8Ft4hFqP88xMCRoV+h1jls=";
 
@@ -48,7 +48,7 @@
         # ── Python package ──────────────────────────────────────────
         stackunderflow-pkg = pp.buildPythonPackage {
           pname = "stackunderflow";
-          version = "0.3.0";
+          version = "0.3.1";
           pyproject = true;
           src = srcWithFrontend;
 

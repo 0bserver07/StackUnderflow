@@ -109,7 +109,10 @@ function percentile(nums: number[], p: number): number {
   return sorted[idx] ?? 0
 }
 
-function useSortableTableStub(
+// Local sort hook instead of the shared `hooks/useSortableTable` because the
+// 'tokens' column sorts by an aggregate (input + output + cache_*), not a
+// direct row property. The shared hook only supports `row[key]` access.
+function useCommandCostSort(
   rows: CommandCost[],
   initialKey: SortKey,
   initialDir: SortDir,
@@ -210,7 +213,7 @@ function ExpandedDetail({ row, colSpan }: ExpandedDetailProps) {
 
 export default function CommandCostList({ data, onOpen, initialSort }: CommandCostListProps) {
   const rows = data ?? []
-  const { sorted, sortKey, sortDir, setSort } = useSortableTableStub(
+  const { sorted, sortKey, sortDir, setSort } = useCommandCostSort(
     rows,
     initialSort?.key ?? 'cost',
     initialSort?.dir ?? 'desc',

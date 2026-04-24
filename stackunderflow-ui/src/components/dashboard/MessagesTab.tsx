@@ -413,7 +413,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 text-red-400 text-xs">
+        <div className="bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg p-3 text-red-700 dark:text-red-400 text-xs">
           Failed to load all messages: {error instanceof Error ? error.message : 'Unknown error'}. Showing initial batch.
         </div>
       )}
@@ -554,7 +554,7 @@ function InteractionPanelView({ panel, pulse, onClose, panelRef }: InteractionPa
       )}
 
       {panel.kind === 'error' && (
-        <div className="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs">
+        <div className="bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded p-2 text-red-700 dark:text-red-400 text-xs">
           Failed to load interaction <code>{panel.interactionId}</code>: {panel.message}
         </div>
       )}

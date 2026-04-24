@@ -161,7 +161,7 @@ export default function TokenCompositionStack({ daily }: TokenCompositionStackPr
                 aria-pressed={active}
                 className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
                   active
-                    ? 'bg-indigo-900/50 text-indigo-200 border-indigo-700'
+                    ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-200 dark:border-indigo-700'
                     : 'bg-gray-100/90 dark:bg-gray-800/80 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600'
                 }`}
               >

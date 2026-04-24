@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-24
+
+Rolls up the analytics + Cost tab build, the NixOS flake, the final polish pass, and the previously-[Unreleased] OpenAI Codex adapter into one release.
+
 ### Added
+- **Cost tab** on the project dashboard. Answers "where did my tokens go?" and "where was time wasted?":
+  - Top sessions and top commands by $ cost (click-through to Messages / Sessions tabs)
+  - Per-tool cost attribution (calls × tokens × model rates, with `%`-of-total)
+  - Token composition donut + daily stacked bar (input / output / cache_read / cache_creation)
+  - Cache ROI hero card (hit rate, tokens saved, cost saved, break-even badge)
+  - Outlier commands panel (tool count > 20, step count > 15)
+  - Retry signal alerts (same-tool re-invocations after errors)
+  - Session efficiency table with classification (`edit-heavy` / `research-heavy` / `idle-heavy` / `balanced`)
+  - Week-over-week trend delta strip (cost / errors / tools / tokens per command)
+  - Error cost estimation
+- **New API endpoints:**
+  - `GET /api/cost-data?log_path=` — analytics payload, lazy-loaded by the Cost tab
+  - `GET /api/commands?log_path=&offset=&limit=&sort=&order=` — paginated command list
+  - `GET /api/interaction/{interaction_id}?log_path=` — single enriched interaction
+  - `GET /api/sessions/compare?log_path=&a=&b=` — side-by-side session diff
+- **Session compare UI** — toggle mode on Sessions tab, pick two sessions, see a per-metric diff.
+- **Breadcrumb + back button** when a deep-link query param (`?session=`, `?interaction=`) is active.
+- **URL-persisted filter state** on the Cost tab (`range`, `session`, `tool`).
+- **Light / dark theme toggle** in the header (sun/moon icon). Preference persists to `localStorage['suf:theme']`.
+- **NixOS flake** — `nix build`, `nix run`, `nix develop`. Frontend via `buildNpmPackage`, backend via `buildPythonPackage`, merged into one `result/bin/stackunderflow`.
 - **OpenAI Codex adapter** (`stackunderflow/adapters/codex.py`). Walks
   `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, validates each file's
   `session_meta` header (originator must start with `codex`), and streams
@@ -18,28 +42,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens inside `input_tokens` (OpenAI convention); Anthropic keeps them
   separate. The adapter strips cached tokens out of `input_tokens`, adds
   reasoning tokens onto `output_tokens`, and writes `cache_read_tokens`
-  independently so the cost math matches. Without this the numbers are
-  off by ~2x for any session with a large cached prefix.
-- **Tool-name mapping.** Codex function-call names are normalised to the
-  same verbs Claude uses: `exec_command → Bash`, `read_file → Read`,
-  `write_file`/`apply_diff`/`apply_patch → Edit`, `read_dir → Glob`,
-  `spawn_agent`/`wait_agent`/`close_agent → Agent`. Unknown names pass
-  through unchanged.
-- **OpenAI / Codex pricing** in `stackunderflow/infra/costs.py`: new
-  `_Family` members for `gpt-5`, `gpt-5-mini`, `gpt-5-codex`,
-  `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-4o`, `gpt-4o-mini`,
-  `gpt-4.1`, with cache-write always at `$0` (OpenAI doesn't bill for
-  prompt-cache writes). The LiteLLM overlay still updates live rates
-  at runtime if they drift.
-- **Adapter registration** in `stackunderflow/adapters/__init__.py`:
-  Codex now registers alongside Claude. `stackunderflow reindex` picks up
-  both without further changes; routes and reports stay provider-agnostic
-  because they read only from the store.
-- **10 new tests** in `tests/stackunderflow/adapters/test_codex.py` with a
-  committed fixture at `tests/mock-data/codex-sessions/2026/04/19/rollout-*.jsonl`.
-  Cover enumerate/validate, project slugging, message + tool records,
-  token-count attachment, malformed-line tolerance, monotonic seq, and
-  `since_offset` resume. Suite total: 350 passed, 2 skipped.
+  independently so the cost math matches.
+- **Tool-name mapping** for Codex. Function-call names normalised to Claude's verbs: `exec_command → Bash`, `read_file → Read`, `write_file`/`apply_diff`/`apply_patch → Edit`, `read_dir → Glob`, `spawn_agent`/`wait_agent`/`close_agent → Agent`.
+- **OpenAI / Codex pricing** in `stackunderflow/infra/costs.py`: new `_Family` members for `gpt-5`, `gpt-5-mini`, `gpt-5-codex`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`. Cache-write is `$0` (OpenAI doesn't bill for prompt-cache writes).
+- **Adapter registration** in `stackunderflow/adapters/__init__.py`: Codex registers alongside Claude. `stackunderflow reindex` picks up both.
+- **448 tests passing** (prior baseline 340). +34 for analytics collectors + trends, +23 for the new routes, +10 for Codex, +others for primitives + regressions.
+
+### Changed
+- **`/api/dashboard-data` payload trimmed ~65%** (chimera: 2.37 MB → 823 KB). Analytics fields moved to `/api/cost-data`; command detail moved to `/api/commands`.
+- **`summarise()` throughput +45%** on chimera (793 ms → 436 ms warm). Hot-path fixes in `_local_day` / `_local_hour` and collector ingest loops.
+- **Overview tab** — 4 mini cards for token categories replaced by a single token-composition donut; added trend delta strip and cache ROI hero card.
+- **All UI surfaces** (dashboard tabs, Cost tab components, common primitives, charts, layout, pages, discussion/ and qa/) now support both dark and light mode via paired `dark:/light:` Tailwind classes.
+- **Navigation consolidated** — cost components route click-through via `services/navigation.ts` instead of inline `window.history.pushState` duplicates.
+
+### Fixed
+- **Retry detection** on real data. Previous rule required `is_error` on assistant records, which never fires (errors live on `tool_result` records). Detection now walks the response + tool_result stream per interaction — chimera surfaces **127 signals** (was 0).
+- **Error cost estimation** — was gated behind retry signals, always rendered `$0`. Now derives from output tokens on failed assistant turns per interaction — chimera shows **$2.05** attributable retry cost across 226 errors (was $0).
+- **27 accent pill patterns** (`bg-<c>-900/n text-<c>-200/300`) had no light-mode counterpart → each now ships with paired `bg-<c>-100 text-<c>-700/800` classes.
+- **6 error-banner regressions** (inline retry prompts, bookmark confirmation, session-compare failure, message-load error) fixed during end-to-end QA — F2's regex missed them because of interleaved `border-*` tokens.
+- **Theme persistence** — Header previously shipped a local `ThemeToggle` stub that flipped the `dark` class but didn't write to `localStorage`, so reloads reverted the theme. Swapped to the shared `useTheme`-backed toggle.
+- **19 dark-on-dark text hits** in components/ pre-emptively bumped to `text-gray-400` or `text-gray-300`.
+
+### Removed
+- Stale `TODO(merge)` / `TODO(prim-*)` / "swap to shared primitive" comments left behind during parallel-agent builds.
 
 ## [0.3.0] - 2026-04-19
 
