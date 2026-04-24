@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { IconStack2, IconSearch, IconMessageChatbot, IconChevronDown } from '@tabler/icons-react'
+import { IconStack2, IconSearch, IconMessageChatbot, IconChevronDown, IconSettings } from '@tabler/icons-react'
 import { getProjects } from '../../services/api'
 import { formatProjectName, getNameMode } from '../../services/nameMode'
 import type { Project } from '../../types/api'
@@ -164,6 +164,16 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
           />
         </div>
       </form>
+
+      {/* Settings */}
+      <Link
+        to="/settings"
+        className="p-1.5 rounded text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800"
+        title="Settings"
+        aria-label="Open settings"
+      >
+        <IconSettings size={18} />
+      </Link>
 
       {/* Theme Toggle */}
       <ThemeToggle />
