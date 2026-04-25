@@ -258,9 +258,9 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       key: 'content',
       label: 'Content',
       render: (row) => (
-        <span className="text-gray-700 dark:text-gray-300 text-xs truncate block max-w-lg">
-          {row.content.length > 150
-            ? row.content.slice(0, 150) + '...'
+        <span className="text-gray-700 dark:text-gray-300 text-xs whitespace-pre-wrap break-words block">
+          {row.content.length > 300
+            ? row.content.slice(0, 300) + '…'
             : row.content}
         </span>
       ),
