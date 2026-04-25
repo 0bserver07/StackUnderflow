@@ -236,7 +236,7 @@ function formatTime(iso: string): string {
   })
 }
 
-const DEFAULT_PAGE_SIZE = 50
+const DEFAULT_PAGE_SIZE = 10
 
 type SortableKey = keyof Pick<
   OutlierCommand,

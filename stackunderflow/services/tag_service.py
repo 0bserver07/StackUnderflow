@@ -733,69 +733,61 @@ class TagService:
             "total_sessions": len(all_session_ids),
         }
 
-    def reindex_all(self, memory_cache, cache_service, projects=None) -> dict:
-        """Rebuild auto-tags from all available project data.
+    def reindex_all(self, memory_cache=None, cache_service=None, projects=None) -> dict:
+        """Rebuild auto-tags from the session store.
 
-        Args:
-            memory_cache: The MemoryCache instance
-            cache_service: The LocalCacheService instance
-            projects: Optional project list override; if None, discovered from filesystem
-
-        Returns:
-            Dict with reindex results
+        `memory_cache` / `cache_service` are retained for backwards
+        compatibility but are ignored — the SQLite store is the single
+        source of truth.
         """
-        from ..infra.discovery import project_metadata as get_all_projects_with_metadata
-        from ..pipeline import process as _run_pipeline
+        from ..store import db, queries
+        import stackunderflow.deps as deps
+        from collections import defaultdict
 
-        if projects is None:
-            projects = get_all_projects_with_metadata()
+        store_path = getattr(deps, "store_path", None)
+        if store_path is None:
+            return {"projects_indexed": 0, "total_sessions_tagged": 0, "total_tags_assigned": 0, "errors": [{"project": "(all)", "error": "store_path unavailable"}]}
+
         total_sessions = 0
         total_tags = 0
         projects_indexed = 0
-        errors = []
+        errors: list[dict] = []
 
-        # Clear existing auto tags before reindexing
         data = self._load_tags()
         data["auto_tags"] = {}
         data["tag_metadata"] = self._build_tag_metadata()
 
-        for project in projects:
-            project_name = project["dir_name"]
-            log_path = project["log_path"]
+        conn = db.connect(store_path)
+        try:
+            project_rows = queries.list_projects(conn)
+            wanted_slugs = (
+                {p.get("dir_name") for p in (projects or []) if p.get("dir_name")}
+                if projects
+                else None
+            )
+            slug_groups: dict[str, list[int]] = defaultdict(list)
+            for prow in project_rows:
+                if wanted_slugs is not None and prow.slug not in wanted_slugs:
+                    continue
+                slug_groups[prow.slug].append(prow.id)
 
-            try:
-                # Try memory cache first
-                messages = None
-                memory_result = (
-                    memory_cache.fetch(log_path) if memory_cache else None
-                )
-                if memory_result:
-                    messages, _ = memory_result
-                else:
-                    # Try file cache
-                    cached_messages = (
-                        cache_service.load_messages(log_path)
-                        if cache_service
-                        else None
-                    )
-                    if cached_messages:
-                        messages = cached_messages
-                    else:
-                        # Process from disk
-                        messages, _ = _run_pipeline(log_path)
-
-                if messages:
-                    auto_tags = self.auto_tag_all_sessions(messages)
-                    data["auto_tags"].update(auto_tags)
-                    total_sessions += len(auto_tags)
-                    total_tags += sum(
-                        len(tags) for tags in auto_tags.values()
-                    )
-                    projects_indexed += 1
-
-            except Exception as e:
-                logger.error(f"Error tagging project {project_name}: {e}")
-                errors.append({"project": project_name, "error": str(e)})
+            for slug, ids in slug_groups.items():
+                merged: list[dict] = []
+                try:
+                    for pid in ids:
+                        msgs, _ = queries.get_project_stats(conn, project_id=pid)
+                        merged.extend(msgs)
+                    if merged:
+                        auto_tags = self.auto_tag_all_sessions(merged)
+                        data["auto_tags"].update(auto_tags)
+                        total_sessions += len(auto_tags)
+                        total_tags += sum(len(tags) for tags in auto_tags.values())
+                        projects_indexed += 1
+                except Exception as e:
+                    logger.error(f"Error tagging project {slug}: {e}")
+                    errors.append({"project": slug, "error": str(e)})
+        finally:
+            conn.close()
 
         self._save_tags(data)
 

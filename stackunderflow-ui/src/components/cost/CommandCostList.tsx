@@ -217,7 +217,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(10)
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const paged = useMemo(

@@ -109,9 +109,9 @@ export default function CommandsTab({ data }: CommandsTabProps) {
           ) : (
             <IconChevronRight size={14} className="text-gray-500 mt-0.5 shrink-0" />
           )}
-          <span className="text-gray-700 dark:text-gray-300 truncate">
-            {row.command.content.length > 200
-              ? row.command.content.slice(0, 200) + '...'
+          <span className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words min-w-0">
+            {row.command.content.length > 400
+              ? row.command.content.slice(0, 400) + '…'
               : row.command.content}
           </span>
         </div>
