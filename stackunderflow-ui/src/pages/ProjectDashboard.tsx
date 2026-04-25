@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -34,17 +34,26 @@ import BookmarksTab from '../components/dashboard/BookmarksTab'
 import TagsTab from '../components/dashboard/TagsTab'
 import SessionsTab from '../components/dashboard/SessionsTab'
 import CostTab from '../components/dashboard/CostTab'
+import { useBetaFeatures } from '../hooks/useBetaFeatures'
+import BetaBadge from '../components/common/BetaBadge'
 
-const TABS = [
+type Tab = {
+  id: string
+  label: string
+  icon: typeof IconLayoutDashboard
+  beta?: boolean
+}
+
+const TABS: readonly Tab[] = [
   { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
   { id: 'sessions', label: 'Sessions', icon: IconFolders },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
-  { id: 'qa', label: 'Q&A', icon: IconHelpCircle },
+  { id: 'qa', label: 'Q&A', icon: IconHelpCircle, beta: true },
   { id: 'bookmarks', label: 'Bookmarks', icon: IconBookmark },
-  { id: 'tags', label: 'Tags', icon: IconTag },
+  { id: 'tags', label: 'Tags', icon: IconTag, beta: true },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -69,6 +78,22 @@ export default function ProjectDashboard() {
   // `urlTick` bumps whenever the URL changes via NAV_EVENT or popstate so
   // children that read URL params (Search query, etc.) re-render in step.
   const [urlTick, setUrlTick] = useState(0)
+
+  // Beta-features toggle + per-tab overrides from localStorage.
+  // Filter TABS once per render so the tab bar and the fallback logic agree.
+  const { isTabVisible } = useBetaFeatures()
+  const visibleTabs = useMemo(
+    () => TABS.filter(t => isTabVisible(t.id, t.beta ?? false)),
+    [isTabVisible],
+  )
+
+  // If the current tab was hidden (user toggled beta off or added a "hidden"
+  // override), fall back to 'overview' so the content area isn't blank.
+  useEffect(() => {
+    if (!visibleTabs.some(t => t.id === activeTab)) {
+      setActiveTab('overview')
+    }
+  }, [visibleTabs, activeTab])
 
   // Set project on backend
   const { isLoading: settingProject, error: setError } = useQuery({
@@ -218,7 +243,7 @@ export default function ProjectDashboard() {
       {/* Tab Bar */}
       <div className="border-b border-gray-200 dark:border-gray-800">
         <nav className="flex gap-0 -mb-px overflow-x-auto" data-testid="dashboard-tabs">
-          {TABS.map(tab => {
+          {visibleTabs.map(tab => {
             const Icon = tab.icon
             return (
               <button
@@ -233,6 +258,7 @@ export default function ProjectDashboard() {
               >
                 <Icon size={14} />
                 {tab.label}
+                {tab.beta === true && <BetaBadge className="ml-1.5" />}
               </button>
             )
           })}
