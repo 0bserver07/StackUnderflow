@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-04-25
+
+### Fixed
+- **`Cost Saved` rendered raw token-rate units** — `cost_saved_base_units` is `tokens × $/M-rate` (no /1M divisor; rates in `infra/costs.py` are stored as `$/million`). Frontend was passing the raw value through `formatCost`, displaying e.g. `$2,346,042,618` instead of `$2,346.04`. `CacheRoiCard` now divides by 1M before formatting.
+- **Cost-tab tables now paginate.** `Most Expensive Commands`, `Outlier Commands` (high-tool / high-step), and `Retry Alerts` got real Prev/Next + N/page (10 / 25 / 50 / 100) controls. The previous "Show all" toggle on the outlier table was a row-dump.
+- **`formatCost` consolidated.** 11 nearly-identical local copies were scattered across `cost/`, `dashboard/`, `analytics/`, and `pages/` — most missing the `≥$1,000` thousands-separator branch (so `$5421` instead of `$5,421`), and a few stuck on `toFixed(4)` always (so `$5421.0345` on the Total Cost mini-card). Single canonical implementation now lives in `services/format.ts` and is imported everywhere.
+
 ## [0.3.3] - 2026-04-25
 
 ### Fixed
