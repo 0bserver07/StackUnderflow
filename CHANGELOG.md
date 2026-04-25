@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-24
+
 ### Added
 - **Beta features toggle** — new `/settings` page with theme controls, a global "Show beta features" switch, and per-tab Default/Shown/Hidden overrides. Q&A and Tags dashboard tabs are now marked BETA. Preferences persist to `localStorage['suf:beta']` and `localStorage['suf:tabs']`. Gear icon in the header opens the page.
+
+### Fixed
+- Direct loads of `/settings` (page reload, deep link) no longer return 404 — added an SPA catch-all handler that serves the React `index.html` so client-side routing takes over.
 
 ## [0.3.1] - 2026-04-24
 
