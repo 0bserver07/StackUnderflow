@@ -468,55 +468,55 @@ class QAService:
         finally:
             conn.close()
 
-    def reindex_all(self, memory_cache, cache_service, projects=None) -> dict:
-        """Rebuild the entire Q&A index from all available project data.
+    def reindex_all(self, memory_cache=None, cache_service=None, projects=None) -> dict:
+        """Rebuild the entire Q&A index from the session store.
 
-        Args:
-            memory_cache: The MemoryCache instance
-            cache_service: The LocalCacheService instance
-            projects: Optional project list override; if None, discovered from filesystem
-
-        Returns:
-            Dict with reindex results
+        `memory_cache` / `cache_service` are retained for backwards
+        compatibility but are ignored — the SQLite store is the single
+        source of truth.
         """
-        from ..infra.discovery import project_metadata as get_all_projects_with_metadata
-        from ..pipeline import process as _run_pipeline
+        from ..store import db, queries
+        import stackunderflow.deps as deps
+        from collections import defaultdict
 
-        if projects is None:
-            projects = get_all_projects_with_metadata()
+        store_path = getattr(deps, "store_path", None)
+        if store_path is None:
+            return {"projects_indexed": 0, "total_qa_indexed": 0, "errors": [{"project": "(all)", "error": "store_path unavailable"}]}
+
         total_qa = 0
         projects_indexed = 0
-        errors = []
+        errors: list[dict] = []
 
-        for project in projects:
-            project_name = project["dir_name"]
-            log_path = project["log_path"]
+        conn = db.connect(store_path)
+        try:
+            project_rows = queries.list_projects(conn)
+            wanted_slugs = (
+                {p.get("dir_name") for p in (projects or []) if p.get("dir_name")}
+                if projects
+                else None
+            )
+            slug_groups: dict[str, list[int]] = defaultdict(list)
+            for prow in project_rows:
+                if wanted_slugs is not None and prow.slug not in wanted_slugs:
+                    continue
+                slug_groups[prow.slug].append(prow.id)
 
-            try:
-                # Try memory cache first
-                messages = None
-                memory_result = memory_cache.fetch(log_path) if memory_cache else None
-                if memory_result:
-                    messages, _ = memory_result
-                else:
-                    # Try file cache
-                    cached_messages = cache_service.load_messages(log_path) if cache_service else None
-                    if cached_messages:
-                        messages = cached_messages
-                    else:
-                        # Process from disk
-                        messages, _ = _run_pipeline(log_path)
-
-                if messages:
-                    self.index_project(project_name, messages)
-                    # Count how many were indexed
-                    qa_pairs = self.extract_qa_pairs(project_name, messages)
-                    total_qa += len(qa_pairs)
-                    projects_indexed += 1
-
-            except Exception as e:
-                logger.error(f"Error indexing Q&A for project {project_name}: {e}")
-                errors.append({"project": project_name, "error": str(e)})
+            for slug, ids in slug_groups.items():
+                merged: list[dict] = []
+                try:
+                    for pid in ids:
+                        msgs, _ = queries.get_project_stats(conn, project_id=pid)
+                        merged.extend(msgs)
+                    if merged:
+                        self.index_project(slug, merged)
+                        qa_pairs = self.extract_qa_pairs(slug, merged)
+                        total_qa += len(qa_pairs)
+                        projects_indexed += 1
+                except Exception as e:
+                    logger.error(f"Error indexing Q&A for project {slug}: {e}")
+                    errors.append({"project": slug, "error": str(e)})
+        finally:
+            conn.close()
 
         return {
             "projects_indexed": projects_indexed,

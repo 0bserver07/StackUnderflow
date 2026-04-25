@@ -44,7 +44,7 @@ export default function CommandToolDistChart({ toolCountDist }: CommandToolDistC
   return (
     <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
       <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Commands by Tool Count</h3>
-      <ResponsiveContainer width="100%" height={250}>
+      <ResponsiveContainer width="100%" height={280}>
         <BarChart data={data}>
           <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
           <XAxis

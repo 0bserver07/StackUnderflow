@@ -48,6 +48,8 @@ function formatTokens(n: number): string {
 interface ChartDatum {
   session_id: string
   short_id: string
+  /** Pre-formatted Y-axis label: "534bba1f · refactor the auth …" */
+  label: string
   cost: number
   commands: number
   errors: number
@@ -186,18 +188,24 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
   const chartData: ChartDatum[] = [...data]
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 10)
-    .map((s) => ({
-      session_id: s.session_id,
-      short_id: shortSession(s.session_id),
-      cost: s.cost,
-      commands: s.commands,
-      errors: s.errors,
-      messages: s.messages,
-      duration_s: s.duration_s,
-      models_used: s.models_used ?? [],
-      tokens: s.tokens ?? {},
-      preview: s.first_prompt_preview,
-    }))
+    .map((s) => {
+      const sid = shortSession(s.session_id)
+      const preview = (s.first_prompt_preview ?? '').replace(/\s+/g, ' ').trim()
+      const truncated = preview.length > 36 ? preview.slice(0, 36) + '…' : preview
+      return {
+        session_id: s.session_id,
+        short_id: sid,
+        label: truncated ? `${sid} · ${truncated}` : sid,
+        cost: s.cost,
+        commands: s.commands,
+        errors: s.errors,
+        messages: s.messages,
+        duration_s: s.duration_s,
+        models_used: s.models_used ?? [],
+        tokens: s.tokens ?? {},
+        preview: s.first_prompt_preview,
+      }
+    })
 
   const maxCost = chartData.reduce((m, d) => (d.cost > m ? d.cost : m), 0)
   // Only label bars that are > 10% of the chart max.
@@ -231,11 +239,12 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
           />
           <YAxis
             type="category"
-            dataKey="short_id"
-            tick={{ fontSize: 10, fill: '#9CA3AF', fontFamily: 'monospace' }}
+            dataKey="label"
+            tick={{ fontSize: 11, fill: '#9CA3AF' }}
             tickLine={{ stroke: '#4B5563' }}
             axisLine={{ stroke: '#4B5563' }}
-            width={80}
+            width={320}
+            interval={0}
           />
           <Tooltip
             content={<SessionTooltip />}

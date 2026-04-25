@@ -147,14 +147,14 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
           {formatTokens(grandTotal)} total
         </span>
       </h3>
-      <ResponsiveContainer width="100%" height={260}>
+      <ResponsiveContainer width="100%" height={360}>
         <PieChart>
           <Pie
             data={data}
             cx="50%"
             cy="50%"
-            innerRadius={60}
-            outerRadius={95}
+            innerRadius={85}
+            outerRadius={135}
             paddingAngle={2}
             dataKey="value"
             nameKey="label"
