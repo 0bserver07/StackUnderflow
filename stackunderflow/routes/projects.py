@@ -1,6 +1,7 @@
 """Project management routes."""
 
 import os
+from collections import defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -168,22 +169,35 @@ async def get_projects(
         try:
             project_rows = queries.list_projects(conn)
 
-            projects = [
-                {
-                    "dir_name": p.slug,
-                    "log_path": _resolve_log_dir(p.path, p.slug),
-                    "file_count": len(queries.list_sessions(conn, project_id=p.id)),
-                    "total_size_mb": _dir_size_mb(_resolve_log_dir(p.path, p.slug)),
-                    "last_modified": p.last_modified,
-                    "first_seen": p.first_seen,
-                    "display_name": p.display_name,
-                    "in_cache": False,
-                    "url_slug": p.slug,
-                    "stats": None,
-                    "_id": p.id,
-                }
-                for p in project_rows
-            ]
+            # Schema has UNIQUE(provider, slug) — same project used through
+            # multiple providers (e.g. claude + codex) yields multiple rows.
+            # Merge them so the user-facing list has one entry per slug.
+            slug_groups: dict[str, list] = defaultdict(list)
+            for p in project_rows:
+                slug_groups[p.slug].append(p)
+
+            projects = []
+            for slug, group in slug_groups.items():
+                primary = max(group, key=lambda p: p.last_modified)
+                log_path = _resolve_log_dir(primary.path, slug)
+                projects.append(
+                    {
+                        "dir_name": slug,
+                        "log_path": log_path,
+                        "file_count": sum(
+                            len(queries.list_sessions(conn, project_id=p.id))
+                            for p in group
+                        ),
+                        "total_size_mb": _dir_size_mb(log_path),
+                        "last_modified": max(p.last_modified for p in group),
+                        "first_seen": min(p.first_seen for p in group),
+                        "display_name": primary.display_name,
+                        "in_cache": False,
+                        "url_slug": slug,
+                        "stats": None,
+                        "_ids": [p.id for p in group],
+                    }
+                )
 
             if sort_by == "last_modified":
                 projects.sort(key=lambda x: x["last_modified"], reverse=True)
@@ -200,10 +214,10 @@ async def get_projects(
 
             if include_stats:
                 for proj in projects:
-                    proj["stats"] = _project_stats_for_ui(conn, proj["_id"])
+                    proj["stats"] = _merge_stats_for_ui(conn, proj["_ids"])
 
             for proj in projects:
-                proj.pop("_id", None)
+                proj.pop("_ids", None)
         finally:
             conn.close()
 
@@ -241,6 +255,37 @@ def _dir_size_mb(log_dir: str) -> float:
     except OSError:
         return 0.0
     return round(total / (1024 * 1024), 2)
+
+
+def _merge_stats_for_ui(conn, project_ids: list[int]) -> dict:
+    """Sum / max / min ProjectStats across provider-duplicates of one slug."""
+    parts = [_project_stats_for_ui(conn, pid) for pid in project_ids]
+    if len(parts) == 1:
+        return parts[0]
+    total_commands = sum(p["total_commands"] for p in parts)
+    starts = [p["first_message_date"] for p in parts if p["first_message_date"]]
+    ends = [p["last_message_date"] for p in parts if p["last_message_date"]]
+    return {
+        "total_input_tokens": sum(p["total_input_tokens"] for p in parts),
+        "total_output_tokens": sum(p["total_output_tokens"] for p in parts),
+        "total_cache_read": sum(p["total_cache_read"] for p in parts),
+        "total_cache_write": sum(p["total_cache_write"] for p in parts),
+        "total_commands": total_commands,
+        "avg_tokens_per_command": (
+            sum(p["total_commands"] * p["avg_tokens_per_command"] for p in parts) / total_commands
+            if total_commands
+            else 0
+        ),
+        "avg_steps_per_command": (
+            sum(p["total_commands"] * p["avg_steps_per_command"] for p in parts) / total_commands
+            if total_commands
+            else 0
+        ),
+        "compact_summary_count": sum(p["compact_summary_count"] for p in parts),
+        "first_message_date": min(starts) if starts else None,
+        "last_message_date": max(ends) if ends else None,
+        "total_cost": sum(p["total_cost"] for p in parts),
+    }
 
 
 def _project_stats_for_ui(conn, project_id: int) -> dict:

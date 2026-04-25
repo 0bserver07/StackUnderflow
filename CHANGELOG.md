@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-04-25
+
+### Fixed
+- **Duplicate projects in `/api/projects`** — same project used through both Claude and Codex appeared twice in the dashboard projects list (one row with each provider's stats), making the Est. Cost sort look broken. The schema's `UNIQUE (provider, slug)` permits this; `/api/projects` now groups by slug and merges stats additively across providers (sum tokens / commands / cost; min first_message_date; max last_message_date; weighted-mean averages).
+
 ## [0.3.2] - 2026-04-24
 
 ### Added
