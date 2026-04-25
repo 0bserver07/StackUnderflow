@@ -371,6 +371,9 @@ function ConversationMessage({
   isFirstInSidechainGroup?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+  // Per-message JSON disclosure. Independent from the global `showRaw` toggle
+  // so users can drill into one message without flipping the whole session.
+  const [showJson, setShowJson] = useState(false)
   const role = getRole(line)
   const content = getContent(line)
   const ts = getTimestamp(line)
@@ -425,6 +428,20 @@ function ConversationMessage({
         )}
         <span className="flex-1" />
         {ts && <span className="text-[10px] text-gray-600 dark:text-gray-400">{fmtTs(ts)}</span>}
+        <button
+          type="button"
+          onClick={() => setShowJson((v) => !v)}
+          aria-pressed={showJson}
+          aria-label={showJson ? 'Hide raw JSON' : 'View raw JSON'}
+          title={showJson ? 'Hide raw JSON' : 'View raw JSON'}
+          className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+            showJson
+              ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800'
+              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:text-gray-800 dark:hover:text-gray-200'
+          }`}
+        >
+          {showJson ? 'Hide JSON' : 'JSON'}
+        </button>
       </div>
       {/* Body */}
       <div className="px-4 py-3">
@@ -446,6 +463,11 @@ function ConversationMessage({
           >
             Show less
           </button>
+        )}
+        {showJson && (
+          <pre className="mt-3 text-[11px] text-gray-600 dark:text-gray-400 overflow-x-auto whitespace-pre-wrap font-mono bg-gray-50/70 dark:bg-gray-950/60 rounded p-2 max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-800">
+            {JSON.stringify(line, null, 2)}
+          </pre>
         )}
       </div>
     </div>

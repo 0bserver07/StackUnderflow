@@ -33,7 +33,7 @@ export default function ErrorDistributionChart({ errorCategories }: ErrorDistrib
         Error Categories
         <span className="ml-2 text-xs text-gray-500 font-normal">{total} total</span>
       </h3>
-      <ResponsiveContainer width="100%" height={250}>
+      <ResponsiveContainer width="100%" height={280}>
         <BarChart data={data} layout="vertical" margin={{ left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
           <XAxis
