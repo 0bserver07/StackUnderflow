@@ -58,7 +58,7 @@ const FILTERS: Array<{ id: SeverityFilter; label: string; predicate: (s: RetrySi
 export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
   const [filter, setFilter] = useState<SeverityFilter>('all')
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(10)
 
   const sortedAll = useMemo(() => {
     if (!signals || signals.length === 0) return []

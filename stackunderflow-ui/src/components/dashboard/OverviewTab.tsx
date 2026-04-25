@@ -40,6 +40,20 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
+/**
+ * "2026-01-30T20:58:11.193Z" → "Jan 30, 2026". Falls through to the original
+ * string if it's not a parseable ISO timestamp so we never blank out a label.
+ */
+function formatDateRange(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
 import { formatCost } from '../../services/format'
 
 interface MiniStatCardProps {
@@ -138,12 +152,12 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
       {/* Primary stats from existing StatsCards component */}
       <StatsCards stats={stats} />
 
-      {/* Cache ROI hero card — uses the still-present `cache` field on
-          /api/dashboard-data; daily_stats supplies the ROI sparkline. */}
-      <CacheRoiCard cache={stats.cache} dailyStats={stats.daily_stats} />
-
-      {/* Token composition donut replaces the four mini token cards (spec §2.4) */}
-      <TokenCompositionDonut totals={tokenTotals} />
+      {/* Cache ROI + Token composition share a row on wide screens so the
+          donut doesn't stretch to a full-width band on its own. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <CacheRoiCard cache={stats.cache} dailyStats={stats.daily_stats} />
+        <TokenCompositionDonut totals={tokenTotals} />
+      </div>
 
       {/* Extended stat cards grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -211,8 +225,8 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
         <MiniStatCard
           icon={<IconCalendar size={14} />}
           label="Date Range"
-          value={dateRange.start ? `${dateRange.start.slice(5)}` : 'N/A'}
-          sublabel={dateRange.end ? `to ${dateRange.end.slice(5)}` : ''}
+          value={dateRange.start ? formatDateRange(dateRange.start) : 'N/A'}
+          sublabel={dateRange.end ? `to ${formatDateRange(dateRange.end)}` : ''}
           color="text-gray-600 dark:text-gray-400"
         />
       </div>
