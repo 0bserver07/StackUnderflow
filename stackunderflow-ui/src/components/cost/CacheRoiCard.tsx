@@ -48,12 +48,7 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
-function formatCost(cost: number): string {
-  if (cost >= 1000) return `$${cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-  if (cost >= 100) return `$${cost.toFixed(0)}`
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 /**
  * Backend's `cost_saved_base_units` is `tokens × $/M-token-rate` without the

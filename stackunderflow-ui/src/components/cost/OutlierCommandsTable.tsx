@@ -222,11 +222,7 @@ interface OutlierCommandsTableProps {
   onOpen?: (interactionId: string) => void
 }
 
-function formatCost(cost: number): string {
-  if (cost >= 100) return `$${cost.toFixed(0)}`
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatTime(iso: string): string {
   if (!iso) return ''
