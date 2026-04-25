@@ -46,12 +46,7 @@ function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function formatCost(cost: number): string {
-  if (cost === 0) return '$0'
-  if (cost < 0.01) return `$${cost.toFixed(4)}`
-  if (cost >= 1000) return `$${cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  return `$${cost.toFixed(2)}`
-}
+import { formatCost } from '../services/format'
 
 function formatDuration(firstDate: string | undefined, lastDate: string | undefined): string {
   if (!firstDate || !lastDate) return '-'

@@ -21,9 +21,7 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
-function formatCost(cost: number): string {
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`

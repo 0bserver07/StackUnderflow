@@ -13,11 +13,7 @@ interface ErrorCostCardProps {
 
 const COLLAPSED_TOOL_COUNT = 6
 
-function formatCost(cost: number): string {
-  if (cost >= 100) return `$${cost.toFixed(0)}`
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`

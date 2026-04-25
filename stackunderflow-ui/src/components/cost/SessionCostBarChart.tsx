@@ -27,11 +27,7 @@ function shortSession(sid: string): string {
   return sid.length > 8 ? sid.slice(0, 8) : sid
 }
 
-function formatCost(cost: number): string {
-  if (cost >= 100) return `$${cost.toFixed(0)}`
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatDuration(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00:00'

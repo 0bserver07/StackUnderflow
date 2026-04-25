@@ -40,9 +40,7 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
-function formatCost(cost: number): string {
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 interface MiniStatCardProps {
   icon: React.ReactNode

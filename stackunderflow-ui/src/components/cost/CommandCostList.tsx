@@ -41,11 +41,7 @@ function totalTokens(t: Record<string, number> | undefined): number {
   )
 }
 
-function formatCost(cost: number): string {
-  if (cost >= 100) return `$${cost.toFixed(0)}`
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatTokenCount(total: number): string {
   if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`

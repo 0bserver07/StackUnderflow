@@ -64,12 +64,7 @@ function shortSession(sid: string): string {
   return sid.length > 12 ? sid.slice(0, 8) : sid
 }
 
-function formatCost(cost: number): string {
-  const abs = Math.abs(cost)
-  if (abs >= 100) return `$${cost.toFixed(0)}`
-  if (abs >= 1) return `$${cost.toFixed(2)}`
-  return `$${cost.toFixed(4)}`
-}
+import { formatCost } from '../../services/format'
 
 function formatNumber(n: number): string {
   return Math.round(n).toLocaleString()
