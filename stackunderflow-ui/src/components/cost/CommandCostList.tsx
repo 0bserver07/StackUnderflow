@@ -220,6 +220,14 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
   )
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const paged = useMemo(
+    () => sorted.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [sorted, safePage, pageSize],
+  )
 
   const totalCost = useMemo(
     () => rows.reduce((s, r) => s + (r.cost ?? 0), 0),
@@ -273,8 +281,22 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
     >
       <div className="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Most Expensive Commands</h3>
-        <div className="text-xs text-gray-500" data-testid="ccl-caption">
-          showing {sorted.length} of {rows.length}, sorted by {SORT_LABELS[sortKey]} ({sortDir})
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-gray-500" data-testid="ccl-caption">
+            {sorted.length === 0
+              ? 'no rows'
+              : `${(safePage - 1) * pageSize + 1}–${Math.min(safePage * pageSize, sorted.length)} of ${sorted.length}, sorted by ${SORT_LABELS[sortKey]} (${sortDir})`}
+          </div>
+          <select
+            value={pageSize}
+            onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
+            aria-label="Rows per page"
+            className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs text-gray-700 dark:text-gray-300"
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>{n}/page</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -309,7 +331,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r) => {
+              {paged.map((r) => {
                 const tokens = totalTokens(r.tokens)
                 const pctOfTotal = totalCost > 0 ? (r.cost / totalCost) * 100 : 0
                 const isOpen = expanded.has(r.interaction_id)
@@ -407,6 +429,26 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
           </table>
         </div>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-3 text-xs text-gray-600 dark:text-gray-400" data-testid="ccl-pagination">
+          <span>Page {safePage} of {totalPages}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >Prev</button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >Next</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
