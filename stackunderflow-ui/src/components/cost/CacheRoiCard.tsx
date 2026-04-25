@@ -49,9 +49,21 @@ function formatNumber(n: number): string {
 }
 
 function formatCost(cost: number): string {
+  if (cost >= 1000) return `$${cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
   if (cost >= 100) return `$${cost.toFixed(0)}`
   if (cost >= 1) return `$${cost.toFixed(2)}`
   return `$${cost.toFixed(4)}`
+}
+
+/**
+ * Backend's `cost_saved_base_units` is `tokens × $/M-token-rate` without the
+ * /1M divisor (rates are stored as $/million in `infra/costs.py`). Convert to
+ * actual dollars before formatting.
+ */
+const TOKEN_RATE_DIVISOR = 1_000_000
+
+function tokensToDollars(value: number): number {
+  return value / TOKEN_RATE_DIVISOR
 }
 
 function shortId(id: string): string {
@@ -71,7 +83,7 @@ function computeTopSavers(
 ): SessionSaver[] {
   if (!sessionCosts || sessionCosts.length === 0) return []
   const totalTokensSaved = cache.tokens_saved ?? 0
-  const totalCostSaved = cache.cost_saved_base_units ?? 0
+  const totalCostSaved = tokensToDollars(cache.cost_saved_base_units ?? 0)
   const unitCost =
     totalTokensSaved > 0 ? totalCostSaved / totalTokensSaved : 0
 
@@ -154,7 +166,7 @@ export default function CacheRoiCard({
   const tokensSaved = cache.tokens_saved ?? 0
   const tokensCreated = cache.total_created ?? 0
   const roiPct = tokensCreated > 0 ? (tokensSaved / tokensCreated) * 100 : 0
-  const costSaved = cache.cost_saved_base_units ?? 0
+  const costSaved = tokensToDollars(cache.cost_saved_base_units ?? 0)
   const breakEven = cache.break_even_achieved === true
   const hitRate = cache.hit_rate ?? 0
 

@@ -274,12 +274,17 @@ function OutlierSection({
     key: countKey,
     dir: 'desc',
   })
-  const [showAll, setShowAll] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const total = sorted.length
-  const capped = !showAll && total > DEFAULT_PAGE_SIZE
-  const visible = capped ? sorted.slice(0, DEFAULT_PAGE_SIZE) : sorted
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const visible = useMemo(
+    () => sorted.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [sorted, safePage, pageSize],
+  )
 
   const medianCost = useMemo(() => median(rows.map((r) => r.cost)), [rows])
 
@@ -419,9 +424,9 @@ function OutlierSection({
                   <td className="w-6 px-2 py-2" aria-hidden="true" />
                   <td className="px-3 py-2 font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                     {total} {total === 1 ? 'command' : 'commands'}
-                    {capped ? (
+                    {totalPages > 1 ? (
                       <span className="text-gray-500 normal-case ml-2">
-                        (showing first {DEFAULT_PAGE_SIZE})
+                        (page {safePage} of {totalPages})
                       </span>
                     ) : null}
                   </td>
@@ -436,16 +441,39 @@ function OutlierSection({
               </tfoot>
             </table>
           </div>
-          {total > DEFAULT_PAGE_SIZE && (
-            <div className="border-t border-gray-200 dark:border-gray-800 px-3 py-2 bg-gray-100/40 dark:bg-gray-800/20 text-center">
-              <button
-                type="button"
-                className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
-                onClick={() => setShowAll((v) => !v)}
-                data-testid={`${testIdPrefix}-toggle-all`}
-              >
-                {showAll ? `Show first ${DEFAULT_PAGE_SIZE}` : `Show all (${total})`}
-              </button>
+          {totalPages > 1 && (
+            <div
+              className="border-t border-gray-200 dark:border-gray-800 px-3 py-2 bg-gray-100/40 dark:bg-gray-800/20 flex items-center justify-between text-xs text-gray-600 dark:text-gray-400"
+              data-testid={`${testIdPrefix}-pagination`}
+            >
+              <span>
+                {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, total)} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
+                  aria-label="Rows per page"
+                  className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-0.5 text-xs"
+                >
+                  {[10, 25, 50, 100].map((n) => (
+                    <option key={n} value={n}>{n}/page</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >Prev</button>
+                <span>{safePage}/{totalPages}</span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                  className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >Next</button>
+              </div>
             </div>
           )}
         </div>

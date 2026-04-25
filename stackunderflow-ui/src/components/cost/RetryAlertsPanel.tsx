@@ -61,6 +61,8 @@ const FILTERS: Array<{ id: SeverityFilter; label: string; predicate: (s: RetrySi
 
 export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
   const [filter, setFilter] = useState<SeverityFilter>('all')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const sortedAll = useMemo(() => {
     if (!signals || signals.length === 0) return []
@@ -79,6 +81,13 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
   const totalWasted = useMemo(
     () => visible.reduce((sum, sig) => sum + (sig.estimated_wasted_cost ?? 0), 0),
     [visible],
+  )
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const paged = useMemo(
+    () => visible.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [visible, safePage, pageSize],
   )
 
   if (!signals || signals.length === 0) {
@@ -117,7 +126,7 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
               <button
                 key={f.id}
                 type="button"
-                onClick={() => setFilter(f.id)}
+                onClick={() => { setFilter(f.id); setPage(1) }}
                 aria-pressed={active}
                 data-testid={`retry-alerts-filter-${f.id}`}
                 className={
@@ -143,7 +152,7 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
         </div>
       ) : (
         <div className="space-y-2" data-testid="retry-alerts-list">
-          {visible.map((sig, idx) => {
+          {paged.map((sig, idx) => {
             const style = STYLES[severity(sig)]
             return (
               <button
@@ -177,6 +186,42 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
               </button>
             )
           })}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div
+          className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-800 flex items-center justify-between text-xs text-gray-600 dark:text-gray-400"
+          data-testid="retry-alerts-pagination"
+        >
+          <span>
+            {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, visible.length)} of {visible.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
+              aria-label="Rows per page"
+              className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-0.5 text-xs"
+            >
+              {[10, 25, 50, 100].map((n) => (
+                <option key={n} value={n}>{n}/page</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >Prev</button>
+            <span>{safePage}/{totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >Next</button>
+          </div>
         </div>
       )}
     </div>
