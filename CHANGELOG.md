@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-04-25
+
+### Fixed
+- **Full-text search returned 0 results** for any project ingested after the `pipeline → stats` rename in 0.3.0. `SearchService.reindex_all`, `TagService.reindex_all`, and `QaService.reindex_all` all imported `from ..pipeline import process` — module no longer exists. Hitting the Reindex button silently failed for the entire run. Replaced with `queries.get_project_stats(conn, project_id=...)`.
+- **Reindex was wiping its own work for duplicate slugs** — schema has `UNIQUE(provider, slug)` so a project used through both Claude and Codex has two rows with the same slug. `index_project` does `DELETE WHERE project = ?` before inserting, so iterating rows naively had iteration 2 wipe iteration 1. Now grouped by slug and concatenated before indexing. Verified live: chimera-scoped search for "refactor" returns 74 hits (was 0).
+
+### Changed
+- **UX pass on the dashboard:**
+  - Cost-tab table page-size default 25 → 10.
+  - `TokenCompositionDonut` height 260 → 360, radii 60/95 → 85/135 — reads as a hero card instead of a small chart in a big box.
+  - `Top Sessions by Cost` y-axis labels: `<short_id> · <first prompt preview>` instead of bare hash.
+  - Overview "Date Range" mini-card: `Jan 30, 2026 → to Apr 25, 2026` instead of raw ISO slice (`01-30T20:58:11.193Z`).
+  - Overview layout: `CacheRoiCard` and `TokenCompositionDonut` share a 2-col grid on lg+ instead of stacking full-width.
+  - Per-message JSON toggle in the session viewer — independent of the global Raw JSON / Formatted switch so users can drill into one message without flipping the whole view.
+- **Commands and Messages tab content cells wrap** instead of truncating to a single line. Slice limits 200 → 400 (Commands) and 150 → 300 (Messages).
+- **All Overview chart heights standardised at 280** (some were 250, mixing). `ToolUsageBarChart` was unbounded (`Math.max(250, n*32)` → 700+ on busy projects); now `min(420, max(280, n*28))`.
+
 ## [0.3.4] - 2026-04-25
 
 ### Fixed
