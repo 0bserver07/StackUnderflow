@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Auto-reindex after ingest.** `run_ingest` now refreshes the search, tag, and Q&A indexes for every project that gained new messages, so users no longer have to POST to `/api/search/reindex`, `/api/tags/reindex`, `/api/qa/reindex` after ingest. Each service is invoked in its own try/except — a beta-service failure (tags or Q&A) cannot break ingest, and search itself fails soft. Gated by a new `auto_reindex_on_ingest` setting (default `True`, env `AUTO_REINDEX_ON_INGEST`) for power users who want to disable it. Per-project re-index, not full `reindex_all` — only the touched projects are touched.
 
+### Changed
+- **`/api/dashboard-data` ~29x faster on warm hits.** Live measurement against the
+  chimera test project (~18k messages, 827 KB payload):
+  - Cold (cache miss): **1381.9 ms**
+  - Hot (cache hit): **46.0–48.3 ms** across 5 consecutive runs
+  - Hot output is byte-identical to cold (same MD5)
+  - Per-phase breakdown of the cold path: SQL fetch ~135–310 ms, `json.loads`
+    loop ~235–295 ms, classifier+enricher+formatter ~180 ms, aggregator
+    ~445 ms — every phase dominated by `aggregator.summarise`.
+  - Implemented as an in-process memo on `routes.data` keyed by
+    `(slug, tz_offset)`, with a `(MAX(sessions.last_ts), SUM(message_count))`
+    signature pulled in one SQL query. Adding a session, growing an existing
+    session, or running `/api/refresh` with new data all bump the signature
+    and force a fresh build. `is_reindexing` and `config` are overlaid on
+    the cached payload per request so live config edits aren't masked.
+
 ## [0.3.5] - 2026-04-25
 
 ### Fixed
