@@ -8,6 +8,7 @@ hook entirely.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,7 @@ def _ref(tmp_path: Path, slug: str = "-a", mtime: float = 1.0, size: int = 100) 
 
 
 @pytest.fixture
-def conn(tmp_path: Path) -> sqlite3.Connection:
+def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     c = db.connect(tmp_path / "store.db")
     schema.apply(c)
     yield c
