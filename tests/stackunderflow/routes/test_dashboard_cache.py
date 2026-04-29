@@ -24,6 +24,7 @@ def _seed_project(store_db, slug: str) -> int:
     project_id = cur.lastrowid
     conn.commit()
     conn.close()
+    assert project_id is not None
     return project_id
 
 
