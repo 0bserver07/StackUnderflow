@@ -57,6 +57,7 @@
           propagatedBuildInputs = with pp; [
             python-dotenv click fastapi uvicorn httpx
             python-multipart orjson uvloop rich
+            mcp
           ];
 
           doCheck = false; # tests use pytest separately
@@ -83,6 +84,7 @@
             pp.pytest pp.pytest-asyncio
             pp.pytest-cov pp.psutil
             pp.types-python-dateutil pp.types-psutil
+            pp.mcp
             pkgs.rsync
           ];
 
