@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP server (`stackunderflow.mcp`).** New FastMCP stdio server exposing a `session_query(session_id, limit, kind="tool_calls"|"errors"|"all")` tool to MCP clients (Claude Desktop, Claude Code, Cursor, etc.). Walks Claude-Code-format JSONL logs across `~/.claude`, `~/.claude-opus`, `~/.claude-sonnet`, `~/.claude-haiku`, `~/.claude-glm` directly through `stackunderflow.adapters.claude.ClaudeAdapter` — stateless, no SQLite, no ingest dependency. Adds runtime dep `mcp>=1.2.0` and console script `stackunderflow-mcp`. Smoke-tested against ~1018 local sessions; tool-call and error filters return real records. Contributed by @zh4ngx (PR #9).
 - **Auto-reindex after ingest.** `run_ingest` now refreshes the search, tag, and Q&A indexes for every project that gained new messages, so users no longer have to POST to `/api/search/reindex`, `/api/tags/reindex`, `/api/qa/reindex` after ingest. Each service is invoked in its own try/except — a beta-service failure (tags or Q&A) cannot break ingest, and search itself fails soft. Gated by a new `auto_reindex_on_ingest` setting (default `True`, env `AUTO_REINDEX_ON_INGEST`) for power users who want to disable it. Per-project re-index, not full `reindex_all` — only the touched projects are touched.
 
 ### Changed
