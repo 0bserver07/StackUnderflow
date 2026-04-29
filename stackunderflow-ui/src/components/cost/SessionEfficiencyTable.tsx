@@ -255,7 +255,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider whitespace-nowrap">
                 <SortHeader
                   label="Session"
                   sortKey="session_id"
@@ -270,7 +270,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   activeKey={sortKeyStr}
                   dir={sortDir}
                   onClick={() => setSort('classification')}
-                  className="px-3 py-2 w-32"
+                  className="px-3 py-2 w-36"
                 />
                 <SortHeader
                   label="Edit"
@@ -279,7 +279,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('edit_ratio')}
                   align="right"
-                  className="px-3 py-2 w-16"
+                  className="px-3 py-2 w-20"
                 />
                 <SortHeader
                   label="Read"
@@ -288,7 +288,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('read_ratio')}
                   align="right"
-                  className="px-3 py-2 w-16"
+                  className="px-3 py-2 w-20"
                 />
                 <SortHeader
                   label="Search"
@@ -297,7 +297,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('search_ratio')}
                   align="right"
-                  className="px-3 py-2 w-16"
+                  className="px-3 py-2 w-20"
                 />
                 <SortHeader
                   label="Bash"
@@ -306,7 +306,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('bash_ratio')}
                   align="right"
-                  className="px-3 py-2 w-16"
+                  className="px-3 py-2 w-20"
                 />
                 <SortHeader
                   label="Idle Total"
@@ -315,7 +315,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('idle_gap_total_s')}
                   align="right"
-                  className="px-3 py-2 w-20"
+                  className="px-3 py-2 w-24"
                 />
                 <SortHeader
                   label="Idle Max"
@@ -324,7 +324,7 @@ export default function SessionEfficiencyTable({ data }: SessionEfficiencyTableP
                   dir={sortDir}
                   onClick={() => setSort('idle_gap_max_s')}
                   align="right"
-                  className="px-3 py-2 w-20"
+                  className="px-3 py-2 w-24"
                 />
               </tr>
             </thead>

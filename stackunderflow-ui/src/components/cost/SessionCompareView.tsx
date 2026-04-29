@@ -251,11 +251,11 @@ export default function SessionCompareView({
         <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider whitespace-nowrap">
                 <th className="px-3 py-2 text-left">Metric</th>
-                <th className="px-3 py-2 text-right">A</th>
-                <th className="px-3 py-2 text-right">B</th>
-                <th className="px-3 py-2 text-right">Δ</th>
+                <th className="px-3 py-2 text-right w-40">A</th>
+                <th className="px-3 py-2 text-right w-40">B</th>
+                <th className="px-3 py-2 text-right w-40">Δ</th>
               </tr>
             </thead>
             <tbody>
@@ -318,15 +318,15 @@ export default function SessionCompareView({
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider whitespace-nowrap">
                 <th className="px-3 py-2 text-left">Metric</th>
-                <th className="px-3 py-2 text-right">
+                <th className="px-3 py-2 text-right w-40">
                   <span className="font-mono text-indigo-700 dark:text-indigo-300">A · {shortSession(data.a.session_id)}</span>
                 </th>
-                <th className="px-3 py-2 text-right">
+                <th className="px-3 py-2 text-right w-40">
                   <span className="font-mono text-indigo-700 dark:text-indigo-300">B · {shortSession(data.b.session_id)}</span>
                 </th>
-                <th className="px-3 py-2 text-right">Δ (B − A)</th>
+                <th className="px-3 py-2 text-right w-40">Δ (B − A)</th>
               </tr>
             </thead>
             <tbody>

@@ -304,7 +304,7 @@ function OutlierSection({
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid={`${testIdPrefix}-table`}>
               <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider whitespace-nowrap">
                   <th className="w-6 px-2 py-2" aria-hidden="true" />
                   <th className="px-3 py-2 text-left">Prompt</th>
                   <SortHeader
@@ -313,7 +313,7 @@ function OutlierSection({
                     activeKey={activeKey}
                     dir={sortDir}
                     onClick={() => setSort('timestamp' as SortableKey)}
-                    className="w-28"
+                    className="w-32"
                   />
                   <SortHeader
                     label={countLabel}
@@ -331,7 +331,7 @@ function OutlierSection({
                     dir={sortDir}
                     onClick={() => setSort('cost' as SortableKey)}
                     align="right"
-                    className="w-20"
+                    className="w-24"
                   />
                 </tr>
               </thead>
