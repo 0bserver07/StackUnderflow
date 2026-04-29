@@ -300,29 +300,29 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-200 dark:border-gray-800 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider whitespace-nowrap">
                 <th scope="col" className="w-8" aria-label="expand" />
                 <th scope="col" className="px-3 py-2 text-left">Prompt</th>
                 <SortHeader
                   label="When" sortKey="when" activeKey={sortKey} dir={sortDir}
-                  onSort={setSort} align="left" className="w-32"
+                  onSort={setSort} align="left" className="w-28"
                 />
                 <SortHeader
                   label="Cost" sortKey="cost" activeKey={sortKey} dir={sortDir}
                   onSort={setSort} className="w-20"
                 />
-                <th scope="col" className="px-3 py-2 text-right w-16">%Total</th>
+                <th scope="col" className="px-3 py-2 text-right w-20">%Total</th>
                 <SortHeader
                   label="Tokens" sortKey="tokens" activeKey={sortKey} dir={sortDir}
                   onSort={setSort} className="w-20"
                 />
                 <SortHeader
                   label="Tools" sortKey="tools" activeKey={sortKey} dir={sortDir}
-                  onSort={setSort} className="w-16"
+                  onSort={setSort} className="w-20"
                 />
                 <SortHeader
                   label="Steps" sortKey="steps" activeKey={sortKey} dir={sortDir}
-                  onSort={setSort} className="w-16"
+                  onSort={setSort} className="w-20"
                 />
               </tr>
             </thead>
