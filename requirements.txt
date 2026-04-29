@@ -12,3 +12,6 @@ python-multipart>=0.0.6
 
 # JSON parsing optimization
 orjson>=3.9.0
+
+# MCP server (stackunderflow.mcp)
+mcp>=1.2.0
