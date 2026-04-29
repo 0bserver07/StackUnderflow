@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from stackunderflow.routes.commands import get_commands
+from stackunderflow.routes.commands import get_commands, get_tool_distribution
 from stackunderflow.routes.data import get_dashboard_data
 from stackunderflow.stats.enricher import EnrichedDataset, Interaction, Record
 from stackunderflow.store import db, schema
@@ -309,10 +309,63 @@ async def test_dashboard_data_drops_command_details(tmp_path, monkeypatch):
     resp = await get_dashboard_data()
     ui = resp["statistics"]["user_interactions"]
     assert "command_details" not in ui, "command_details leaked into dashboard-data"
+    # §D2: tool_count_distribution moved to /api/tool-distribution.
+    assert "tool_count_distribution" not in ui, (
+        "tool_count_distribution leaked into dashboard-data"
+    )
     # Summary fields must survive.
     assert ui["user_commands_analyzed"] == 3
     assert ui["avg_tools_per_command"] == 2.0
-    assert ui["tool_count_distribution"] == {"0": 1, "1": 2}
+
+
+# ── /api/tool-distribution (§D2) ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_distribution_returns_dict(tmp_path, monkeypatch):
+    """§D2: /api/tool-distribution serves the bucket map split off dashboard-data."""
+    store_db = tmp_path / "store.db"
+    slug = "-tcd-ok"
+    _seed_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    fake_stats = {
+        "user_interactions": {
+            "user_commands_analyzed": 5,
+            "tool_count_distribution": {"0": 2, "1": 1, "5": 2},
+        },
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.commands.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], fake_stats),
+    )
+    payload = await get_tool_distribution()
+    assert payload == {"tool_count_distribution": {"0": 2, "1": 1, "5": 2}}
+
+
+@pytest.mark.asyncio
+async def test_tool_distribution_empty_when_missing(tmp_path, monkeypatch):
+    """Empty user_interactions / missing key → ``{}`` (chart shows empty state)."""
+    store_db = tmp_path / "store.db"
+    slug = "-tcd-empty"
+    _seed_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    monkeypatch.setattr(
+        "stackunderflow.routes.commands.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], {}),
+    )
+    payload = await get_tool_distribution()
+    assert payload == {"tool_count_distribution": {}}
+
+
+@pytest.mark.asyncio
+async def test_tool_distribution_400_without_project(monkeypatch):
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+    with pytest.raises(HTTPException) as exc_info:
+        await get_tool_distribution()
+    assert exc_info.value.status_code == 400
 
 
 # ── route registration ──────────────────────────────────────────────────────
@@ -321,3 +374,9 @@ def test_commands_route_registered_on_app():
     from stackunderflow.server import app
     paths = {getattr(r, "path", "") for r in app.routes}
     assert "/api/commands" in paths
+
+
+def test_tool_distribution_route_registered_on_app():
+    from stackunderflow.server import app
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert "/api/tool-distribution" in paths
