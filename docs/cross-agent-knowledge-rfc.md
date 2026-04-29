@@ -1,9 +1,16 @@
 # Cross-Agent Knowledge Base RFC
 
-> **Status: Proposal / RFC — not implemented.**
+> **Status: Proposal / RFC — partially implemented.**
 > This document scopes out what it would take to turn StackUnderflow from a
 > Claude Code analytics dashboard into a unified, cross-agent, cross-project
 > knowledge base that actively feeds context back into agent sessions.
+>
+> **Shipped so far:** an initial MCP server (`stackunderflow-mcp` /
+> `stackunderflow mcp`) exposing a `session_query` tool — read-only,
+> stateless, walks `~/.claude*` JSONL logs through the adapter layer.
+> This is a step toward §7 ("MCP tool") and §8.7 (read-only query API),
+> but does not yet implement the push/persistence side of the proposed
+> knowledge store. See [`docs/mcp.md`](mcp.md) for the current surface.
 
 ## 1. Problem Statement
 
