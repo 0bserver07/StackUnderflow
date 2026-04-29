@@ -142,6 +142,15 @@ def init_cmd(ctx: click.Context, port: int | None, host: str | None, no_browser:
     ctx.invoke(start_cmd, port=port, host=host, headless=no_browser, fresh=clear_cache)
 
 
+# ── MCP server ──────────────────────────────────────────────────────────────
+
+@cli.command("mcp")
+def mcp_cmd():
+    """Run the MCP server over stdio (alias for ``stackunderflow-mcp``)."""
+    from stackunderflow.mcp.server import main as _mcp_main
+    _mcp_main()
+
+
 # ── configuration ────────────────────────────────────────────────────────────
 
 @cli.group("cfg")

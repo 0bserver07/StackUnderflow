@@ -107,6 +107,29 @@ from stackunderflow.stats import classifier, enricher, aggregator, formatter
 from stackunderflow.infra.discovery import locate_logs
 ```
 
+## MCP server
+
+StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that exposes your local Claude Code session logs as a tool any MCP client can call. With it wired up, your AI can answer "what tools did I run in the last hour" or "find the last error I hit" by reading your real on-disk session files.
+
+```bash
+stackunderflow-mcp     # console script
+stackunderflow mcp     # equivalent CLI subcommand
+```
+
+To wire it into Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "stackunderflow": {
+      "command": "stackunderflow-mcp"
+    }
+  }
+}
+```
+
+Restart Claude Desktop and the `session_query` tool becomes callable. See [`docs/mcp.md`](docs/mcp.md) for the full tool reference, Cursor / Claude Code wiring, supported agent roots, and the architectural rationale (stateless, adapter-imported, schema-evolution insulated).
+
 ## Configuration
 
 ```bash

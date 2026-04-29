@@ -16,6 +16,9 @@ stackunderflow start [-p N] [-H H] [--headless] [--fresh]
 stackunderflow reindex
 stackunderflow clear-cache [PROJECT]
 
+# MCP server (also exposed as `stackunderflow-mcp` console script)
+stackunderflow mcp
+
 # Reports
 stackunderflow status [--format text|json]
 stackunderflow today [--format text|json] [--project P] [--exclude P]
@@ -144,6 +147,41 @@ $ stackunderflow clear-cache
 ```
 
 > To actually wipe the disk cache: `stackunderflow start --fresh`
+
+---
+
+## MCP Server
+
+### `stackunderflow mcp`
+
+Run the MCP (Model Context Protocol) server over stdio. Equivalent to the
+standalone `stackunderflow-mcp` console script — both are wired to the same
+entry point. Use this if you prefer one binary; use `stackunderflow-mcp` if
+the client config you're pasting expects a single-word command.
+
+```
+Usage: stackunderflow mcp [OPTIONS]
+```
+
+The server exposes one tool, `session_query`, that any MCP client (Claude
+Desktop, Claude Code, Cursor) can call to read local Claude-Code-format
+session logs across `~/.claude*` directories. Stateless — does not read or
+write StackUnderflow's SQLite store.
+
+**Example Claude Desktop config:**
+
+```json
+{
+  "mcpServers": {
+    "stackunderflow": {
+      "command": "stackunderflow-mcp"
+    }
+  }
+}
+```
+
+See [`docs/mcp.md`](mcp.md) for the full tool reference, supported agent
+roots, architectural rationale, and known limitations.
 
 ---
 
