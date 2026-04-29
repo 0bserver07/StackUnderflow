@@ -174,7 +174,11 @@ class SearchService:
 
         store_path = getattr(deps, 'store_path', None)
         if store_path is None:
-            return {"projects_indexed": 0, "total_messages_indexed": 0, "errors": [{"project": "(all)", "error": "store_path unavailable"}]}
+            return {
+                "projects_indexed": 0,
+                "total_messages_indexed": 0,
+                "errors": [{"project": "(all)", "error": "store_path unavailable"}],
+            }
 
         total_messages = 0
         projects_indexed = 0
