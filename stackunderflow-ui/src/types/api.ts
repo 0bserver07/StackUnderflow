@@ -317,8 +317,13 @@ export interface UserInteractionStats {
   avg_steps_per_command: number
   avg_tokens_per_command: number
   percentage_steps_with_tools: number
-  tool_count_distribution: Record<string, number>
   command_details: CommandDetail[]
+}
+
+// §D2: shape of /api/tool-distribution — split off /api/dashboard-data so the
+// Overview chart can lazy-fetch the bucket map post-mount.
+export interface ToolDistributionResponse {
+  tool_count_distribution: Record<string, number>
 }
 
 export interface CacheStats {

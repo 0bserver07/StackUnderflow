@@ -12,7 +12,7 @@ import {
   IconMessage,
   IconCalendar,
 } from '@tabler/icons-react'
-import type { DashboardStats, Trends } from '../../types/api'
+import type { DashboardStats, Trends, ToolDistributionResponse } from '../../types/api'
 import StatsCards from '../analytics/StatsCards'
 import TokenUsageChart from '../charts/TokenUsageChart'
 import DailyCostChart from '../charts/DailyCostChart'
@@ -83,6 +83,11 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
   // immediately. `stats.trends` will normally be undefined here; we still seed
   // from it so an older payload (or a future re-merge) keeps working.
   const [trends, setTrends] = useState<Trends | null>(stats.trends ?? null)
+  // §D2: tool_count_distribution moved off /api/dashboard-data onto
+  // /api/tool-distribution. Fetch it post-mount so the chart shows its empty
+  // state for the few hundred ms until the response arrives instead of
+  // blocking the rest of the Overview tab.
+  const [toolCountDist, setToolCountDist] = useState<Record<string, number>>({})
 
   useEffect(() => {
     if (stats.trends) {
@@ -109,6 +114,23 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
       cancelled = true
     }
   }, [stats.trends])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/tool-distribution')
+      .then((res) => (res.ok ? (res.json() as Promise<ToolDistributionResponse>) : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        setToolCountDist(data.tool_count_distribution ?? {})
+      })
+      .catch(() => {
+        // Non-blocking: leave the distribution empty so CommandToolDistChart
+        // renders its empty state. Deliberately not surfaced in the UI.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   if (!stats?.overview) return null
 
@@ -239,7 +261,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
         <ToolUsageBarChart toolStats={stats.tools?.usage_counts ?? {}} />
         <ModelDistributionChart modelStats={stats.models ?? {}} />
         <HourlyPatternChart hourlyPattern={stats.hourly_pattern ?? { messages: {}, tokens: {} }} />
-        <CommandToolDistChart toolCountDist={stats.user_interactions?.tool_count_distribution ?? {}} />
+        <CommandToolDistChart toolCountDist={toolCountDist} />
         <InterruptionRateChart dailyStats={stats.daily_stats ?? {}} />
         <ErrorDistributionChart errorCategories={stats.errors?.by_category ?? {}} />
         <ErrorRateChart dailyStats={stats.daily_stats ?? {}} />

@@ -143,13 +143,16 @@ async def get_dashboard_data(timezone_offset: int = 0):
     lean_stats = {k: v for k, v in stats.items() if k not in COST_KEYS}
     # §D1: user_interactions.command_details is the bulk of the remaining
     # payload (~1.8 MB on chimera). Drop the per-command array so only the
-    # summary stats — counts, averages, percentages, tool_count_distribution —
-    # survive. The Commands tab now fetches that list paginated from
-    # /api/commands.
+    # summary stats — counts, averages, percentages — survive. The Commands
+    # tab now fetches that list paginated from /api/commands.
+    # §D2: tool_count_distribution can also balloon (one bucket per distinct
+    # tool count, dense on busy projects). It moved to /api/tool-distribution
+    # for the same reason — keep dashboard-data lean.
     ui = lean_stats.get("user_interactions")
     if isinstance(ui, dict):
         lean_stats["user_interactions"] = {
-            k: v for k, v in ui.items() if k != "command_details"
+            k: v for k, v in ui.items()
+            if k not in {"command_details", "tool_count_distribution"}
         }
     payload = {
         "statistics": lean_stats,
