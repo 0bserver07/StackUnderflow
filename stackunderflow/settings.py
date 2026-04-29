@@ -77,6 +77,7 @@ class Settings:
     max_date_range_days          = _Opt(30,    "MAX_DATE_RANGE_DAYS")
     messages_initial_load        = _Opt(500,   "MESSAGES_INITIAL_LOAD")
     log_level                    = _Opt("INFO","LOG_LEVEL")
+    auto_reindex_on_ingest       = _Opt(True,  "AUTO_REINDEX_ON_INGEST")
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 
