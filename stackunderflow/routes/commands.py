@@ -1,18 +1,24 @@
-"""Paginated per-command list — ``/api/commands`` per spec §D1.
+"""Paginated per-command list — ``/api/commands`` per spec §D1, plus the
+``/api/tool-distribution`` split (§D2).
 
 ``/api/dashboard-data`` used to ship the full ``user_interactions.command_details``
 array (one entry per user prompt). On large projects that array alone was
 ~1.8 MB of payload, which blocked the initial Overview render even when the
 Commands tab was not yet open. §D1 moves the list to this endpoint and the
-dashboard payload keeps only the summary (counts, averages, distribution).
+dashboard payload keeps only the summary (counts, averages).
 
-Shape:
+§D2 splits ``tool_count_distribution`` off the same dashboard payload onto
+``/api/tool-distribution`` for the same reason — the Overview chart that
+consumes it now lazy-fetches it post-mount instead of blocking initial paint.
+
+Shapes:
 
 ``GET /api/commands?log_path=&offset=0&limit=50&sort=cost&order=desc``
+  ``{commands: [...], total: N, offset, limit}`` — one entry per
+  ``Interaction`` in the project's enriched dataset.
 
-Returns ``{commands: [...], total: N, offset, limit}`` — one entry per
-``Interaction`` in the project's enriched dataset, each carrying enough
-fields for the Commands tab to render a row without another round-trip.
+``GET /api/tool-distribution?log_path=``
+  ``{tool_count_distribution: {<tool_count>: <command_count>}}``
 """
 
 from __future__ import annotations
@@ -177,3 +183,30 @@ async def get_commands(
         "offset": offset,
         "limit": limit,
     }
+
+
+@router.get("/api/tool-distribution")
+async def get_tool_distribution(log_path: str | None = None, timezone_offset: int = 0):
+    """Return the ``tool_count_distribution`` map split off from dashboard-data.
+
+    Mirrors the §A3 ``/api/cost-data`` pattern: same canonical
+    ``queries.get_project_stats`` call, then we project a single key out of
+    the resulting stats dict so the Overview chart can lazy-fetch this
+    section without dragging the rest of the analytics over the wire.
+
+    Shape: ``{tool_count_distribution: {<tool_count>: <command_count>}}``.
+    Missing data resolves to ``{}`` so the chart renders its empty state.
+    """
+    path = _resolve_log_path(log_path)
+    conn = db.connect(deps.store_path)
+    try:
+        project_id = _project_id_for(conn, path)
+        _, stats = queries.get_project_stats(
+            conn, project_id=project_id, tz_offset=timezone_offset
+        )
+    finally:
+        conn.close()
+
+    ui = stats.get("user_interactions") if isinstance(stats, dict) else None
+    dist = ui.get("tool_count_distribution") if isinstance(ui, dict) else None
+    return {"tool_count_distribution": dist if isinstance(dist, dict) else {}}

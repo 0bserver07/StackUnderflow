@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     session, or running `/api/refresh` with new data all bump the signature
     and force a fresh build. `is_reindexing` and `config` are overlaid on
     the cached payload per request so live config edits aren't masked.
+- **`tool_count_distribution` split off `/api/dashboard-data`** onto its own `GET /api/tool-distribution` endpoint (mirrors the §D1 pattern that previously moved `command_details` to `/api/commands`). On chimera the dashboard payload drops from **846,774 → 846,274 bytes** (`wc -c` on real curls); the bucket map itself is 501 bytes / 66 buckets there. On busier projects with hundreds of distinct tool counts the saving is materially larger. The Overview tab's `CommandToolDistChart` now lazy-fetches the map after mount, so the chart renders an empty state for ~1 RTT instead of blocking initial paint.
 
 ## [0.3.5] - 2026-04-25
 
