@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -16,6 +17,37 @@ from stackunderflow.routes.cost import COST_KEYS
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
+
+
+# ── dashboard payload memo ────────────────────────────────────────────────────
+
+# In-process memo for /api/dashboard-data. Key = (slug, tz_offset);
+# value = (signature, cached_payload). Signature is (max_last_ts, msg_count)
+# pulled from the sessions table — both move whenever ingest writes new data,
+# so a stale entry can never survive a refresh. /api/refresh calls
+# ``invalidate_dashboard_cache()`` defensively for the project it just touched.
+_DASHBOARD_CACHE: dict[tuple[str, int], tuple[tuple[str | None, int], dict]] = {}
+_DASHBOARD_CACHE_LOCK = threading.Lock()
+
+
+def _dashboard_signature(conn, project_id: int) -> tuple[str | None, int]:
+    row = conn.execute(
+        "SELECT MAX(last_ts) AS max_ts, COALESCE(SUM(message_count), 0) AS n "
+        "FROM sessions WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    return (row["max_ts"], int(row["n"] or 0))
+
+
+def invalidate_dashboard_cache(slug: str | None = None) -> None:
+    """Drop cached dashboard payloads. ``slug=None`` clears every entry."""
+    with _DASHBOARD_CACHE_LOCK:
+        if slug is None:
+            _DASHBOARD_CACHE.clear()
+            return
+        for key in list(_DASHBOARD_CACHE):
+            if key[0] == slug:
+                del _DASHBOARD_CACHE[key]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -77,9 +109,28 @@ async def get_dashboard_data(timezone_offset: int = 0):
     """Get optimized data for initial dashboard load."""
     log_path = _require_project()
     t0 = time.time()
+    slug = Path(log_path).name
+    cache_key = (slug, timezone_offset)
+
     conn = db.connect(deps.store_path)
     try:
         project_id = _get_project_id(conn, log_path)
+        sig = _dashboard_signature(conn, project_id)
+
+        with _DASHBOARD_CACHE_LOCK:
+            cached = _DASHBOARD_CACHE.get(cache_key)
+        if cached is not None and cached[0] == sig:
+            payload = dict(cached[1])
+            payload["is_reindexing"] = deps.is_reindexing
+            payload["config"] = {
+                "messages_initial_load": deps.config.get("messages_initial_load"),
+                "max_date_range_days": deps.config.get("max_date_range_days"),
+            }
+            deps.logger.debug(
+                f"dashboard-data [hit] {(time.time()-t0)*1000:.1f}ms"
+            )
+            return payload
+
         messages, stats = queries.get_project_stats(
             conn, project_id=project_id, tz_offset=timezone_offset
         )
@@ -100,8 +151,7 @@ async def get_dashboard_data(timezone_offset: int = 0):
         lean_stats["user_interactions"] = {
             k: v for k, v in ui.items() if k != "command_details"
         }
-    deps.logger.debug(f"dashboard-data [store] {(time.time()-t0)*1000:.1f}ms")
-    return {
+    payload = {
         "statistics": lean_stats,
         "messages_page": first_page,
         "message_count": len(messages),
@@ -111,6 +161,10 @@ async def get_dashboard_data(timezone_offset: int = 0):
             "max_date_range_days": deps.config.get("max_date_range_days"),
         },
     }
+    with _DASHBOARD_CACHE_LOCK:
+        _DASHBOARD_CACHE[cache_key] = (sig, payload)
+    deps.logger.debug(f"dashboard-data [miss] {(time.time()-t0)*1000:.1f}ms")
+    return payload
 
 
 @router.get("/api/messages")
@@ -160,6 +214,7 @@ async def refresh_data(request: dict):
     new_msgs = counts.get(slug, 0)
 
     if new_msgs:
+        invalidate_dashboard_cache(slug)
         conn2 = db.connect(deps.store_path)
         try:
             row = queries.get_project(conn2, slug=slug)
@@ -197,6 +252,8 @@ async def refresh_all_projects(request: dict):
         conn.close()
 
     total_new = sum(counts.values())
+    if total_new:
+        invalidate_dashboard_cache()
     ms = int((time.time() - t0) * 1000)
     return JSONResponse({
         "status": "success",
