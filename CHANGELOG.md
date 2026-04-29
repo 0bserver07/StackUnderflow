@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Added
 - **Auto-reindex after ingest.** `run_ingest` now refreshes the search, tag, and Q&A indexes for every project that gained new messages, so users no longer have to POST to `/api/search/reindex`, `/api/tags/reindex`, `/api/qa/reindex` after ingest. Each service is invoked in its own try/except — a beta-service failure (tags or Q&A) cannot break ingest, and search itself fails soft. Gated by a new `auto_reindex_on_ingest` setting (default `True`, env `AUTO_REINDEX_ON_INGEST`) for power users who want to disable it. Per-project re-index, not full `reindex_all` — only the touched projects are touched.
 
@@ -26,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and force a fresh build. `is_reindexing` and `config` are overlaid on
     the cached payload per request so live config edits aren't masked.
 - **`tool_count_distribution` split off `/api/dashboard-data`** onto its own `GET /api/tool-distribution` endpoint (mirrors the §D1 pattern that previously moved `command_details` to `/api/commands`). On chimera the dashboard payload drops from **846,774 → 846,274 bytes** (`wc -c` on real curls); the bucket map itself is 501 bytes / 66 buckets there. On busier projects with hundreds of distinct tool counts the saving is materially larger. The Overview tab's `CommandToolDistChart` now lazy-fetches the map after mount, so the chart renders an empty state for ~1 RTT instead of blocking initial paint.
+- **Cost-tab table column widths hand-tuned** so cells no longer look cramped:
+  - `CommandCostList`: `When` 8rem → 7rem (timestamps fit cleanly), `%Total` /
+    `Tools` / `Steps` 4rem → 5rem so headers don't wedge against their sort
+    chevrons; `Prompt` keeps the slack as the only flex column.
+  - `OutlierCommandsTable`: `When` 7rem → 8rem to match the sibling commands
+    table; `Cost` 5rem → 6rem so `$1,234.56` has breathing room.
+  - `SessionEfficiencyTable`: `Edit` / `Read` / `Search` / `Bash` 4rem → 5rem
+    (`Search` + chevron previously overflowed `w-16`); `Idle Total` / `Idle Max`
+    5rem → 6rem so the two-word headers stay on one line; `Class` 8rem → 9rem
+    for the `research-heavy` badge.
+  - `SessionCompareView`: numeric columns (`A`, `B`, `Δ`) get fixed 10rem widths
+    so the metric-label column gets the slack, and the loading skeleton matches.
+- **All four cost-table headers** now wrap with `whitespace-nowrap` to guarantee
+  single-line headers at the 1280px breakpoint.
 
 ## [0.3.5] - 2026-04-25
 
