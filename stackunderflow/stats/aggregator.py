@@ -91,7 +91,10 @@ def summarise(
         "retry_signals":      _safe(retry_c.result, []),
         "session_efficiency": _safe(sess_eff_c.result, []),
         "error_cost":         _safe(lambda: err_cost_c.result(ds.interactions), _empty_error_cost()),
-        "trends":             _safe(lambda: _trends(ds.records, ds.interactions, tz_offset, provider=provider), _empty_trends()),
+        "trends":             _safe(
+            lambda: _trends(ds.records, ds.interactions, tz_offset, provider=provider),
+            _empty_trends(),
+        ),
     }
 
 
