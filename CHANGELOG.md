@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-04-30
+
 ### Added
 - **MCP server (`stackunderflow.mcp`).** New FastMCP stdio server exposing a `session_query(session_id, limit, kind="tool_calls"|"errors"|"all")` tool to MCP clients (Claude Desktop, Claude Code, Cursor, etc.). Walks Claude-Code-format JSONL logs across `~/.claude`, `~/.claude-opus`, `~/.claude-sonnet`, `~/.claude-haiku`, `~/.claude-glm` directly through `stackunderflow.adapters.claude.ClaudeAdapter` — stateless, no SQLite, no ingest dependency. Adds runtime dep `mcp>=1.2.0` and console script `stackunderflow-mcp`. Smoke-tested against ~1018 local sessions; tool-call and error filters return real records. Contributed by @zh4ngx (PR #9).
 - **`stackunderflow mcp` CLI subcommand** as an alias for the `stackunderflow-mcp` console script — discoverable via `stackunderflow --help`.
