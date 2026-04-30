@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from .anthropic import AnthropicPricer
 from .base import ProviderPricer
+from .cline import ClinePricer
 from .cursor import CursorPricer
 from .openai import OpenAIPricer
 
@@ -21,18 +22,21 @@ __all__ = ["ProviderPricer", "get_pricer"]
 _ANTHROPIC = AnthropicPricer()
 _OPENAI = OpenAIPricer()
 _CURSOR = CursorPricer()
+_CLINE = ClinePricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
-# (``claude`` / ``codex`` / ``cursor``) and from explicit provider arguments
-# (``anthropic`` / ``openai``) to the right pricer singleton. Multiple
-# names point at the same instance so callers can compare with ``is``.
+# (``claude`` / ``codex`` / ``cursor`` / ``cline``) and from explicit
+# provider arguments (``anthropic`` / ``openai``) to the right pricer
+# singleton. Multiple names point at the same instance so callers can
+# compare with ``is``.
 _REGISTRY: dict[str, ProviderPricer] = {
     "anthropic": _ANTHROPIC,
     "claude": _ANTHROPIC,
     "openai": _OPENAI,
     "codex": _OPENAI,
     "cursor": _CURSOR,
+    "cline": _CLINE,
 }
 
 

@@ -8,6 +8,7 @@ store rows.
 Beta adapters are gated by environment variables (default: off):
 
   STACKUNDERFLOW_BETA_CURSOR=1   # opt into the Cursor (vscdb) adapter
+  STACKUNDERFLOW_BETA_CLINE=1    # opt into the Cline (vscode globalStorage) adapter
 """
 
 import os
@@ -48,3 +49,10 @@ if _beta_enabled("CURSOR"):
     from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
 
     register(_CursorAdapter())
+
+# Beta: Cline (VS Code globalStorage). Off by default — set
+# STACKUNDERFLOW_BETA_CLINE=1 to enable. macOS-only for v1; spec §3.2.
+if _beta_enabled("CLINE"):
+    from .cline import ClineAdapter as _ClineAdapter  # noqa: E402
+
+    register(_ClineAdapter())
