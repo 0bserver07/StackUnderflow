@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 interface BadgeProps {
   children: ReactNode
-  color?: 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'gray'
+  color?: 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'orange' | 'gray'
   size?: 'sm' | 'md'
 }
 
@@ -12,6 +12,7 @@ const colorClasses = {
   yellow: 'bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/50 dark:text-yellow-300 dark:border-yellow-800',
   red: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/50 dark:text-red-300 dark:border-red-800',
   purple: 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/50 dark:text-purple-300 dark:border-purple-800',
+  orange: 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/50 dark:text-orange-300 dark:border-orange-800',
   gray: 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700',
 }
 

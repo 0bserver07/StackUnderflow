@@ -20,6 +20,8 @@ import type { JsonlFile, JsonlContentResponse, SessionEfficiency } from '../../t
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import Markdown from '../common/Markdown'
+import ProviderChip from '../common/ProviderChip'
+import EstimatedCostMarker from '../common/EstimatedCostMarker'
 import SessionEfficiencyTable from '../cost/SessionEfficiencyTable'
 import SessionCompareView from '../cost/SessionCompareView'
 import { NAV_EVENT, getParam, clearParam, type NavDetail } from '../../services/navigation'
@@ -263,6 +265,8 @@ function SessionCard({
                 Sub-agent
               </span>
             )}
+            {/* Multi-provider polish: spec.md §6 Step 5 — provider chip on each session row. */}
+            <ProviderChip provider={file.provider} />
           </div>
           <span className="text-xs text-gray-500 shrink-0">{relativeTime(file.modified)}</span>
         </div>
@@ -295,7 +299,10 @@ function SessionCard({
             <span>{fmtTokensShort(totalTokens)} tokens</span>
           )}
           {file.estimated_cost != null && file.estimated_cost > 0 && (
-            <span className="text-emerald-400/80 font-medium">{fmtCost(file.estimated_cost)}</span>
+            <span className="text-emerald-400/80 font-medium">
+              <EstimatedCostMarker costSource={file.cost_source} />
+              {fmtCost(file.estimated_cost)}
+            </span>
           )}
           {file.model && (
             <span className="text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>

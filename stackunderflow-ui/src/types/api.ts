@@ -39,6 +39,12 @@ export interface Project {
   in_cache: boolean
   url_slug: string
   stats?: ProjectStats | null
+  // Multi-provider polish (spec.md §6 Step 5). The backend currently merges
+  // provider-duplicates of one slug at the API layer, so this is optional —
+  // a single string when one provider, or a comma-joined list (e.g.
+  // `"claude,codex"`) when a slug appears under multiple providers. Renders
+  // as the "unknown" chip when missing.
+  provider?: string
 }
 
 export interface ProjectStats {
@@ -88,6 +94,15 @@ export interface JsonlFile {
   tool_calls?: number
   is_subagent?: boolean
   estimated_cost?: number
+  // Multi-provider polish (spec.md §6 Step 5). Source provider — `claude`,
+  // `codex`, `cursor`, `cline`, etc. Optional during rollout: when missing,
+  // ProviderChip renders as gray "unknown".
+  provider?: string
+  // Multi-provider polish (spec.md §3.1). Cursor's vscdb does not surface
+  // per-message tokens, so its cost is derived from estimated token counts.
+  // Future Cline / opencode adapters may set this too. Optional until the
+  // backend (sessions route + aggregator) propagates the flag.
+  cost_source?: 'estimated' | 'actual'
 }
 
 export interface JsonlContentResponse {
