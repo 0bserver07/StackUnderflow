@@ -195,6 +195,8 @@ async def get_projects(
                         "in_cache": False,
                         "url_slug": slug,
                         "stats": None,
+                        "provider": primary.provider,
+                        "providers": sorted({p.provider for p in group}),
                         "_ids": [p.id for p in group],
                     }
                 )

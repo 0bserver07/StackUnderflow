@@ -92,6 +92,7 @@ async def get_jsonl_files(project: str | None = None):
                     "title": title,
                     "tool_calls": stats["tool_calls"],
                     "estimated_cost": round(estimated_cost, 4),
+                    "provider": project_row.provider,
                 })
         finally:
             conn.close()
