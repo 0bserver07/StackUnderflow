@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from stackunderflow.infra.providers import get_pricer
 from stackunderflow.infra.providers.anthropic import AnthropicPricer
+from stackunderflow.infra.providers.cursor import CursorPricer
 from stackunderflow.infra.providers.openai import OpenAIPricer
 
 
@@ -18,13 +19,17 @@ def test_get_pricer_openai():
     assert isinstance(get_pricer("codex"), OpenAIPricer)
 
 
+def test_get_pricer_cursor():
+    assert isinstance(get_pricer("cursor"), CursorPricer)
+    assert isinstance(get_pricer("Cursor"), CursorPricer)
+
+
 def test_get_pricer_case_insensitive():
     assert isinstance(get_pricer("ANTHROPIC"), AnthropicPricer)
     assert isinstance(get_pricer("Codex"), OpenAIPricer)
 
 
 def test_get_pricer_unknown_falls_back_to_anthropic():
-    assert isinstance(get_pricer("cursor"), AnthropicPricer)
     assert isinstance(get_pricer(""), AnthropicPricer)
     assert isinstance(get_pricer("not-a-provider"), AnthropicPricer)
 
