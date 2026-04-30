@@ -16,6 +16,16 @@ export interface SessionCost {
   errors: number
   first_prompt_preview: string
   models_used: string[]
+  // Multi-provider polish (spec.md §6 Step 5 + §3.1). Optional flag set by
+  // adapters / pricers that cannot resolve exact per-message token counts
+  // (e.g. Cursor — see CursorPricer.supports_per_message_tokens). The UI
+  // surfaces this as a "≈" prefix on cost numbers + tooltip. Backend gap:
+  // aggregator collectors don't propagate this yet; type added so renderers
+  // are wired and ready.
+  cost_source?: 'estimated' | 'actual'
+  // Source provider — used for the chip rendered in surfaces that show
+  // session-level rows. Optional during rollout.
+  provider?: string
 }
 
 export interface CommandCost {
@@ -29,6 +39,9 @@ export interface CommandCost {
   steps: number
   models_used: string[]
   had_error: boolean
+  // Multi-provider polish (spec.md §6 Step 5 + §3.1). See SessionCost above.
+  cost_source?: 'estimated' | 'actual'
+  provider?: string
 }
 
 export interface ToolCost {
@@ -54,6 +67,8 @@ export interface OutlierCommand {
   tool_count: number
   step_count: number
   cost: number
+  // Multi-provider polish (spec.md §6 Step 5 + §3.1). See SessionCost above.
+  cost_source?: 'estimated' | 'actual'
 }
 
 export interface Outliers {
