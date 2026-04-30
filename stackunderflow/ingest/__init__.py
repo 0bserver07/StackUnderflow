@@ -31,20 +31,36 @@ def run_ingest(conn: sqlite3.Connection, adapters: list[SourceAdapter]) -> dict[
     counts: dict[str, int] = {}
     touched_slugs: set[str] = set()
     for ref in iter_refs(adapters):
-        prior = conn.execute(
-            "SELECT mtime, size, processed_offset FROM ingest_log WHERE file_path = ?",
-            (str(ref.file_path),),
-        ).fetchone()
+        if ref.source_kind == "database":
+            prior = conn.execute(
+                "SELECT mtime, size, last_rowid FROM ingest_log "
+                "WHERE file_path = ? AND session_id = ?",
+                (str(ref.file_path), ref.session_id),
+            ).fetchone()
 
-        if prior and prior["mtime"] == ref.file_mtime and prior["size"] == ref.file_size:
-            continue  # unchanged
+            if prior and prior["mtime"] == ref.file_mtime and prior["size"] == ref.file_size:
+                continue  # unchanged
 
-        if prior and ref.file_size < prior["size"]:
-            # Truncation / rotation — full reparse from 0
-            conn.execute("DELETE FROM ingest_log WHERE file_path = ?", (str(ref.file_path),))
-            since = 0
+            since = prior["last_rowid"] if prior else 0
         else:
-            since = prior["processed_offset"] if prior else 0
+            prior = conn.execute(
+                "SELECT mtime, size, processed_offset FROM ingest_log "
+                "WHERE file_path = ? AND session_id IS NULL",
+                (str(ref.file_path),),
+            ).fetchone()
+
+            if prior and prior["mtime"] == ref.file_mtime and prior["size"] == ref.file_size:
+                continue  # unchanged
+
+            if prior and ref.file_size < prior["size"]:
+                # Truncation / rotation — full reparse from 0
+                conn.execute(
+                    "DELETE FROM ingest_log WHERE file_path = ? AND session_id IS NULL",
+                    (str(ref.file_path),),
+                )
+                since = 0
+            else:
+                since = prior["processed_offset"] if prior else 0
 
         adapter = _lookup(adapters, ref.provider)
         pre = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

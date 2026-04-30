@@ -242,16 +242,21 @@ def test_since_offset_resumes_mid_file() -> None:
     adapter = CodexAdapter(sessions_root=FIXTURE_ROOT)
     ref = list(adapter.enumerate())[0]
 
-    # Build a byte offset that lands just after the fixture's first few lines.
-    # Skip past session_meta + turn_context + first user message (3 lines).
+    # ``since_offset`` is "the highest seq the caller has already processed";
+    # the adapter yields strictly past it. We want to skip the first three
+    # source lines (session_meta, turn_context, user "refactor this function")
+    # and include from the first assistant onward — so the floor is the byte
+    # position of that user-message line (its seq).
     raw = ref.file_path.read_bytes()
     line_ends: list[int] = []
     pos = 0
     for b in raw.splitlines(keepends=True):
         pos += len(b)
         line_ends.append(pos)
-    # Offset after the first 3 lines (session_meta, turn_context, user msg).
-    offset = line_ends[2]
+    # line_ends[1] is the start byte of line index 2 (the user "refactor"
+    # message). Passing it as since_offset means "I've already seen the user
+    # message; give me everything strictly after it."
+    offset = line_ends[1]
 
     full = list(adapter.read(ref))
     partial = list(adapter.read(ref, since_offset=offset))
@@ -259,10 +264,24 @@ def test_since_offset_resumes_mid_file() -> None:
     # Partial read must have strictly fewer records than a full read.
     assert len(partial) < len(full)
 
-    # Partial read must NOT contain the first user message (it preceded offset).
+    # Partial read must NOT contain the first user message (it was at offset).
     assert not any(
         "refactor this function" in r.content_text for r in partial if r.role == "user"
     )
     # Partial read SHOULD still contain content from after the offset.
     assistant_texts = [r.content_text for r in partial if r.role == "assistant"]
     assert any("refactor" in t for t in assistant_texts)
+
+
+# ── shared adapter contract ────────────────────────────────────────────
+
+import unittest  # noqa: E402
+
+from tests.stackunderflow.adapters.contract import AdapterContract  # noqa: E402
+
+
+class TestCodexAdapterContract(unittest.TestCase, AdapterContract):
+    """Runs every AdapterContract invariant against the Codex fixture."""
+
+    def setUp(self):
+        self.adapter = CodexAdapter(sessions_root=FIXTURE_ROOT)

@@ -10,11 +10,12 @@ function calls) and periodic `event_msg` token-count updates. This adapter
 normalises those into the cross-source `Record` shape declared in
 `stackunderflow/adapters/base.py`.
 
-Token accounting quirk: OpenAI embeds cached-input tokens *inside*
-`input_tokens`; we subtract them so the normalised `Record.input_tokens`
-counts only fresh (uncached) input, matching the Anthropic convention.
-Reasoning tokens are billed as output, so they are bundled into
-`Record.output_tokens`.
+Token shape: this adapter emits the *raw* OpenAI shape — cached input
+tokens are kept inside `input_tokens` and reasoning tokens stay separate
+from `output_tokens`. The flattening to canonical shape (subtracting
+cached, folding reasoning into output) lives in
+`infra/providers/openai.py:OpenAIPricer.normalize_tokens()` so all OpenAI
+providers share one normalization seam. See multi-provider spec §1.5 / §2.
 """
 
 from __future__ import annotations
@@ -114,13 +115,20 @@ class CodexAdapter:
 
         with fh:
             fh.seek(since_offset)
-            seq = 0
+            offset = since_offset
             # Buffer records emitted since the most recent token_count so we
             # can retroactively attach tokens to the last assistant record
             # in the turn before flushing in original order.
             buffer: list[Record] = []
 
             for raw_line in fh:
+                line_offset = offset
+                offset += len(raw_line)
+                # `since_offset == 0` means "fresh read, yield everything".
+                # Otherwise, the caller already saw the record at exactly
+                # `since_offset`, so skip it.
+                if since_offset > 0 and line_offset <= since_offset:
+                    continue
                 stripped = raw_line.strip()
                 if not stripped:
                     continue
@@ -134,12 +142,14 @@ class CodexAdapter:
                 payload = event.get("payload") or {}
 
                 if etype == "response_item":
+                    # seq = byte offset where this line started. Aligns with
+                    # the Claude adapter so the storage-aware contract test
+                    # ("resume from seq=midpoint") works for both providers.
                     record = self._record_from_response_item(
-                        event, payload, ref=ref, seq=seq,
+                        event, payload, ref=ref, seq=line_offset,
                     )
                     if record is not None:
                         buffer.append(record)
-                        seq += 1
                     continue
 
                 if etype == "event_msg" and payload.get("type") == "token_count":
@@ -300,19 +310,33 @@ def _attach_tokens_to_last_assistant(
     buffer: list[Record],
     last_usage: dict,
 ) -> list[Record]:
-    """Return a new buffer where the most recent assistant Record carries the
-    supplied per-turn token usage. Records are frozen, so we rebuild the one
-    we want to update via dataclass-style replacement."""
+    """Return a new buffer where the most recent assistant Record carries
+    the supplied per-turn token usage.
+
+    The 4-slot ``Record`` shape (input / output / cache_create /
+    cache_read) is fixed; we flatten OpenAI's raw shape into it here so
+    every downstream consumer of ``Record.*_tokens`` (DB columns, cache
+    stats, model-mix dashboards) sees the same convention as Anthropic
+    records: ``input_tokens`` excludes cached, ``output_tokens`` is the
+    fully-billable output (including reasoning), ``cache_create_tokens``
+    is 0 (OpenAI doesn't bill writes), and ``cache_read_tokens`` carries
+    cached input.
+
+    The same flattening is also implemented as
+    ``OpenAIPricer.normalize_tokens()`` so callers that *do* hand it raw
+    OpenAI shape (a future API-level integration, or a re-test fixture)
+    get the identical canonical numbers. Cost-equivalence with the
+    pre-refactor adapter is verified by
+    ``tests/stackunderflow/infra/providers/test_codex_cost_equivalence.py``.
+    Records are frozen, so we rebuild the slot we want to update via
+    dataclass-style replacement.
+    """
     idx = _last_assistant_index(buffer)
     if idx is None:
         return buffer
 
-    raw_input = int(last_usage.get("input_tokens", 0) or 0)
-    cached = int(last_usage.get("cached_input_tokens", 0) or 0)
-    raw_output = int(last_usage.get("output_tokens", 0) or 0)
-    reasoning = int(last_usage.get("reasoning_output_tokens", 0) or 0)
-
     target = buffer[idx]
+    canonical = _canonicalize_openai_usage(last_usage)
     updated = Record(
         provider=target.provider,
         session_id=target.session_id,
@@ -320,10 +344,10 @@ def _attach_tokens_to_last_assistant(
         timestamp=target.timestamp,
         role=target.role,
         model=target.model,
-        input_tokens=max(raw_input - cached, 0),
-        output_tokens=raw_output + reasoning,
-        cache_create_tokens=0,  # OpenAI does not bill prompt-cache writes.
-        cache_read_tokens=cached,
+        input_tokens=canonical["input"],
+        output_tokens=canonical["output"],
+        cache_create_tokens=canonical["cache_creation"],
+        cache_read_tokens=canonical["cache_read"],
         content_text=target.content_text,
         tools=target.tools,
         cwd=target.cwd,
@@ -335,6 +359,16 @@ def _attach_tokens_to_last_assistant(
     new_buf = list(buffer)
     new_buf[idx] = updated
     return new_buf
+
+
+def _canonicalize_openai_usage(raw: dict) -> dict[str, int]:
+    """Single seam shared with ``OpenAIPricer.normalize_tokens``.
+
+    Imported lazily so the adapter module remains free of provider-pricer
+    dependencies at import time.
+    """
+    from stackunderflow.infra.providers.openai import OpenAIPricer
+    return OpenAIPricer().normalize_tokens(raw)
 
 
 def _last_assistant_index(buffer: list[Record]) -> int | None:

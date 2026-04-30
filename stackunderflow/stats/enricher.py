@@ -36,6 +36,11 @@ class Record:
     message_id: str
     cwd: str
     raw_data: dict
+    # Provider that originally produced this record ("claude", "codex",
+    # ...). Defaults to ``"anthropic"`` so existing fixtures and tests
+    # that never plumb a provider through still resolve to the canonical
+    # rate card. See multi-provider spec §2.4.
+    provider: str = "anthropic"
 
 
 @dataclass(slots=True)
@@ -212,6 +217,7 @@ def _parse_entry(te: TaggedEntry) -> Record:
         message_id=msg.get("id", "") if msg else "",
         cwd=raw.get("cwd", ""),
         raw_data=raw,
+        provider=te.provider,
     )
 
 

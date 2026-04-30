@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-provider foundation (Wave 2 prerequisite).** Extended `SessionRef` with `source_kind` (`"file"` | `"database"`) and `source_hint` so one adapter contract handles JSONL files, SQLite tables, and vscdb keys uniformly — JSONL adapters need zero changes (`docs/specs/multi-provider/spec.md` §1.1). Migrated `ingest_log` from a `file_path PRIMARY KEY` shape to `(id INTEGER PRIMARY KEY, file_path, session_id, storage_kind, last_rowid, …)` with two partial unique indexes so file-mode and database-mode rows coexist without colliding on NULL session_ids. Every existing row is preserved with `session_id=NULL, storage_kind='file', last_rowid=NULL`. New `infra/providers/` package introduces a pluggable `ProviderPricer` ABC with `AnthropicPricer` and `OpenAIPricer` extracted out of `infra/costs.py`; `compute_cost(tokens, model, provider="anthropic")` keeps every existing call site working unchanged and aggregator collectors now route per-record through the right provider. Codex's cached-input-subtraction logic moved out of `adapters/codex.py` into `OpenAIPricer.normalize_tokens`, with a regression test (`tests/stackunderflow/infra/providers/test_codex_cost_equivalence.py`) proving the move is cost-neutral.
+
 ## [0.3.6] - 2026-04-30
 
 ### Added

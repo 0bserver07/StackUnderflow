@@ -68,10 +68,16 @@ def test_unchanged_file_skipped(conn, tmp_path: Path) -> None:
 
 
 def test_appended_file_reads_only_tail(conn, tmp_path: Path) -> None:
+    """File-mode resume stores max(seq) of yielded records, so on a follow-up
+    pass the adapter is asked for ``since_offset = that seq``. For real
+    JSONL adapters seq is the byte offset of the source line, so this maps
+    to "skip everything up to and including the last consumed line."
+    """
     fp = tmp_path / "a.jsonl"
     fp.write_bytes(b"x" * 100)
     ref_v1 = SessionRef("stub", "-a", "s1", fp, file_mtime=1.0, file_size=100)
-    run_ingest(conn, [_StubAdapter([ref_v1], {"s1": [_rec(0)]})])
+    # Use seq values that mimic line byte offsets (Claude/Codex semantics).
+    run_ingest(conn, [_StubAdapter([ref_v1], {"s1": [_rec(0), _rec(40), _rec(80)]})])
 
     # grow the file
     fp.write_bytes(b"x" * 200)
@@ -85,7 +91,9 @@ def test_appended_file_reads_only_tail(conn, tmp_path: Path) -> None:
 
     ref_v2 = SessionRef("stub", "-a", "s1", fp, file_mtime=2.0, file_size=200)
     run_ingest(conn, [_CapturingAdapter([ref_v2], {})])
-    assert captured_offset["v"] == 100
+    # The highest seq from the first ingest was 80; the second pass should
+    # resume from there.
+    assert captured_offset["v"] == 80
 
 
 def test_truncated_file_full_reparse(conn, tmp_path: Path) -> None:

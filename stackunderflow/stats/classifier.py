@@ -17,6 +17,10 @@ class RawEntry(NamedTuple):
     payload: dict
     session_id: str
     origin: str
+    # Provider that produced this entry. Default keeps every existing
+    # call site working unchanged; the multi-provider stats path passes
+    # the real provider through from the project row.
+    provider: str = "anthropic"
 
 
 # ── interruption markers ─────────────────────────────────────────────────────
@@ -118,6 +122,7 @@ class TaggedEntry(NamedTuple):
     is_error: bool
     error_category: str | None
     is_interruption: bool
+    provider: str = "anthropic"
 
 
 def tag(entries: list[RawEntry]) -> list[TaggedEntry]:
@@ -147,6 +152,7 @@ def _classify(entry: RawEntry) -> TaggedEntry:
         is_error=is_error,
         error_category=error_cat,
         is_interruption=is_interruption,
+        provider=entry.provider,
     )
 
 
