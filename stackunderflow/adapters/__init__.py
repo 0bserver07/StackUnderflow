@@ -4,7 +4,13 @@ Each adapter turns a specific tool's on-disk session format (Claude Code's
 JSONL, Codex's rollout JSONL, etc.) into a stream of normalised `Record`s.
 The ingest layer drives adapters; route handlers and reports only ever see
 store rows.
+
+Beta adapters are gated by environment variables (default: off):
+
+  STACKUNDERFLOW_BETA_CURSOR=1   # opt into the Cursor (vscdb) adapter
 """
+
+import os
 
 from .base import Record, SessionRef, SourceAdapter
 
@@ -23,8 +29,22 @@ def registered() -> list[SourceAdapter]:
     return list(_registry)
 
 
+def _beta_enabled(name: str) -> bool:
+    """Return True when the matching ``STACKUNDERFLOW_BETA_<NAME>`` env
+    var is set to a truthy value."""
+    val = os.environ.get(f"STACKUNDERFLOW_BETA_{name.upper()}", "")
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
 from .codex import CodexAdapter as _CodexAdapter  # noqa: E402
 
 register(_ClaudeAdapter())
 register(_CodexAdapter())
+
+# Beta: Cursor (vscdb). Off by default — set STACKUNDERFLOW_BETA_CURSOR=1
+# to enable. macOS-only for v1; spec §3.1.
+if _beta_enabled("CURSOR"):
+    from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
+
+    register(_CursorAdapter())
