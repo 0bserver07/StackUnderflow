@@ -15,7 +15,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 
 def apply(conn: sqlite3.Connection) -> None:

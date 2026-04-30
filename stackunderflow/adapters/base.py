@@ -3,20 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Literal, Protocol
 
 
 @dataclass(frozen=True, slots=True)
 class SessionRef:
-    """Points at one parseable session on disk."""
+    """Points at one parseable session on disk.
+
+    The two ``source_*`` fields let one adapter contract handle JSONL files,
+    SQLite tables, and vscdb keys uniformly. JSONL adapters leave them at the
+    defaults — see ``docs/specs/multi-provider/spec.md`` §1.1.
+    """
     provider: str
     project_slug: str
     session_id: str
     file_path: Path
     file_mtime: float
     file_size: int
+    # Storage mode for resumable reads: byte-offset for "file", rowid for
+    # "database". Unknown adapters default to "file" so existing JSONL
+    # adapters need no changes.
+    source_kind: Literal["file", "database"] = "file"
+    # Adapter-private metadata (table name, vscdb key prefix, conversation
+    # id, etc.). Not interpreted outside the adapter that produced it.
+    source_hint: dict[str, Any] | None = field(default=None)
 
 
 @dataclass(frozen=True, slots=True)

@@ -30,6 +30,12 @@ def summarise(
 ) -> dict[str, Any]:
     """Produce the full statistics dict matching the API contract."""
 
+    # All records in a single ``EnrichedDataset`` come from one project,
+    # so they share a provider. Resolve once and route every compute_cost
+    # call through ``infra.providers`` for that provider — see
+    # ``docs/specs/multi-provider/spec.md`` §2.4.
+    provider = ds.records[0].provider if ds.records else "anthropic"
+
     # single-pass collectors
     tools_c       = _ToolsCollector()
     models_c      = _ModelsCollector()
@@ -38,11 +44,11 @@ def summarise(
     cache_c       = _CacheCollector()
 
     # analytics-expansion collectors (§1.1 – §1.8)
-    sess_cost_c   = _SessionCostCollector()
-    tool_cost_c   = _ToolCostCollector()
+    sess_cost_c   = _SessionCostCollector(provider=provider)
+    tool_cost_c   = _ToolCostCollector(provider=provider)
     token_comp_c  = _TokenCompositionCollector(tz_offset)
     sess_eff_c    = _SessionEfficiencyCollector()
-    err_cost_c    = _ErrorCostCollector()
+    err_cost_c    = _ErrorCostCollector(provider=provider)
 
     for rec in ds.records:
         tools_c.ingest(rec)
@@ -57,9 +63,9 @@ def summarise(
         err_cost_c.ingest(rec)
 
     # interaction-driven collectors (§1.2, §1.5, §1.6)
-    cmd_cost_c    = _CommandCostCollector()
-    outlier_c     = _OutlierCollector()
-    retry_c       = _RetryCollector()
+    cmd_cost_c    = _CommandCostCollector(provider=provider)
+    outlier_c     = _OutlierCollector(provider=provider)
+    retry_c       = _RetryCollector(provider=provider)
 
     for ix in ds.interactions:
         cmd_cost_c.ingest_interaction(ix)
@@ -67,10 +73,10 @@ def summarise(
         retry_c.ingest_interaction(ix)
 
     return {
-        "overview":           _build_overview(ds, log_dir, tools_c),
+        "overview":           _build_overview(ds, log_dir, tools_c, provider=provider),
         "tools":              tools_c.result(),
         "sessions":           sessions_c.result(),
-        "daily_stats":        _daily(ds.records, ds.interactions, tz_offset),
+        "daily_stats":        _daily(ds.records, ds.interactions, tz_offset, provider=provider),
         "hourly_pattern":     _hourly(ds.records, tz_offset),
         "errors":             errors_c.result(ds.records),
         "models":             models_c.result(),
@@ -85,7 +91,7 @@ def summarise(
         "retry_signals":      _safe(retry_c.result, []),
         "session_efficiency": _safe(sess_eff_c.result, []),
         "error_cost":         _safe(lambda: err_cost_c.result(ds.interactions), _empty_error_cost()),
-        "trends":             _safe(lambda: _trends(ds.records, ds.interactions, tz_offset), _empty_trends()),
+        "trends":             _safe(lambda: _trends(ds.records, ds.interactions, tz_offset, provider=provider), _empty_trends()),
     }
 
 
@@ -100,7 +106,13 @@ def _safe(fn, fallback):
 
 # ── overview (needs data from multiple collectors) ───────────────────────────
 
-def _build_overview(ds: EnrichedDataset, log_dir: str, tc: _ToolsCollector) -> dict:
+def _build_overview(
+    ds: EnrichedDataset,
+    log_dir: str,
+    tc: _ToolsCollector,
+    *,
+    provider: str = "anthropic",
+) -> dict:
     recs = ds.records
     tok = Counter[str]()
     for r in recs:
@@ -124,7 +136,7 @@ def _build_overview(ds: EnrichedDataset, log_dir: str, tc: _ToolsCollector) -> d
         "sessions": len({r.session_id for r in recs}),
         "message_types": dict(kind_counts),
         "total_tokens": dict(tok),
-        "total_cost": _aggregate_cost(recs),
+        "total_cost": _aggregate_cost(recs, provider=provider),
     }
 
 
@@ -243,8 +255,9 @@ class _ErrorsCollector:
 class _SessionCostCollector:
     """§1.1 — per-session cost/tokens/messages/errors, ranked desc by cost."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self._s: dict[str, dict] = {}
+        self._provider = provider
 
     def ingest(self, r: Record) -> None:
         s = self._s.setdefault(r.session_id, {
@@ -290,7 +303,7 @@ class _SessionCostCollector:
 
             cost = 0.0
             for model, tok_c in s["by_model"].items():
-                cost += compute_cost(dict(tok_c), model)["total_cost"]
+                cost += compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
 
             first = first_prompt_by_session.get(sid, ("", ""))[1]
             preview = _preview(first, 140)
@@ -315,8 +328,9 @@ class _SessionCostCollector:
 class _CommandCostCollector:
     """§1.2 — one entry per real user prompt (Interaction), top 50 desc by cost."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self._items: list[dict] = []
+        self._provider = provider
 
     def ingest_interaction(self, ix: Interaction) -> None:
         tokens: Counter[str] = Counter()
@@ -334,7 +348,10 @@ class _CommandCostCollector:
                 for k, v in r.tokens.items():
                     m[k] += v
 
-        cost = sum(compute_cost(dict(tok_c), model)["total_cost"] for model, tok_c in by_model.items())
+        cost = sum(
+            compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
+            for model, tok_c in by_model.items()
+        )
 
         self._items.append({
             "interaction_id": ix.interaction_id,
@@ -356,8 +373,9 @@ class _CommandCostCollector:
 class _ToolCostCollector:
     """§1.3 — per-tool cost with 1/N cost attribution across distinct tools per msg."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self._data: dict[str, dict[str, float]] = {}
+        self._provider = provider
 
     def ingest(self, r: Record) -> None:
         if r.kind != "assistant" or not r.tools:
@@ -370,7 +388,7 @@ class _ToolCostCollector:
         share = 1.0 / n
         msg_cost = 0.0
         if r.model and r.model != "N/A":
-            msg_cost = compute_cost(r.tokens, r.model)["total_cost"]
+            msg_cost = compute_cost(r.tokens, r.model, provider=self._provider)["total_cost"]
         for name in distinct:
             d = self._data.setdefault(name, {
                 "calls": 0,
@@ -425,9 +443,10 @@ class _TokenCompositionCollector:
 class _OutlierCollector:
     """§1.5 — interactions with abnormally high tool/step counts."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self._high_tool: list[dict] = []
         self._high_step: list[dict] = []
+        self._provider = provider
 
     def ingest_interaction(self, ix: Interaction) -> None:
         tc, steps = ix.tool_count, ix.assistant_steps
@@ -439,7 +458,10 @@ class _OutlierCollector:
                 m = by_model.setdefault(r.model, Counter())
                 for k, v in r.tokens.items():
                     m[k] += v
-        cost = sum(compute_cost(dict(tok_c), model)["total_cost"] for model, tok_c in by_model.items())
+        cost = sum(
+            compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
+            for model, tok_c in by_model.items()
+        )
         entry = {
             "interaction_id": ix.interaction_id,
             "session_id": ix.session_id,
@@ -477,8 +499,9 @@ class _RetryCollector:
        ``INTERRUPT_API`` / ``INTERRUPT_PREFIX``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self._items: list[dict] = []
+        self._provider = provider
 
     def ingest_interaction(self, ix: Interaction) -> None:
         events = sorted(
@@ -526,6 +549,7 @@ class _RetryCollector:
                 wc = compute_cost(
                     {"input": 0, "output": wt, "cache_creation": 0, "cache_read": 0},
                     ix.model,
+                    provider=self._provider,
                 )["total_cost"]
             self._items.append({
                 "interaction_id": ix.interaction_id,
@@ -662,11 +686,12 @@ class _ErrorCostCollector:
     records — tool_result error records themselves have no ``tools`` list.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self.total_errors = 0
         # tool_use_id → tool_name, populated from every assistant record we see
         # so errors_by_tool can attribute tool_result errors correctly
         self._tool_id_to_name: dict[str, str] = {}
+        self._provider = provider
 
     def ingest(self, r: Record) -> None:
         if r.kind == "assistant":
@@ -712,13 +737,14 @@ class _ErrorCostCollector:
                         {"input": 0, "output": tokens,
                          "cache_creation": 0, "cache_read": 0},
                         model,
+                        provider=self._provider,
                     )["total_cost"]
             if err_count > 0:
                 ranked.append((err_count, ix))
 
         ranked.sort(key=lambda p: p[0], reverse=True)
         top_error_commands: list[dict] = [
-            _interaction_to_outlier_command(ix) for _, ix in ranked[:10]
+            _interaction_to_outlier_command(ix, provider=self._provider) for _, ix in ranked[:10]
         ]
 
         return {
@@ -779,7 +805,11 @@ class _ErrorCostCollector:
         return 0, ""
 
 
-def _interaction_to_outlier_command(ix: Interaction) -> dict:
+def _interaction_to_outlier_command(
+    ix: Interaction,
+    *,
+    provider: str = "anthropic",
+) -> dict:
     """Render an Interaction as an ``OutlierCommand`` dict (shape shared with
     ``_OutlierCollector`` and the frontend ``OutlierCommand`` TypedDict)."""
     by_model: dict[str, Counter[str]] = {}
@@ -789,7 +819,7 @@ def _interaction_to_outlier_command(ix: Interaction) -> dict:
             for k, v in r.tokens.items():
                 m[k] += v
     cost = sum(
-        compute_cost(dict(tok_c), model)["total_cost"]
+        compute_cost(dict(tok_c), model, provider=provider)["total_cost"]
         for model, tok_c in by_model.items()
     )
     return {
@@ -867,6 +897,8 @@ def _daily(
     records: list[Record],
     interactions: list[Interaction],
     tz_offset: int,
+    *,
+    provider: str = "anthropic",
 ) -> dict:
     buckets: dict[str, _DayBucket] = {}
 
@@ -908,7 +940,7 @@ def _daily(
         day_cost = 0.0
         model_costs: dict[str, dict] = {}
         for model, tok_c in b.model_tokens.items():
-            cb = compute_cost(dict(tok_c), model)
+            cb = compute_cost(dict(tok_c), model, provider=provider)
             model_costs[model] = cb
             day_cost += cb["total_cost"]
 
@@ -1207,14 +1239,17 @@ def _time_bounds(recs: list[Record]) -> dict:
     return {"start": min(stamps), "end": max(stamps)} if stamps else {"start": None, "end": None}
 
 
-def _aggregate_cost(recs: list[Record]) -> float:
+def _aggregate_cost(recs: list[Record], *, provider: str = "anthropic") -> float:
     by_model: dict[str, Counter[str]] = {}
     for r in recs:
         if r.kind == "assistant" and r.model and r.model != "N/A":
             c = by_model.setdefault(r.model, Counter())
             for k, v in r.tokens.items():
                 c[k] += v
-    return sum(compute_cost(dict(c), m)["total_cost"] for m, c in by_model.items())
+    return sum(
+        compute_cost(dict(c), m, provider=provider)["total_cost"]
+        for m, c in by_model.items()
+    )
 
 
 def _is_interrupt_text(text: str) -> bool:
@@ -1257,6 +1292,8 @@ def _trends(
     records: list[Record],
     interactions: list[Interaction],
     tz_offset: int,  # noqa: ARG001 — signature parity with other sections
+    *,
+    provider: str = "anthropic",
 ) -> dict:
     """Compare the last 7 days to the prior 7 days using ``overview.date_range.end``."""
     stamps = [r.timestamp for r in records if r.timestamp]
@@ -1284,8 +1321,8 @@ def _trends(
         elif prior_start < t <= cur_start:
             prior.append(ix)
 
-    cur_m = _trend_metrics(current)
-    prior_m = _trend_metrics(prior)
+    cur_m = _trend_metrics(current, provider=provider)
+    prior_m = _trend_metrics(prior, provider=provider)
 
     delta: dict[str, float] = {}
     for k, cur_v in cur_m.items():
@@ -1300,7 +1337,7 @@ def _trends(
     return {"current_week": cur_m, "prior_week": prior_m, "delta_pct": delta}
 
 
-def _trend_metrics(ixs: list[Interaction]) -> dict:
+def _trend_metrics(ixs: list[Interaction], *, provider: str = "anthropic") -> dict:
     if not ixs:
         return dict(_TREND_ZERO)
     total_cost = 0.0
@@ -1320,7 +1357,7 @@ def _trend_metrics(ixs: list[Interaction]) -> dict:
                     m[k] += v
         total_tools += ix.tool_count
         total_cost += sum(
-            compute_cost(dict(tok_c), model)["total_cost"]
+            compute_cost(dict(tok_c), model, provider=provider)["total_cost"]
             for model, tok_c in by_model.items()
         )
     n = len(ixs)

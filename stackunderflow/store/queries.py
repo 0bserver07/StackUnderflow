@@ -113,12 +113,13 @@ def build_enriched_dataset(
     from stackunderflow.stats.classifier import RawEntry
 
     row = conn.execute(
-        "SELECT path, slug FROM projects WHERE id = ?", (project_id,)
+        "SELECT path, slug, provider FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     if row is None:
         return None, ""
 
     log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
+    provider = row["provider"] or "anthropic"
 
     rows = conn.execute(
         "SELECT m.raw_json, s.session_id, m.timestamp "
@@ -142,6 +143,7 @@ def build_enriched_dataset(
                 payload=payload,
                 session_id=r["session_id"],
                 origin=r["session_id"],
+                provider=provider,
             )
         )
 
