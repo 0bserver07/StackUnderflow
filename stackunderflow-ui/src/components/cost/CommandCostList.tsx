@@ -8,6 +8,7 @@ import {
 } from '@tabler/icons-react'
 import type { CommandCost } from '../../types/api'
 import Badge from '../common/Badge'
+import EstimatedCostMarker from '../common/EstimatedCostMarker'
 import { openInteraction } from '../../services/navigation'
 
 type SortDir = 'asc' | 'desc'
@@ -382,6 +383,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                         {formatTime(r.timestamp)}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100 font-medium tabular-nums">
+                        <EstimatedCostMarker costSource={r.cost_source} />
                         {formatCost(r.cost)}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-500 tabular-nums text-xs">

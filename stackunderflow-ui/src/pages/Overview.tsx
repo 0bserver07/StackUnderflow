@@ -8,6 +8,7 @@ import type { NameMode } from '../services/nameMode'
 import type { Project } from '../types/api'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
+import ProviderChip from '../components/common/ProviderChip'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -456,7 +457,14 @@ export default function Overview() {
                     className="border-b border-gray-200/50 dark:border-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-800/50 cursor-pointer"
                   >
                     <td className="px-4 py-3">
-                      <div className="text-gray-800 dark:text-gray-200 font-medium">{projectDisplayName(p, (page - 1) * perPage + idx)}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-gray-800 dark:text-gray-200 font-medium">{projectDisplayName(p, (page - 1) * perPage + idx)}</span>
+                        {/* Multi-provider polish: spec.md §6 Step 5 — provider chip on each project card. */}
+                        {(p.provider ?? '').split(',').filter(Boolean).map((prov) => (
+                          <ProviderChip key={prov} provider={prov.trim()} />
+                        ))}
+                        {!p.provider && <ProviderChip provider={undefined} />}
+                      </div>
                       <div className="text-xs text-gray-500">{p.file_count} sessions</div>
                     </td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs">

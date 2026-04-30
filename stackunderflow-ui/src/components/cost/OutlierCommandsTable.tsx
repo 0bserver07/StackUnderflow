@@ -223,6 +223,7 @@ interface OutlierCommandsTableProps {
 }
 
 import { formatCost } from '../../services/format'
+import EstimatedCostMarker from '../common/EstimatedCostMarker'
 
 function formatTime(iso: string): string {
   if (!iso) return ''
@@ -372,6 +373,7 @@ function OutlierSection({
                             <div>
                               <span className="text-gray-500">Cost:</span>{' '}
                               <span className="tabular-nums text-gray-800 dark:text-gray-200">
+                                <EstimatedCostMarker costSource={r.cost_source} />
                                 {formatCost(r.cost)}
                               </span>
                             </div>
@@ -406,6 +408,7 @@ function OutlierSection({
                         {r[countKey]}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
+                        <EstimatedCostMarker costSource={r.cost_source} />
                         {formatCost(r.cost)}
                       </td>
                     </ExpandableRow>
