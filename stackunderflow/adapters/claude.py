@@ -78,6 +78,14 @@ class ClaudeAdapter:
     # ── reading modern JSONL ──────────────────────────────────────────
 
     def _read_jsonl(self, ref: SessionRef, *, since_offset: int) -> Iterable[Record]:
+        """Yield records strictly past ``since_offset``.
+
+        ``seq`` and ``since_offset`` share the same units (byte position
+        of the line start). We seek to ``since_offset`` and then yield
+        only records whose ``seq`` is strictly greater than the floor —
+        ``since_offset == 0`` is treated specially (yield all records,
+        starting from the file head).
+        """
         try:
             fp = ref.file_path.open("rb")
         except OSError as exc:
@@ -89,6 +97,11 @@ class ClaudeAdapter:
             for raw_line in fp:
                 line_offset = offset
                 offset += len(raw_line)
+                # `since_offset == 0` means "fresh read, yield everything".
+                # Otherwise, the caller already saw the record at exactly
+                # `since_offset`, so skip it.
+                if since_offset > 0 and line_offset <= since_offset:
+                    continue
                 stripped = raw_line.strip()
                 if not stripped:
                     continue

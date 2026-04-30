@@ -1,200 +1,49 @@
-"""Anthropic + OpenAI model billing.
+"""Public cost API — a thin shim over ``infra/providers/`` pricers.
 
-Pricing is stored in a flat table indexed by model-family enum values.
-Model IDs are resolved to families by splitting on hyphens and matching
-known tokens — no regex involved.
+Keeps the same ``compute_cost(tokens, model, provider="anthropic")``
+signature every other module already calls, plus the back-compat helpers
+(``format_dollars``, ``get_dynamic_pricing``, ``get_model_pricing``,
+``RATE_CARD``). The actual pricing logic now lives in pluggable
+``ProviderPricer`` modules — see ``docs/specs/multi-provider/spec.md`` §2.
 """
 
 from __future__ import annotations
 
-from enum import Enum, auto
 from typing import Any
 
+from .providers import get_pricer
+from .providers.anthropic import AnthropicPricer
+from .providers.base import ProviderPricer
+from .providers.openai import OpenAIPricer
 
-class _Family(Enum):
-    OPUS_46 = auto()
-    SONNET_46 = auto()
-    OPUS_45 = auto()
-    SONNET_45 = auto()
-    HAIKU_45 = auto()
-    OPUS_4 = auto()
-    SONNET_4 = auto()
-    SONNET_35 = auto()
-    HAIKU_35 = auto()
-    OPUS_3 = auto()
-    SONNET_3 = auto()
-    HAIKU_3 = auto()
-    # OpenAI Codex variants
-    GPT_5_CODEX = auto()
-    GPT_52_CODEX = auto()
-    GPT_53_CODEX = auto()
-    # OpenAI base GPT families
-    GPT_54 = auto()
-    GPT_5 = auto()
-    GPT_5_MINI = auto()
-    GPT_4O = auto()
-    GPT_4O_MINI = auto()
-    GPT_41 = auto()
-
-
-# (input $/M, output $/M, cache-write $/M, cache-read $/M)
-_RATES: dict[_Family, tuple[float, float, float, float]] = {
-    _Family.OPUS_46:   (15.0,  75.0,  18.75, 1.50),
-    _Family.SONNET_46: (3.0,   15.0,  3.75,  0.30),
-    _Family.OPUS_45:   (15.0,  75.0,  18.75, 1.50),
-    _Family.SONNET_45: (3.0,   15.0,  3.75,  0.30),
-    _Family.HAIKU_45:  (1.0,   5.0,   1.25,  0.10),
-    _Family.OPUS_4:    (15.0,  75.0,  18.75, 1.50),
-    _Family.SONNET_4:  (3.0,   15.0,  3.75,  0.30),
-    _Family.SONNET_35: (3.0,   15.0,  3.75,  0.30),
-    _Family.HAIKU_35:  (1.0,   5.0,   1.25,  0.10),
-    _Family.OPUS_3:    (15.0,  75.0,  18.75, 1.50),
-    _Family.SONNET_3:  (3.0,   15.0,  3.75,  0.30),
-    _Family.HAIKU_3:   (0.25,  1.25,  0.30,  0.03),
-    # OpenAI — cache-write is 0 because OpenAI does not bill for prompt
-    # cache writes.  Cache-read is ~10% of input for Codex/gpt-5, ~50%
-    # for gpt-4o.  Overlay will correct at runtime if real values differ.
-    _Family.GPT_5_CODEX:  (1.25,  10.0,  0.0,   0.125),
-    _Family.GPT_52_CODEX: (1.25,  10.0,  0.0,   0.125),
-    _Family.GPT_53_CODEX: (1.25,  10.0,  0.0,   0.125),
-    _Family.GPT_54:       (2.50,  20.0,  0.0,   0.25),
-    _Family.GPT_5:        (2.50,  20.0,  0.0,   0.25),
-    _Family.GPT_5_MINI:   (0.25,  2.00,  0.0,   0.025),
-    _Family.GPT_4O:       (2.50,  10.0,  0.0,   1.25),
-    _Family.GPT_4O_MINI:  (0.15,  0.60,  0.0,   0.075),
-    _Family.GPT_41:       (2.50,  10.0,  0.0,   0.625),
-}
-
-_FALLBACK = _Family.SONNET_35
 _MILLION = 1_000_000.0
-
-
-def _identify(model_id: str) -> _Family:
-    """Resolve a model ID string to its pricing family.
-
-    Works by splitting on hyphens and checking for known version + tier
-    tokens.  No regex needed — just set membership tests.
-    """
-    parts = set(model_id.lower().replace(".", "-").split("-"))
-
-    has_opus = "opus" in parts
-    has_sonnet = "sonnet" in parts
-    has_haiku = "haiku" in parts
-
-    # ── OpenAI Codex variants ────────────────────────────────────────────
-    if "codex" in parts:
-        # Disambiguate by version number combination.
-        if "5" in parts and "3" in parts:
-            return _Family.GPT_53_CODEX
-        if "5" in parts and "2" in parts:
-            return _Family.GPT_52_CODEX
-        if "5" in parts:
-            return _Family.GPT_5_CODEX
-        # Unknown codex flavour — best-effort default.
-        return _Family.GPT_5_CODEX
-
-    # ── OpenAI base GPT families ─────────────────────────────────────────
-    if "gpt" in parts:
-        has_mini = "mini" in parts
-        if "5" in parts and "4" in parts:
-            return _Family.GPT_54
-        if "5" in parts:
-            if has_mini:
-                return _Family.GPT_5_MINI
-            return _Family.GPT_5
-        # 4o detection — token may be literal "4o" or split "4" + "o"
-        if "4o" in parts or ("4" in parts and "o" in parts):
-            if has_mini:
-                return _Family.GPT_4O_MINI
-            return _Family.GPT_4O
-        if ("4" in parts and "1" in parts) or "4-1" in parts:
-            return _Family.GPT_41
-
-    # version detection by checking for version-specific tokens
-    if "6" in parts and "4" in parts:
-        if has_opus:
-            return _Family.OPUS_46
-        if has_sonnet:
-            return _Family.SONNET_46
-    if "5" in parts and "4" in parts:
-        if has_opus:
-            return _Family.OPUS_45
-        if has_sonnet:
-            return _Family.SONNET_45
-        if has_haiku:
-            return _Family.HAIKU_45
-    if "4" in parts:
-        if has_opus:
-            return _Family.OPUS_4
-        if has_sonnet:
-            return _Family.SONNET_4
-    if "5" in parts and "3" in parts:
-        if has_sonnet:
-            return _Family.SONNET_35
-        if has_haiku:
-            return _Family.HAIKU_35
-    if "3" in parts:
-        if has_opus:
-            return _Family.OPUS_3
-        if has_sonnet:
-            return _Family.SONNET_3
-        if has_haiku:
-            return _Family.HAIKU_3
-
-    return _FALLBACK
-
-
-# ── dynamic pricing overlay ──────────────────────────────────────────────────
-
-_overlay: dict[_Family, tuple[float, float, float, float]] | None = None
-
-
-def _load_overlay() -> dict[_Family, tuple[float, float, float, float]]:
-    global _overlay
-    if _overlay is not None:
-        return _overlay
-    try:
-        from stackunderflow.services.pricing_service import PricingService
-        raw = PricingService().get_pricing().get("pricing", {})
-        merged: dict[_Family, tuple[float, float, float, float]] = {}
-        for mid, vals in raw.items():
-            fam = _identify(mid)
-            if fam not in merged:
-                merged[fam] = (
-                    vals.get("input_cost_per_token", 0) * _MILLION,
-                    vals.get("output_cost_per_token", 0) * _MILLION,
-                    vals.get("cache_creation_cost_per_token", 0) * _MILLION,
-                    vals.get("cache_read_cost_per_token", 0) * _MILLION,
-                )
-        _overlay = {**_RATES, **merged}
-    except Exception:
-        _overlay = _RATES
-    return _overlay
-
-
-def _effective(model_id: str) -> tuple[float, float, float, float]:
-    """Return (input, output, cache_write, cache_read) in $/M tokens."""
-    overlay = _load_overlay()
-    fam = _identify(model_id)
-    return overlay.get(fam, _RATES[_FALLBACK])
 
 
 # ── public API ───────────────────────────────────────────────────────────────
 
-def compute_cost(tokens: dict[str, int], model: str) -> dict[str, float]:
-    """Return cost breakdown.  Rates are $/M so we divide token counts by 1M."""
-    inp_r, out_r, cw_r, cr_r = _effective(model)
-    ic = tokens.get("input", 0) * inp_r / _MILLION
-    oc = tokens.get("output", 0) * out_r / _MILLION
-    cc = tokens.get("cache_creation", 0) * cw_r / _MILLION
-    rc = tokens.get("cache_read", 0) * cr_r / _MILLION
-    return {
-        "input_cost": ic,
-        "output_cost": oc,
-        "cache_creation_cost": cc,
-        "cache_read_cost": rc,
-        "total_cost": ic + oc + cc + rc,
-    }
+def compute_cost(
+    tokens: dict[str, int],
+    model: str,
+    provider: str = "anthropic",
+) -> dict[str, float]:
+    """Return cost breakdown.
+
+    ``provider`` defaults to ``"anthropic"`` so every existing call site
+    still works unchanged. Tokens are normalised by the provider's pricer
+    first (a no-op for Anthropic, the cached-input subtraction for
+    OpenAI), then priced.
+
+    A PricingService overlay (if initialised) takes precedence over the
+    hardcoded rates — preserves the pre-refactor behaviour of letting
+    LiteLLM upstream override the canonical rate card.
+    """
+    pricer = get_pricer(provider)
+    normalized = pricer.normalize_tokens(tokens)
+
+    overlay = _overlay_rates(model)
+    if overlay is not None:
+        return ProviderPricer._apply_overlay_rates(normalized, overlay)
+    return pricer.compute(normalized, model)
 
 
 def format_dollars(amount: float) -> str:
@@ -223,12 +72,61 @@ _CANONICAL_IDS = [
 ]
 
 
-def get_dynamic_pricing() -> dict[str, Any]:
-    return {mid: get_model_pricing(mid) for mid in _CANONICAL_IDS}
+def _provider_for_model(model: str) -> str:
+    """Best-effort guess for the legacy single-arg helpers below."""
+    lowered = model.lower()
+    if "claude" in lowered:
+        return "anthropic"
+    if "gpt" in lowered or "codex" in lowered:
+        return "openai"
+    return "anthropic"
+
+
+_overlay_cache: dict[str, tuple[float, float, float, float]] | None = None
+
+
+def _load_overlay() -> dict[str, tuple[float, float, float, float]]:
+    """Load the live LiteLLM-style pricing overlay, lazily and once.
+
+    Mirrors the pre-refactor ``_load_overlay`` — when a PricingService has
+    been initialised, its per-model dollar figures take precedence over the
+    hardcoded rate table. Cached at module level after first successful
+    load; failures fall back to an empty dict so subsequent calls are cheap.
+    """
+    global _overlay_cache
+    if _overlay_cache is not None:
+        return _overlay_cache
+    out: dict[str, tuple[float, float, float, float]] = {}
+    try:
+        from stackunderflow.services.pricing_service import PricingService
+        raw = PricingService().get_pricing().get("pricing", {})
+        for mid, entry in raw.items():
+            out[mid] = (
+                float(entry.get("input_cost_per_token", 0)) * _MILLION,
+                float(entry.get("output_cost_per_token", 0)) * _MILLION,
+                float(entry.get("cache_creation_cost_per_token", 0)) * _MILLION,
+                float(entry.get("cache_read_cost_per_token", 0)) * _MILLION,
+            )
+    except Exception:
+        pass
+    _overlay_cache = out
+    return out
+
+
+def _overlay_rates(model: str) -> tuple[float, float, float, float] | None:
+    return _load_overlay().get(model)
 
 
 def get_model_pricing(model: str) -> dict[str, float] | None:
-    i, o, cw, cr = _effective(model)
+    overlay = _overlay_rates(model)
+    if overlay is not None:
+        i, o, cw, cr = overlay
+    else:
+        pricer = get_pricer(_provider_for_model(model))
+        rates = pricer.rates_for(pricer.canonicalize(model))
+        if rates is None:
+            return None
+        i, o, cw, cr = rates
     return {
         "input_cost_per_token": i / _MILLION,
         "output_cost_per_token": o / _MILLION,
@@ -237,4 +135,20 @@ def get_model_pricing(model: str) -> dict[str, float] | None:
     }
 
 
+def get_dynamic_pricing() -> dict[str, Any]:
+    return {mid: get_model_pricing(mid) for mid in _CANONICAL_IDS}
+
+
 RATE_CARD = {mid: get_model_pricing(mid) for mid in _CANONICAL_IDS}
+
+
+# Re-export the pricer classes for tests / advanced callers.
+__all__ = [
+    "AnthropicPricer",
+    "OpenAIPricer",
+    "RATE_CARD",
+    "compute_cost",
+    "format_dollars",
+    "get_dynamic_pricing",
+    "get_model_pricing",
+]

@@ -20,6 +20,12 @@ def ingest_file(
 
     Raises whatever the adapter raises; the transaction rolls back and
     the ingest_log is left untouched.
+
+    For ``ref.source_kind == "file"`` the ingest_log row stores
+    ``processed_offset = ref.file_size`` (byte position into a JSONL).
+    For ``"database"`` the row stores ``last_rowid = max(record.seq)``
+    seen in this batch — the next pass resumes from that rowid keyed on
+    ``(file_path, session_id)``.
     """
     conn.execute("BEGIN")
     try:
@@ -27,6 +33,11 @@ def ingest_file(
         session_fk = _upsert_session(conn, project_id, ref)
 
         max_ts: str | None = None
+        # max_seq carries the highest record.seq we observed in this batch.
+        # For both source kinds the semantic on the next ingest is "give me
+        # records strictly past this seq" — for database mode that's a
+        # rowid; for file mode that's the byte offset of the last line.
+        max_seq: int = since_offset
         count_added = 0
         for record in adapter.read(ref, since_offset=since_offset):
             changes = _insert_message(conn, session_fk, record)
@@ -34,6 +45,8 @@ def ingest_file(
                 count_added += 1
                 if max_ts is None or record.timestamp > max_ts:
                     max_ts = record.timestamp
+                if record.seq > max_seq:
+                    max_seq = record.seq
 
         if count_added:
             conn.execute(
@@ -44,22 +57,63 @@ def ingest_file(
                 (count_added, max_ts or "", max_ts or "", session_fk),
             )
 
-        conn.execute(
-            "INSERT INTO ingest_log (file_path, provider, mtime, size, processed_offset, last_ingest_ts) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(file_path) DO UPDATE SET "
-            "  mtime=excluded.mtime, size=excluded.size, "
-            "  processed_offset=excluded.processed_offset, "
-            "  last_ingest_ts=excluded.last_ingest_ts",
-            (
-                str(ref.file_path),
-                ref.provider,
-                ref.file_mtime,
-                ref.file_size,
-                ref.file_size,
-                time.time(),
-            ),
-        )
+        if ref.source_kind == "database":
+            # Database-backed sources resume by rowid keyed on (file_path,
+            # session_id). The partial unique index covers session_id IS
+            # NOT NULL rows; processed_offset stays NULL.
+            conn.execute(
+                "INSERT INTO ingest_log "
+                "(file_path, provider, session_id, storage_kind, "
+                " mtime, size, processed_offset, last_rowid, last_ingest_ts) "
+                "VALUES (?, ?, ?, 'database', ?, ?, NULL, ?, ?) "
+                "ON CONFLICT(file_path, session_id) WHERE session_id IS NOT NULL "
+                "DO UPDATE SET "
+                "  mtime=excluded.mtime, size=excluded.size, "
+                "  storage_kind=excluded.storage_kind, "
+                "  processed_offset=NULL, "
+                "  last_rowid=excluded.last_rowid, "
+                "  last_ingest_ts=excluded.last_ingest_ts",
+                (
+                    str(ref.file_path),
+                    ref.provider,
+                    ref.session_id,
+                    ref.file_mtime,
+                    ref.file_size,
+                    max_seq,
+                    time.time(),
+                ),
+            )
+        else:
+            # File-backed sources resume from the highest seq observed
+            # (= byte offset of the last yielded line). session_id is NULL
+            # so a single .jsonl is one ingest_log row regardless of how
+            # many sessions live inside it. The partial unique index on
+            # file_path WHERE session_id IS NULL is the conflict target.
+            #
+            # First-time ingest with no records: store the file_size so we
+            # don't re-scan empty/non-conversational files on every pass.
+            stored_offset = max_seq if count_added else ref.file_size
+            conn.execute(
+                "INSERT INTO ingest_log "
+                "(file_path, provider, session_id, storage_kind, "
+                " mtime, size, processed_offset, last_rowid, last_ingest_ts) "
+                "VALUES (?, ?, NULL, 'file', ?, ?, ?, NULL, ?) "
+                "ON CONFLICT(file_path) WHERE session_id IS NULL "
+                "DO UPDATE SET "
+                "  mtime=excluded.mtime, size=excluded.size, "
+                "  storage_kind=excluded.storage_kind, "
+                "  processed_offset=excluded.processed_offset, "
+                "  last_rowid=NULL, "
+                "  last_ingest_ts=excluded.last_ingest_ts",
+                (
+                    str(ref.file_path),
+                    ref.provider,
+                    ref.file_mtime,
+                    ref.file_size,
+                    stored_offset,
+                    time.time(),
+                ),
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

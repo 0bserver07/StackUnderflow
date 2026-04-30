@@ -53,3 +53,22 @@ class AdapterContract:
         for rec in self.adapter.read(refs[0]):
             # must parse as ISO 8601
             datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
+
+    def test_read_since_offset_is_storage_aware(self):
+        """Resumable reads work for both storage kinds.
+
+        ``seq`` is the right abstraction for both file-byte offsets and
+        SQLite rowids — a partial read past the midpoint must drop
+        everything at-or-before that offset and yield strictly fewer
+        records than the full read. See spec §1.4.
+        """
+        refs = list(self.adapter.enumerate())
+        if not refs:
+            return
+        full = list(self.adapter.read(refs[0]))
+        if len(full) < 2:
+            return
+        midpoint = full[len(full) // 2].seq
+        resumed = list(self.adapter.read(refs[0], since_offset=midpoint))
+        assert all(r.seq > midpoint for r in resumed)
+        assert len(resumed) < len(full)

@@ -81,7 +81,9 @@ def test_read_respects_since_offset(fake_home: Path) -> None:
 
     a = ClaudeAdapter()
     ref = list(a.enumerate())[0]
-    records = list(a.read(ref, since_offset=len(line1.encode())))
+    # ``since_offset`` is the highest seq the caller already processed;
+    # passing line1's seq (=0) gives us everything strictly past it.
+    records = list(a.read(ref, since_offset=1))
     assert len(records) == 1
     assert records[0].content_text == "b"
 

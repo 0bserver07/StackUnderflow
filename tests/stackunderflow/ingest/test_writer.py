@@ -66,15 +66,23 @@ def test_ingest_file_creates_project_and_session(conn, tmp_path: Path) -> None:
 
 def test_ingest_file_updates_ingest_log(conn, tmp_path: Path) -> None:
     ref = _ref(tmp_path, mtime=5.0, size=42)
-    adapter = _StubAdapter([_rec(0)])
+    # File-mode resume now stores max(record.seq) so the next pass can ask
+    # the adapter for "everything past this seq" — for real JSONL adapters
+    # seq is the byte offset of the line, so this is the byte position of
+    # the last consumed line.
+    adapter = _StubAdapter([_rec(7), _rec(15)])
     ingest_file(conn, adapter, ref)
     row = conn.execute(
-        "SELECT mtime, size, processed_offset FROM ingest_log WHERE file_path = ?",
+        "SELECT mtime, size, processed_offset, last_rowid, storage_kind, session_id "
+        "FROM ingest_log WHERE file_path = ?",
         (str(ref.file_path),),
     ).fetchone()
     assert row["mtime"] == 5.0
     assert row["size"] == 42
-    assert row["processed_offset"] == 42
+    assert row["processed_offset"] == 15  # max seq seen
+    assert row["last_rowid"] is None
+    assert row["storage_kind"] == "file"
+    assert row["session_id"] is None
 
 
 def test_ingest_file_is_idempotent_on_seq(conn, tmp_path: Path) -> None:
