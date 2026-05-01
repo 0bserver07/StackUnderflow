@@ -208,6 +208,14 @@ def cfg_set(key: str, value: str):
             f"(e.g. ``stackunderflow cfg model-alias set FROM TO``).",
             param_hint="KEY",
         )
+    if key.startswith("plan_"):
+        # Plan keys (``plan_name`` / ``plan_monthly_usd`` / ``plan_reset_day``)
+        # have inter-key invariants — manage via ``stackunderflow plan set``.
+        raise click.BadParameter(
+            f"'{key}' is part of the plan-budget settings group; "
+            f"use ``stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]`` instead.",
+            param_hint="KEY",
+        )
     parsed: Any = value
     if isinstance(ref, bool):
         parsed = value.lower() in ("1", "true", "yes", "on")
@@ -287,6 +295,121 @@ def cfg_model_alias_ls(as_json: bool):
     width = max(len(k) for k in aliases)
     for src in sorted(aliases):
         click.echo(f"  {src:<{width}s}  ->  {aliases[src]}")
+
+
+# ── plan budgets ────────────────────────────────────────────────────────────
+#
+# Track monthly AI spend against a known plan (Claude Pro $20/mo, Claude Max
+# $200/mo, etc.) plus a custom amount. Storage is three settings keys
+# (``plan_name``, ``plan_monthly_usd``, ``plan_reset_day``) but the CLI
+# treats them as one logical unit so users can't half-set a plan via
+# ``cfg set``.
+
+@cli.group("plan")
+def plan_group():
+    """Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom)."""
+
+
+def _format_money(amount: float) -> str:
+    """Render a USD amount with thousands separators and 2 decimals."""
+    return f"${amount:,.2f}"
+
+
+def _resolve_period_spend(period_start: str, period_end: str) -> float:
+    """Sum cost across every project for the active plan's billing window.
+
+    Reuses ``build_report`` so we don't duplicate aggregation. The window
+    is converted from inclusive calendar dates to the half-open ISO range
+    that ``cross_project_daily_totals`` understands (``[since, until)``):
+
+    * ``since`` = ``period_start`` at 00:00:00 UTC
+    * ``until`` = day-after-``period_end`` at 00:00:00 UTC
+    """
+    from datetime import date, datetime, timedelta
+
+    from stackunderflow.reports.aggregate import build_report
+    from stackunderflow.reports.scope import Scope
+
+    start_d = date.fromisoformat(period_start)
+    end_d = date.fromisoformat(period_end)
+    since = datetime.combine(start_d, datetime.min.time()).isoformat()
+    until = datetime.combine(end_d + timedelta(days=1), datetime.min.time()).isoformat()
+    scope = Scope(since=since, until=until, label="plan-period")
+
+    conn = _open_store()
+    try:
+        report = build_report(conn, scope=scope, include=None, exclude=None)
+    finally:
+        conn.close()
+    return float(report["total_cost"])
+
+
+@plan_group.command("show")
+@click.option("--format", "fmt", type=click.Choice(("text", "json")), default="text")
+def plan_show_cmd(fmt: str):
+    """Show the active plan and current usage against budget."""
+    from stackunderflow.services import plans as plans_mod
+
+    plan = plans_mod.get_active_plan()
+    if plan is None:
+        if fmt == "json":
+            click.echo(json.dumps({"plan": None, "usage": None}, indent=2))
+        else:
+            click.echo("No plan set. Run: stackunderflow plan set claude-pro")
+        return
+
+    usage = plans_mod.compute_usage(plan, 0.0)
+    used = _resolve_period_spend(usage["period_start"], usage["period_end"])
+    usage = plans_mod.compute_usage(plan, used)
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "plan": {
+                "name": plan.name,
+                "monthly_usd": plan.monthly_usd,
+                "reset_day": plan.reset_day,
+            },
+            "usage": usage,
+        }, indent=2))
+        return
+
+    status_color = {"ok": "green", "warn": "yellow", "over": "red"}[usage["status"]]
+    click.echo(f"Plan:          {plan.name}")
+    click.echo(f"Budget:        {_format_money(plan.monthly_usd)} / month  (resets day {plan.reset_day})")
+    click.echo(f"Period:        {usage['period_start']} → {usage['period_end']}  "
+               f"(day {usage['days_so_far']} of {usage['days_in_period']})")
+    click.echo(f"Used:          {_format_money(usage['used'])}  ({usage['pct']:.1f}% of budget)")
+    click.echo(f"Remaining:     {_format_money(usage['remaining'])}")
+    click.echo(f"Projected:     {_format_money(usage['projected_month_end'])}  (linear, today's burn rate)")
+    click.secho(f"Status:        {usage['status']}", fg=status_color, bold=True)
+
+
+@plan_group.command("set")
+@click.argument("name")
+@click.option("--monthly-usd", type=float, default=None,
+              help="Monthly budget in USD (required for 'custom', overrides preset otherwise).")
+@click.option("--reset-day", type=click.IntRange(1, 31), default=1,
+              help="Day of month the budget resets (default 1).")
+def plan_set_cmd(name: str, monthly_usd: float | None, reset_day: int):
+    """Set the active plan. NAME is one of: claude-pro, claude-max, cursor-pro, cursor-max, custom."""
+    from stackunderflow.services import plans as plans_mod
+
+    try:
+        plan = plans_mod.set_plan(name, monthly_usd=monthly_usd, reset_day=reset_day)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="NAME") from e
+    click.echo(
+        f"  plan = {plan.name}  ({_format_money(plan.monthly_usd)}/month, "
+        f"resets day {plan.reset_day})"
+    )
+
+
+@plan_group.command("reset")
+def plan_reset_cmd():
+    """Clear the active plan."""
+    from stackunderflow.services import plans as plans_mod
+    plans_mod.reset_plan()
+    click.echo("  plan cleared")
 
 
 # backward compat: `stackunderflow config show/set/unset`
