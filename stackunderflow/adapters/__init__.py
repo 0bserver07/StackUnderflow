@@ -15,6 +15,12 @@ Beta adapters are gated by environment variables (default: off):
   STACKUNDERFLOW_BETA_CURSOR_AGENT=1   # opt into the Cursor Agent (transcripts + SQLite) adapter
   STACKUNDERFLOW_BETA_QWEN=1           # opt into the Qwen (jsonl) adapter
   STACKUNDERFLOW_BETA_GEMINI=1         # opt into the Gemini (jsonl/json) adapter
+  STACKUNDERFLOW_BETA_COPILOT=1        # opt into the GitHub Copilot adapter
+                                       #   (legacy + VS Code transcript JSONL)
+  STACKUNDERFLOW_BETA_CODEIUM=1        # opt into the Codeium adapter (discovery
+                                       #   stub — protobuf decoding deferred)
+  STACKUNDERFLOW_BETA_CONTINUE=1       # opt into the Continue IDE adapter
+                                       #   (defensive SQLite parser)
 """
 
 import os
@@ -109,3 +115,26 @@ if _beta_enabled("GEMINI"):
     from .gemini import GeminiAdapter as _GeminiAdapter  # noqa: E402
 
     register(_GeminiAdapter())
+
+# Beta: Copilot (legacy ~/.copilot + VS Code transcripts). Off by default
+# — set STACKUNDERFLOW_BETA_COPILOT=1 to enable. macOS-only for v1;
+# codeburn-catalog §3.
+if _beta_enabled("COPILOT"):
+    from .copilot import CopilotAdapter as _CopilotAdapter  # noqa: E402
+
+    register(_CopilotAdapter())
+
+# Beta: Codeium (discovery stub — see module docstring). Off by default
+# — set STACKUNDERFLOW_BETA_CODEIUM=1 to enable. Yields nothing today.
+if _beta_enabled("CODEIUM"):
+    from .codeium import CodeiumAdapter as _CodeiumAdapter  # noqa: E402
+
+    register(_CodeiumAdapter())
+
+# Beta: Continue (defensive SQLite parser). Off by default — set
+# STACKUNDERFLOW_BETA_CONTINUE=1 to enable. Yields nothing on empty
+# state (most installs); local-inventory.md §13.
+if _beta_enabled("CONTINUE"):
+    from .continue_adapter import ContinueAdapter as _ContinueAdapter  # noqa: E402
+
+    register(_ContinueAdapter())
