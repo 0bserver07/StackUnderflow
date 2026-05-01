@@ -4,8 +4,8 @@ Short, runnable scripts showing how to use StackUnderflow as a Python library. E
 
 | File | What it shows |
 |------|---------------|
-| `list_projects.py` | Iterate every discovered project from the inventory API |
-| `process_session.py` | Open the session store, pull stats for one project |
+| `list_projects.py` | Iterate every project the local store knows about — provider-tagged |
+| `process_session.py` | Pull pipeline messages + stats for the first project via `stackunderflow.process` |
 | `cross_provider_costs.py` | Sum cost per provider across the store; uses beta adapters when their env vars are set |
 
 Run any of them directly:
