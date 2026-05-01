@@ -163,6 +163,8 @@ List all known projects from the session store with metadata. Supports sorting a
       "display_name": "-Users-yadkonrad-dev-myproject",
       "in_cache": false,
       "url_slug": "-Users-yadkonrad-dev-myproject",
+      "provider": "claude",
+      "providers": ["claude"],
       "stats": null
     }
   ],
@@ -171,6 +173,8 @@ List all known projects from the session store with metadata. Supports sorting a
   "cache_status": {"cached_count": 0, "total_projects": 143}
 }
 ```
+
+`provider` is the most-recent provider that ingested the slug; `providers` is the sorted list of every provider with a row for that slug (the schema has `UNIQUE(provider, slug)`, so one project used through both Claude and Cursor yields two rows that the route collapses into one card).
 
 **Status codes:** `200` always (errors return `500` with `{"error": "..."}`).
 
@@ -559,10 +563,13 @@ Accepts an optional `project` query parameter to override the current project.
     "model": "claude-opus-4-6",
     "title": "What does this function do?",
     "tool_calls": 15,
-    "estimated_cost": 0.4812
+    "estimated_cost": 0.4812,
+    "provider": "claude"
   }
 ]
 ```
+
+`provider` carries the parent project's provider name (`claude`, `codex`, `cursor`, `cline`); the React UI uses it to colour the per-session chip.
 
 **Status codes:** `200` success; `400` no project; `500` internal error.
 

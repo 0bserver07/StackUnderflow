@@ -1,11 +1,13 @@
 # Codex Adapter Specification
 
-> **Status: Proposal / RFC — not implemented.**
-> This document describes a possible future architecture for adding OpenAI
-> Codex as a second data source. **No code in this repository implements
-> any of the classes or modules described below.** The current pipeline
-> reads only Claude Code JSONL logs. Treat this file as a design sketch
-> open to discussion, not a roadmap commitment.
+> **Status: HISTORICAL — Codex adapter shipped in v0.x.**
+> This document remains as design context for the Codex integration work.
+> For current adapter authoring (the `SourceAdapter` protocol, `SessionRef`
+> / `Record` shapes, `ProviderPricer` extension points, beta-flag wiring,
+> the resume-aware contract test), see [`docs/adapters.md`](adapters.md).
+> The shipping Codex adapter lives at `stackunderflow/adapters/codex.py`
+> and reads `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` rollout files —
+> not the `state_5.sqlite` schema sketched below.
 
 Adds OpenAI Codex (CLI coding agent) as a second data source alongside Claude Code.
 

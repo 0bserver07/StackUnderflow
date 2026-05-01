@@ -228,7 +228,25 @@ On first successful ingest the legacy `~/.stackunderflow/cache/` directory is re
 
 ### Source adapters
 
-Currently supports Claude Code only — JSONL logs under `~/.claude/projects/` plus the legacy `~/.claude/history.jsonl` for pre-January-2026 sessions. A proposal sketch for adding OpenAI Codex (`~/.codex/`) lives at [docs/codex-adapter-spec.md](docs/codex-adapter-spec.md); it is an unimplemented RFC, not a roadmap commitment.
+StackUnderflow ingests sessions from more than one coding agent. Two adapters are stable; two more are opt-in beta.
+
+| Provider | Status | Source | Default state |
+|----------|--------|--------|---------------|
+| Claude Code | stable | `~/.claude/projects/<slug>/*.jsonl` (+ legacy `~/.claude/history.jsonl`) | on |
+| Codex | stable | `~/.codex/` rollout JSONL | on |
+| Cursor | beta | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | off |
+| Cline | beta | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | off |
+
+#### Beta adapters
+
+Beta adapters are off by default. Opt in with an env var when starting the server:
+
+```bash
+STACKUNDERFLOW_BETA_CURSOR=1 stackunderflow start
+STACKUNDERFLOW_BETA_CLINE=1 stackunderflow start
+```
+
+Both are macOS-only in v1. See [docs/multi-provider.md](docs/multi-provider.md) for the full feature reference and [docs/adapters.md](docs/adapters.md) for how to write a new adapter.
 
 ## Privacy
 

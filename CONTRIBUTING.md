@@ -40,7 +40,7 @@ bash lint.sh
 
 ## Adding a New Source Adapter
 
-StackUnderflow is designed to support multiple AI coding agents. See [docs/codex-adapter-spec.md](docs/codex-adapter-spec.md) for the Codex adapter specification — it documents the adapter interface and how new sources plug into the pipeline.
+See [docs/adapters.md](docs/adapters.md) for the contract (`SessionRef`, `Record`, the `SourceAdapter` protocol), the `enumerate()` / `read()` semantics, the `ProviderPricer` extension point, and the beta-flag wiring pattern. Working references: `stackunderflow/adapters/claude.py` (file-mode), `stackunderflow/adapters/cursor.py` (database-mode).
 
 ## Project Structure
 
