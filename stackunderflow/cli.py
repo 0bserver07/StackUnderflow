@@ -19,9 +19,12 @@ from typing import Any
 import click
 
 from stackunderflow.reports.aggregate import build_report
+from stackunderflow.reports.export import (
+    run_export,
+    safe_write_text,
+)
 from stackunderflow.reports.optimize import find_waste
 from stackunderflow.reports.render import (
-    render_csv,
     render_json,
     render_status_line,
     render_text,
@@ -681,33 +684,88 @@ def status_cmd(fmt: str):
 
 
 _EXPORT_FORMATS = ("csv", "json")
+_EXPORT_PERIODS = ("today", "week", "month", "all")
 
 
 @cli.command("export")
-@click.option("-p", "--period", default="30days")
-@click.option("-f", "--format", "fmt", type=click.Choice(_EXPORT_FORMATS), default="csv")
-@click.option("--project", "include", multiple=True)
-@click.option("--exclude", "exclude", multiple=True)
-def export_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
-    """Export aggregated data as CSV or JSON."""
-    try:
-        scope = parse_period(period)
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
+@click.option(
+    "-f", "--format", "fmt",
+    type=click.Choice(_EXPORT_FORMATS),
+    required=True,
+    help="Output format.",
+)
+@click.option(
+    "-o", "--output",
+    type=click.Path(dir_okay=False),
+    required=True,
+    help="Destination file path.",
+)
+@click.option(
+    "-p", "--period",
+    type=click.Choice(_EXPORT_PERIODS),
+    default=None,
+    help=(
+        "Window. Omit to roll up today + 7 days + 30 days into one file."
+    ),
+)
+@click.option(
+    "--provider",
+    default=None,
+    help="Filter by provider (e.g. claude, codex, cursor).",
+)
+@click.option(
+    "--project", "include", multiple=True,
+    help="Include only this project slug (repeatable).",
+)
+@click.option(
+    "--exclude", "exclude", multiple=True,
+    help="Exclude this project slug (repeatable).",
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Overwrite the output file if it already exists.",
+)
+def export_cmd(
+    fmt: str,
+    output: str,
+    period: str | None,
+    provider: str | None,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    force: bool,
+):
+    """Export aggregated usage data to a CSV or JSON file.
+
+    With ``--period`` set, exports a single window. Without it, exports
+    a multi-period rollup (today / last 7 days / last 30 days) so a JSON
+    consumer never has to make three CLI calls. CSV always lays out
+    one section per period in the same file, separated by a blank line.
+    """
+    inc = list(include) or None
+    exc = list(exclude) or None
+
     conn = _open_store()
     try:
-        report = build_report(
-            conn,
-            scope=scope,
-            include=list(include) or None,
-            exclude=list(exclude) or None,
-        )
+        try:
+            text, _content_type, _suggested = run_export(
+                conn,
+                fmt=fmt,
+                period=period,
+                provider=provider,
+                include=inc,
+                exclude=exc,
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
     finally:
         conn.close()
-    if fmt == "json":
-        click.echo(render_json(report))
-    else:
-        click.echo(render_csv(report), nl=False)
+
+    try:
+        safe_write_text(output, text, force=force)
+    except FileExistsError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"  wrote {output}")
 
 
 @cli.command("optimize")

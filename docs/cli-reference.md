@@ -24,7 +24,7 @@ stackunderflow status [--format text|json]
 stackunderflow today [--format text|json] [--project P] [--exclude P]
 stackunderflow month [--format text|json] [--project P] [--exclude P]
 stackunderflow report [-p PERIOD] [--format text|json] [--project P] [--exclude P] [--provider PROV]
-stackunderflow export [-p PERIOD] [-f csv|json] [--project P] [--exclude P]
+stackunderflow export -f csv|json -o PATH [-p today|week|month|all] [--provider X] [--project P] [--exclude P] [--force]
 stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
 
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
@@ -325,8 +325,9 @@ $ stackunderflow report -p today --exclude sandbox
 
 ### `stackunderflow export`
 
-Export aggregated data as CSV or JSON. Useful for spreadsheets or downstream tooling.
-`export --format json` is equivalent to `report --format json`.
+Export aggregated, cross-project usage data to a file. Both `--format`
+and `--output` are required. Designed for spreadsheets, BI tools, and
+downstream automation.
 
 ```
 Usage: stackunderflow export [OPTIONS]
@@ -334,29 +335,54 @@ Usage: stackunderflow export [OPTIONS]
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `-p, --period` | TEXT | `30days` | Period: `today`, `7days`, `30days`, `month`, `all` |
-| `-f, --format` | `csv\|json` | csv | Output format |
-| `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
-| `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
+| `-f, --format` | `csv\|json` | (required) | Output format |
+| `-o, --output` | PATH | (required) | File path to write |
+| `-p, --period` | `today\|week\|month\|all` | (multi-period rollup) | Single window. Omit for today + 7 days + 30 days in one file. |
+| `--provider` | TEXT | (all) | Filter by provider (e.g. `claude`, `codex`, `cursor`) |
+| `--project` | TEXT | (all) | Include only this project slug (repeatable) |
+| `--exclude` | TEXT | (none) | Exclude this project slug (repeatable) |
+| `--force` | flag | false | Overwrite the output file if it already exists |
+
+**CSV layout.** Each period section starts with a `# period: <label>`
+comment row, followed by the daily-rows header
+(`date, provider, project, cost_usd, calls, sessions, input_tokens,
+output_tokens, cache_read_tokens, cache_write_tokens`) and the rows.
+A blank line separates each period from the activity-breakdown section
+(`# activity — <label>`, then `activity, calls, share_pct`). With no
+`--period`, three pairs of sections are emitted (today / last 7 days /
+last 30 days) in the same file.
+
+**JSON layout.** With `--period`, the file is one period dict with
+`label`, `since`, `until`, `totals`, `daily`, `projects`, `models`,
+`activities`, `tools`, `mcp`, `shell`. Without `--period`, a top-level
+`{schema, generated, filters, today, last_7d, last_30d}` envelope wraps
+three of those dicts so a single file is enough for short / medium /
+long windows side-by-side.
+
+**File-write safety.** The command refuses to overwrite an existing
+file unless `--force` is set, refuses to follow symlinks at the output
+path, and writes atomically via a `.tmp` file that is renamed into
+place. Parent directories are created if missing.
 
 **Examples:**
 
 ```
-$ stackunderflow export --period today --format csv
-project,cost,messages,sessions
--Users-you-dev-my-api,15.21,116,1
--Users-you-dev-StackUnderflow,2.95,125,1
+$ stackunderflow export --format csv --output ~/usage-week.csv --period week
+  wrote /Users/you/usage-week.csv
 
-$ stackunderflow export --period today --format json
-{
-  "total_cost": 34.61,
-  "total_messages": 558,
-  ...
-}
+$ stackunderflow export -f json -o ~/usage-rollup.json
+  wrote /Users/you/usage-rollup.json
 
-$ stackunderflow export -p 30days -f csv > usage.csv
-$ stackunderflow export -p all -f json | jq '.projects[] | select(.cost > 10)'
+$ stackunderflow export -f csv -o ~/claude-only.csv --provider claude --period month
+
+$ stackunderflow export -f csv -o ~/big.csv -p all --exclude sandbox --force
+
+$ jq '.last_30d.projects[] | select(.cost_usd > 10)' < ~/usage-rollup.json
 ```
+
+The same data is available over HTTP at `GET /api/export` with the
+matching query parameters (`format`, `period`, `provider`, `project`,
+`exclude`) — used by the dashboard's "Download" button.
 
 ---
 
