@@ -48,7 +48,8 @@ def get_messages(
     rows = conn.execute(
         "SELECT id, session_fk, seq, timestamp, role, model, "
         "       input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
-        "       content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid "
+        "       content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid, "
+        "       speed "
         "FROM messages WHERE session_fk = ? "
         "ORDER BY seq LIMIT ? OFFSET ?",
         (session_fk, limit, offset),
@@ -63,7 +64,8 @@ def get_session_messages(conn: sqlite3.Connection, *, session_fk: int) -> list[M
     rows = conn.execute(
         "SELECT id, session_fk, seq, timestamp, role, model, "
         "       input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
-        "       content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid "
+        "       content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid, "
+        "       speed "
         "FROM messages WHERE session_fk = ? ORDER BY seq",
         (session_fk,),
     ).fetchall()
@@ -214,28 +216,36 @@ def get_global_stats(conn: sqlite3.Connection) -> dict:
         )
     ]
 
-    # per-(day, model) rollup feeding both daily_costs and the models map
+    # per-(day, model, speed) rollup feeding both daily_costs and the models map.
+    # Grouping by ``speed`` lets ``compute_cost`` apply the Anthropic Opus
+    # priority/fast 6× multiplier to the right subset of tokens — without
+    # this dimension, every priority record was silently re-billed at the
+    # standard rate (the bug PR #44 left in the SQL path). The top-level
+    # ``models[model]`` dict still aggregates across speeds because the
+    # public API contract doesn't expose the speed dimension yet — frontend
+    # update will follow.
     per_day_model = conn.execute(
         "SELECT substr(timestamp,1,10) AS day, "
         "       COALESCE(model,'') AS model, "
+        "       COALESCE(speed,'standard') AS speed, "
         "       SUM(input_tokens) AS inp, SUM(output_tokens) AS out, "
         "       SUM(cache_create_tokens) AS cache_create, "
         "       SUM(cache_read_tokens) AS cache_read, "
         "       COUNT(*) AS n "
-        "FROM messages GROUP BY day, model ORDER BY day"
+        "FROM messages GROUP BY day, model, speed ORDER BY day"
     ).fetchall()
 
     daily_costs_map: dict[str, dict] = {}
     models: dict[str, dict] = {}
     for r in per_day_model:
-        day, model = r["day"], r["model"]
+        day, model, speed = r["day"], r["model"], r["speed"]
         tokens = {
             "input": r["inp"] or 0,
             "output": r["out"] or 0,
             "cache_creation": r["cache_create"] or 0,
             "cache_read": r["cache_read"] or 0,
         }
-        cost = compute_cost(tokens, model)["total_cost"] if model else 0.0
+        cost = compute_cost(tokens, model, speed=speed)["total_cost"] if model else 0.0
         bucket = daily_costs_map.setdefault(day, {"date": day, "cost": 0.0, "by_model": {}})
         bucket["cost"] += cost
         if model:
@@ -261,14 +271,22 @@ def cross_project_daily_totals(
     since: str | None = None,
     until: str | None = None,
 ) -> list[tuple]:
-    """Per-(project_slug, day, model) token rollups within [since, until]."""
+    """Per-(project_slug, day, model, speed) token rollups within [since, until].
+
+    Tuple shape is ``(slug, day, model, input_tokens, output_tokens,
+    messages, speed)``. ``speed`` is appended at the end so existing
+    callers that index the leading columns positionally keep working
+    while new callers (e.g. ``reports.aggregate``) can read the speed
+    flag for tier-aware cost computation.
+    """
     sql = (
         "SELECT projects.slug AS slug, "
         "       substr(messages.timestamp, 1, 10) AS day, "
         "       COALESCE(messages.model, '') AS model, "
         "       SUM(messages.input_tokens) AS input_tokens, "
         "       SUM(messages.output_tokens) AS output_tokens, "
-        "       COUNT(*) AS messages "
+        "       COUNT(*) AS messages, "
+        "       COALESCE(messages.speed, 'standard') AS speed "
         "FROM messages "
         "JOIN sessions ON sessions.id = messages.session_fk "
         "JOIN projects ON projects.id = sessions.project_id "
@@ -281,5 +299,5 @@ def cross_project_daily_totals(
     if until:
         sql += "AND messages.timestamp < ? "
         params.append(until)
-    sql += "GROUP BY slug, day, model ORDER BY day"
+    sql += "GROUP BY slug, day, model, speed ORDER BY day"
     return [tuple(row) for row in conn.execute(sql, params).fetchall()]

@@ -298,14 +298,19 @@ def _estimate_session_cost(
     chart. Sessions that mix models still total correctly because we group
     by model before pricing.
     """
+    # Group by ``(model, speed)`` so the Anthropic priority/fast tier rows
+    # price at 6× via compute_cost(speed=...). Without this dimension, a
+    # session that ran a few Opus prompts on the priority tier would report
+    # 1× cost — silently understating the spend yield is correlating against.
     rows = conn.execute(
         "SELECT COALESCE(model, '') AS model, "
+        "       COALESCE(speed, 'standard') AS speed, "
         "       SUM(input_tokens) AS inp, "
         "       SUM(output_tokens) AS out, "
         "       SUM(cache_create_tokens) AS cc, "
         "       SUM(cache_read_tokens) AS cr "
         "FROM messages WHERE session_fk = ? "
-        "GROUP BY model",
+        "GROUP BY model, speed",
         (session_fk,),
     ).fetchall()
 
@@ -314,6 +319,7 @@ def _estimate_session_cost(
         model = r["model"]
         if not model:
             continue
+        speed = r["speed"] or "standard"
         tokens = {
             "input": int(r["inp"] or 0),
             "output": int(r["out"] or 0),
@@ -321,7 +327,9 @@ def _estimate_session_cost(
             "cache_read": int(r["cr"] or 0),
         }
         try:
-            total += compute_cost(tokens, model, provider=provider).get("total_cost", 0.0)
+            total += compute_cost(
+                tokens, model, provider=provider, speed=speed,
+            ).get("total_cost", 0.0)
         except Exception as e:  # noqa: BLE001 - cost issues should not stall yield
             logger.debug("compute_cost failed for model %s: %s", model, e)
     return total

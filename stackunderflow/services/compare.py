@@ -114,6 +114,9 @@ def _fetch_messages(
         "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
         "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
         "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
+        # ``speed`` carries the Anthropic priority/fast tier flag (v003 column).
+        # Threaded into compute_cost() below so Opus fast-mode rows price at 6×.
+        "       COALESCE(messages.speed, 'standard') AS speed, "
         "       projects.provider AS provider "
         "FROM messages "
         "JOIN sessions ON sessions.id = messages.session_fk "
@@ -237,6 +240,7 @@ def compare_models(
             },
             mdl,
             provider=r["provider"] or "anthropic",
+            speed=r["speed"] or "standard",
         )["total_cost"]
         acc.total_cost += cost
 
