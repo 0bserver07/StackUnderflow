@@ -13,6 +13,9 @@ from __future__ import annotations
 from .anthropic import AnthropicPricer
 from .base import ProviderPricer
 from .cline import ClinePricer
+from .codeium import CodeiumPricer
+from .continue_pricer import ContinuePricer
+from .copilot import CopilotPricer
 from .cursor import CursorPricer
 from .cursor_agent import CursorAgentPricer
 from .gemini import GeminiPricer
@@ -35,14 +38,18 @@ _OPENCODE = OpenCodePricer()
 _CURSOR_AGENT = CursorAgentPricer()
 _QWEN = QwenPricer()
 _GEMINI = GeminiPricer()
+_COPILOT = CopilotPricer()
+_CODEIUM = CodeiumPricer()
+_CONTINUE = ContinuePricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
 # (``claude`` / ``codex`` / ``cursor`` / ``cline`` / ``kilocode`` /
-# ``roocode`` / ``opencode`` / ``cursor-agent`` / ``qwen`` / ``gemini``)
-# and from explicit provider arguments (``anthropic`` / ``openai``) to the
-# right pricer singleton. Multiple names point at the same instance so
-# callers can compare with ``is``.
+# ``roocode`` / ``opencode`` / ``cursor-agent`` / ``qwen`` / ``gemini`` /
+# ``copilot`` / ``codeium`` / ``continue``) and from explicit provider
+# arguments (``anthropic`` / ``openai``) to the right pricer singleton.
+# Multiple names point at the same instance so callers can compare with
+# ``is``.
 _REGISTRY: dict[str, ProviderPricer] = {
     "anthropic": _ANTHROPIC,
     "claude": _ANTHROPIC,
@@ -56,6 +63,9 @@ _REGISTRY: dict[str, ProviderPricer] = {
     "cursor-agent": _CURSOR_AGENT,
     "qwen": _QWEN,
     "gemini": _GEMINI,
+    "copilot": _COPILOT,
+    "codeium": _CODEIUM,
+    "continue": _CONTINUE,
 }
 
 
