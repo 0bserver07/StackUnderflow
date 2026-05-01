@@ -21,6 +21,10 @@ Beta adapters are gated by environment variables (default: off):
                                        #   stub — protobuf decoding deferred)
   STACKUNDERFLOW_BETA_CONTINUE=1       # opt into the Continue IDE adapter
                                        #   (defensive SQLite parser)
+  STACKUNDERFLOW_BETA_DROID=1          # opt into the Droid (Factory) adapter
+  STACKUNDERFLOW_BETA_KIRO=1           # opt into the Kiro (kiroagent) adapter
+  STACKUNDERFLOW_BETA_OPENCLAW=1       # opt into the OpenClaw (multi-base) adapter
+  STACKUNDERFLOW_BETA_PI=1             # opt into the Pi+OMP shared adapter
 """
 
 import os
@@ -138,3 +142,37 @@ if _beta_enabled("CONTINUE"):
     from .continue_adapter import ContinueAdapter as _ContinueAdapter  # noqa: E402
 
     register(_ContinueAdapter())
+
+# Beta: Droid (Factory). Off by default — set STACKUNDERFLOW_BETA_DROID=1
+# to enable. Honors $FACTORY_DIR. Session-level token totals are
+# distributed evenly across detected assistant messages; codeburn-catalog §6.
+if _beta_enabled("DROID"):
+    from .droid import DroidAdapter as _DroidAdapter  # noqa: E402
+
+    register(_DroidAdapter())
+
+# Beta: Kiro (kiroagent). Off by default — set STACKUNDERFLOW_BETA_KIRO=1
+# to enable. macOS-only for v1; tokens are estimated from content
+# length and Records carry ``raw["cost_source"] = "estimated"``.
+# codeburn-catalog §9.
+if _beta_enabled("KIRO"):
+    from .kiro import KiroAdapter as _KiroAdapter  # noqa: E402
+
+    register(_KiroAdapter())
+
+# Beta: OpenClaw (and rebrand cousins). Off by default — set
+# STACKUNDERFLOW_BETA_OPENCLAW=1 to enable. Walks four candidate base
+# directories: ~/.openclaw, ~/.clawdbot, ~/.moltbot, ~/.moldbot.
+# codeburn-catalog §10.
+if _beta_enabled("OPENCLAW"):
+    from .openclaw import OpenClawAdapter as _OpenClawAdapter  # noqa: E402
+
+    register(_OpenClawAdapter())
+
+# Beta: Pi + OMP (shared format, two roots). Off by default — set
+# STACKUNDERFLOW_BETA_PI=1 to enable both. One adapter scans both
+# ~/.pi/agent/sessions and ~/.omp/agent/sessions. codeburn-catalog §12.
+if _beta_enabled("PI"):
+    from .pi import PiAdapter as _PiAdapter  # noqa: E402
+
+    register(_PiAdapter())
