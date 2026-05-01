@@ -60,12 +60,23 @@ class ProviderPricer(ABC):
 
     # ── shared helper ────────────────────────────────────────────────
 
-    def compute(self, tokens: dict[str, int], model: str) -> dict[str, float]:
+    def compute(
+        self,
+        tokens: dict[str, int],
+        model: str,
+        *,
+        speed: str = "standard",
+    ) -> dict[str, float]:
         """Return cost breakdown — ``tokens × rates_for(canonicalize(model))``.
 
         Tokens must already be in canonical shape (input / output /
         cache_creation / cache_read) — call ``normalize_tokens()`` first if
         the caller has the raw provider shape.
+
+        ``speed`` lets pricers apply a tier multiplier; the default is a
+        no-op so non-tiered providers ignore the kwarg entirely. The
+        Anthropic pricer overrides this method to fold in Opus's 6× fast
+        rate.
         """
         canonical = self.canonicalize(model)
         rates = self.rates_for(canonical)

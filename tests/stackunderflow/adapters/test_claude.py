@@ -122,6 +122,104 @@ def test_read_legacy_history_yields_records(fake_home: Path) -> None:
     assert recs[0].timestamp.startswith("2024-01-01")
 
 
+def test_read_detects_priority_service_tier_as_fast(fake_home: Path) -> None:
+    """``message.usage.service_tier == "priority"`` flips ``Record.speed`` to
+    ``"fast"``. This is the field name surfaced in real Claude JSONL logs
+    (verified at ``~/.claude/projects/`` — observed values: ``"standard"``
+    and ``null``; ``"priority"`` is the documented Anthropic priority tier).
+    """
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u","message":{"role":"assistant","model":"claude-opus-4-5",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2,"service_tier":"priority"}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 1
+    assert records[0].speed == "fast"
+
+
+def test_read_treats_standard_service_tier_as_standard(fake_home: Path) -> None:
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u","message":{"role":"assistant","model":"claude-opus-4-5",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2,"service_tier":"standard"}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert records[0].speed == "standard"
+
+
+def test_read_treats_missing_service_tier_as_standard(fake_home: Path) -> None:
+    """Pre-tier records (``service_tier`` field absent) must default to
+    ``"standard"`` — the conservative default protects against
+    over-charging records that aren't actually on the priority tier.
+    """
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u","message":{"role":"assistant","model":"claude-opus-4-5",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert records[0].speed == "standard"
+
+
+def test_read_treats_null_service_tier_as_standard(fake_home: Path) -> None:
+    """Some JSONL records have ``service_tier: null`` (observed in real
+    user logs — the field is present but unset). Must not flip to fast.
+    """
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u","message":{"role":"assistant","model":"claude-opus-4-5",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2,"service_tier":null}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert records[0].speed == "standard"
+
+
+def test_read_treats_batch_service_tier_as_standard(fake_home: Path) -> None:
+    """Batch tier is cheaper, not faster — and we don't model it here. The
+    conservative mapping is to treat every non-priority value as standard
+    so we never accidentally apply the 6× Opus multiplier to batch
+    requests.
+    """
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u","message":{"role":"assistant","model":"claude-opus-4-5",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2,"service_tier":"batch"}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert records[0].speed == "standard"
+
+
 class TestClaudeAdapterContract(unittest.TestCase, AdapterContract):
     """Runs every AdapterContract invariant against a ClaudeAdapter backed by a fake HOME."""
 

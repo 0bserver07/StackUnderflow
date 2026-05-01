@@ -256,7 +256,13 @@ class _ErrorsCollector:
 # ── analytics expansion collectors (docs/specs/analytics-expansion.md §1) ───
 
 class _SessionCostCollector:
-    """§1.1 — per-session cost/tokens/messages/errors, ranked desc by cost."""
+    """§1.1 — per-session cost/tokens/messages/errors, ranked desc by cost.
+
+    Token totals are accumulated per ``(model, speed)`` tuple so the
+    Anthropic priority/fast tier multiplier applies only to the messages
+    that actually used it. Standard-tier and fast-tier records of the
+    same model are priced separately and summed.
+    """
 
     def __init__(self, *, provider: str = "anthropic") -> None:
         self._s: dict[str, dict] = {}
@@ -282,7 +288,8 @@ class _SessionCostCollector:
             s["tokens"][k] += v
         if r.kind == "assistant" and r.model and r.model != "N/A":
             s["models"].add(r.model)
-            m = s["by_model"].setdefault(r.model, Counter())
+            key = (r.model, r.speed)
+            m = s["by_model"].setdefault(key, Counter())
             for k, v in r.tokens.items():
                 m[k] += v
 
@@ -305,8 +312,10 @@ class _SessionCostCollector:
                     duration = 0.0
 
             cost = 0.0
-            for model, tok_c in s["by_model"].items():
-                cost += compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
+            for (model, speed), tok_c in s["by_model"].items():
+                cost += compute_cost(
+                    dict(tok_c), model, provider=self._provider, speed=speed
+                )["total_cost"]
 
             first = first_prompt_by_session.get(sid, ("", ""))[1]
             preview = _preview(first, 140)
@@ -337,7 +346,7 @@ class _CommandCostCollector:
 
     def ingest_interaction(self, ix: Interaction) -> None:
         tokens: Counter[str] = Counter()
-        by_model: dict[str, Counter[str]] = {}
+        by_model: dict[tuple[str, str], Counter[str]] = {}
         had_error = False
         models_used: set[str] = set()
         for r in ix.responses + ix.tool_results:
@@ -347,13 +356,15 @@ class _CommandCostCollector:
                 tokens[k] += v
             if r.kind == "assistant" and r.model and r.model != "N/A":
                 models_used.add(r.model)
-                m = by_model.setdefault(r.model, Counter())
+                m = by_model.setdefault((r.model, r.speed), Counter())
                 for k, v in r.tokens.items():
                     m[k] += v
 
         cost = sum(
-            compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
-            for model, tok_c in by_model.items()
+            compute_cost(
+                dict(tok_c), model, provider=self._provider, speed=speed
+            )["total_cost"]
+            for (model, speed), tok_c in by_model.items()
         )
 
         self._items.append({
@@ -391,7 +402,9 @@ class _ToolCostCollector:
         share = 1.0 / n
         msg_cost = 0.0
         if r.model and r.model != "N/A":
-            msg_cost = compute_cost(r.tokens, r.model, provider=self._provider)["total_cost"]
+            msg_cost = compute_cost(
+                r.tokens, r.model, provider=self._provider, speed=r.speed
+            )["total_cost"]
         for name in distinct:
             d = self._data.setdefault(name, {
                 "calls": 0,
@@ -455,15 +468,17 @@ class _OutlierCollector:
         tc, steps = ix.tool_count, ix.assistant_steps
         if tc <= 20 and steps <= 15:
             return
-        by_model: dict[str, Counter[str]] = {}
+        by_model: dict[tuple[str, str], Counter[str]] = {}
         for r in ix.responses + ix.tool_results:
             if r.kind == "assistant" and r.model and r.model != "N/A":
-                m = by_model.setdefault(r.model, Counter())
+                m = by_model.setdefault((r.model, r.speed), Counter())
                 for k, v in r.tokens.items():
                     m[k] += v
         cost = sum(
-            compute_cost(dict(tok_c), model, provider=self._provider)["total_cost"]
-            for model, tok_c in by_model.items()
+            compute_cost(
+                dict(tok_c), model, provider=self._provider, speed=speed
+            )["total_cost"]
+            for (model, speed), tok_c in by_model.items()
         )
         entry = {
             "interaction_id": ix.interaction_id,
@@ -515,8 +530,10 @@ class _RetryCollector:
             return
 
         # Per-tool: ordered list of failure flags, one per invocation.
+        # Wasted tokens are split by ``speed`` so the fast-tier multiplier
+        # only applies to the records that actually used it.
         per_tool_flags: dict[str, list[bool]] = {}
-        per_tool_wasted: dict[str, int] = {}
+        per_tool_wasted: dict[str, dict[str, int]] = {}
 
         for i, r in enumerate(events):
             if r.kind != "assistant" or not r.tools:
@@ -527,7 +544,8 @@ class _RetryCollector:
                 name = t.get("name", "?")
                 per_tool_flags.setdefault(name, []).append(failed)
                 if failed:
-                    per_tool_wasted[name] = per_tool_wasted.get(name, 0) + out_tok
+                    bucket = per_tool_wasted.setdefault(name, {})
+                    bucket[r.speed] = bucket.get(r.speed, 0) + out_tok
 
         for name, flags in per_tool_flags.items():
             if len(flags) < 2:
@@ -546,14 +564,20 @@ class _RetryCollector:
                         max_run = run
                 else:
                     run = 0
-            wt = per_tool_wasted.get(name, 0)
+            wasted_by_speed = per_tool_wasted.get(name, {})
+            wt = sum(wasted_by_speed.values())
             wc = 0.0
             if ix.model and ix.model != "N/A" and wt:
-                wc = compute_cost(
-                    {"input": 0, "output": wt, "cache_creation": 0, "cache_read": 0},
-                    ix.model,
-                    provider=self._provider,
-                )["total_cost"]
+                for speed, tokens in wasted_by_speed.items():
+                    if not tokens:
+                        continue
+                    wc += compute_cost(
+                        {"input": 0, "output": tokens,
+                         "cache_creation": 0, "cache_read": 0},
+                        ix.model,
+                        provider=self._provider,
+                        speed=speed,
+                    )["total_cost"]
             self._items.append({
                 "interaction_id": ix.interaction_id,
                 "session_id": ix.session_id,
@@ -733,7 +757,7 @@ class _ErrorCostCollector:
                         if nm:
                             errors_by_tool[nm] += 1
                 # Retry cost: own output tokens if assistant, else next assistant.
-                tokens, model = self._retry_tokens_and_model(rec, timeline, idx)
+                tokens, model, speed = self._retry_tokens_and_model(rec, timeline, idx)
                 if tokens and model and model != "N/A":
                     est_retry_tokens += tokens
                     est_retry_cost += compute_cost(
@@ -741,6 +765,7 @@ class _ErrorCostCollector:
                          "cache_creation": 0, "cache_read": 0},
                         model,
                         provider=self._provider,
+                        speed=speed,
                     )["total_cost"]
             if err_count > 0:
                 ranked.append((err_count, ix))
@@ -790,22 +815,27 @@ class _ErrorCostCollector:
         error_rec: Record,
         timeline: list[Record],
         idx: int,
-    ) -> tuple[int, str]:
-        """Return ``(output_tokens, model)`` to charge for this error record.
+    ) -> tuple[int, str, str]:
+        """Return ``(output_tokens, model, speed)`` to charge for this error record.
 
-        If the error is itself an assistant with output tokens, use those and
-        its own model. Otherwise, scan forward in the interaction timeline for
-        the next assistant message and use its output tokens + model.
+        If the error is itself an assistant with output tokens, use those, its
+        own model, and its own speed flag. Otherwise, scan forward in the
+        interaction timeline for the next assistant message and use its output
+        tokens, model, and speed.
         """
         if error_rec.kind == "assistant":
             out = int(error_rec.tokens.get("output", 0) or 0)
             if out and error_rec.model and error_rec.model != "N/A":
-                return out, error_rec.model
+                return out, error_rec.model, error_rec.speed
         for j in range(idx + 1, len(timeline)):
             cand = timeline[j]
             if cand.kind == "assistant" and cand.model and cand.model != "N/A":
-                return int(cand.tokens.get("output", 0) or 0), cand.model
-        return 0, ""
+                return (
+                    int(cand.tokens.get("output", 0) or 0),
+                    cand.model,
+                    cand.speed,
+                )
+        return 0, "", "standard"
 
 
 def _interaction_to_outlier_command(
@@ -815,15 +845,17 @@ def _interaction_to_outlier_command(
 ) -> dict:
     """Render an Interaction as an ``OutlierCommand`` dict (shape shared with
     ``_OutlierCollector`` and the frontend ``OutlierCommand`` TypedDict)."""
-    by_model: dict[str, Counter[str]] = {}
+    by_model: dict[tuple[str, str], Counter[str]] = {}
     for r in ix.responses + ix.tool_results:
         if r.kind == "assistant" and r.model and r.model != "N/A":
-            m = by_model.setdefault(r.model, Counter())
+            m = by_model.setdefault((r.model, r.speed), Counter())
             for k, v in r.tokens.items():
                 m[k] += v
     cost = sum(
-        compute_cost(dict(tok_c), model, provider=provider)["total_cost"]
-        for model, tok_c in by_model.items()
+        compute_cost(
+            dict(tok_c), model, provider=provider, speed=speed
+        )["total_cost"]
+        for (model, speed), tok_c in by_model.items()
     )
     return {
         "interaction_id": ix.interaction_id,
@@ -917,7 +949,7 @@ def _daily(
         if r.kind == "assistant":
             b.asst += 1
             if r.model and r.model != "N/A":
-                md = b.model_tokens.setdefault(r.model, Counter())
+                md = b.model_tokens.setdefault((r.model, r.speed), Counter())
                 for k, v in r.tokens.items():
                     md[k] += v
         for k, v in r.tokens.items():
@@ -941,11 +973,19 @@ def _daily(
     out: dict[str, dict] = {}
     for day, b in buckets.items():
         day_cost = 0.0
+        # Two-stage merge: price each (model, speed) bucket separately, then
+        # collapse by model name for the public ``by_model`` payload (callers
+        # don't see the speed dimension yet — would need a frontend update).
         model_costs: dict[str, dict] = {}
-        for model, tok_c in b.model_tokens.items():
-            cb = compute_cost(dict(tok_c), model, provider=provider)
-            model_costs[model] = cb
+        for (model, speed), tok_c in b.model_tokens.items():
+            cb = compute_cost(dict(tok_c), model, provider=provider, speed=speed)
             day_cost += cb["total_cost"]
+            existing = model_costs.get(model)
+            if existing is None:
+                model_costs[model] = dict(cb)
+            else:
+                for key, val in cb.items():
+                    existing[key] = existing.get(key, 0.0) + val
 
         ir = (b.int_cmds / b.user_cmds * 100) if b.user_cmds else 0
         er = (b.errs / b.asst * 100) if b.asst else 0
@@ -972,7 +1012,10 @@ class _DayBucket:
         self.msgs = 0
         self.tokens: Counter[str] = Counter()
         self.session_ids: set[str] = set()
-        self.model_tokens: dict[str, Counter[str]] = {}
+        # Keyed by ``(model, speed)`` so the Anthropic priority/fast tier
+        # multiplier only applies to the records that used it. The public
+        # ``by_model`` payload still rolls up by model name (see ``_daily``).
+        self.model_tokens: dict[tuple[str, str], Counter[str]] = {}
         self.user_cmds = 0
         self.int_cmds = 0
         self.errs = 0
@@ -1063,7 +1106,7 @@ def recompute_tz_stats(
 class _DictProxy:
     """Lightweight adapter so _daily/_hourly can read message dicts as if they were Records."""
     __slots__ = ("timestamp", "session_id", "kind", "model", "tokens",
-                 "is_error", "content", "has_tool_result")
+                 "is_error", "content", "has_tool_result", "speed")
 
     def __init__(self, m: dict) -> None:
         self.timestamp = m.get("timestamp", "")
@@ -1074,6 +1117,11 @@ class _DictProxy:
         self.is_error = m.get("error", False)
         self.content = m.get("content", "")
         self.has_tool_result = m.get("has_tool_result", False)
+        # ``speed`` flag for Anthropic priority/fast tier — defaults to
+        # standard since cached message dicts produced before fast-mode
+        # support omit the key. This proxy only feeds ``_daily`` /
+        # ``_hourly``, both of which treat missing speed as standard.
+        self.speed = m.get("speed", "standard")
 
 
 def _command_analysis(records: list[Record], interactions: list[Interaction]) -> dict:
@@ -1243,15 +1291,15 @@ def _time_bounds(recs: list[Record]) -> dict:
 
 
 def _aggregate_cost(recs: list[Record], *, provider: str = "anthropic") -> float:
-    by_model: dict[str, Counter[str]] = {}
+    by_model: dict[tuple[str, str], Counter[str]] = {}
     for r in recs:
         if r.kind == "assistant" and r.model and r.model != "N/A":
-            c = by_model.setdefault(r.model, Counter())
+            c = by_model.setdefault((r.model, r.speed), Counter())
             for k, v in r.tokens.items():
                 c[k] += v
     return sum(
-        compute_cost(dict(c), m, provider=provider)["total_cost"]
-        for m, c in by_model.items()
+        compute_cost(dict(c), m, provider=provider, speed=speed)["total_cost"]
+        for (m, speed), c in by_model.items()
     )
 
 
@@ -1348,20 +1396,22 @@ def _trend_metrics(ixs: list[Interaction], *, provider: str = "anthropic") -> di
     total_tools = 0
     total_tokens = 0
     for ix in ixs:
-        by_model: dict[str, Counter[str]] = {}
+        by_model: dict[tuple[str, str], Counter[str]] = {}
         for r in ix.responses + ix.tool_results:
             if r.is_error:
                 total_errors += 1
             for v in r.tokens.values():
                 total_tokens += v
             if r.kind == "assistant" and r.model and r.model != "N/A":
-                m = by_model.setdefault(r.model, Counter())
+                m = by_model.setdefault((r.model, r.speed), Counter())
                 for k, v in r.tokens.items():
                     m[k] += v
         total_tools += ix.tool_count
         total_cost += sum(
-            compute_cost(dict(tok_c), model, provider=provider)["total_cost"]
-            for model, tok_c in by_model.items()
+            compute_cost(
+                dict(tok_c), model, provider=provider, speed=speed
+            )["total_cost"]
+            for (model, speed), tok_c in by_model.items()
         )
     n = len(ixs)
     return {
