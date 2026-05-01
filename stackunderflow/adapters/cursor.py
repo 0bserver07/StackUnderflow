@@ -112,8 +112,10 @@ class CursorAdapter:
                 "SELECT key, value FROM cursorDiskKV "
                 "WHERE key LIKE 'bubbleId:%' OR key LIKE 'agentKv:blob:%'"
             )
-            for _key, value in cur:
-                conv_id = _conversation_id(value)
+            for key, value in cur:
+                # Cursor v3+: conversationId is positional in the key.
+                # Fall back to the JSON value for older formats.
+                conv_id = _conversation_id_from_key(key) or _conversation_id(value)
                 if not conv_id or conv_id in seen:
                     continue
                 seen.add(conv_id)
@@ -195,11 +197,12 @@ class CursorAdapter:
                 parsed = _safe_json_loads(value)
                 if parsed is None:
                     continue
-                conv_id = str(parsed.get("conversationId") or "")
-                # Rows without a conversationId can't be addressed from
-                # the cache by any SessionRef, so we drop them — same
-                # net effect as the pre-cache behaviour where the row
-                # was filtered out before record construction.
+                # Cursor v3+: conv_id lives in the key. Older formats
+                # surfaced it inside the JSON value — accept both.
+                conv_id = (
+                    _conversation_id_from_key(key)
+                    or str(parsed.get("conversationId") or "")
+                )
                 if not conv_id:
                     continue
                 rec = _record_from_row(
@@ -264,6 +267,27 @@ def _safe_json_loads(value: object) -> dict | None:
     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
         return None
     return obj if isinstance(obj, dict) else None
+
+
+def _conversation_id_from_key(key: str) -> str | None:
+    """Extract the conversation id encoded in a cursorDiskKV key.
+
+    Cursor v3+ keys are ``bubbleId:<conversationId>:<bubbleId>`` and
+    ``agentKv:blob:<conversationId>:<...>`` — the conversationId is
+    positional. Older single-segment keys (``bubbleId:<bubbleId>``)
+    stored conversationId in the JSON value instead; for those we
+    return None and let the caller fall through to the value lookup.
+    """
+    if key.startswith("bubbleId:"):
+        rest = key[len("bubbleId:"):]
+    elif key.startswith("agentKv:blob:"):
+        rest = key[len("agentKv:blob:"):]
+    else:
+        return None
+    parts = rest.split(":", 1)
+    if len(parts) < 2:
+        return None
+    return parts[0] or None
 
 
 def _conversation_id(value: object) -> str | None:

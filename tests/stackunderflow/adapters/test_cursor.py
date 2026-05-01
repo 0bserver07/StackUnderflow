@@ -152,6 +152,30 @@ def test_enumerate_returns_empty_when_db_missing(tmp_path: Path) -> None:
     assert list(adapter.enumerate()) == []
 
 
+def test_enumerate_handles_v3_positional_conversation_id(tmp_path: Path) -> None:
+    """Cursor v3+ encodes conversationId as ``bubbleId:<conv>:<bubble>``.
+
+    The JSON value no longer carries ``conversationId``; the adapter
+    must extract it from the key.
+    """
+    import json
+    import sqlite3
+    db = tmp_path / "v3.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
+    conv = "v3-conv-aaa"
+    bubble_payload = json.dumps({"_v": 3, "type": 1, "text": "hi"})
+    for n in range(3):
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            (f"bubbleId:{conv}:bub-{n}", bubble_payload),
+        )
+    conn.commit()
+    conn.close()
+    refs = list(CursorAdapter(vscdb_path=db).enumerate())
+    assert [r.session_id for r in refs] == [conv]
+
+
 def test_read_yields_records_for_target_conversation(vscdb_path: Path) -> None:
     adapter = CursorAdapter(vscdb_path=vscdb_path)
     refs = [r for r in adapter.enumerate() if r.session_id == CONV_ID]
