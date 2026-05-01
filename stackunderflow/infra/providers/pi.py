@@ -26,7 +26,7 @@ class PiPricer(ProviderPricer):
 
     def canonicalize(self, model_id: str) -> str:
         if not isinstance(model_id, str) or not model_id:
-            # Default for Pi/OMP is gpt-5 (codeburn-catalog §12).
+            # Default for Pi/OMP is gpt-5.
             return self._openai.canonicalize("gpt-5")
         return self._openai.canonicalize(model_id)
 

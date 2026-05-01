@@ -35,7 +35,7 @@ Each ``.chat`` file is a single JSON document::
   assistant turn). Resumable reads (``since_offset``) are by event index
   — Kiro files are small and aren't streamed.
 
-Spec §3 (multi-provider); codeburn-catalog.md §9.
+Spec §3 (multi-provider).
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ class KiroAdapter:
             return
 
         human_text, bot_text = _join_chat(chat)
-        # Token estimate per codeburn §9: content_chars // 4.
+        # Token estimate: content_chars // 4.
         input_tokens = max(len(human_text) // 4, 0)
         output_tokens = max(len(bot_text) // 4, 0)
 
@@ -224,10 +224,9 @@ def _join_chat(chat: list) -> tuple[str, str]:
 def _extract_tools(bot_text: str) -> tuple[str, ...]:
     """Pull tool names from ``<tool_use><name>X</name>`` markers.
 
-    Per codeburn-catalog.md §9, Kiro embeds tool invocations as XML-style
-    fragments inside bot text. We do a permissive split rather than a
-    full XML parse — invalid/partial fragments yield zero tool names
-    rather than raising.
+    Kiro embeds tool invocations as XML-style fragments inside bot text.
+    We do a permissive split rather than a full XML parse — invalid/partial
+    fragments yield zero tool names rather than raising.
     """
     if not bot_text:
         return ()

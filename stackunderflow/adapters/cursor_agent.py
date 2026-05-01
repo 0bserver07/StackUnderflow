@@ -2,7 +2,7 @@
 
 Reads agent transcripts that the Cursor Agent CLI writes under
 ``~/.cursor/projects/{project}/agent-transcripts/``. Two transcript
-formats are supported (codeburn-catalog.md §5):
+formats are supported:
 
 - **Legacy text format**: one ``.txt`` file per session, with marker
   lines: ``user:``, ``A:``, ``[Thinking]``, ``[Tool call]``,
@@ -65,10 +65,10 @@ _UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-# Project-name prettifier per codeburn:src/providers/cursor-agent.ts.
-# Strip leading absolute-path prefix tokens (e.g. ``-Users-yad-foo``) and
-# trailing ISO-ish timestamps. The default is conservative — anything left
-# that looks like a path separator gets normalised to a hyphen.
+# Project-name prettifier. Strip leading absolute-path prefix tokens
+# (e.g. ``-Users-yad-foo``) and trailing ISO-ish timestamps. The default
+# is conservative — anything left that looks like a path separator gets
+# normalised to a hyphen.
 _TIMESTAMP_TAIL_RE = re.compile(r"[-_]?\d{4}-?\d{2}-?\d{2}[Tt _]?\d{2}.*$")
 _LEADING_PATH_RE = re.compile(r"^[-_/]+")
 
@@ -304,7 +304,7 @@ def _read_text(
 ) -> Iterator[Record]:
     """Read legacy text transcripts.
 
-    Markers (codeburn-catalog.md §5):
+    Markers:
       - ``user:``           — start of a user turn
       - ``A:``              — start of an assistant turn
       - ``[Thinking]``      — marks a thinking block (we treat as
@@ -523,7 +523,7 @@ def _session_id_for(fp: Path, *, session_dir: Path | None = None) -> str:
 
 
 def _prettify_project_name(name: str) -> str:
-    """Apply codeburn's project-name prettification.
+    """Apply project-name prettification.
 
     Strips leading path separators and trailing timestamp markers so a
     raw directory name like ``-Users-yad-myproj-2025-04-01T10-30-00``

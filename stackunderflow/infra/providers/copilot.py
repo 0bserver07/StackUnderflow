@@ -19,7 +19,7 @@ contract*, but individual records may still have ``cost_source ==
 token count. The aggregator already special-cases that flag at the
 record level.
 
-Spec: ``docs/specs/multi-provider/spec.md`` §2; codeburn-catalog §3.
+Spec: ``docs/specs/multi-provider/spec.md`` §2.
 """
 
 from __future__ import annotations

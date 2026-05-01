@@ -21,8 +21,6 @@ per-message cost for Cursor Agent records and rely on session totals.
 
 ``normalize_tokens`` is a no-op — the adapter already emits the canonical
 4-key shape.
-
-codeburn-catalog.md §5.
 """
 
 from __future__ import annotations

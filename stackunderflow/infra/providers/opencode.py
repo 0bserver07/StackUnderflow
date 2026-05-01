@@ -21,8 +21,6 @@ Token shape: the adapter has already collapsed OpenCode's 5-key shape
 (``input``, ``output``, ``reasoning``, ``cache.read``, ``cache.write``)
 to the canonical 4-key shape, with reasoning folded into output. So
 ``normalize_tokens`` here is a no-op — same pattern as ``ClinePricer``.
-
-codeburn-catalog.md §11.
 """
 
 from __future__ import annotations

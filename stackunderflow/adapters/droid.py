@@ -5,7 +5,7 @@ by default). Each project gets its own hash subdirectory containing one or
 more JSONL session files plus a companion ``.settings.json`` that carries
 the session-level token usage.
 
-On-disk layout (codeburn-catalog.md §6)::
+On-disk layout::
 
     {factoryDir}/sessions/{projectHash}/{sessionId}.jsonl
     {factoryDir}/sessions/{projectHash}/{sessionId}.settings.json
@@ -39,7 +39,7 @@ reads via ``since_offset`` skip records but the *distribution* is
 recomputed from the full file each call — pricing stays stable across
 resumes.
 
-Spec §3 (multi-provider); codeburn-catalog.md §6.
+Spec §3 (multi-provider).
 """
 
 from __future__ import annotations
