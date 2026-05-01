@@ -163,6 +163,39 @@ class TestCLICommands:
         assert result.exit_code == 0
         assert (tmp_path / "store.db").exists()
 
+    def test_cfg_set_currency_normalises_to_uppercase(self):
+        """`stackunderflow cfg set currency gbp` should persist as 'GBP'."""
+        with self.runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = self.runner.invoke(cli, ['cfg', 'set', 'currency', 'gbp'])
+                assert result.exit_code == 0
+                assert 'currency = GBP' in result.output
+
+                result = self.runner.invoke(cli, ['cfg', 'ls', '--json'])
+                config_data = json.loads(result.output)
+                assert config_data['currency'] == 'GBP'
+
+    def test_cfg_set_currency_rejects_non_iso_code(self):
+        """Non-ISO codes must fail validation, not silently persist."""
+        with self.runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = self.runner.invoke(cli, ['cfg', 'set', 'currency', 'EURO'])
+                assert result.exit_code != 0
+                assert 'ISO 4217' in result.output
+
+                result = self.runner.invoke(cli, ['cfg', 'set', 'currency', '12'])
+                assert result.exit_code != 0
+
+    def test_cfg_set_currency_default_is_usd(self):
+        with self.runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = self.runner.invoke(cli, ['cfg', 'ls', '--json'])
+                config_data = json.loads(result.output)
+                assert config_data['currency'] == 'USD'
+
     def test_config_environment_override(self):
         """Test that environment variables override config file."""
         with self.runner.isolated_filesystem() as td:

@@ -166,11 +166,13 @@ def _configure_store(tmp_path, monkeypatch, slug: str, dataset: EnrichedDataset 
 async def test_commands_default_shape(tmp_path, monkeypatch):
     _configure_store(tmp_path, monkeypatch, "-cmd-shape", _three_command_dataset())
     payload = await get_commands()
-    assert set(payload.keys()) == {"commands", "total", "offset", "limit"}
+    assert set(payload.keys()) == {"commands", "total", "offset", "limit", "currency"}
     assert payload["total"] == 3
     assert payload["offset"] == 0
     assert payload["limit"] == 50  # default
     assert len(payload["commands"]) == 3
+    assert payload["currency"]["code"] == "USD"
+    assert payload["currency"]["rate_from_usd"] == 1.0
 
     row = payload["commands"][0]
     expected_keys = {

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.costs import compute_cost
+from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.store import db, queries
 
 router = APIRouter()
@@ -97,8 +98,14 @@ async def get_jsonl_files(project: str | None = None):
         finally:
             conn.close()
 
+        currency = active_currency_payload()
+        rate = currency["rate_from_usd"]
+        if rate != 1.0:
+            for f in files:
+                f["estimated_cost"] = round(float(f["estimated_cost"]) * rate, 4)
+
         files.sort(key=lambda x: x["created"])
-        return JSONResponse(files)
+        return JSONResponse({"files": files, "currency": currency})
     except HTTPException:
         raise
     except Exception as e:
@@ -150,7 +157,17 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
         "errors":     sb["errors"] - sa["errors"],
         "duration_s": sb["duration_s"] - sa["duration_s"],
     }
-    return JSONResponse({"a": sa, "b": sb, "diff": diff})
+
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    if rate != 1.0:
+        # ``session_costs`` rows ship in USD straight from the aggregator —
+        # convert the cost figures we surface in this comparison response.
+        sa = {**sa, "cost": float(sa["cost"]) * rate}
+        sb = {**sb, "cost": float(sb["cost"]) * rate}
+        diff = {**diff, "cost": float(diff["cost"]) * rate}
+
+    return JSONResponse({"a": sa, "b": sb, "diff": diff, "currency": currency})
 
 
 @router.get("/api/jsonl-content")

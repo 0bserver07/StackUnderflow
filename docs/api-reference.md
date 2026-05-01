@@ -5,6 +5,12 @@ The REST API is served by `stackunderflow init` on `http://localhost:8081` by de
 intent, request/response shapes, and status codes in plain language. All endpoints return JSON. Errors use
 the shape `{"error": "<message>"}` with an appropriate non-2xx status code.
 
+**Currency:** every endpoint that returns dollar figures (`/api/dashboard-data`, `/api/projects`, `/api/cost-data`,
+`/api/commands`, `/api/sessions/*`) also includes a `currency: {code, symbol, rate_from_usd}` block at the top
+level. Cost amounts in those responses are pre-converted from USD into the active currency
+(set via `stackunderflow cfg set currency GBP` or `STACKUNDERFLOW_CURRENCY=GBP`). FX rates are fetched from
+Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with `rate_from_usd=1.0`.
+
 ---
 
 ## Endpoint Overview

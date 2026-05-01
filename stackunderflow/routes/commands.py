@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.costs import compute_cost
+from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.stats.enricher import Interaction
 from stackunderflow.store import db, queries
 
@@ -177,11 +178,19 @@ async def get_commands(
 
     total = len(commands)
     page = commands[offset : offset + limit]
+
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    if rate != 1.0:
+        for cmd in page:
+            cmd["cost"] = float(cmd["cost"]) * rate
+
     return {
         "commands": page,
         "total": total,
         "offset": offset,
         "limit": limit,
+        "currency": currency,
     }
 
 

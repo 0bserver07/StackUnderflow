@@ -104,10 +104,12 @@ async def test_cost_data_returns_nine_keys_and_nothing_else(tmp_path, monkeypatc
     )
 
     payload = await get_cost_data()
-    assert set(payload.keys()) == set(COST_KEYS)
+    assert set(payload.keys()) == set(COST_KEYS) | {"currency"}
     assert payload["session_costs"] == [{"session_id": "s1", "cost": 1.0}]
     assert payload["error_cost"]["estimated_retry_cost"] == 0.12
     assert payload["retry_signals"][0]["interaction_id"] == "i1"
+    assert payload["currency"]["code"] == "USD"
+    assert payload["currency"]["rate_from_usd"] == 1.0
 
 
 @pytest.mark.asyncio
