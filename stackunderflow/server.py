@@ -19,6 +19,7 @@ import stackunderflow.deps as deps
 # Route modules
 from stackunderflow.routes import (
     bookmarks,
+    cfg,
     commands,
     compare,
     context_budget,
@@ -153,6 +154,7 @@ app.include_router(plan.router)
 app.include_router(compare.router)
 app.include_router(yield_route.router)
 app.include_router(context_budget.router)
+app.include_router(cfg.router)
 
 
 

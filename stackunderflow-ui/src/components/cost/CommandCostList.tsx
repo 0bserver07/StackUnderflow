@@ -43,6 +43,7 @@ function totalTokens(t: Record<string, number> | undefined): number {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 function formatTokenCount(total: number): string {
   if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`
@@ -209,6 +210,7 @@ function ExpandedDetail({ row, colSpan }: ExpandedDetailProps) {
 // ---------------- main component ----------------
 
 export default function CommandCostList({ data, onOpen, initialSort }: CommandCostListProps) {
+  const { currency } = useCurrency()
   const rows = data ?? []
   const { sorted, sortKey, sortDir, setSort } = useCommandCostSort(
     rows,
@@ -384,7 +386,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                       </td>
                       <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100 font-medium tabular-nums">
                         <EstimatedCostMarker costSource={r.cost_source} />
-                        {formatCost(r.cost)}
+                        {formatCost(r.cost, currency)}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-500 tabular-nums text-xs">
                         {pctOfTotal >= 0.1 ? `${pctOfTotal.toFixed(1)}%` : '—'}
@@ -413,14 +415,14 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                   Cost aggregates
                 </td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums" title="Sum">
-                  Σ {formatCost(costStats.sum)}
+                  Σ {formatCost(costStats.sum, currency)}
                 </td>
                 <td className="px-3 py-2 text-right text-gray-500 tabular-nums">100%</td>
                 <td
                   colSpan={3}
                   className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 tabular-nums text-[11px]"
                 >
-                  median {formatCost(costStats.median)} · p95 {formatCost(costStats.p95)}
+                  median {formatCost(costStats.median, currency)} · p95 {formatCost(costStats.p95, currency)}
                 </td>
               </tr>
             </tfoot>

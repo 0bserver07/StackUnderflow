@@ -65,6 +65,8 @@ function shortSession(sid: string): string {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
+import type { CurrencyInfo } from '../../types/api'
 
 function formatNumber(n: number): string {
   return Math.round(n).toLocaleString()
@@ -80,10 +82,14 @@ function formatDuration(seconds: number): string {
   return `${h.toFixed(1)}h`
 }
 
-function formatValue(kind: 'cost' | 'tokens' | 'count' | 'duration', v: number): string {
+function formatValue(
+  kind: 'cost' | 'tokens' | 'count' | 'duration',
+  v: number,
+  currency?: CurrencyInfo | null,
+): string {
   switch (kind) {
     case 'cost':
-      return formatCost(v)
+      return formatCost(v, currency)
     case 'duration':
       return formatDuration(v)
     case 'tokens':
@@ -92,10 +98,14 @@ function formatValue(kind: 'cost' | 'tokens' | 'count' | 'duration', v: number):
   }
 }
 
-function formatDelta(kind: 'cost' | 'tokens' | 'count' | 'duration', delta: number): string {
+function formatDelta(
+  kind: 'cost' | 'tokens' | 'count' | 'duration',
+  delta: number,
+  currency?: CurrencyInfo | null,
+): string {
   if (delta === 0) return '—'
   const sign = delta > 0 ? '+' : '−'
-  const body = formatValue(kind, Math.abs(delta))
+  const body = formatValue(kind, Math.abs(delta), currency)
   return `${sign}${body}`
 }
 
@@ -157,6 +167,7 @@ export default function SessionCompareView({
   sessionBId,
   onClose,
 }: SessionCompareViewProps) {
+  const { currency } = useCurrency()
   const [data, setData] = useState<CompareResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -342,13 +353,13 @@ export default function SessionCompareView({
                   <tr key={row.key} className="border-b border-gray-200/50 dark:border-gray-800/50">
                     <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{row.label}</td>
                     <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
-                      {formatValue(row.kind, aVal)}
+                      {formatValue(row.kind, aVal, currency)}
                     </td>
                     <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
-                      {formatValue(row.kind, bVal)}
+                      {formatValue(row.kind, bVal, currency)}
                     </td>
                     <td className={`px-3 py-2 text-right tabular-nums ${color}`}>
-                      {formatDelta(row.kind, delta)}
+                      {formatDelta(row.kind, delta, currency)}
                       <span className="text-[10px] text-gray-500">{formatPct(pct)}</span>
                     </td>
                   </tr>

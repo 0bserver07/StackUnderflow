@@ -22,6 +22,7 @@ function formatNumber(n: number): string {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`
@@ -58,6 +59,7 @@ function StatCard({ icon, label, value, sublabel, badge }: StatCardProps) {
 }
 
 export default function StatsCards({ stats }: StatsCardsProps) {
+  const { currency } = useCurrency()
   // Pricing data is used only to surface a "stale pricing" indicator; a
   // failed fetch should never hide the dashboard, so errors are swallowed.
   const { data: pricing } = useQuery({
@@ -125,7 +127,7 @@ export default function StatsCards({ stats }: StatsCardsProps) {
       <StatCard
         icon={<IconCurrencyDollar size={18} />}
         label="Total Cost"
-        value={formatCost(stats.overview.total_cost ?? 0)}
+        value={formatCost(stats.overview.total_cost ?? 0, currency)}
         sublabel={costSublabel}
         badge={staleBadge}
       />

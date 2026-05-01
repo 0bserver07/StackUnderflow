@@ -48,6 +48,7 @@ function formatDate(ts: number): string {
 }
 
 import { formatCost } from '../services/format'
+import { useCurrency } from '../services/currency'
 
 function formatDuration(firstDate: string | undefined, lastDate: string | undefined): string {
   if (!firstDate || !lastDate) return '-'
@@ -80,6 +81,7 @@ function rangeLabel(range: DateRange, firstUse: string | undefined): string {
 export default function Overview() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { currency } = useCurrency()
   const [search, setSearch] = useState('')
   const [sortField, setSortField] = useState<SortField>('last_modified')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -329,7 +331,7 @@ export default function Overview() {
         </div>
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Est. API Cost</div>
-          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatCost(filteredStats.totalCost)}</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatCost(filteredStats.totalCost, currency)}</div>
           <div className="text-[10px] text-gray-500 mt-0.5">{rangeLabel(dateRange, firstUseDate)}</div>
           <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">pay-per-token equivalent</div>
         </div>
@@ -373,8 +375,8 @@ export default function Overview() {
             <BarChart data={dailyCosts}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9CA3AF' }} />
-              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={v => `$${v}`} />
-              <Tooltip contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }} formatter={(v: number) => [`$${v.toFixed(4)}`, 'Cost']} />
+              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={v => `${currency?.symbol ?? '$'}${v}`} />
+              <Tooltip contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }} formatter={(v: number) => [formatCost(v, currency), 'Cost']} />
               <Bar dataKey="cost" fill="#818CF8" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -486,7 +488,7 @@ export default function Overview() {
                       {p.stats?.avg_steps_per_command ? p.stats.avg_steps_per_command.toFixed(1) : '-'}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-700 dark:text-gray-300">
-                      {p.stats?.total_cost != null ? formatCost(p.stats.total_cost) : '-'}
+                      {p.stats?.total_cost != null ? formatCost(p.stats.total_cost, currency) : '-'}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">
                       {p.total_size_mb.toFixed(1)} MB

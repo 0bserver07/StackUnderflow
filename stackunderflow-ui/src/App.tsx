@@ -5,6 +5,7 @@ import ChatDrawer from './components/layout/ChatDrawer'
 import Overview from './pages/Overview'
 import ProjectDashboard from './pages/ProjectDashboard'
 import Settings from './pages/Settings'
+import { CurrencyProvider } from './services/currency'
 
 function AppLayout() {
   const [chatOpen, setChatOpen] = useState(false)
@@ -27,7 +28,9 @@ function AppLayout() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AppLayout />
+      <CurrencyProvider>
+        <AppLayout />
+      </CurrencyProvider>
     </BrowserRouter>
   )
 }

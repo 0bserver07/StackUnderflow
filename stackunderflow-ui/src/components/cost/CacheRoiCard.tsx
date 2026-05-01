@@ -49,6 +49,7 @@ function formatNumber(n: number): string {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 /**
  * Backend's `cost_saved_base_units` is `tokens × $/M-token-rate` without the
@@ -133,6 +134,7 @@ export default function CacheRoiCard({
   sessionCosts,
   dailyStats,
 }: CacheRoiCardProps) {
+  const { currency } = useCurrency()
   // Session-saver disclosure is kept inline (not via `../common/ExpandableRow`)
   // because that primitive is `<tr>`-shaped and this card uses a flex/grid layout.
   const [expanded, setExpanded] = useState(false)
@@ -235,7 +237,7 @@ export default function CacheRoiCard({
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Cost Saved</div>
-          <div className="text-lg font-semibold text-green-700 dark:text-green-300 mt-0.5">{formatCost(costSaved)}</div>
+          <div className="text-lg font-semibold text-green-700 dark:text-green-300 mt-0.5">{formatCost(costSaved, currency)}</div>
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Hit Rate</div>
@@ -283,7 +285,7 @@ export default function CacheRoiCard({
                     </div>
                     <div>
                       <div className="text-green-700 dark:text-green-300 font-semibold">
-                        {formatCost(s.cost_saved)}
+                        {formatCost(s.cost_saved, currency)}
                       </div>
                       <div className="text-[10px] text-gray-500 uppercase tracking-wider">
                         saved
