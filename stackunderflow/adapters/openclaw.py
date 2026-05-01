@@ -12,7 +12,7 @@ Within each base, the layout is::
 
     {base}/{agent}/sessions/{sessionId}.jsonl
 
-JSONL events look like (codeburn-catalog.md §10)::
+JSONL events look like::
 
     {"type": "session", "id": "...", "timestamp": "..."}
     {"type": "model_change", "data": {"model": "claude-..."}, "timestamp": "..."}
@@ -32,7 +32,7 @@ to ``"openclaw-unknown"``.
 Storage: byte-offset resume (spec §1.4) — same as Codex/Claude. ``seq``
 is the byte offset where each JSONL line started.
 
-Spec §3 (multi-provider); codeburn-catalog.md §10.
+Spec §3 (multi-provider).
 """
 
 from __future__ import annotations

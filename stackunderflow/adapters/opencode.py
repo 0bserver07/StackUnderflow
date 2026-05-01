@@ -7,7 +7,7 @@ XDG data directory:
 - Scans for ``opencode*.db`` files (multiple DBs are supported — older
   installs sometimes ship more than one).
 
-Each DB carries three tables (codeburn-catalog.md §11):
+Each DB carries three tables:
 
 - **session**: ``id, directory, title, time_created, time_archived, parent_id``
 - **message**: ``id, session_id, time_created, data`` — ``data`` is JSON
@@ -21,11 +21,10 @@ One ``SessionRef`` is yielded per ``session.id``. ``source_kind`` is
 ``"database"`` and ``seq`` is the SQLite ``rowid`` of the message row, so
 resumable reads use the rowid as a high-water mark (spec §1.4).
 
-Cross-DB session id encoding: codeburn warns that multiple DB files can
-have overlapping session UUIDs, so the public ``session_id`` we emit is
-``f"{db_basename}:{session.id}"`` (codeburn-catalog.md §11 quirks). The
-inner ``data.id`` is preserved in ``source_hint["session_id"]`` for
-debugging.
+Cross-DB session id encoding: multiple DB files can have overlapping
+session UUIDs, so the public ``session_id`` we emit is
+``f"{db_basename}:{session.id}"``. The inner ``data.id`` is preserved
+in ``source_hint["session_id"]`` for debugging.
 
 Token mapping: OpenCode reports five count keys; we collapse them onto
 the canonical 4-key Record shape:
@@ -89,8 +88,8 @@ class OpenCodeAdapter:
             # OpenCode not installed / never used — clean exit.
             return
 
-        # Scan for opencode*.db files. Multiple DBs are valid (codeburn
-        # docs note this; older installs can have several).
+        # Scan for opencode*.db files. Multiple DBs are valid — older
+        # installs can have several.
         db_files = sorted(p for p in root.glob("opencode*.db") if p.is_file())
         for db_path in db_files:
             try:
@@ -339,8 +338,8 @@ def _content_from_parts(parts: list[dict]) -> str:
 def _tools_from_parts(parts: list[dict]) -> list[str]:
     """Extract tool names from ``type == 'tool'`` part rows.
 
-    The tool name lives at ``data.tool`` per codeburn; we tolerate either
-    a string or a dict-wrapped name in case of schema drift.
+    The tool name lives at ``data.tool``; we tolerate either a string or
+    a dict-wrapped name in case of schema drift.
     """
     tools: list[str] = []
     for part in parts:

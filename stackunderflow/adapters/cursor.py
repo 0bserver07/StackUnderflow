@@ -21,8 +21,7 @@ distinguish real vs. estimated counts. Cursor doesn't surface cache
 fields, so ``cache_create_tokens`` and ``cache_read_tokens`` are 0.
 
 macOS only for v1; Windows / Linux paths are present but untested. See
-``docs/specs/multi-provider/spec.md`` §3.1 and
-``docs/specs/multi-provider/codeburn-catalog.md`` §4.
+``docs/specs/multi-provider/spec.md`` §3.1.
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ from .base import Record, SessionRef
 _log = logging.getLogger(__name__)
 
 
-# Path constants — paths from codeburn:src/providers/cursor.ts (MIT).
+# Path constants for Cursor's vscdb storage.
 _VSCDB_MACOS = (
     Path.home()
     / "Library"
@@ -329,8 +328,7 @@ def _tokens_from_payload(parsed: dict, *, text: str) -> tuple[int, int, bool]:
 
     Prefer explicit ``tokenCount.{inputTokens,outputTokens}`` when *either*
     is non-zero; else estimate ``len(text) // 4``. Cursor v3 returns zero
-    counts on every bubble — that's the case codeburn handles with the
-    same len/4 heuristic (codeburn-catalog.md §4 quirks).
+    counts on every bubble — the len/4 heuristic handles that case.
     """
     tc = parsed.get("tokenCount")
     if isinstance(tc, dict):

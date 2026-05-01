@@ -5,7 +5,7 @@ Reads Gemini CLI session files at::
     ~/.gemini/tmp/{project}/chats/session-*.json
     ~/.gemini/tmp/{project}/chats/session-*.jsonl
 
-Two on-disk formats coexist (codeburn-catalog §7):
+Two on-disk formats coexist:
 
 * **CLI ≤0.38 (single JSON)** — one top-level JSON object:
   ``{ sessionId, startTime, projectHash?, lastUpdated?, kind?, messages: [...] }``.
@@ -26,7 +26,7 @@ monotonic ``seq`` and that resume yields strictly fewer records past a
 midpoint — that contract holds for both variants. This same
 non-byte-offset ``seq`` pattern is documented on the Cline adapter.
 
-Message shape (codeburn-catalog §7)::
+Message shape::
 
     {
       id, timestamp,

@@ -12,7 +12,7 @@ the diff between two adapters would be one constant — and the env-flag
 embeds the source root name (``pi`` or ``omp``) so cross-tool reports
 can still split them apart.
 
-JSONL events look like (codeburn-catalog.md §12)::
+JSONL events look like::
 
     {"type": "session", "id": "...", "timestamp": "...", "cwd": "..."}
     {"type": "message", "id": "...", "timestamp": "...",
@@ -25,7 +25,7 @@ JSONL events look like (codeburn-catalog.md §12)::
 
 Storage: byte-offset resume (spec §1.4) — same as Codex.
 
-Spec §3 (multi-provider); codeburn-catalog.md §12.
+Spec §3 (multi-provider).
 """
 
 from __future__ import annotations

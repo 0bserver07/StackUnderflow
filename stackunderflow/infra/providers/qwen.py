@@ -9,7 +9,7 @@ available" rather than mispricing against an arbitrary table.
 Rate provenance (recorded for future audit):
 
 * ``qwen-max`` / ``qwen-plus`` / ``qwen-turbo`` — pulled from the public
-  DashScope "tokens per million" table at the time codeburn-catalog §13
+  DashScope "tokens per million" table at the time this rate table
   was authored. These are USD estimates against the published CNY rates;
   the absolute numbers are conservative placeholders rather than
   contractual values. Treat them as "directionally right, not authoritative."
@@ -21,7 +21,7 @@ canonical 4-key shape (cached subtracted from input, thoughts folded
 into output) so ``normalize_tokens`` here is a no-op — same pattern as
 ``ClinePricer`` / ``CursorPricer``.
 
-Spec: ``docs/specs/multi-provider/spec.md`` §2; codeburn-catalog §13.
+Spec: ``docs/specs/multi-provider/spec.md`` §2.
 """
 
 from __future__ import annotations
