@@ -28,6 +28,7 @@ stackunderflow export -f csv|json -o PATH [-p today|week|month|all] [--provider 
 stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
 stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [--format text|json]
 stackunderflow yield [-p PERIOD] [--format text|json] [--project SLUG]
+stackunderflow context-budget [--project DIR] [--global] [--format text|json]
 
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
 stackunderflow cfg ls [--json]
@@ -459,6 +460,15 @@ classifies the result:
 
 ```
 Usage: stackunderflow yield [OPTIONS]
+### `stackunderflow context-budget`
+
+Estimate the per-session "context tax" — the tokens every Claude Code
+turn pays before the user types: system prompt + registered MCP servers
++ available skills + agent definitions + memory files (project
+`CLAUDE.md`, global `~/.claude/CLAUDE.md`).
+
+```
+Usage: stackunderflow context-budget [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -476,6 +486,28 @@ Usage: stackunderflow yield [OPTIONS]
 - **$/call** — `total_cost / calls` (per assistant message).
 - **$/session** — `total_cost / sessions` (sessions are attributed to whichever model dominated the session — most assistant messages wins, ties broken alphabetically).
 - **Total $** — sum of `compute_cost` over every assistant message in the window.
+| `--project` | PATH | cwd | Project directory to inspect |
+| `--global` | flag | false | Estimate the global budget only (`~/.claude`); ignore project files |
+| `--format` | `text\|json` | text | Output format |
+
+**Estimation heuristic — explicit and approximate.**
+
+| Source | Cost |
+|---|---|
+| System prompt | Fixed `DEFAULT_SYSTEM_PROMPT_TOKENS=3000` (Claude Code default, public scratch count) |
+| `CLAUDE.md` files | `len(content) // 4` — 1 token ≈ 4 characters of English |
+| MCP server | `MCP_BASE_TOKENS=200` + `MCP_PER_TOOL_TOKENS=50` × declared tools, **or** `MCP_UNKNOWN_TOOLS_FALLBACK=200` flat when tool counts aren't statically known (the common case) |
+| Skill (`SKILL.md`) | `len(content) // 4` |
+| Subagent (`*.md`) | `len(content) // 4` |
+| Cost projection | Total tokens × `$3/M` (current Sonnet input rate) per session, × 100 sessions/month |
+
+**Underestimates code-heavy or non-Latin content; the full heuristic
+string is echoed in every output payload (`heuristic` field in JSON).
+Useful for spotting bloat — not for billing.**
+
+A budget over 20k tokens triggers a yellow warning in the text output
+and a `context_budget_bloat` finding (severity: medium) when consumed
+by the optimize report.
 
 **Examples:**
 
@@ -550,6 +582,28 @@ query parameters (`period`, `project`).
   the same follow-up commit attribution across every session that ran first.
 - Each git invocation has a 5-second timeout; a hung repo (e.g. NFS lock)
   falls through to `no_repo` rather than stalling the report.
+$ stackunderflow context-budget
+Context budget (per-session estimate)
+  heuristic: len(text) // 4; per-MCP-server 200 + 50/tool
+
+  system_prompt                     3,000 tok   (fixed)
+  memory:project_CLAUDE.md            512 tok   /path/to/project/CLAUDE.md
+  memory:global_CLAUDE.md             876 tok   /Users/you/.claude/CLAUDE.md
+  mcp:filesystem                      400 tok   /Users/you/.claude.json
+  mcp:tavily                          400 tok   /Users/you/.claude.json
+  skill:anti-slop-guide               204 tok   /Users/you/.claude/skills/anti-slop-guide/SKILL.md
+  ...
+
+  total: 8,142 tokens
+  cost per session: $0.0244
+  estimated monthly cost: $2.44
+
+$ stackunderflow context-budget --global --format json
+$ stackunderflow context-budget --project ~/code/my-app
+```
+
+The same data is available over HTTP at `GET /api/context-budget` with
+a `project=<slug>` query parameter (omit for the global budget).
 
 ---
 
