@@ -51,6 +51,11 @@ Token normalization (canonical 4-key shape):
 
 macOS-only path constants in v1; Windows / Linux are documented at the
 constant definitions but ``# untested`` per spec §5.
+
+Defensive sizing: chat files (single-JSON or JSONL) larger than
+``MAX_SESSION_FILE_BYTES`` (128 MB; see
+``stackunderflow/adapters/_streaming.py``) are **skipped with a logged
+warning** rather than parsed. Smaller JSONL files stream line-by-line.
 """
 
 from __future__ import annotations
@@ -60,6 +65,7 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines, stat_or_skip
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -154,6 +160,12 @@ class GeminiAdapter:
     def _read_single_json(
         self, ref: SessionRef, *, since_offset: int
     ) -> Iterator[Record]:
+        # Single-document JSON: we have to call ``read_bytes()`` (no
+        # streaming option for a top-level JSON object), so the
+        # defensive 128 MB cap is the only protection. Above the cap
+        # we skip and yield nothing.
+        if stat_or_skip(ref.file_path) is None:
+            return
         try:
             raw = ref.file_path.read_bytes()
         except OSError as exc:
@@ -187,52 +199,45 @@ class GeminiAdapter:
                 yield record
 
     def _read_jsonl(self, ref: SessionRef, *, since_offset: int) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read Gemini chat %s: %s", ref.file_path, exc)
-            return
+        session_id = ref.session_id
 
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-            session_id = ref.session_id
-
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    entry = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug(
-                        "Skipping malformed Gemini JSONL line in %s: %s",
-                        ref.file_path, exc,
-                    )
-                    continue
-                if not isinstance(entry, dict):
-                    continue
-
-                # Metadata line in the ≥0.39 format carries
-                # ``sessionId`` but no message ``type``. Capture the id
-                # and skip — it's not a record, but it does refine the
-                # session id we attach to subsequent records.
-                etype = entry.get("type")
-                if etype not in ("user", "gemini", "info"):
-                    sid = entry.get("sessionId")
-                    if isinstance(sid, str) and sid:
-                        session_id = sid
-                    continue
-
-                record = self._record_from_message(
-                    entry, ref=ref, seq=line_offset, session_id=session_id,
+        # ``iter_jsonl_lines`` enforces the 128 MB cap and streams
+        # line-by-line.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug(
+                    "Skipping malformed Gemini JSONL line in %s: %s",
+                    ref.file_path, exc,
                 )
-                if record is not None:
-                    yield record
+                continue
+            if not isinstance(entry, dict):
+                continue
+
+            # Metadata line in the ≥0.39 format carries
+            # ``sessionId`` but no message ``type``. Capture the id
+            # and skip — it's not a record, but it does refine the
+            # session id we attach to subsequent records.
+            etype = entry.get("type")
+            if etype not in ("user", "gemini", "info"):
+                sid = entry.get("sessionId")
+                if isinstance(sid, str) and sid:
+                    session_id = sid
+                continue
+
+            record = self._record_from_message(
+                entry, ref=ref, seq=line_offset, session_id=session_id,
+            )
+            if record is not None:
+                yield record
 
     # ── internals ─────────────────────────────────────────────────────
 

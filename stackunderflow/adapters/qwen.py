@@ -41,6 +41,11 @@ Token normalization (canonical 4-key shape):
 
 macOS-only path constants in v1; Windows / Linux are documented at the
 constant definitions but ``# untested`` per spec §5.
+
+Defensive sizing: JSONL chats larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -147,41 +153,34 @@ class QwenAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read Qwen chat %s: %s", ref.file_path, exc)
-            return
+        # ``iter_jsonl_lines`` enforces the 128 MB defensive cap and
+        # streams line-by-line; oversized chats are skipped with a
+        # warning rather than parsed.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            # ``since_offset == 0`` means "fresh read, yield
+            # everything". Otherwise the caller already saw the
+            # record at exactly ``since_offset`` so skip it.
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug(
+                    "Skipping malformed Qwen JSON line in %s: %s",
+                    ref.file_path, exc,
+                )
+                continue
+            if not isinstance(entry, dict):
+                continue
 
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                # ``since_offset == 0`` means "fresh read, yield
-                # everything". Otherwise the caller already saw the
-                # record at exactly ``since_offset`` so skip it.
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    entry = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug(
-                        "Skipping malformed Qwen JSON line in %s: %s",
-                        ref.file_path, exc,
-                    )
-                    continue
-                if not isinstance(entry, dict):
-                    continue
-
-                record = self._record_from_entry(entry, ref=ref, seq=line_offset)
-                if record is not None:
-                    yield record
+            record = self._record_from_entry(entry, ref=ref, seq=line_offset)
+            if record is not None:
+                yield record
 
     # ── internals ─────────────────────────────────────────────────────
 

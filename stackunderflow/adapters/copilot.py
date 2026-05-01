@@ -46,6 +46,11 @@ ingest left off.
 
 macOS only for v1 — Linux / Windows path constants are present in the
 module but not exercised by ``enumerate()`` (see spec §5).
+
+Defensive sizing: JSONL transcripts / events files larger than
+``MAX_SESSION_FILE_BYTES`` (128 MB; see
+``stackunderflow/adapters/_streaming.py``) are **skipped with a logged
+warning** rather than parsed. Smaller files stream line-by-line.
 """
 
 from __future__ import annotations
@@ -60,6 +65,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ._streaming import iter_jsonl_lines, stat_or_skip
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -234,6 +240,11 @@ class CopilotAdapter:
         if not path.is_file():
             _log.warning("Copilot session file missing at read time: %s", path)
             return
+        # Defensive 128 MB cap. ``iter_jsonl_lines`` would re-stat below,
+        # but checking up-front keeps the behaviour explicit alongside
+        # the ``is_file`` guard.
+        if stat_or_skip(path) is None:
+            return
 
         # Track the "current model" from session.model_change events and the
         # most recent user message so assistant events can attach both to
@@ -241,114 +252,96 @@ class CopilotAdapter:
         current_model: str | None = None
         last_user_text: str = ""
 
-        try:
-            with path.open("rb") as fh:
-                if since_offset > 0:
-                    try:
-                        fh.seek(since_offset)
-                    except OSError as exc:
-                        _log.warning(
-                            "Copilot seek %s on %s failed: %s",
-                            since_offset, path, exc,
-                        )
-                        return
-                # Drop the partial line if we landed mid-record.
-                if since_offset > 0:
-                    fh.readline()
+        for line_offset, line in iter_jsonl_lines(path, since_offset=since_offset):
+            if since_offset > 0 and line_offset <= since_offset:
+                # Caller already saw the record at exactly ``since_offset``;
+                # skip duplicates. Matches the convention used by every
+                # other JSONL adapter in this package.
+                continue
+            if not line.strip():
+                continue
+            event = _safe_loads_line(line, path=path)
+            if event is None:
+                continue
+            etype = event.get("type")
 
-                while True:
-                    line_offset = fh.tell()
-                    line = fh.readline()
-                    if not line:
-                        break
-                    if not line.strip():
-                        continue
-                    event = _safe_loads_line(line, path=path)
-                    if event is None:
-                        continue
-                    etype = event.get("type")
+            if etype == "session.model_change":
+                # Update the rolling model. Don't yield a record.
+                candidate = _extract_model(event)
+                if candidate:
+                    current_model = candidate
+                continue
 
-                    if etype == "session.model_change":
-                        # Update the rolling model. Don't yield a record.
-                        candidate = _extract_model(event)
-                        if candidate:
-                            current_model = candidate
-                        continue
+            if etype == "session.start":
+                # Transcript header — capture model if present, but
+                # don't emit a record.
+                candidate = _extract_model(event)
+                if candidate:
+                    current_model = candidate
+                continue
 
-                    if etype == "session.start":
-                        # Transcript header — capture model if present, but
-                        # don't emit a record.
-                        candidate = _extract_model(event)
-                        if candidate:
-                            current_model = candidate
-                        continue
+            if etype == "user.message":
+                text = _extract_text(event)
+                if text:
+                    last_user_text = text
+                continue
 
-                    if etype == "user.message":
-                        text = _extract_text(event)
-                        if text:
-                            last_user_text = text
-                        continue
+            if etype != "assistant.message":
+                continue
 
-                    if etype != "assistant.message":
-                        continue
+            text = _extract_text(event)
+            out_tokens, out_estimated = _output_tokens_for(event, text)
+            in_tokens, in_estimated = _input_tokens_for(
+                event, last_user_text=last_user_text
+            )
 
-                    text = _extract_text(event)
-                    out_tokens, out_estimated = _output_tokens_for(event, text)
-                    in_tokens, in_estimated = _input_tokens_for(
-                        event, last_user_text=last_user_text
-                    )
+            # codeburn says "records: one per assistant.message with
+            # outputTokens > 0". We extend that: if the event has no
+            # explicit count, we estimate from text length and only
+            # skip when both the explicit value AND the estimate are
+            # zero (purely empty assistant turn).
+            if out_tokens <= 0:
+                continue
 
-                    # We emit one record per assistant.message with
-                    # outputTokens > 0. If the event has no explicit count,
-                    # we estimate from text length and only skip when both
-                    # the explicit value AND the estimate are zero (purely
-                    # empty assistant turn).
-                    if out_tokens <= 0:
-                        continue
+            tool_calls_field = event.get("toolCalls")
+            if not isinstance(tool_calls_field, list):
+                data_envelope = event.get("data")
+                if isinstance(data_envelope, dict):
+                    tool_calls_field = data_envelope.get("toolCalls")
+            model = (
+                _extract_model(event)
+                or _infer_model_from_tool_calls(tool_calls_field)
+                or current_model
+                or "copilot-auto"
+            )
+            # Bind the inference into rolling state so subsequent
+            # turns without their own model field stay coherent.
+            current_model = model
 
-                    tool_calls_field = event.get("toolCalls")
-                    if not isinstance(tool_calls_field, list):
-                        data_envelope = event.get("data")
-                        if isinstance(data_envelope, dict):
-                            tool_calls_field = data_envelope.get("toolCalls")
-                    model = (
-                        _extract_model(event)
-                        or _infer_model_from_tool_calls(tool_calls_field)
-                        or current_model
-                        or "copilot-auto"
-                    )
+            timestamp = _extract_timestamp(event)
+            raw_payload: dict[str, Any] = dict(event)
+            if out_estimated or in_estimated:
+                raw_payload["cost_source"] = "estimated"
 
-                    # Bind the inference into rolling state so subsequent
-                    # turns without their own model field stay coherent.
-                    current_model = model
-
-                    timestamp = _extract_timestamp(event)
-                    raw_payload: dict[str, Any] = dict(event)
-                    if out_estimated or in_estimated:
-                        raw_payload["cost_source"] = "estimated"
-
-                    yield Record(
-                        provider=self.name,
-                        session_id=ref.session_id,
-                        seq=line_offset,
-                        timestamp=timestamp,
-                        role="assistant",
-                        model=model,
-                        input_tokens=in_tokens,
-                        output_tokens=out_tokens,
-                        cache_create_tokens=0,
-                        cache_read_tokens=0,
-                        content_text=text,
-                        tools=_extract_tool_names(event),
-                        cwd=None,
-                        is_sidechain=False,
-                        uuid=f"{ref.session_id}:{line_offset}",
-                        parent_uuid=None,
-                        raw=raw_payload,
-                    )
-        except OSError as exc:
-            _log.warning("Cannot read Copilot session %s: %s", path, exc)
-            return
+            yield Record(
+                provider=self.name,
+                session_id=ref.session_id,
+                seq=line_offset,
+                timestamp=timestamp,
+                role="assistant",
+                model=model,
+                input_tokens=in_tokens,
+                output_tokens=out_tokens,
+                cache_create_tokens=0,
+                cache_read_tokens=0,
+                content_text=text,
+                tools=_extract_tool_names(event),
+                cwd=None,
+                is_sidechain=False,
+                uuid=f"{ref.session_id}:{line_offset}",
+                parent_uuid=None,
+                raw=raw_payload,
+            )
 
 
 # ── helpers ───────────────────────────────────────────────────────────

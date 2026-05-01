@@ -33,7 +33,11 @@ Storage: byte-offset resume (spec §1.4) — same as Codex/Claude. ``seq``
 is the byte offset where each JSONL line started.
 
 Spec §3 (multi-provider).
-"""
+
+Defensive sizing: JSONL sessions larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line."""
 
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines, stat_or_skip
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -109,10 +114,9 @@ class OpenClawAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read %s: %s", ref.file_path, exc)
+        # Defensive cap: skip files larger than 128 MB before doing the
+        # model_change pre-scan.
+        if stat_or_skip(ref.file_path) is None:
             return
 
         # Most-recent ``model_change`` seen so far. We always start by
@@ -121,78 +125,77 @@ class OpenClawAdapter:
         # the model context for records past the resume floor.
         current_model: str | None = _scan_for_model(ref.file_path, since_offset)
 
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug(
-                        "Skipping malformed JSON line in %s: %s",
-                        ref.file_path, exc,
-                    )
-                    continue
-
-                etype = event.get("type")
-
-                if etype == "model_change":
-                    new_model = _model_from_model_change(event)
-                    if new_model:
-                        current_model = new_model
-                    continue
-
-                if etype != "message":
-                    continue
-
-                message = event.get("message") or {}
-                if not isinstance(message, dict):
-                    continue
-                role = message.get("role")
-                if role != "assistant":
-                    # Spec says one Record per assistant message *with
-                    # usage*; user/system messages don't drive cost.
-                    continue
-                usage = message.get("usage")
-                if not isinstance(usage, dict):
-                    continue
-
-                model = (
-                    str(message.get("model"))
-                    if isinstance(message.get("model"), str)
-                    and message.get("model")
-                    else current_model or _DEFAULT_MODEL
+        # ``iter_jsonl_lines`` enforces the 128 MB cap and streams
+        # line-by-line.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug(
+                    "Skipping malformed JSON line in %s: %s",
+                    ref.file_path, exc,
                 )
+                continue
 
-                tokens = _normalize_usage(usage)
-                content = message.get("content")
+            etype = event.get("type")
 
-                yield Record(
-                    provider=self.name,
-                    session_id=ref.session_id,
-                    seq=line_offset,
-                    timestamp=str(event.get("timestamp") or ""),
-                    role="assistant",
-                    model=model,
-                    input_tokens=tokens["input"],
-                    output_tokens=tokens["output"],
-                    cache_create_tokens=tokens["cache_creation"],
-                    cache_read_tokens=tokens["cache_read"],
-                    content_text=_message_text(content),
-                    tools=_tools_from_content(content),
-                    cwd=None,
-                    is_sidechain=False,
-                    uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
-                    parent_uuid=None,
-                    raw=event,
-                )
+            if etype == "model_change":
+                new_model = _model_from_model_change(event)
+                if new_model:
+                    current_model = new_model
+                continue
+
+            if etype != "message":
+                continue
+
+            message = event.get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role != "assistant":
+                # Spec says one Record per assistant message *with
+                # usage*; user/system messages don't drive cost.
+                continue
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+
+            model = (
+                str(message.get("model"))
+                if isinstance(message.get("model"), str)
+                and message.get("model")
+                else current_model or _DEFAULT_MODEL
+            )
+
+            tokens = _normalize_usage(usage)
+            content = message.get("content")
+
+            yield Record(
+                provider=self.name,
+                session_id=ref.session_id,
+                seq=line_offset,
+                timestamp=str(event.get("timestamp") or ""),
+                role="assistant",
+                model=model,
+                input_tokens=tokens["input"],
+                output_tokens=tokens["output"],
+                cache_create_tokens=tokens["cache_creation"],
+                cache_read_tokens=tokens["cache_read"],
+                content_text=_message_text(content),
+                tools=_tools_from_content(content),
+                cwd=None,
+                is_sidechain=False,
+                uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
+                parent_uuid=None,
+                raw=event,
+            )
 
 
 # ── helpers ───────────────────────────────────────────────────────────

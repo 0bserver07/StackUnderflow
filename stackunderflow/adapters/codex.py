@@ -16,6 +16,11 @@ from `output_tokens`. The flattening to canonical shape (subtracting
 cached, folding reasoning into output) lives in
 `infra/providers/openai.py:OpenAIPricer.normalize_tokens()` so all OpenAI
 providers share one normalization seam. See multi-provider spec §1.5 / §2.
+
+Defensive sizing: JSONL rollouts larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -107,69 +113,63 @@ class CodexAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read %s: %s", ref.file_path, exc)
-            return
+        # Buffer records emitted since the most recent token_count so we
+        # can retroactively attach tokens to the last assistant record
+        # in the turn before flushing in original order.
+        buffer: list[Record] = []
 
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-            # Buffer records emitted since the most recent token_count so we
-            # can retroactively attach tokens to the last assistant record
-            # in the turn before flushing in original order.
-            buffer: list[Record] = []
+        # ``iter_jsonl_lines`` enforces the 128 MB defensive cap and
+        # streams line-by-line; rollouts above the cap are skipped with
+        # a warning rather than parsed.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            # `since_offset == 0` means "fresh read, yield everything".
+            # Otherwise, the caller already saw the record at exactly
+            # `since_offset`, so skip it.
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug("Skipping malformed JSON line in %s: %s", ref.file_path, exc)
+                continue
 
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                # `since_offset == 0` means "fresh read, yield everything".
-                # Otherwise, the caller already saw the record at exactly
-                # `since_offset`, so skip it.
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug("Skipping malformed JSON line in %s: %s", ref.file_path, exc)
-                    continue
+            etype = event.get("type")
+            payload = event.get("payload") or {}
 
-                etype = event.get("type")
-                payload = event.get("payload") or {}
+            if etype == "response_item":
+                # seq = byte offset where this line started. Aligns with
+                # the Claude adapter so the storage-aware contract test
+                # ("resume from seq=midpoint") works for both providers.
+                record = self._record_from_response_item(
+                    event, payload, ref=ref, seq=line_offset,
+                )
+                if record is not None:
+                    buffer.append(record)
+                continue
 
-                if etype == "response_item":
-                    # seq = byte offset where this line started. Aligns with
-                    # the Claude adapter so the storage-aware contract test
-                    # ("resume from seq=midpoint") works for both providers.
-                    record = self._record_from_response_item(
-                        event, payload, ref=ref, seq=line_offset,
-                    )
-                    if record is not None:
-                        buffer.append(record)
-                    continue
+            if etype == "event_msg" and payload.get("type") == "token_count":
+                info = payload.get("info")
+                if isinstance(info, dict):
+                    last = info.get("last_token_usage")
+                    if isinstance(last, dict):
+                        buffer = _attach_tokens_to_last_assistant(buffer, last)
+                # Flush the completed turn regardless of whether we had
+                # usable token info.
+                yield from buffer
+                buffer = []
+                continue
 
-                if etype == "event_msg" and payload.get("type") == "token_count":
-                    info = payload.get("info")
-                    if isinstance(info, dict):
-                        last = info.get("last_token_usage")
-                        if isinstance(last, dict):
-                            buffer = _attach_tokens_to_last_assistant(buffer, last)
-                    # Flush the completed turn regardless of whether we had
-                    # usable token info.
-                    yield from buffer
-                    buffer = []
-                    continue
+            # Other event_msg types (task_started, task_complete, error,
+            # user_message, etc.) and turn_context events are ignored in
+            # Phase 1. session_meta was already consumed during enumerate.
 
-                # Other event_msg types (task_started, task_complete, error,
-                # user_message, etc.) and turn_context events are ignored in
-                # Phase 1. session_meta was already consumed during enumerate.
-
-            # End of file: flush any records that never saw a token_count.
-            yield from buffer
+        # End of file: flush any records that never saw a token_count.
+        yield from buffer
 
     # ── internals ─────────────────────────────────────────────────────
 

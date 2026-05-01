@@ -40,7 +40,11 @@ recomputed from the full file each call — pricing stays stable across
 resumes.
 
 Spec §3 (multi-provider).
-"""
+
+Defensive sizing: JSONL sessions larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line."""
 
 from __future__ import annotations
 
@@ -50,6 +54,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines, stat_or_skip
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -112,10 +117,10 @@ class DroidAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read %s: %s", ref.file_path, exc)
+        # Defensive cap: skip files larger than 128 MB. Checked here so
+        # the side-car loading and assistant-message pre-pass don't run
+        # for files we'd refuse to parse anyway.
+        if stat_or_skip(ref.file_path) is None:
             return
 
         # Side-car settings file. ``foo.jsonl`` -> ``foo.settings.json``.
@@ -132,78 +137,77 @@ class DroidAdapter:
         # gets the leftover remainder (keeps sum == totals).
         assistant_idx = 0
 
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                if since_offset > 0 and line_offset <= since_offset:
-                    # Caller already saw this record; still need to count
-                    # assistant messages we skip so the *remaining* records
-                    # get the right slice of the distributed totals.
-                    if _line_is_assistant_message(raw_line):
-                        assistant_idx += 1
-                    continue
-
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug(
-                        "Skipping malformed JSON line in %s: %s",
-                        ref.file_path, exc,
-                    )
-                    continue
-
-                etype = event.get("type")
-
-                if etype == "session_start":
-                    # Already consumed for SessionRef; nothing to emit.
-                    continue
-
-                if etype != "message":
-                    continue
-
-                message = event.get("message") or {}
-                role = message.get("role")
-                if role not in ("user", "assistant"):
-                    continue
-
-                tokens = (
-                    per_record[assistant_idx]
-                    if role == "assistant"
-                    and assistant_idx < len(per_record)
-                    else _ZERO_TOKENS
-                )
-                if role == "assistant":
+        # ``iter_jsonl_lines`` enforces the 128 MB cap and streams
+        # line-by-line.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            if since_offset > 0 and line_offset <= since_offset:
+                # Caller already saw this record; still need to count
+                # assistant messages we skip so the *remaining* records
+                # get the right slice of the distributed totals.
+                if _line_is_assistant_message(raw_line):
                     assistant_idx += 1
+                continue
 
-                timestamp = str(event.get("timestamp") or "")
-                cwd = event.get("cwd") or None
-                content = message.get("content")
-
-                yield Record(
-                    provider=self.name,
-                    session_id=ref.session_id,
-                    seq=line_offset,
-                    timestamp=timestamp,
-                    role=role,
-                    model=model,
-                    input_tokens=tokens["input"],
-                    output_tokens=tokens["output"],
-                    cache_create_tokens=tokens["cache_creation"],
-                    cache_read_tokens=tokens["cache_read"],
-                    content_text=_message_text(content),
-                    tools=_tools_from_content(content),
-                    cwd=cwd,
-                    is_sidechain=False,
-                    uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
-                    parent_uuid=None,
-                    raw=event,
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug(
+                    "Skipping malformed JSON line in %s: %s",
+                    ref.file_path, exc,
                 )
+                continue
+
+            etype = event.get("type")
+
+            if etype == "session_start":
+                # Already consumed for SessionRef; nothing to emit.
+                continue
+
+            if etype != "message":
+                continue
+
+            message = event.get("message") or {}
+            role = message.get("role")
+            if role not in ("user", "assistant"):
+                continue
+
+            tokens = (
+                per_record[assistant_idx]
+                if role == "assistant"
+                and assistant_idx < len(per_record)
+                else _ZERO_TOKENS
+            )
+            if role == "assistant":
+                assistant_idx += 1
+
+            timestamp = str(event.get("timestamp") or "")
+            cwd = event.get("cwd") or None
+            content = message.get("content")
+
+            yield Record(
+                provider=self.name,
+                session_id=ref.session_id,
+                seq=line_offset,
+                timestamp=timestamp,
+                role=role,
+                model=model,
+                input_tokens=tokens["input"],
+                output_tokens=tokens["output"],
+                cache_create_tokens=tokens["cache_creation"],
+                cache_read_tokens=tokens["cache_read"],
+                content_text=_message_text(content),
+                tools=_tools_from_content(content),
+                cwd=cwd,
+                is_sidechain=False,
+                uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
+                parent_uuid=None,
+                raw=event,
+            )
 
 
 # ── helpers ───────────────────────────────────────────────────────────
