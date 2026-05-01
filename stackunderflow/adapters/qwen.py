@@ -5,8 +5,7 @@ Reads Qwen CLI session JSONL files at::
     $QWEN_DATA_DIR/projects/{project}/chats/*.jsonl
     ~/.qwen/projects/{project}/chats/*.jsonl  (default)
 
-Each entry is one JSON object on its own line carrying the shape
-(see ``docs/specs/multi-provider/codeburn-catalog.md`` §13)::
+Each entry is one JSON object on its own line carrying the shape::
 
     {
       uuid, sessionId, timestamp,
@@ -62,8 +61,7 @@ _log = logging.getLogger(__name__)
 _LARGE_FILE_BYTES = 64 * 1024 * 1024
 
 # Qwen tool name -> canonical cross-source tool label. Mirror the small
-# set Codex maps; unknown names pass through untouched. See
-# codeburn-catalog §13 (toolNameMap reference).
+# set Codex maps; unknown names pass through untouched.
 _TOOL_NAME_MAP = {
     "shell": "Bash",
     "execute": "Bash",

@@ -4,16 +4,16 @@ Gemini Code (the CLI) calls Google's Gemini API. Rate provenance for
 the table below — recorded so future audits can spot drift:
 
 * ``gemini-2.5-pro`` / ``gemini-2.5-flash`` — Google AI for Developers
-  list price at the time codeburn-catalog §7 was authored. Pricing is
+  list price at the time this table was authored. Pricing is
   tier-based above 200K input tokens; the simple table here uses the
   short-context tier (≤200K input). If long-context billing matters
   to a downstream report, extend ``rates_for`` to inspect the canonical
   id for a long-context variant.
 * ``gemini-2.5-flash-lite`` — derived from the published flash-lite
   short-context tier.
-* ``gemini-3.1-pro`` (placeholder) — listed in codeburn's ``models.ts``
-  forward-looking entries; rates are estimates pegged to ``gemini-2.5-pro``
-  until Google publishes definitive numbers. Documented as such here.
+* ``gemini-3.1-pro`` (placeholder) — forward-looking entry; rates are
+  estimates pegged to ``gemini-2.5-pro`` until Google publishes
+  definitive numbers. Documented as such here.
 * ``gemini-auto`` — the adapter's default when a message omits
   ``model``. Maps to ``gemini-2.5-pro`` rates (the Gemini CLI default).
 
@@ -28,7 +28,7 @@ OpenAI / Qwen convention. cache-read is set at ~25% of input — Google's
 documented "implicit cache discount" range — and can be tuned per-row
 when the API publishes per-model values.
 
-Spec: ``docs/specs/multi-provider/spec.md`` §2; codeburn-catalog §7.
+Spec: ``docs/specs/multi-provider/spec.md`` §2.
 """
 
 from __future__ import annotations

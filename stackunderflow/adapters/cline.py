@@ -10,8 +10,7 @@ Each task is a directory ``{taskId}/`` containing two JSON files:
   ``{ tokensIn, tokensOut, cacheWrites, cacheReads, cost }``.
 - ``api_conversation_history.json`` — flat array of ``{role, content}``
   Anthropic-shape messages. The first user message is expected to embed
-  ``<model>...</model>`` declaring the model used for the run (see
-  codeburn-catalog.md §15).
+  ``<model>...</model>`` declaring the model used for the run.
 
 Storage / resumption note (spec §3.2):
 This adapter is a **hybrid** — it reads files (so ``source_kind="file"``),
@@ -23,11 +22,8 @@ it only checks monotonic ``seq`` and that resume yields strictly fewer
 records past a midpoint.
 
 The on-disk layout is identical for Cline, KiloCode and Roo Code — only
-the extension-id directory differs (codeburn-catalog §15). All three
-adapters subclass :class:`_VsCodeClineAdapter` and override only the
-class-level identifiers.
-
-Path constants follow codeburn:src/providers/vscode-cline-parser.ts.
+the extension-id directory differs. All three adapters subclass
+:class:`_VsCodeClineAdapter` and override only the class-level identifiers.
 """
 
 from __future__ import annotations
@@ -71,8 +67,7 @@ class _VsCodeClineAdapter:
     Subclasses override :attr:`name`, :attr:`_extension_id` and
     :attr:`_project_slug` to point at their own globalStorage directory.
     The on-disk format (``tasks/{taskId}/{ui_messages.json,
-    api_conversation_history.json}``) is identical across the family — see
-    codeburn-catalog §15 for the canonical reference.
+    api_conversation_history.json}``) is identical across the family.
     """
 
     # Subclasses MUST override these three class attributes.
@@ -227,8 +222,8 @@ def _extract_model_tag(history: list) -> str | None:
     user message, or None.
 
     Cline's first user message embeds the model the run will use as an
-    XML-style tag (codeburn-catalog.md §15). We scan only the first user
-    message — model changes mid-task aren't supported in v1.
+    XML-style tag. We scan only the first user message — model changes
+    mid-task aren't supported in v1.
     """
     for entry in history:
         if not isinstance(entry, dict):
@@ -268,7 +263,7 @@ def _content_to_text(content: object) -> str:
 def _parse_api_req_text(text: object) -> dict[str, int]:
     """Parse the JSON-stringified ``text`` field on an ``api_req_started`` event.
 
-    Shape (codeburn-catalog.md §15):
+    Shape:
         {"tokensIn": int, "tokensOut": int, "cacheWrites": int,
          "cacheReads": int, "cost": float}
 
@@ -317,7 +312,7 @@ def _ts_to_iso(ts: object) -> str:
 class ClineAdapter(_VsCodeClineAdapter):
     """Source adapter for the Cline VS Code extension.
 
-    Extension id: ``saoudrizwan.claude-dev`` (codeburn-catalog §15).
+    Extension id: ``saoudrizwan.claude-dev``.
     """
 
     name = "cline"
@@ -328,9 +323,8 @@ class ClineAdapter(_VsCodeClineAdapter):
 class KiloCodeAdapter(_VsCodeClineAdapter):
     """Source adapter for the KiloCode VS Code extension.
 
-    Extension id: ``kilocode.kilo-code`` (codeburn-catalog §8). KiloCode
-    wraps the same Cline parser surface — only the globalStorage directory
-    differs.
+    Extension id: ``kilocode.kilo-code``. KiloCode wraps the same Cline
+    parser surface — only the globalStorage directory differs.
     """
 
     name = "kilocode"
@@ -341,9 +335,8 @@ class KiloCodeAdapter(_VsCodeClineAdapter):
 class RooCodeAdapter(_VsCodeClineAdapter):
     """Source adapter for the Roo Code VS Code extension.
 
-    Extension id: ``rooveterinaryinc.roo-cline`` (codeburn-catalog §14).
-    Roo Code wraps the same Cline parser surface — only the globalStorage
-    directory differs.
+    Extension id: ``rooveterinaryinc.roo-cline``. Roo Code wraps the same
+    Cline parser surface — only the globalStorage directory differs.
     """
 
     name = "roocode"

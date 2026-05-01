@@ -2,10 +2,10 @@
 
 Probes ``~/.continue/`` for SQLite databases and tries to find a
 sessions/messages-style schema by introspection. The Continue extension's
-on-disk schema is not formally documented in the codeburn catalog and the
-user's local install reports an empty sessions file (``local-inventory.md``
-§13: "sessions file: empty"), so this adapter is **schema-discovery first
-and defensive everywhere**.
+on-disk schema is not formally documented and the user's local install
+reports an empty sessions file (``local-inventory.md`` §13: "sessions
+file: empty"), so this adapter is **schema-discovery first and defensive
+everywhere**.
 
 Strategy:
   1. Walk ``~/.continue/`` recursively for ``*.db`` / ``*.sqlite`` /

@@ -1,7 +1,7 @@
 """GitHub Copilot session adapter.
 
 Reads conversation data the GitHub Copilot CLI / VS Code chat extension
-writes in two distinct on-disk formats (codeburn-catalog.md §3):
+writes in two distinct on-disk formats:
 
 1. **Legacy** — ``~/.copilot/session-state/{sessionId}/events.jsonl``
    Each line is one event with ``type`` in:
@@ -98,7 +98,7 @@ def _default_vscode_workspace_storage() -> Path:
     return _VSCODE_WORKSPACE_STORAGE_MACOS
 
 
-# ── tool-call-id model inference (codeburn-catalog §3) ────────────────
+# ── tool-call-id model inference ──────────────────────────────────────
 
 # `toolu_bdrk_*` is Anthropic-Bedrock; `toolu_*` is the bare Anthropic
 # tool-use id. Both indicate a Claude-family model.
@@ -298,11 +298,11 @@ class CopilotAdapter:
                         event, last_user_text=last_user_text
                     )
 
-                    # codeburn says "records: one per assistant.message with
-                    # outputTokens > 0". We extend that: if the event has no
-                    # explicit count, we estimate from text length and only
-                    # skip when both the explicit value AND the estimate are
-                    # zero (purely empty assistant turn).
+                    # We emit one record per assistant.message with
+                    # outputTokens > 0. If the event has no explicit count,
+                    # we estimate from text length and only skip when both
+                    # the explicit value AND the estimate are zero (purely
+                    # empty assistant turn).
                     if out_tokens <= 0:
                         continue
 
@@ -426,7 +426,7 @@ def _output_tokens_for(event: dict, text: str) -> tuple[int, bool]:
             return explicit, False
     # Fall back to length / 4. If text is empty the caller will still see
     # zero and skip the record (that's the correct behaviour for an empty
-    # assistant turn — codeburn explicitly filters these).
+    # assistant turn — these are filtered out).
     return max(len(text) // 4, 0), True
 
 
