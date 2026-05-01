@@ -122,6 +122,13 @@ class Settings:
     # File-only (no env var — a JSON dict is awkward to set in shell).
     # Manage via ``stackunderflow cfg model-alias {set,rm,ls}``.
     model_aliases                = _Opt({},    None)
+    # Plan budget — track monthly spend against a known plan (Claude Pro,
+    # Claude Max, Cursor Pro, custom). All three keys are read together by
+    # ``stackunderflow.services.plans.get_active_plan``; manage via the
+    # ``stackunderflow plan {show,set,reset}`` subcommand.
+    plan_name                    = _Opt(None,  None)
+    plan_monthly_usd             = _Opt(None,  None)
+    plan_reset_day               = _Opt(1,     None)
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 

@@ -35,6 +35,11 @@ stackunderflow cfg model-alias set FROM TO
 stackunderflow cfg model-alias rm FROM
 stackunderflow cfg model-alias ls [--json]
 
+# Plan budgets
+stackunderflow plan show [--format text|json]
+stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]
+stackunderflow plan reset
+
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
 stackunderflow backup list
@@ -596,6 +601,153 @@ intentionally rejected — use this dedicated subcommand instead.
 
 ---
 
+## Plan Budget Commands
+
+Track monthly AI spend against a known plan (Claude Pro, Claude Max, Cursor Pro,
+Cursor Max, or a custom amount). Status banding tells you whether you're on track:
+
+| pct of budget | status |
+|---|---|
+| `< 80%` | `ok` |
+| `80% – 100%` | `warn` |
+| `> 100%` | `over` |
+
+The plan is stored in three settings keys (`plan_name`, `plan_monthly_usd`,
+`plan_reset_day`) but managed through this command — `cfg set plan_name ...`
+is intentionally rejected because the three keys have inter-key invariants.
+
+The `Projected` figure is a **simple linear** extrapolation
+(`used + daily_burn × days_left`). It does not weight weekends, project
+ramps, or week-of-month seasonality — read it as a directional signal,
+not a forecast.
+
+The cost rollup reuses the same engine as `stackunderflow month`
+(`reports.aggregate.build_report`), so the `Used` number always matches
+what the dashboard's monthly spend shows.
+
+### `stackunderflow plan show`
+
+Print the active plan and current usage against budget.
+
+```
+Usage: stackunderflow plan show [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow plan show
+Plan:          claude-pro
+Budget:        $20.00 / month  (resets day 1)
+Period:        2026-05-01 → 2026-05-31  (day 12 of 31)
+Used:          $12.50  (62.5% of budget)
+Remaining:     $7.50
+Projected:     $32.29  (linear, today's burn rate)
+Status:        ok
+
+$ stackunderflow plan show --format json
+{
+  "plan": {"name": "claude-pro", "monthly_usd": 20.0, "reset_day": 1},
+  "usage": {
+    "used": 12.5,
+    "budget": 20.0,
+    "remaining": 7.5,
+    "pct": 62.5,
+    "projected_month_end": 32.29,
+    "status": "ok",
+    "period_start": "2026-05-01",
+    "period_end": "2026-05-31",
+    "days_so_far": 12,
+    "days_in_period": 31
+  }
+}
+```
+
+If no plan is set:
+
+```
+$ stackunderflow plan show
+No plan set. Run: stackunderflow plan set claude-pro
+```
+
+The same payload is exposed over HTTP at `GET /api/plan`. With no plan
+configured, the route returns `{"plan": null, "usage": null}`.
+
+---
+
+### `stackunderflow plan set`
+
+Set the active plan. Preset names accept an optional `--monthly-usd` to
+override the listed amount (useful if you're grandfathered into an
+older price); `custom` requires `--monthly-usd`.
+
+```
+Usage: stackunderflow plan set NAME [OPTIONS]
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `NAME` | yes | One of `claude-pro`, `claude-max`, `cursor-pro`, `cursor-max`, `custom` |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--monthly-usd` | FLOAT | (preset amount) | Required for `custom`; overrides the preset amount otherwise |
+| `--reset-day` | INTEGER (1–31) | 1 | Day-of-month the billing window rolls over |
+
+Preset amounts:
+
+| Preset | Monthly USD |
+|---|---|
+| `claude-pro` | 20 |
+| `claude-max` | 200 |
+| `cursor-pro` | 20 |
+| `cursor-max` | 40 |
+| `custom` | `--monthly-usd` (required) |
+
+**`--reset-day` semantics.** A reset day greater than the current month's
+length clamps to the last day of the month — so `--reset-day 31` lands on
+Feb 28 (or 29 in leap years), then rolls back to 31 on March.
+
+**Examples:**
+
+```
+$ stackunderflow plan set claude-pro
+  plan = claude-pro  ($20.00/month, resets day 1)
+
+$ stackunderflow plan set claude-max --reset-day 15
+  plan = claude-max  ($200.00/month, resets day 15)
+
+$ stackunderflow plan set custom --monthly-usd 75
+  plan = custom  ($75.00/month, resets day 1)
+
+$ stackunderflow plan set claude-pro --monthly-usd 18
+  plan = claude-pro  ($18.00/month, resets day 1)   # grandfathered price
+```
+
+---
+
+### `stackunderflow plan reset`
+
+Clear the active plan. After this, `plan show` reports "No plan set" and
+`/api/plan` returns `{"plan": null, "usage": null}`.
+
+```
+Usage: stackunderflow plan reset
+```
+
+**Example:**
+
+```
+$ stackunderflow plan reset
+  plan cleared
+```
+
+---
+
 ## Backup Commands
 
 ### `stackunderflow backup create`
@@ -727,6 +879,9 @@ $ stackunderflow backup auto --disable
 | `log_level` | str | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `currency` | str | `USD` | Display currency for cost figures — any 3-letter ISO 4217 code |
 | `model_aliases` | dict[str,str] | `{}` | Proxy-rewritten model id → canonical id (manage via `cfg model-alias`) |
+| `plan_name` | str \| null | `null` | Active plan preset name (manage via `plan set`) |
+| `plan_monthly_usd` | float \| null | `null` | Monthly budget in USD (manage via `plan set`) |
+| `plan_reset_day` | int | `1` | Day-of-month the budget resets (manage via `plan set`) |
 
 **Example — set, verify, then reset a key:**
 
