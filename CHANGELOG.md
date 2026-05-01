@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Model aliases — proxy id → canonical id.** A new dict-typed setting `model_aliases` (file-only; persists in `~/.stackunderflow/config.json` under the `model_aliases` key) lets users patch the case where sessions go through a proxy that rewrites model names (OpenRouter, Replicate, LiteLLM, internal gateways). Without an alias, a record like `"model": "openrouter/claude-opus"` would fall into the conservative fallback rates and underreport spend; with the alias `openrouter/claude-opus → claude-opus-4-6` set, `compute_cost()` resolves to the real Opus 4.6 rate card. Resolution is single-step (no recursive chasing — `a→b→c` returns `b`), happens inside `compute_cost()` **before** any provider dispatch so it auto-applies to every caller (REST routes, aggregator, future MCP cost paths), and an alias to an unknown canonical id falls through to existing behaviour rather than looping. Manage via three new subcommands: `stackunderflow cfg model-alias set FROM TO`, `stackunderflow cfg model-alias rm FROM`, `stackunderflow cfg model-alias ls [--json]`. The generic `cfg set model_aliases ...` is intentionally rejected with a pointer to the dedicated subcommand. New helpers `resolve_model_alias(model_id, aliases)` (pure function) and `_user_aliases()` (settings reader) live in `stackunderflow/infra/costs.py`. 23 new tests in `tests/stackunderflow/infra/test_model_aliases.py` and `tests/stackunderflow/test_cli_model_alias.py`.
+
 ## [0.5.0] - 2026-05-01
 
 ### Added

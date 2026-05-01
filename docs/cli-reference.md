@@ -31,6 +31,9 @@ stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclud
 stackunderflow cfg ls [--json]
 stackunderflow cfg set KEY VALUE
 stackunderflow cfg rm KEY
+stackunderflow cfg model-alias set FROM TO
+stackunderflow cfg model-alias rm FROM
+stackunderflow cfg model-alias ls [--json]
 
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
@@ -485,6 +488,83 @@ $ stackunderflow cfg rm auto_browser
 
 ---
 
+### `stackunderflow cfg model-alias`
+
+Manage **model aliases** — a map from a proxy-rewritten model id to a
+canonical id our pricing tables know about. Use this when sessions go
+through OpenRouter, Replicate, LiteLLM, or an internal company gateway
+that rewrites model names.
+
+**Why you'd reach for this.** Suppose your sessions emit
+`"model": "openrouter/claude-opus"` but our rate tables only know
+`claude-opus-4-6`. Without an alias, `compute_cost()` falls into the
+fallback rates (or even returns $0 once stricter resolution lands), and
+spend on those sessions is silently misreported. Adding the alias
+`openrouter/claude-opus → claude-opus-4-6` patches the gap so the
+dashboard shows the real number.
+
+```
+Usage: stackunderflow cfg model-alias set FROM TO
+       stackunderflow cfg model-alias rm  FROM
+       stackunderflow cfg model-alias ls  [--json]
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `FROM` | yes (set / rm) | The proxy-rewritten id as it appears in your session logs |
+| `TO`   | yes (set)      | The canonical id (must match a key our pricers recognise) |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--json` | flag | false | (`ls` only) JSON output instead of table |
+
+**Resolution semantics.** Aliases are consulted **before** the
+provider-specific canonicalize / identify logic in `compute_cost()`.
+Resolution is single-step — no recursive chasing — so a chain like
+`a → b → c` returns `b`, not `c`. Aliasing to an unknown canonical id
+falls through to the existing fallback behaviour rather than looping.
+
+**Examples:**
+
+```
+$ stackunderflow cfg model-alias set openrouter/claude-opus claude-opus-4-6
+  openrouter/claude-opus -> claude-opus-4-6
+
+$ stackunderflow cfg model-alias set litellm/sonnet claude-sonnet-4-6
+  litellm/sonnet -> claude-sonnet-4-6
+
+$ stackunderflow cfg model-alias ls
+Model aliases:
+  litellm/sonnet           ->  claude-sonnet-4-6
+  openrouter/claude-opus   ->  claude-opus-4-6
+
+$ stackunderflow cfg model-alias ls --json
+{
+  "litellm/sonnet": "claude-sonnet-4-6",
+  "openrouter/claude-opus": "claude-opus-4-6"
+}
+
+$ stackunderflow cfg model-alias rm litellm/sonnet
+  litellm/sonnet removed
+```
+
+**Worked end-to-end example.**
+
+```
+$ stackunderflow cfg model-alias set my-proxy claude-opus-4-6
+  my-proxy -> claude-opus-4-6
+
+$ python -c "from stackunderflow.infra.costs import compute_cost; \
+print(compute_cost({'input': 1000, 'output': 1000}, 'my-proxy')['total_cost'])"
+0.09
+```
+
+The alias map is stored under the `model_aliases` key in
+`~/.stackunderflow/config.json`. Generic `cfg set model_aliases ...` is
+intentionally rejected — use this dedicated subcommand instead.
+
+---
+
 ## Backup Commands
 
 ### `stackunderflow backup create`
@@ -614,6 +694,7 @@ $ stackunderflow backup auto --disable
 | `max_date_range_days` | int | `30` | Maximum days allowed in a dashboard date range query |
 | `messages_initial_load` | int | `500` | Number of messages loaded on initial dashboard view |
 | `log_level` | str | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `model_aliases` | dict[str,str] | `{}` | Proxy-rewritten model id → canonical id (manage via `cfg model-alias`) |
 
 **Example — set, verify, then reset a key:**
 
