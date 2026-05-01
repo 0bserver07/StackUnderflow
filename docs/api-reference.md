@@ -54,6 +54,7 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | DELETE | `/api/bookmarks/{id}` | Bookmarks |
 | POST | `/api/bookmarks/toggle` | Bookmarks |
 | GET | `/api/bookmarks/session/{id}` | Bookmarks |
+| GET | `/api/export` | Export |
 | GET | `/api/health` | Misc |
 | GET | `/api/pricing` | Misc |
 | POST | `/api/pricing/refresh` | Misc |
@@ -1239,3 +1240,36 @@ This endpoint is the primary data source for the Overview page. The authoritativ
 
 `count` is the number of messages attributed to the model; `cost` is the cumulative USD cost computed
 using the pricing table.
+
+
+## Export
+
+### GET /api/export
+
+Stream a downloadable CSV or JSON file of cross-project usage data.
+Same surface as the `stackunderflow export` CLI — both share a single
+internal helper.
+
+**Query parameters**
+
+| Name       | Type                                        | Required | Description |
+|------------|---------------------------------------------|----------|-------------|
+| `format`   | `csv \| json`                               | yes      | Output format. |
+| `period`   | `today \| week \| month \| all`             | no       | Single window. Omit for a multi-period rollup (today + last 7 days + last 30 days) in one document. |
+| `provider` | string                                      | no       | Filter by provider (`claude`, `codex`, etc.). |
+| `project`  | string (repeatable)                         | no       | Include only this project slug. |
+| `exclude`  | string (repeatable)                         | no       | Exclude this project slug. |
+
+**Response headers**
+
+- `Content-Type`: `text/csv` or `application/json`
+- `Content-Disposition`: `attachment; filename="stackunderflow-export-<period>-<YYYY-MM-DD>.<ext>"`
+- `X-Suggested-Filename`: same filename, surfaced for fetch/blob clients
+  that do not parse `Content-Disposition`.
+
+**Body**
+
+For `format=csv` the body is a multi-section CSV: one daily-rows block
+plus one activity block per period. For `format=json` the body is a
+period dict (with `--period`) or a `{today, last_7d, last_30d}` rollup
+(without). See the CLI reference for the full schema.

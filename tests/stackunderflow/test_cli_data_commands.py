@@ -125,25 +125,8 @@ class TestStatusCommand(unittest.TestCase):
         self.assertEqual(parsed["today"]["total_cost"], 1.0)
 
 
-class TestExportCommand(unittest.TestCase):
-    def setUp(self):
-        self.runner = CliRunner()
-
-    def test_export_csv_default(self):
-        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
-             patch("stackunderflow.cli.build_report", return_value=_fake_report()):
-            result = self.runner.invoke(cli, ["export"])
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("project,cost,messages,sessions", result.output)
-        self.assertIn("alpha", result.output)
-
-    def test_export_json(self):
-        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
-             patch("stackunderflow.cli.build_report", return_value=_fake_report()):
-            result = self.runner.invoke(cli, ["export", "-f", "json"])
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        parsed = json.loads(result.output)
-        self.assertEqual(parsed["total_messages"], 500)
+# NOTE: ``export`` now requires --format and --output and writes to a file.
+# Its behaviour is exercised in tests/stackunderflow/cli/test_export.py.
 
 
 class TestOptimizeCommand(unittest.TestCase):

@@ -15,7 +15,14 @@ from typing import TextIO
 from rich.console import Console
 from rich.table import Table
 
-__all__ = ["render_text", "render_json", "render_status_line", "render_csv"]
+__all__ = [
+    "render_text",
+    "render_json",
+    "render_status_line",
+    "render_csv",
+    "render_export_csv",
+    "render_export_json",
+]
 
 
 def render_text(report: dict, *, stream: TextIO | None = None) -> None:
@@ -82,3 +89,71 @@ def render_csv(report: dict) -> str:
             row["sessions"],
         ])
     return buf.getvalue()
+
+
+def render_export_csv(payload: dict) -> str:
+    """Render an export payload (single or multi-period) as CSV.
+
+    Layout: one daily-rows section per period (header + rows), separated
+    by a blank line and a `# activity — <period>` section header that
+    introduces the activity-breakdown rows for that period.
+
+    The daily section always contains the full ``DAILY_HEADERS`` columns
+    so an empty database still produces a parseable file with headers
+    and zero data rows.
+    """
+    from .export import ACTIVITY_HEADERS, DAILY_HEADERS
+
+    periods = _iter_periods(payload)
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+
+    for i, (label, period) in enumerate(periods):
+        if i > 0:
+            buf.write("\n")
+        # Section header (commented so most spreadsheets just ignore it,
+        # but tests can still parse with the stdlib csv module).
+        if label:
+            writer.writerow([f"# period: {label}"])
+        writer.writerow(DAILY_HEADERS)
+        for row in period.get("daily", []):
+            writer.writerow([
+                row.get("date", ""),
+                row.get("provider", ""),
+                row.get("project", ""),
+                f"{float(row.get('cost_usd', 0.0)):.6f}",
+                int(row.get("calls", 0)),
+                int(row.get("sessions", 0)),
+                int(row.get("input_tokens", 0)),
+                int(row.get("output_tokens", 0)),
+                int(row.get("cache_read_tokens", 0)),
+                int(row.get("cache_write_tokens", 0)),
+            ])
+
+        buf.write("\n")
+        writer.writerow([f"# activity — {label}" if label else "# activity"])
+        writer.writerow(ACTIVITY_HEADERS)
+        for row in period.get("activities", []):
+            writer.writerow([
+                row.get("name", ""),
+                int(row.get("calls", 0)),
+                f"{float(row.get('share_pct', 0.0)):.2f}",
+            ])
+
+    return buf.getvalue()
+
+
+def render_export_json(payload: dict) -> str:
+    """Render an export payload as pretty JSON (single source of truth)."""
+    return json.dumps(payload, indent=2, sort_keys=False, default=str)
+
+
+def _iter_periods(payload: dict):
+    """Yield (label, period_dict) tuples — multi-period or single-period."""
+    if "today" in payload and "last_7d" in payload and "last_30d" in payload:
+        for key in ("today", "last_7d", "last_30d"):
+            sub = payload.get(key) or {}
+            yield sub.get("label") or key, sub
+        return
+    # single-period: payload itself IS a period dict
+    yield payload.get("label") or "", payload
