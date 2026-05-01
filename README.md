@@ -228,25 +228,40 @@ On first successful ingest the legacy `~/.stackunderflow/cache/` directory is re
 
 ### Source adapters
 
-StackUnderflow ingests sessions from more than one coding agent. Two adapters are stable; two more are opt-in beta.
+StackUnderflow ingests sessions from more than one coding agent. Four adapters are default-on; twelve more are opt-in beta.
 
 | Provider | Status | Source | Default state |
 |----------|--------|--------|---------------|
 | Claude Code | stable | `~/.claude/projects/<slug>/*.jsonl` (+ legacy `~/.claude/history.jsonl`) | on |
 | Codex | stable | `~/.codex/` rollout JSONL | on |
-| Cursor | beta | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | off |
-| Cline | beta | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | off |
+| Cursor | stable | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | on |
+| Cline | stable | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | on |
+| KiloCode | beta | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks/` | off |
+| Roo Code | beta | `…/rooveterinaryinc.roo-cline/tasks/` | off |
+| OpenCode | beta | SQLite under `$XDG_DATA_HOME/opencode/` | off |
+| Cursor Agent | beta | `~/.cursor/projects/{p}/agent-transcripts/` (+ ai-tracking.db) | off |
+| Qwen | beta | `~/.qwen/projects/{p}/chats/*.jsonl` | off |
+| Gemini | beta | `~/.gemini/tmp/{p}/chats/session-*.{json,jsonl}` | off |
+| Copilot | beta | `~/.copilot/session-state/` + VS Code transcripts | off |
+| Codeium | beta | `~/.codeium/` (discovery stub — protobuf decoding deferred) | off |
+| Continue | beta | `~/.continue/*.{db,sqlite,sqlite3}` | off |
+| Droid | beta | `$FACTORY_DIR` (or `~/.factory/sessions/`) | off |
+| Kiro | beta | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/` | off |
+| OpenClaw | beta | `~/.openclaw/`, `~/.clawdbot/`, `~/.moltbot/`, `~/.moldbot/` | off |
+| Pi + OMP | beta | `~/.pi/agent/sessions/` and `~/.omp/agent/sessions/` | off |
+
+Cursor and Cline shipped behind beta flags from v0.4.0 through v0.6.0. They've been promoted to default-on in v0.7.0 — both have full test coverage, fingerprint-based caching for the Cursor vscdb, and have been stable against real local data for several releases.
 
 #### Beta adapters
 
-Beta adapters are off by default. Opt in with an env var when starting the server:
+The remaining beta adapters are off by default. Opt in with an env var when starting the server:
 
 ```bash
-STACKUNDERFLOW_BETA_CURSOR=1 stackunderflow start
-STACKUNDERFLOW_BETA_CLINE=1 stackunderflow start
+STACKUNDERFLOW_BETA_KILOCODE=1 stackunderflow start
+STACKUNDERFLOW_BETA_QWEN=1 STACKUNDERFLOW_BETA_GEMINI=1 stackunderflow start
 ```
 
-Both are macOS-only in v1. See [docs/multi-provider.md](docs/multi-provider.md) for the full feature reference and [docs/adapters.md](docs/adapters.md) for how to write a new adapter.
+The flag parser accepts `1`, `true`, `yes`, `on` (case-insensitive). Most beta adapters are macOS-only in v1. See [docs/multi-provider.md](docs/multi-provider.md) for the full feature reference and [docs/adapters.md](docs/adapters.md) for how to write a new adapter.
 
 ## Privacy
 
