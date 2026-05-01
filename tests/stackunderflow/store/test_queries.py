@@ -157,3 +157,145 @@ def test_cross_project_daily_totals_since_filter(conn) -> None:
     rows = queries.cross_project_daily_totals(conn, since="2026-04-15T00:00:00+00:00")
     total_in = sum(r[3] for r in rows)
     assert total_in == 50  # 20 + 30, not 10
+
+
+def test_cross_project_daily_totals_carries_speed(conn) -> None:
+    """The speed flag is appended at the end of each tuple (v003)."""
+    pa = _seed_project(conn, slug="proj-a")
+    sa = _seed_session(conn, pa, "s-a")
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, speed, raw_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (sa, 0, "2026-04-15T10:00:00+00:00", "assistant",
+         "claude-opus-4-6", 100, 50, "fast", "{}"),
+    )
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, speed, raw_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (sa, 1, "2026-04-15T11:00:00+00:00", "assistant",
+         "claude-opus-4-6", 100, 50, "standard", "{}"),
+    )
+    rows = queries.cross_project_daily_totals(conn)
+    speeds = sorted(r[6] for r in rows)
+    assert speeds == ["fast", "standard"]
+
+
+# ── fast-mode cost path ──────────────────────────────────────────────────
+
+def _seed_assistant_message(
+    conn: sqlite3.Connection,
+    *,
+    session_fk: int,
+    seq: int,
+    timestamp: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    speed: str = "standard",
+) -> None:
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, speed, raw_json) "
+        "VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, '{}')",
+        (session_fk, seq, timestamp, model, input_tokens, output_tokens, speed),
+    )
+
+
+def test_get_global_stats_applies_fast_mode_multiplier(conn) -> None:
+    """Opus rows tagged speed='fast' must price at 6× via compute_cost.
+
+    Seeds two assistant messages that are identical *except* for ``speed``.
+    The fast row's slice of ``daily_costs`` and ``models[opus].cost`` must
+    be 6× the standard row's slice — closing the SQL-path gap PR #44 left.
+    """
+    from stackunderflow.infra.costs import compute_cost
+
+    pa = _seed_project(conn, slug="proj-a")
+    sa = _seed_session(conn, pa, "s-a")
+    _seed_assistant_message(
+        conn, session_fk=sa, seq=0,
+        timestamp="2026-04-15T10:00:00+00:00",
+        model="claude-opus-4-6",
+        input_tokens=1000, output_tokens=500,
+        speed="standard",
+    )
+    _seed_assistant_message(
+        conn, session_fk=sa, seq=1,
+        timestamp="2026-04-15T11:00:00+00:00",
+        model="claude-opus-4-6",
+        input_tokens=1000, output_tokens=500,
+        speed="fast",
+    )
+
+    stats = queries.get_global_stats(conn)
+    # Both rows roll into the same day & model.
+    daily_cost = stats["daily_costs"][0]["cost"]
+    model_cost = stats["models"]["claude-opus-4-6"]["cost"]
+
+    # Compute the expected value using the same compute_cost the query
+    # uses, so this test pins behavior, not absolute dollar figures.
+    standard_cost = compute_cost(
+        {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0},
+        "claude-opus-4-6",
+        speed="standard",
+    )["total_cost"]
+    fast_cost = compute_cost(
+        {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0},
+        "claude-opus-4-6",
+        speed="fast",
+    )["total_cost"]
+    expected = standard_cost + fast_cost
+
+    assert daily_cost == pytest.approx(expected)
+    assert model_cost == pytest.approx(expected)
+    # And the priority-tier slice is 6× the standard slice — that's the
+    # whole point of the fast-mode multiplier.
+    assert fast_cost == pytest.approx(standard_cost * 6.0)
+
+
+def test_get_global_stats_standard_only_unchanged(conn) -> None:
+    """Sessions without any fast rows must produce the same numbers as
+    pre-v003 — no regression for the common case."""
+    from stackunderflow.infra.costs import compute_cost
+
+    pa = _seed_project(conn, slug="proj-a")
+    sa = _seed_session(conn, pa, "s-a")
+    _seed_assistant_message(
+        conn, session_fk=sa, seq=0,
+        timestamp="2026-04-15T10:00:00+00:00",
+        model="claude-sonnet-4-6",
+        input_tokens=2000, output_tokens=1000,
+    )
+    stats = queries.get_global_stats(conn)
+    expected = compute_cost(
+        {"input": 2000, "output": 1000, "cache_creation": 0, "cache_read": 0},
+        "claude-sonnet-4-6",
+        speed="standard",
+    )["total_cost"]
+    assert stats["models"]["claude-sonnet-4-6"]["cost"] == pytest.approx(expected)
+
+
+def test_get_global_stats_sonnet_fast_no_multiplier(conn) -> None:
+    """Sonnet on the priority tier still bills at 1× — only Opus families
+    get the multiplier per the AnthropicPricer contract.
+    """
+    from stackunderflow.infra.costs import compute_cost
+
+    pa = _seed_project(conn, slug="proj-a")
+    sa = _seed_session(conn, pa, "s-a")
+    _seed_assistant_message(
+        conn, session_fk=sa, seq=0,
+        timestamp="2026-04-15T10:00:00+00:00",
+        model="claude-sonnet-4-6",
+        input_tokens=1000, output_tokens=500,
+        speed="fast",
+    )
+    stats = queries.get_global_stats(conn)
+    standard_expected = compute_cost(
+        {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0},
+        "claude-sonnet-4-6",
+        speed="standard",
+    )["total_cost"]
+    assert stats["models"]["claude-sonnet-4-6"]["cost"] == pytest.approx(standard_expected)

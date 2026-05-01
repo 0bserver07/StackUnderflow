@@ -58,14 +58,20 @@ def build_report(
         conn.execute(session_sql, s_params).fetchall()
     )
 
-    # Accumulate per-project totals
+    # Accumulate per-project totals. Each row carries a ``speed`` flag
+    # appended by ``cross_project_daily_totals`` so the Anthropic
+    # priority/fast tier 6× multiplier kicks in for Opus rows.
     per_slug: dict[str, dict] = {}
-    for slug, _day, model, input_tokens, output_tokens, msg_count in rows:
+    for row in rows:
+        slug, _day, model, input_tokens, output_tokens, msg_count = row[:6]
+        speed = row[6] if len(row) >= 7 else "standard"
         entry = per_slug.setdefault(slug, {"messages": 0, "cost": 0.0})
         entry["messages"] += msg_count
         if model:
             entry["cost"] += compute_cost(
-                {"input": input_tokens or 0, "output": output_tokens or 0}, model
+                {"input": input_tokens or 0, "output": output_tokens or 0},
+                model,
+                speed=speed,
             )["total_cost"]
 
     # Apply include/exclude
