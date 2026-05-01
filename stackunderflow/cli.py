@@ -23,7 +23,7 @@ from stackunderflow.reports.export import (
     run_export,
     safe_write_text,
 )
-from stackunderflow.reports.optimize import find_waste
+from stackunderflow.reports.optimize import find_patterns, find_waste
 from stackunderflow.reports.render import (
     render_json,
     render_status_line,
@@ -901,7 +901,14 @@ def export_cmd(
 @click.option("--project", "include", multiple=True)
 @click.option("--exclude", "exclude", multiple=True)
 def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
-    """Find wasted spend: sessions where the assistant had to retry repeatedly."""
+    """Find wasted spend: looped Q&A pairs plus seven structural waste patterns.
+
+    The legacy ``waste`` block lists projects where the assistant had to
+    retry repeatedly. The ``patterns`` block surfaces structural waste
+    detected from filesystem state and tool-call history (bloated
+    CLAUDE.md, unused MCP servers, ghost agents, junk reads, cache
+    thrash, oversized bash output, exploration-only sessions).
+    """
     try:
         scope = parse_period(period)
     except ValueError as e:
@@ -914,23 +921,46 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
             include=list(include) or None,
             exclude=list(exclude) or None,
         )
+        patterns = find_patterns(
+            conn,
+            scope=scope,
+            project_filter=list(include) or None,
+        )
     finally:
         conn.close()
 
     if fmt == "json":
-        click.echo(render_json(waste))
+        payload = {
+            "scope": scope.label,
+            "waste": waste,
+            "patterns": [p.to_dict() for p in patterns],
+        }
+        click.echo(render_json(payload))
         return
 
-    if not waste:
-        click.echo(f"No looped Q&A pairs found in {scope.label}.")
+    if not waste and not patterns:
+        click.echo(f"No waste or structural patterns found in {scope.label}.")
         return
 
     click.echo(f"Waste report — {scope.label}")
     click.echo("")
-    for row in waste:
-        click.echo(f"  {row['project']}: {row['looped_pairs']} looped pair(s)")
-        for q in row["sample_questions"]:
-            click.echo(f"    - {q}")
+    if waste:
+        click.echo("Q&A loops:")
+        for row in waste:
+            click.echo(f"  {row['project']}: {row['looped_pairs']} looped pair(s)")
+            for q in row["sample_questions"]:
+                click.echo(f"    - {q}")
+        click.echo("")
+
+    if patterns:
+        click.echo("Structural patterns:")
+        for f in patterns:
+            badge = f"[{f.severity.upper()}]"
+            click.echo(f"  {badge} {f.pattern_id}: {f.title}")
+            click.echo(f"      {f.description}")
+            if f.estimated_waste_tokens is not None:
+                click.echo(f"      ~{f.estimated_waste_tokens:,} wasted tokens")
+            click.echo(f"      fix: {f.suggested_fix}")
 
 
 @cli.command()
