@@ -5,10 +5,16 @@ JSONL, Codex's rollout JSONL, etc.) into a stream of normalised `Record`s.
 The ingest layer drives adapters; route handlers and reports only ever see
 store rows.
 
-Beta adapters are gated by environment variables (default: off):
+Default-on adapters (always registered):
 
-  STACKUNDERFLOW_BETA_CURSOR=1         # opt into the Cursor (vscdb) adapter
-  STACKUNDERFLOW_BETA_CLINE=1          # opt into the Cline (vscode globalStorage) adapter
+  - Claude Code (per-project JSONL + legacy ~/.claude/history.jsonl)
+  - Codex (rollout JSONL)
+  - Cursor (vscdb) — promoted out of beta in v0.7.0
+  - Cline (VS Code globalStorage) — promoted out of beta in v0.7.0
+
+Beta adapters are gated by environment variables (default: off). The 12 below
+remain opt-in pending broader real-world validation:
+
   STACKUNDERFLOW_BETA_KILOCODE=1       # opt into the KiloCode adapter (Cline parser)
   STACKUNDERFLOW_BETA_ROOCODE=1        # opt into the Roo Code adapter (Cline parser)
   STACKUNDERFLOW_BETA_OPENCODE=1       # opt into the OpenCode (SQLite) adapter
@@ -54,24 +60,18 @@ def _beta_enabled(name: str) -> bool:
 
 
 from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
+from .cline import ClineAdapter as _ClineAdapter  # noqa: E402
 from .codex import CodexAdapter as _CodexAdapter  # noqa: E402
+from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
 
 register(_ClaudeAdapter())
 register(_CodexAdapter())
 
-# Beta: Cursor (vscdb). Off by default — set STACKUNDERFLOW_BETA_CURSOR=1
-# to enable. macOS-only for v1; spec §3.1.
-if _beta_enabled("CURSOR"):
-    from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
+# Cursor (vscdb). macOS-only for v1; spec §3.1.
+register(_CursorAdapter())
 
-    register(_CursorAdapter())
-
-# Beta: Cline (VS Code globalStorage). Off by default — set
-# STACKUNDERFLOW_BETA_CLINE=1 to enable. macOS-only for v1; spec §3.2.
-if _beta_enabled("CLINE"):
-    from .cline import ClineAdapter as _ClineAdapter  # noqa: E402
-
-    register(_ClineAdapter())
+# Cline (VS Code globalStorage). macOS-only for v1; spec §3.2.
+register(_ClineAdapter())
 
 # Beta: KiloCode (VS Code globalStorage, Cline parser reuse). Off by
 # default — set STACKUNDERFLOW_BETA_KILOCODE=1 to enable. macOS-only for v1.
