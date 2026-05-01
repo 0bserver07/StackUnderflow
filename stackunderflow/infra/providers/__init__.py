@@ -18,10 +18,14 @@ from .continue_pricer import ContinuePricer
 from .copilot import CopilotPricer
 from .cursor import CursorPricer
 from .cursor_agent import CursorAgentPricer
+from .droid import DroidPricer
 from .gemini import GeminiPricer
 from .kilocode import KiloCodePricer
+from .kiro import KiroPricer
 from .openai import OpenAIPricer
+from .openclaw import OpenClawPricer
 from .opencode import OpenCodePricer
+from .pi import PiPricer
 from .qwen import QwenPricer
 from .roocode import RooCodePricer
 
@@ -41,15 +45,19 @@ _GEMINI = GeminiPricer()
 _COPILOT = CopilotPricer()
 _CODEIUM = CodeiumPricer()
 _CONTINUE = ContinuePricer()
+_DROID = DroidPricer()
+_KIRO = KiroPricer()
+_OPENCLAW = OpenClawPricer()
+_PI = PiPricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
 # (``claude`` / ``codex`` / ``cursor`` / ``cline`` / ``kilocode`` /
 # ``roocode`` / ``opencode`` / ``cursor-agent`` / ``qwen`` / ``gemini`` /
-# ``copilot`` / ``codeium`` / ``continue``) and from explicit provider
-# arguments (``anthropic`` / ``openai``) to the right pricer singleton.
-# Multiple names point at the same instance so callers can compare with
-# ``is``.
+# ``copilot`` / ``codeium`` / ``continue`` / ``droid`` / ``kiro`` /
+# ``openclaw`` / ``pi``) and from explicit provider arguments
+# (``anthropic`` / ``openai``) to the right pricer singleton. Multiple
+# names point at the same instance so callers can compare with ``is``.
 _REGISTRY: dict[str, ProviderPricer] = {
     "anthropic": _ANTHROPIC,
     "claude": _ANTHROPIC,
@@ -66,6 +74,10 @@ _REGISTRY: dict[str, ProviderPricer] = {
     "copilot": _COPILOT,
     "codeium": _CODEIUM,
     "continue": _CONTINUE,
+    "droid": _DROID,
+    "kiro": _KIRO,
+    "openclaw": _OPENCLAW,
+    "pi": _PI,
 }
 
 
