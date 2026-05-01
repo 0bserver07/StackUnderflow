@@ -75,24 +75,23 @@ stackunderflow init
 
 ## Using as a Library
 
-StackUnderflow also works as a Python package for scripting and automation:
+StackUnderflow also works as a Python package for scripting and automation. The
+public API reads from the local SQLite store at `~/.stackunderflow/store.db` so
+you get every project from every provider that has been ingested:
 
 ```python
 import stackunderflow
 
-# List all Claude Code projects on your machine
+# Every project the local store knows about — provider-tagged.
 projects = stackunderflow.list_projects()
-# [{"dir_name": "...", "log_path": "...", ...}, ...]
+# [{"slug": ..., "provider": "claude" | "codex" | ...,
+#   "display_name": ..., "path": ..., "first_seen": ..., "last_modified": ...}, ...]
 
-# Query the session store directly
-from stackunderflow.store import db, queries
+# Filter to one provider:
+codex_only = stackunderflow.list_projects(provider="codex")
 
-from pathlib import Path
-store = Path.home() / ".stackunderflow" / "store.db"
-conn = db.connect(store)
-project = queries.get_project(conn, slug=projects[0]["dir_name"])
-messages, stats = queries.get_project_stats(conn, project_id=project.id)
-conn.close()
+# Pipeline-formatted messages + statistics for one project:
+messages, stats = stackunderflow.process(projects[0]["slug"])
 
 tokens = stats["overview"]["total_tokens"]
 print(f"Sessions: {stats['overview']['sessions']}")
@@ -100,9 +99,14 @@ print(f"Tokens: {tokens['input']:,} in / {tokens['output']:,} out")
 print(f"Total cost: ${stats['overview']['total_cost']:.2f}")
 ```
 
-The stats modules are also importable for custom workflows:
+If the store doesn't exist yet (fresh install, no `stackunderflow init` run),
+`list_projects()` returns an empty list rather than raising. `process()` raises
+`KeyError` when a slug isn't found.
+
+For lower-level access, the store helpers are still importable:
 
 ```python
+from stackunderflow.store import db, queries
 from stackunderflow.stats import classifier, enricher, aggregator, formatter
 from stackunderflow.infra.discovery import locate_logs
 ```
