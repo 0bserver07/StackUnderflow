@@ -21,9 +21,48 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 import stackunderflow.deps as deps
+from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.store import db, queries
 
 router = APIRouter()
+
+
+# ── currency conversion helpers ──────────────────────────────────────────────
+
+# Cost-bearing fields inside the §A3 analytics payload. Each is converted
+# from USD into the active currency so the frontend never has to multiply
+# by an FX rate.
+_COST_FIELDS_PER_ROW: tuple[str, ...] = (
+    "cost",
+    "total_cost",
+    "estimated_retry_cost",
+    "estimated_cost",
+)
+
+
+def _convert_amount(value: Any, rate: float) -> Any:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) * rate
+    return value
+
+
+def _convert_in_place(node: Any, rate: float) -> Any:
+    """Recursively scale every cost-named numeric leaf by ``rate``.
+
+    We deliberately key on field names — touching every numeric value would
+    incorrectly scale token counts, durations, and retry counts that share
+    a parent dict with cost figures.
+    """
+    if isinstance(node, dict):
+        for key, val in list(node.items()):
+            if key in _COST_FIELDS_PER_ROW:
+                node[key] = _convert_amount(val, rate)
+            else:
+                _convert_in_place(val, rate)
+    elif isinstance(node, list):
+        for item in node:
+            _convert_in_place(item, rate)
+    return node
 
 
 # The 9 analytics keys that moved off ``/api/dashboard-data`` (spec §A3).
@@ -88,6 +127,12 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
             # for the typed React consumers downstream.
             val = {} if key in {"tool_costs", "token_composition", "outliers", "error_cost", "trends"} else []
         payload[key] = val
+
+    currency = active_currency_payload()
+    if currency["rate_from_usd"] != 1.0:
+        for key in COST_KEYS:
+            _convert_in_place(payload[key], currency["rate_from_usd"])
+    payload["currency"] = currency
     return payload
 
 

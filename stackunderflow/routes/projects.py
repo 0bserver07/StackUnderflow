@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
+from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.infra.discovery import locate_logs as find_claude_logs
 from stackunderflow.store import db, queries
 
@@ -223,6 +224,14 @@ async def get_projects(
         finally:
             conn.close()
 
+        currency = active_currency_payload()
+        rate = currency["rate_from_usd"]
+        if rate != 1.0 and include_stats:
+            for proj in projects:
+                stats = proj.get("stats")
+                if isinstance(stats, dict) and "total_cost" in stats:
+                    stats["total_cost"] = float(stats["total_cost"]) * rate
+
         return JSONResponse(
             {
                 "projects": projects,
@@ -232,6 +241,7 @@ async def get_projects(
                     "cached_count": 0,
                     "total_projects": total_count,
                 },
+                "currency": currency,
             }
         )
 

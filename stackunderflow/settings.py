@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 _APP_DIR = Path.home() / ".stackunderflow"
 _CFG_FILE = _APP_DIR / "config.json"
+
+_ISO_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 
 
 class _Opt:
@@ -27,9 +30,10 @@ class _Opt:
     are file-only and skip the env-var leg of the resolution chain.
     """
 
-    def __init__(self, default: Any, env: str | None) -> None:
+    def __init__(self, default: Any, env: str | None, validator: Any = None) -> None:
         self.default = default
         self.env = env
+        self.validator = validator
         self.attr: str = ""           # set by __set_name__
 
     def __set_name__(self, owner: type, name: str) -> None:
@@ -77,6 +81,27 @@ class _Opt:
                 return self.default
         return raw
 
+    def validate(self, value: Any) -> Any:
+        """Run the optional validator. Raise ``ValueError`` on rejection."""
+        if self.validator is None:
+            return value
+        return self.validator(value)
+
+
+def _validate_currency(value: Any) -> str:
+    """Currency is a 3-letter ISO 4217 code, uppercase. Reject anything else.
+
+    We don't validate against Frankfurter's published list at write-time —
+    that would couple the CLI to a network round-trip. Runtime falls back
+    to USD if a fetch for an unknown code fails.
+    """
+    if not isinstance(value, str):
+        raise ValueError("currency must be a 3-letter ISO 4217 code (e.g. USD, EUR, GBP)")
+    code = value.strip().upper()
+    if not _ISO_CURRENCY_RE.match(code):
+        raise ValueError("currency must be a 3-letter ISO 4217 code (e.g. USD, EUR, GBP)")
+    return code
+
 
 class Settings:
     """Reads configuration with env > file > default priority.
@@ -91,6 +116,8 @@ class Settings:
     messages_initial_load        = _Opt(500,   "MESSAGES_INITIAL_LOAD")
     log_level                    = _Opt("INFO","LOG_LEVEL")
     auto_reindex_on_ingest       = _Opt(True,  "AUTO_REINDEX_ON_INGEST")
+    currency                     = _Opt("USD", "STACKUNDERFLOW_CURRENCY",
+                                         validator=_validate_currency)
     # User-provided alias map: proxy-rewritten model id → canonical id.
     # File-only (no env var — a JSON dict is awkward to set in shell).
     # Manage via ``stackunderflow cfg model-alias {set,rm,ls}``.
@@ -108,6 +135,9 @@ class Settings:
         return {k: self.get(k) for k in self._keys()}
 
     def persist(self, key: str, value: Any) -> None:
+        desc = type(self).__dict__.get(key)
+        if isinstance(desc, _Opt):
+            value = desc.validate(value)
         data = _load()
         data[key] = value
         _save(data)

@@ -101,6 +101,11 @@ ignore = [
 "stackunderflow/services/search_service.py" = ["S608"]
 # Pricing service fetches a single hardcoded https URL from LiteLLM
 "stackunderflow/services/pricing_service.py" = ["S310"]
+# Currency module fetches a single hardcoded https URL from Frankfurter;
+# isinstance(x, (int, float)) is the conventional numeric guard
+"stackunderflow/infra/currency.py" = ["S310", "UP038"]
+# isinstance(x, (int, float)) numeric guard in cost-conversion helper
+"stackunderflow/routes/cost.py" = ["UP038"]
 # `assert _cache is not None` is type-narrowing after a conditional init,
 # not a runtime invariant we rely on
 "stackunderflow/pipeline/history_reader.py" = ["S101"]

@@ -458,7 +458,7 @@ $ stackunderflow cfg set log_level DEBUG
 ```
 
 Valid keys: `port`, `host`, `auto_browser`, `max_date_range_days`,
-`messages_initial_load`, `log_level`. Passing an unknown key exits with an error.
+`messages_initial_load`, `log_level`, `currency`. Passing an unknown key exits with an error.
 
 > Legacy alias: `stackunderflow config set KEY VALUE`
 
@@ -694,6 +694,7 @@ $ stackunderflow backup auto --disable
 | `max_date_range_days` | int | `30` | Maximum days allowed in a dashboard date range query |
 | `messages_initial_load` | int | `500` | Number of messages loaded on initial dashboard view |
 | `log_level` | str | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `currency` | str | `USD` | Display currency for cost figures — any 3-letter ISO 4217 code |
 | `model_aliases` | dict[str,str] | `{}` | Proxy-rewritten model id → canonical id (manage via `cfg model-alias`) |
 
 **Example — set, verify, then reset a key:**
@@ -726,6 +727,7 @@ Environment variables take precedence over the config file.
 | `max_date_range_days` | `MAX_DATE_RANGE_DAYS` | `MAX_DATE_RANGE_DAYS=90 stackunderflow start` |
 | `messages_initial_load` | `MESSAGES_INITIAL_LOAD` | `MESSAGES_INITIAL_LOAD=1000 stackunderflow start` |
 | `log_level` | `LOG_LEVEL` | `LOG_LEVEL=DEBUG stackunderflow start` |
+| `currency` | `STACKUNDERFLOW_CURRENCY` | `STACKUNDERFLOW_CURRENCY=GBP stackunderflow start` |
 
 Boolean env vars accept `1`, `true`, `yes`, `on` (case-insensitive) as truthy values;
 anything else is treated as false.
@@ -734,6 +736,22 @@ anything else is treated as false.
 1. Environment variable
 2. Config file (`~/.stackunderflow/config.json`)
 3. Built-in default
+
+---
+
+## Currency
+
+Cost figures default to USD. To display them in another currency set the `currency`
+key to any 3-letter ISO 4217 code (`stackunderflow cfg set currency GBP` or
+`STACKUNDERFLOW_CURRENCY=EUR`). Validation only checks the format — runtime resolves
+the rate via the public Frankfurter API (ECB FX data, no auth) and caches it for
+24h at `~/.stackunderflow/cache/exchange-rate.json`. Cost computation stays in USD
+internally; conversion happens at the API boundary, so the cached rate-card and the
+displayed numbers are independent. If the FX fetch fails and the cache is empty or
+stale-and-uncached, responses fall back to USD with `rate_from_usd=1.0` rather than
+crash. Every API endpoint that returns dollar figures now also returns a
+`currency: {code, symbol, rate_from_usd}` block at the top level so the frontend
+can render symbols and labels without a second round-trip.
 
 ---
 

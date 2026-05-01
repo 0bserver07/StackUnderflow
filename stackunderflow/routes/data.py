@@ -12,8 +12,9 @@ from fastapi.responses import JSONResponse
 import stackunderflow.deps as deps
 from stackunderflow.adapters import registered
 from stackunderflow.api.messages import get_messages_summary, get_paginated_messages
+from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
-from stackunderflow.routes.cost import COST_KEYS
+from stackunderflow.routes.cost import COST_KEYS, _convert_in_place
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
@@ -101,6 +102,11 @@ async def get_stats(timezone_offset: int = 0):
     finally:
         conn.close()
     deps.logger.debug(f"stats [store] {(time.time()-t0)*1000:.1f}ms")
+    currency = active_currency_payload()
+    if currency["rate_from_usd"] != 1.0:
+        _convert_in_place(stats, currency["rate_from_usd"])
+    if isinstance(stats, dict):
+        stats["currency"] = currency
     return stats
 
 
@@ -126,6 +132,8 @@ async def get_dashboard_data(timezone_offset: int = 0):
                 "messages_initial_load": deps.config.get("messages_initial_load"),
                 "max_date_range_days": deps.config.get("max_date_range_days"),
             }
+            payload["statistics"] = _apply_currency_to_stats(payload["statistics"])
+            payload["currency"] = active_currency_payload()
             deps.logger.debug(
                 f"dashboard-data [hit] {(time.time()-t0)*1000:.1f}ms"
             )
@@ -165,9 +173,28 @@ async def get_dashboard_data(timezone_offset: int = 0):
         },
     }
     with _DASHBOARD_CACHE_LOCK:
+        # Cache the USD-denominated payload — currency conversion happens
+        # on every request so a config change doesn't require a cache flush.
         _DASHBOARD_CACHE[cache_key] = (sig, payload)
+    payload = dict(payload)
+    payload["statistics"] = _apply_currency_to_stats(payload["statistics"])
+    payload["currency"] = active_currency_payload()
     deps.logger.debug(f"dashboard-data [miss] {(time.time()-t0)*1000:.1f}ms")
     return payload
+
+
+def _apply_currency_to_stats(stats: dict) -> dict:
+    """Return a copy of ``stats`` with cost figures scaled to the active currency."""
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    if rate == 1.0:
+        return stats
+    # Deep-copy via JSON round-trip — _convert_in_place mutates, and we don't
+    # want to scale the cached USD payload.
+    import copy
+    scaled = copy.deepcopy(stats)
+    _convert_in_place(scaled, rate)
+    return scaled
 
 
 @router.get("/api/messages")

@@ -210,8 +210,14 @@ def cfg_set(key: str, value: str):
         parsed = value.lower() in ("1", "true", "yes", "on")
     elif isinstance(ref, int):
         parsed = int(value)
-    Settings().persist(key, parsed)
-    click.echo(f"  {key} = {parsed}")
+    try:
+        Settings().persist(key, parsed)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="VALUE") from e
+    # Persist may normalise the value (e.g. uppercase a currency code) — read
+    # it back so the echoed confirmation matches what's on disk.
+    final = Settings().get(key, parsed)
+    click.echo(f"  {key} = {final}")
 
 
 @cfg_group.command("rm")
