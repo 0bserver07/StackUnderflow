@@ -163,12 +163,17 @@ def _upsert_session(conn: sqlite3.Connection, project_id: int, ref: SessionRef) 
 
 
 def _insert_message(conn: sqlite3.Connection, session_fk: int, rec: Record) -> int:
+    # ``speed`` carries Anthropic's priority/fast tier flag (PR #44).
+    # Persisted to the messages table by v003 so SQL-driven cost paths
+    # (get_global_stats, services/compare, reports/export, build_enriched_dataset)
+    # can apply the 6× Opus multiplier without round-tripping raw_json.
     cur = conn.execute(
         "INSERT OR IGNORE INTO messages ("
         "  session_fk, seq, timestamp, role, model, "
         "  input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
-        "  content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid, "
+        "  speed"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_fk,
             rec.seq,
@@ -185,6 +190,7 @@ def _insert_message(conn: sqlite3.Connection, session_fk: int, rec: Record) -> i
             int(rec.is_sidechain),
             rec.uuid,
             rec.parent_uuid,
+            rec.speed,
         ),
     )
     return cur.rowcount

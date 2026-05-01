@@ -205,11 +205,16 @@ def _build_daily_and_projects(
     correctly per model. We then collapse model dimension for the daily
     rows the CSV expects.
     """
+    # Group by ``speed`` alongside model so Anthropic's priority/fast tier
+    # rows price at 6× via compute_cost(speed=...). The CSV daily/project
+    # rows still collapse the speed dimension (back-compat); only the
+    # cost arithmetic changes.
     sql = (
         "SELECT projects.provider AS provider, "
         "       projects.slug AS slug, "
         "       substr(messages.timestamp, 1, 10) AS day, "
         "       COALESCE(messages.model, '') AS model, "
+        "       COALESCE(messages.speed, 'standard') AS speed, "
         "       SUM(messages.input_tokens)        AS in_tok, "
         "       SUM(messages.output_tokens)       AS out_tok, "
         "       SUM(messages.cache_read_tokens)   AS cache_r, "
@@ -231,7 +236,7 @@ def _build_daily_and_projects(
     if provider:
         sql += "AND projects.provider = ? "
         params.append(provider)
-    sql += "GROUP BY provider, slug, day, model ORDER BY day, slug"
+    sql += "GROUP BY provider, slug, day, model, speed ORDER BY day, slug"
 
     rows = conn.execute(sql, params).fetchall()
 
@@ -254,6 +259,7 @@ def _build_daily_and_projects(
         prov = r["provider"] or ""
         day = r["day"] or ""
         model = r["model"]
+        speed = r["speed"] or "standard"
         in_tok = r["in_tok"] or 0
         out_tok = r["out_tok"] or 0
         cache_r = r["cache_r"] or 0
@@ -270,7 +276,7 @@ def _build_daily_and_projects(
             }
             try:
                 cost = compute_cost(
-                    tokens, model, provider=prov or "anthropic",
+                    tokens, model, provider=prov or "anthropic", speed=speed,
                 )["total_cost"]
             except Exception:  # noqa: BLE001 — cost is best-effort
                 cost = 0.0
@@ -465,11 +471,18 @@ def _models_from_messages(
     include: list[str] | None,
     exclude: list[str] | None,
 ) -> dict[str, dict]:
-    """Per-model rollup over the same scope. Empty model name dropped."""
+    """Per-model rollup over the same scope. Empty model name dropped.
+
+    Group by ``(model, speed)`` so the Anthropic priority/fast tier rows
+    price at 6× via compute_cost(speed=...). The output dict still keys
+    on model alone — speed buckets within one model collapse on the
+    cost / token totals.
+    """
     sql = (
         "SELECT projects.provider AS provider, "
         "       projects.slug AS slug, "
         "       COALESCE(messages.model, '') AS model, "
+        "       COALESCE(messages.speed, 'standard') AS speed, "
         "       SUM(messages.input_tokens)        AS in_tok, "
         "       SUM(messages.output_tokens)       AS out_tok, "
         "       SUM(messages.cache_read_tokens)   AS cache_r, "
@@ -490,7 +503,7 @@ def _models_from_messages(
     if provider:
         sql += "AND projects.provider = ? "
         params.append(provider)
-    sql += "GROUP BY provider, slug, model"
+    sql += "GROUP BY provider, slug, model, speed"
 
     inc = set(include) if include else None
     exc = set(exclude) if exclude else None
@@ -505,6 +518,7 @@ def _models_from_messages(
         model = r["model"]
         if not model:
             continue
+        speed = r["speed"] or "standard"
         in_tok = r["in_tok"] or 0
         out_tok = r["out_tok"] or 0
         cache_r = r["cache_r"] or 0
@@ -521,6 +535,7 @@ def _models_from_messages(
                 },
                 model,
                 provider=r["provider"] or "anthropic",
+                speed=speed,
             )["total_cost"]
         except Exception:  # noqa: BLE001
             cost = 0.0

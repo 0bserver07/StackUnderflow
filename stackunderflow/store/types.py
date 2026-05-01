@@ -49,6 +49,11 @@ class MessageRow:
     is_sidechain: bool
     uuid: str | None
     parent_uuid: str | None
+    # Anthropic priority/fast tier flag persisted by migration v003.
+    # ``"standard"`` for everything except Claude records whose
+    # ``message.usage.service_tier == "priority"``. Defaulted so older
+    # callers and test fixtures that omit the field stay valid.
+    speed: str = "standard"
 
 
 @dataclass(frozen=True, slots=True)

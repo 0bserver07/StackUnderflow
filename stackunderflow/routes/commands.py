@@ -88,9 +88,15 @@ def _interaction_to_command(ix: Interaction) -> dict[str, Any]:
     """Flatten an Interaction into the per-command row shape the Commands tab
     consumes. Mirrors the field set of ``command_costs`` (aggregator §1.2) but
     is **not** truncated to top 50 — every interaction in the project becomes
-    one entry here so offset/limit pagination makes sense."""
+    one entry here so offset/limit pagination makes sense.
+
+    Cost is bucketed by ``(model, speed)`` so Anthropic priority/fast-tier
+    Opus messages price at 6× via compute_cost(speed="fast"). Without the
+    speed dimension, mixed-tier sessions silently re-billed at standard
+    rates (the same bug the v003 store migration closes for the SQL path).
+    """
     tokens: Counter[str] = Counter()
-    by_model: dict[str, Counter[str]] = {}
+    by_model: dict[tuple[str, str], Counter[str]] = {}
     had_error = False
     models_used: set[str] = set()
     for r in ix.responses + ix.tool_results:
@@ -100,13 +106,13 @@ def _interaction_to_command(ix: Interaction) -> dict[str, Any]:
             tokens[k] += v
         if r.kind == "assistant" and r.model and r.model != "N/A":
             models_used.add(r.model)
-            m = by_model.setdefault(r.model, Counter())
+            m = by_model.setdefault((r.model, r.speed), Counter())
             for k, v in r.tokens.items():
                 m[k] += v
 
     cost = sum(
-        compute_cost(dict(tok_c), model)["total_cost"]
-        for model, tok_c in by_model.items()
+        compute_cost(dict(tok_c), model, speed=speed)["total_cost"]
+        for (model, speed), tok_c in by_model.items()
     )
 
     return {
