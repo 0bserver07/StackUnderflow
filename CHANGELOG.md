@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-01
+
 ### Performance
 - **Fingerprint cache for the Cursor (vscdb) adapter.** Cursor's `state.vscdb` lives at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` and grows monotonically — on a busy developer's machine it can easily hit 1+ GB. Every cold start of StackUnderflow used to re-parse the entire DB even when nothing had changed. The new `stackunderflow/infra/cursor_cache.py` module persists the parse output keyed by a cheap `(mtime, size)` fingerprint at `~/.stackunderflow/cache/cursor-results.json`; on subsequent reads, an unchanged DB skips SQLite entirely and the records are reconstituted from JSON. The cache is opt-IN-by-default (always on, no env var or setting); `since_offset > 0` resume reads bypass the cache by design (the on-disk payload is always a complete parse, not a slice). Any failure mode — missing file, corrupt JSON, schema-version mismatch (`version != 1`), per-record shape mismatch, or a stale fingerprint — falls through silently to a live SQLite parse so the cache can never break ingest. The new entry in `stackunderflow clear-cache` (and any `clear-cache` invocation going forward) wipes the file. Single-writer is assumed (one StackUnderflow server at a time), so no file locking. 17 new tests in `tests/stackunderflow/infra/test_cursor_cache.py` covering hit/miss based on fingerprint match, mtime/size deltas, JSON corruption fallback, schema-version fallback, and `clear_cache` semantics; 2 new tests in `tests/stackunderflow/adapters/test_cursor.py` proving the warm-cache path skips `_open_readonly` on the second call and that resume reads always re-parse.
 
