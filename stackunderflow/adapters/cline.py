@@ -1,7 +1,7 @@
-"""Cline (VS Code globalStorage) session adapter.
+"""Cline-family (VS Code globalStorage) session adapters.
 
-Reads tasks the Cline VS Code extension writes under
-``~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/``.
+Reads tasks Cline-compatible VS Code extensions write under
+``~/Library/Application Support/Code/User/globalStorage/{extensionId}/tasks/``.
 Each task is a directory ``{taskId}/`` containing two JSON files:
 
 - ``ui_messages.json`` — flat array of UI events. We treat ``type=="say"``
@@ -22,6 +22,11 @@ events at-or-before index N", not "seek to byte N". The
 it only checks monotonic ``seq`` and that resume yields strictly fewer
 records past a midpoint.
 
+The on-disk layout is identical for Cline, KiloCode and Roo Code — only
+the extension-id directory differs (codeburn-catalog §15). All three
+adapters subclass :class:`_VsCodeClineAdapter` and override only the
+class-level identifiers.
+
 Path constants follow codeburn:src/providers/vscode-cline-parser.ts.
 """
 
@@ -38,15 +43,15 @@ from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
 
-# path from codeburn:src/providers/vscode-cline-parser.ts
-_CLINE_GLOBAL_STORAGE_MACOS = (
+# Root of VS Code's globalStorage on macOS — extension directories live below.
+_VSCODE_GLOBAL_STORAGE_MACOS = (
     Path.home() / "Library" / "Application Support" / "Code" / "User"
-    / "globalStorage" / "saoudrizwan.claude-dev" / "tasks"
+    / "globalStorage"
 )
-# Windows / Linux paths kept here for documentation only — untested on this
+# Windows / Linux roots kept here for documentation only — untested on this
 # machine and not exercised by enumerate() in v1. See spec §5.
-# _CLINE_GLOBAL_STORAGE_WINDOWS = Path(...)  # untested
-# _CLINE_GLOBAL_STORAGE_LINUX = Path(...)    # untested
+# _VSCODE_GLOBAL_STORAGE_WINDOWS = Path(...)  # untested
+# _VSCODE_GLOBAL_STORAGE_LINUX = Path(...)    # untested
 
 # Anthropic-shape default when no <model> tag is present.
 _DEFAULT_MODEL = "cline-auto"
@@ -55,15 +60,30 @@ _DEFAULT_MODEL = "cline-auto"
 _MODEL_TAG_RE = re.compile(r"<model>([^<]+)</model>", re.IGNORECASE)
 
 
-class ClineAdapter:
-    """Source adapter for the Cline VS Code extension."""
+def _default_tasks_root(extension_id: str) -> Path:
+    """Return the macOS tasks root for the given VS Code extension id."""
+    return _VSCODE_GLOBAL_STORAGE_MACOS / extension_id / "tasks"
 
-    name = "cline"
+
+class _VsCodeClineAdapter:
+    """Shared parser for Cline-compatible VS Code extensions.
+
+    Subclasses override :attr:`name`, :attr:`_extension_id` and
+    :attr:`_project_slug` to point at their own globalStorage directory.
+    The on-disk format (``tasks/{taskId}/{ui_messages.json,
+    api_conversation_history.json}``) is identical across the family — see
+    codeburn-catalog §15 for the canonical reference.
+    """
+
+    # Subclasses MUST override these three class attributes.
+    name: str = ""
+    _extension_id: str = ""
+    _project_slug: str = ""
 
     def __init__(self, tasks_root: Path | None = None) -> None:
         # tasks_root is overridable so tests can point at synthetic fixtures
         # without monkey-patching Path.home().
-        self._root = tasks_root or _CLINE_GLOBAL_STORAGE_MACOS
+        self._root = tasks_root or _default_tasks_root(self._extension_id)
 
     # ── enumeration ───────────────────────────────────────────────────
 
@@ -85,9 +105,10 @@ class ClineAdapter:
 
             yield SessionRef(
                 provider=self.name,
-                # Cline doesn't carry a per-project context the way Claude
-                # does — every task lands under the same logical project.
-                project_slug="cline",
+                # Cline-family adapters don't carry a per-project context
+                # the way Claude does — every task lands under the same
+                # logical project (the provider name).
+                project_slug=self._project_slug,
                 session_id=task_dir.name,
                 file_path=ui_messages,
                 file_mtime=stat.st_mtime,
@@ -288,3 +309,43 @@ def _ts_to_iso(ts: object) -> str:
     if millis <= 0:
         return ""
     return datetime.fromtimestamp(millis / 1000.0, tz=UTC).isoformat()
+
+
+# ── concrete Cline-family adapters ────────────────────────────────────
+
+
+class ClineAdapter(_VsCodeClineAdapter):
+    """Source adapter for the Cline VS Code extension.
+
+    Extension id: ``saoudrizwan.claude-dev`` (codeburn-catalog §15).
+    """
+
+    name = "cline"
+    _extension_id = "saoudrizwan.claude-dev"
+    _project_slug = "cline"
+
+
+class KiloCodeAdapter(_VsCodeClineAdapter):
+    """Source adapter for the KiloCode VS Code extension.
+
+    Extension id: ``kilocode.kilo-code`` (codeburn-catalog §8). KiloCode
+    wraps the same Cline parser surface — only the globalStorage directory
+    differs.
+    """
+
+    name = "kilocode"
+    _extension_id = "kilocode.kilo-code"
+    _project_slug = "kilocode"
+
+
+class RooCodeAdapter(_VsCodeClineAdapter):
+    """Source adapter for the Roo Code VS Code extension.
+
+    Extension id: ``rooveterinaryinc.roo-cline`` (codeburn-catalog §14).
+    Roo Code wraps the same Cline parser surface — only the globalStorage
+    directory differs.
+    """
+
+    name = "roocode"
+    _extension_id = "rooveterinaryinc.roo-cline"
+    _project_slug = "roocode"

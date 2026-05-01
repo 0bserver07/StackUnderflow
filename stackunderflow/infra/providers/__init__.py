@@ -14,7 +14,9 @@ from .anthropic import AnthropicPricer
 from .base import ProviderPricer
 from .cline import ClinePricer
 from .cursor import CursorPricer
+from .kilocode import KiloCodePricer
 from .openai import OpenAIPricer
+from .roocode import RooCodePricer
 
 __all__ = ["ProviderPricer", "get_pricer"]
 
@@ -23,13 +25,15 @@ _ANTHROPIC = AnthropicPricer()
 _OPENAI = OpenAIPricer()
 _CURSOR = CursorPricer()
 _CLINE = ClinePricer()
+_KILOCODE = KiloCodePricer()
+_ROOCODE = RooCodePricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
-# (``claude`` / ``codex`` / ``cursor`` / ``cline``) and from explicit
-# provider arguments (``anthropic`` / ``openai``) to the right pricer
-# singleton. Multiple names point at the same instance so callers can
-# compare with ``is``.
+# (``claude`` / ``codex`` / ``cursor`` / ``cline`` / ``kilocode`` /
+# ``roocode``) and from explicit provider arguments (``anthropic`` /
+# ``openai``) to the right pricer singleton. Multiple names point at
+# the same instance so callers can compare with ``is``.
 _REGISTRY: dict[str, ProviderPricer] = {
     "anthropic": _ANTHROPIC,
     "claude": _ANTHROPIC,
@@ -37,6 +41,8 @@ _REGISTRY: dict[str, ProviderPricer] = {
     "codex": _OPENAI,
     "cursor": _CURSOR,
     "cline": _CLINE,
+    "kilocode": _KILOCODE,
+    "roocode": _ROOCODE,
 }
 
 
