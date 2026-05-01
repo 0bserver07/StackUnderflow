@@ -26,6 +26,7 @@ stackunderflow month [--format text|json] [--project P] [--exclude P]
 stackunderflow report [-p PERIOD] [--format text|json] [--project P] [--exclude P] [--provider PROV]
 stackunderflow export -f csv|json -o PATH [-p today|week|month|all] [--provider X] [--project P] [--exclude P] [--force]
 stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
+stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [--format text|json]
 
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
 stackunderflow cfg ls [--json]
@@ -426,6 +427,69 @@ Waste report — last 30 days
 
 $ stackunderflow optimize --period all --format json
 ```
+
+---
+
+### `stackunderflow compare`
+
+Side-by-side per-model comparison over a time window — answers "is it worth using Opus for this kind of work?" by surfacing one-shot rate, retry rate, cache hit rate, and unit economics ($/call, $/session) per model.
+
+```
+Usage: stackunderflow compare [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `-p, --period` | `today\|week\|month\|all` | `month` | Window over which to compare |
+| `--provider` | TEXT | (all) | Filter by provider id (`claude`, `codex`, `cursor`, …) |
+| `--project` | TEXT | (all) | Restrict to this project slug (repeatable) |
+| `--format` | `text\|json` | text | Output format |
+
+**Metrics:**
+
+- **1-shot %** — fraction of sessions where the user asked once, the assistant answered once, and that was it (heuristic: exactly 1 user + 1 assistant message).
+- **Retry rate** — `(assistant_messages / sessions) - 1`, i.e. the average number of *extra* assistant turns per session beyond the first answer.
+- **Cache %** — `cache_read / (cache_read + cache_create)`, the prompt-cache hit rate; high is good (most prompt context was reused).
+- **$/call** — `total_cost / calls` (per assistant message).
+- **$/session** — `total_cost / sessions` (sessions are attributed to whichever model dominated the session — most assistant messages wins, ties broken alphabetically).
+- **Total $** — sum of `compute_cost` over every assistant message in the window.
+
+**Examples:**
+
+```
+$ stackunderflow compare
+                              Compare — month
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┓
+┃ Model                      ┃ Sessions ┃ Calls ┃ 1-shot% ┃ Retry ┃ Cache% ┃ $/call  ┃ $/session ┃ Total$ ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━┩
+│ claude-opus-4-6            │       12 │   480 │   16.7% │ 39.00 │  92.4% │ $0.0210 │     $0.84 │ $10.07 │
+│ claude-sonnet-4-6          │       38 │ 1,240 │   34.2% │ 31.63 │  88.1% │ $0.0034 │     $0.11 │  $4.21 │
+│ gpt-5                      │        4 │    18 │   75.0% │  3.50 │   0.0% │ $0.0040 │     $0.02 │  $0.07 │
+└────────────────────────────┴──────────┴───────┴─────────┴───────┴────────┴─────────┴───────────┴────────┘
+
+$ stackunderflow compare --period week --provider claude --format json
+{
+  "period": "week",
+  "models": [
+    {
+      "model": "claude-opus-4-6",
+      "provider": "claude",
+      "sessions": 3,
+      "calls": 124,
+      "one_shot_pct": 0.0,
+      "retry_rate": 40.33,
+      "cache_hit_rate": 0.94,
+      "cost_per_call": 0.018,
+      "cost_per_session": 0.74,
+      "total_cost": 2.21,
+      "total_tokens": 4_120_000
+    }
+  ],
+  "generated": 1746125443.117
+}
+```
+
+The same data is available via `GET /api/compare` — see `docs/api-reference.md`.
 
 ---
 

@@ -963,6 +963,107 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
             click.echo(f"      fix: {f.suggested_fix}")
 
 
+_COMPARE_PERIODS = ("today", "week", "month", "all")
+
+
+@cli.command("compare")
+@click.option(
+    "-p", "--period",
+    type=click.Choice(_COMPARE_PERIODS),
+    default="month",
+    help="Window over which to compare (default: month).",
+)
+@click.option(
+    "--provider",
+    default=None,
+    help="Filter by provider id (e.g. claude, codex, cursor).",
+)
+@click.option(
+    "--project", "project",
+    multiple=True,
+    help="Restrict to this project slug (repeatable).",
+)
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(_VALID_FORMATS),
+    default="text",
+    help="Output format.",
+)
+def compare_cmd(period: str, provider: str | None, project: tuple[str, ...], fmt: str):
+    """Compare per-model metrics side-by-side over a window.
+
+    Renders one row per model with sessions, calls, one-shot %, retry
+    rate, cache hit %, $/call, $/session, and total $.
+    """
+    from stackunderflow.services.compare import build_compare_payload
+
+    project_filter = list(project) or None
+
+    conn = _open_store()
+    try:
+        payload = build_compare_payload(
+            conn,
+            period=period,
+            project_filter=project_filter,
+            provider_filter=provider,
+        )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    _render_compare_table(payload)
+
+
+def _render_compare_table(payload: dict) -> None:
+    """Pretty-print the compare payload as a Rich table."""
+    from rich.console import Console
+    from rich.table import Table
+
+    # ``width`` keeps Rich from truncating column headers when stdout
+    # isn't a terminal (CI / pipes / tests) — Rich falls back to 80 cols
+    # there which truncates "Sessions" to "Sessi…".
+    console = Console(force_terminal=False, highlight=False, width=160)
+    period = payload.get("period", "")
+    rows = payload.get("models", [])
+
+    if not rows:
+        console.print(f"[bold]Compare — {period}[/bold]")
+        console.print("[dim]No model activity in this window.[/dim]")
+        return
+
+    table = Table(
+        title=f"Compare — {period}",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("Model")
+    table.add_column("Sessions", justify="right")
+    table.add_column("Calls", justify="right")
+    table.add_column("1-shot%", justify="right")
+    table.add_column("Retry", justify="right")
+    table.add_column("Cache%", justify="right")
+    table.add_column("$/call", justify="right")
+    table.add_column("$/session", justify="right")
+    table.add_column("Total$", justify="right")
+
+    for row in rows:
+        table.add_row(
+            row["model"],
+            f"{row['sessions']:,}",
+            f"{row['calls']:,}",
+            f"{row['one_shot_pct'] * 100:.1f}%",
+            f"{row['retry_rate']:.2f}",
+            f"{row['cache_hit_rate'] * 100:.1f}%",
+            f"${row['cost_per_call']:.4f}",
+            f"${row['cost_per_session']:.2f}",
+            f"${row['total_cost']:.2f}",
+        )
+    console.print(table)
+
+
 @cli.command()
 def reindex():
     """Rebuild the session store from scratch."""
