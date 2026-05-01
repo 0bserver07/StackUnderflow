@@ -55,6 +55,7 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | POST | `/api/bookmarks/toggle` | Bookmarks |
 | GET | `/api/bookmarks/session/{id}` | Bookmarks |
 | GET | `/api/export` | Export |
+| GET | `/api/compare` | Compare |
 | GET | `/api/health` | Misc |
 | GET | `/api/pricing` | Misc |
 | POST | `/api/pricing/refresh` | Misc |
@@ -1273,3 +1274,61 @@ For `format=csv` the body is a multi-section CSV: one daily-rows block
 plus one activity block per period. For `format=json` the body is a
 period dict (with `--period`) or a `{today, last_7d, last_30d}` rollup
 (without). See the CLI reference for the full schema.
+
+---
+
+## Compare
+
+### GET /api/compare
+
+Per-model side-by-side comparison over a window. Same surface as the
+`stackunderflow compare` CLI — both share a single internal helper
+(`stackunderflow.services.compare.build_compare_payload`).
+
+**Query parameters**
+
+| Name       | Type                              | Default | Description |
+|------------|-----------------------------------|---------|-------------|
+| `period`   | `today \| week \| month \| all`   | `month` | Window over which to aggregate. |
+| `project`  | string (repeatable)               | —       | Restrict to these project slugs. |
+| `provider` | string                            | —       | Filter by provider id (`claude`, `codex`, `cursor`, …). |
+
+**Response**
+
+```json
+{
+  "period": "month",
+  "models": [
+    {
+      "model": "claude-opus-4-6",
+      "provider": "claude",
+      "sessions": 12,
+      "calls": 480,
+      "one_shot_pct": 0.167,
+      "retry_rate": 39.0,
+      "cache_hit_rate": 0.924,
+      "cost_per_call": 0.021,
+      "cost_per_session": 0.84,
+      "total_cost": 10.07,
+      "total_tokens": 4120000
+    }
+  ],
+  "generated": 1746125443.117
+}
+```
+
+`models` is sorted by `total_cost` descending. `generated` is a Unix
+epoch float. Per-row fields:
+
+- `one_shot_pct` — fraction of sessions where the user prompted once,
+  the assistant answered once, and that was it (range 0.0–1.0).
+- `retry_rate` — `(assistant_messages / sessions) - 1`, the average
+  number of *extra* assistant turns per session.
+- `cache_hit_rate` — `cache_read / (cache_read + cache_create)`
+  (range 0.0–1.0).
+- `cost_per_call` / `cost_per_session` / `total_cost` are USD; if
+  `currency` is set elsewhere, callers should use a separate currency
+  endpoint to convert (this route does not yet pre-convert).
+
+**Status codes:** `200` success; `400` unknown `period`. Empty store
+returns `{"period": <period>, "models": [], "generated": <ts>}`.
