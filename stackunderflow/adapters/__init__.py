@@ -7,10 +7,12 @@ store rows.
 
 Beta adapters are gated by environment variables (default: off):
 
-  STACKUNDERFLOW_BETA_CURSOR=1     # opt into the Cursor (vscdb) adapter
-  STACKUNDERFLOW_BETA_CLINE=1      # opt into the Cline (vscode globalStorage) adapter
-  STACKUNDERFLOW_BETA_KILOCODE=1   # opt into the KiloCode adapter (Cline parser)
-  STACKUNDERFLOW_BETA_ROOCODE=1    # opt into the Roo Code adapter (Cline parser)
+  STACKUNDERFLOW_BETA_CURSOR=1         # opt into the Cursor (vscdb) adapter
+  STACKUNDERFLOW_BETA_CLINE=1          # opt into the Cline (vscode globalStorage) adapter
+  STACKUNDERFLOW_BETA_KILOCODE=1       # opt into the KiloCode adapter (Cline parser)
+  STACKUNDERFLOW_BETA_ROOCODE=1        # opt into the Roo Code adapter (Cline parser)
+  STACKUNDERFLOW_BETA_OPENCODE=1       # opt into the OpenCode (SQLite) adapter
+  STACKUNDERFLOW_BETA_CURSOR_AGENT=1   # opt into the Cursor Agent (transcripts + SQLite) adapter
 """
 
 import os
@@ -74,3 +76,19 @@ if _beta_enabled("ROOCODE"):
     from .cline import RooCodeAdapter as _RooCodeAdapter  # noqa: E402
 
     register(_RooCodeAdapter())
+
+# Beta: OpenCode (SQLite). Off by default — set
+# STACKUNDERFLOW_BETA_OPENCODE=1 to enable. OS-portable via XDG_DATA_HOME.
+# codeburn-catalog §11.
+if _beta_enabled("OPENCODE"):
+    from .opencode import OpenCodeAdapter as _OpenCodeAdapter  # noqa: E402
+
+    register(_OpenCodeAdapter())
+
+# Beta: Cursor Agent (text/JSONL transcripts + SQLite metadata). Off by
+# default — set STACKUNDERFLOW_BETA_CURSOR_AGENT=1 to enable. macOS-only
+# for v1; codeburn-catalog §5.
+if _beta_enabled("CURSOR_AGENT"):
+    from .cursor_agent import CursorAgentAdapter as _CursorAgentAdapter  # noqa: E402
+
+    register(_CursorAgentAdapter())
