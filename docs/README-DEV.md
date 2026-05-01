@@ -254,12 +254,28 @@ Full details: [cli-reference.md](cli-reference.md).
 
 ## Public Python API
 
+Reads from the local SQLite store at `~/.stackunderflow/store.db` —
+every provider, every project, in one query:
+
 ```python
 import stackunderflow
 
 projects = stackunderflow.list_projects()
-# [{"log_path": ..., "display_name": ..., ...}, ...]
+# [{"slug": ..., "provider": ..., "display_name": ..., "path": ...,
+#   "first_seen": ..., "last_modified": ...}, ...]
+
+# Optional: filter to one provider.
+claude_only = stackunderflow.list_projects(provider="claude")
+
+# Pipeline-formatted messages + stats for one project.
+messages, stats = stackunderflow.process(projects[0]["slug"])
+
+# Sessions for a project (id + first/last timestamp + message count).
+sessions = stackunderflow.list_sessions(projects[0]["slug"])
 ```
+
+Empty store (no ingest yet) → `list_projects()` returns `[]`.
+Unknown slug → `process()` and `list_sessions()` raise `KeyError`.
 
 Lower-level entry points:
 
@@ -268,7 +284,7 @@ from stackunderflow.adapters import registered, register
 from stackunderflow.adapters.base import SourceAdapter, SessionRef, Record
 from stackunderflow.ingest import run_ingest
 from stackunderflow.store import db, schema, queries
-from stackunderflow.infra.discovery import project_metadata, ProjectInfo
+from stackunderflow.infra.discovery import project_metadata, ProjectInfo  # file-scan, legacy shape
 from stackunderflow.settings import Settings
 ```
 

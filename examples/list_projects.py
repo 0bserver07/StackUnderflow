@@ -1,11 +1,15 @@
-"""Print every coding-agent project StackUnderflow can see on this machine.
+"""Print every project StackUnderflow has indexed across every provider.
 
 Run with: python examples/list_projects.py
 """
 
 import stackunderflow
 
-for p in stackunderflow.list_projects():
-    # p is a dict with keys: dir_name, log_path, file_count, total_size_mb,
-    # last_modified, first_seen, display_name
-    print(f"{p['dir_name']}  ({p['file_count']} files, {p['total_size_mb']} MB)")
+projects = stackunderflow.list_projects()
+if not projects:
+    raise SystemExit("No projects in the store. Run `stackunderflow init` to ingest.")
+
+for p in projects:
+    # p is a dict with keys: slug, provider, display_name, path,
+    # first_seen, last_modified
+    print(f"[{p['provider']:<7}] {p['slug']}")
