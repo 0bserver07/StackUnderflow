@@ -527,3 +527,147 @@ export interface ModelPricing {
   cache_creation_cost_per_token?: number
 }
 
+// ---------------------------------------------------------------------------
+// v0.6.0 follow-up surfaces — Compare, Yield, Plan, Optimize, Context-budget.
+// These shapes mirror the Python dataclasses returned by the matching routes
+// (`stackunderflow/routes/{compare,yield_route,plan,optimize,context_budget}.py`).
+// Keep them in lockstep with the route response bodies; missing/optional
+// fields are noted inline.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-model row from `GET /api/compare`.
+ * Source: `services/compare.py::ModelStats` (frozen dataclass, all fields
+ * required). `total_cost` is the column the API sorts by, descending.
+ */
+export interface ModelStats {
+  model: string
+  provider: string
+  sessions: number
+  calls: number
+  one_shot_pct: number
+  retry_rate: number
+  cache_hit_rate: number
+  cost_per_call: number
+  cost_per_session: number
+  total_cost: number
+  total_tokens: number
+}
+
+export interface CompareResponse {
+  period: string
+  models: ModelStats[]
+  generated: number
+}
+
+/**
+ * One session's yield classification — `services/yield_tracker.py::YieldEntry`
+ * with `cost_usd` already converted to the active currency by the route.
+ */
+export type YieldClassification = 'productive' | 'reverted' | 'abandoned' | 'no_repo'
+
+export interface YieldEntry {
+  session_id: string
+  project_slug: string
+  cwd: string
+  started_at: string
+  cost_usd: number
+  classification: YieldClassification
+  follow_commit_sha: string | null
+  follow_commit_msg: string | null
+  follow_commit_age_hours: number | null
+}
+
+export interface YieldSummary {
+  productive: number
+  reverted: number
+  abandoned: number
+  no_repo: number
+  total: number
+  productive_cost: number
+  reverted_cost: number
+  abandoned_cost: number
+  no_repo_cost: number
+  total_cost: number
+}
+
+export interface YieldResponse {
+  period: string
+  summary: YieldSummary
+  entries: YieldEntry[]
+  currency: CurrencyInfo
+  warning: string
+}
+
+/**
+ * Plan + usage payload from `GET /api/plan`. Both fields are nullable —
+ * when no plan is configured, the route returns `{plan: null, usage: null}`
+ * and the UI should hide the widget rather than render an empty card.
+ */
+export interface Plan {
+  name: string
+  monthly_usd: number
+  reset_day: number
+}
+
+export interface PlanUsage {
+  used: number
+  budget: number
+  remaining: number
+  pct: number
+  projected: number
+  status: 'ok' | 'warn' | 'over'
+  period_start: string
+  period_end: string
+  days_so_far: number
+  days_in_period: number
+}
+
+export interface PlanResponse {
+  plan: Plan | null
+  usage: PlanUsage | null
+}
+
+/**
+ * One structural finding from `GET /api/optimize`. Mirrors
+ * `reports/optimize.py::Finding`. The route also returns a legacy `waste`
+ * list (looped Q&A); the new dashboard panel only uses `patterns`.
+ */
+export type FindingSeverity = 'high' | 'medium' | 'low'
+
+export interface Finding {
+  pattern_id: string
+  severity: FindingSeverity
+  title: string
+  description: string
+  affected_count: number
+  suggested_fix: string
+  estimated_waste_tokens: number | null
+  details: Record<string, unknown>
+}
+
+export interface OptimizeResponse {
+  scope: string
+  waste: unknown[]
+  patterns: Finding[]
+}
+
+/**
+ * Per-session context-budget payload from `GET /api/context-budget`. Source:
+ * `services/context_budget.py::ContextBudget`. `slices` is the per-source
+ * breakdown the panel renders.
+ */
+export interface ContextSlice {
+  name: string
+  tokens: number
+  source_path: string | null
+}
+
+export interface ContextBudget {
+  total_tokens: number
+  slices: ContextSlice[]
+  cost_per_session_usd: number
+  estimated_monthly_cost_usd: number
+  heuristic: string
+}
+

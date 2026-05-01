@@ -28,6 +28,8 @@ import ErrorCategoryChart from '../charts/ErrorCategoryChart'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
 import TokenCompositionDonut from '../cost/TokenCompositionDonut'
+import PlanBudgetCard from './PlanBudgetCard'
+import OptimizeFindingsPanel from './OptimizeFindingsPanel'
 import { setTab } from '../../services/navigation'
 
 interface OverviewTabProps {
@@ -166,6 +168,12 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
 
   return (
     <div className="space-y-6">
+      {/* Plan budget — v0.6.0. Renders only when a plan is configured;
+          self-hides when /api/plan returns nulls so Overview stays clean
+          for users who haven't set one. Place above the trend strip so the
+          "am I over budget?" answer is the first thing visible. */}
+      <PlanBudgetCard />
+
       {/* Trend delta strip — full-width top banner (spec §2.4 / C22) */}
       <TrendDeltaStrip
         trends={trends}
@@ -175,6 +183,10 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
 
       {/* Primary stats from existing StatsCards component */}
       <StatsCards stats={stats} />
+
+      {/* Optimize findings — v0.6.0. Self-hides when /api/optimize returns
+          zero patterns so we don't surface noise on a healthy install. */}
+      <OptimizeFindingsPanel />
 
       {/* Cache ROI + Token composition share a row on wide screens so the
           donut doesn't stretch to a full-width band on its own. */}
