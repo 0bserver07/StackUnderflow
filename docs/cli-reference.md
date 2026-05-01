@@ -27,6 +27,7 @@ stackunderflow report [-p PERIOD] [--format text|json] [--project P] [--exclude 
 stackunderflow export -f csv|json -o PATH [-p today|week|month|all] [--provider X] [--project P] [--exclude P] [--force]
 stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
 stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [--format text|json]
+stackunderflow yield [-p PERIOD] [--format text|json] [--project SLUG]
 
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
 stackunderflow cfg ls [--json]
@@ -436,6 +437,28 @@ Side-by-side per-model comparison over a time window — answers "is it worth us
 
 ```
 Usage: stackunderflow compare [OPTIONS]
+### `stackunderflow yield`
+
+Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
+
+For each session in the window, the command resolves the session's `cwd` to a
+git repo, runs `git log` over the 24h after the session started, and
+classifies the result:
+
+| Class        | Meaning                                                                 |
+|--------------|-------------------------------------------------------------------------|
+| `productive` | A commit landed within 24h and is still reachable from `HEAD`.          |
+| `reverted`   | A commit landed but was later reverted (by `git revert` or by being wiped from `HEAD` via reset / force push). |
+| `abandoned`  | No commit landed within the window.                                     |
+| `no_repo`    | The session's `cwd` is missing or isn't a git repository.               |
+
+> **Heuristic warning.** This correlates by **time**, not by content. A commit
+> inside the 24h window is credited to the session even if it was about
+> something else. Treat the breakdown as a smoke signal, not a verdict.
+> Sessions and commits don't have to share a topic to get matched up.
+
+```
+Usage: stackunderflow yield [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -490,6 +513,43 @@ $ stackunderflow compare --period week --provider claude --format json
 ```
 
 The same data is available via `GET /api/compare` — see `docs/api-reference.md`.
+| `-p, --period` | TEXT | `month` | Period: `today`, `week`, `month`, `all`, `7days`, `30days` |
+| `--project` | TEXT | (all) | Filter by project slug (repeatable) |
+| `--format` | `text\|json` | text | Output format |
+
+**Examples:**
+
+```
+$ stackunderflow yield -p week
+Yield analysis — period: week
+  productive:   13  ($724.77)
+  reverted:      0  ($0.00)
+  abandoned:     8  ($1080.25)
+  no_repo:       3  ($0.92)
+  total:        24  ($1805.94)
+
+Top sessions by cost:
+  CLASS            COST  PROJECT                       SESSION
+  abandoned    $ 266.39  -Users-yadkonrad-dev-dev-yea  910a9d68-...
+  productive   $ 247.88  -Users-yadkonrad-dev-dev-yea  ada0010e-...
+  ...
+
+  note: yield is correlated by time, not by content — a commit within 24h is credited to the session even if unrelated.
+
+$ stackunderflow yield -p month --format json
+```
+
+The same data is available over HTTP at `GET /api/yield` with the matching
+query parameters (`period`, `project`).
+
+**Limits:**
+
+- Sessions whose `cwd` lives on a path you've since deleted, renamed, or
+  moved outside its original git work tree are reported as `no_repo`.
+- The 24h window is fixed in v1. A multi-session day in one repo will share
+  the same follow-up commit attribution across every session that ran first.
+- Each git invocation has a 5-second timeout; a hung repo (e.g. NFS lock)
+  falls through to `no_repo` rather than stalling the report.
 
 ---
 
