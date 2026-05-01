@@ -29,6 +29,9 @@ from stackunderflow.routes import (
     sessions,
     tags,
 )
+from stackunderflow.routes import (
+    export as export_routes,
+)
 from stackunderflow.services.bookmark_service import BookmarkService
 from stackunderflow.services.pricing_service import PricingService
 from stackunderflow.services.qa_service import QAService
@@ -139,6 +142,7 @@ app.include_router(qa.router)
 app.include_router(tags.router)
 app.include_router(bookmarks.router)
 app.include_router(misc.router)
+app.include_router(export_routes.router)
 
 
 
