@@ -49,6 +49,24 @@ _RATES: dict[_Family, tuple[float, float, float, float]] = {
 
 _FALLBACK = _Family.SONNET_35
 
+# Opus families — the only Claude tier that bills the priority/fast rate
+# at 6× standard input + 6× standard output. Sonnet/Haiku priority access
+# does not change the published $/M rates today, so we only multiply for
+# these families. Cache-write/cache-read rates stay at the standard tier
+# because Anthropic charges cache traffic at the same rate regardless of
+# service_tier.
+_OPUS_FAMILIES: frozenset[_Family] = frozenset({
+    _Family.OPUS_46,
+    _Family.OPUS_45,
+    _Family.OPUS_4,
+    _Family.OPUS_3,
+})
+
+# 6× input + 6× output, cache rates unchanged. The ratio is an Anthropic-
+# published figure (priority tier costs ~6× more for Opus models). When the
+# API rate-card changes we update this constant in one place.
+_FAST_OPUS_MULTIPLIER: float = 6.0
+
 
 class AnthropicPricer(ProviderPricer):
     provider_name = "anthropic"
@@ -82,6 +100,40 @@ class AnthropicPricer(ProviderPricer):
 
     def supports_per_message_tokens(self) -> bool:
         return True
+
+    # ── tier-aware compute override ──────────────────────────────────
+
+    def compute(
+        self,
+        tokens: dict[str, int],
+        model: str,
+        *,
+        speed: str = "standard",
+    ) -> dict[str, float]:
+        """Apply Opus fast-mode 6× multiplier when ``speed == "fast"``.
+
+        Only Opus families get the multiplier — Sonnet/Haiku priority
+        access doesn't change published rates per Anthropic's docs.
+        Unknown families fall back to standard rates × 1 even when
+        ``speed="fast"`` is set, so a misclassified record never gets
+        silently overcharged.
+        """
+        canonical = self.canonicalize(model)
+        rates = self.rates_for(canonical)
+        if speed == "fast" and rates is not None:
+            try:
+                fam = _Family[canonical]
+            except KeyError:
+                fam = _FALLBACK
+            if fam in _OPUS_FAMILIES:
+                inp_r, out_r, cw_r, cr_r = rates
+                rates = (
+                    inp_r * _FAST_OPUS_MULTIPLIER,
+                    out_r * _FAST_OPUS_MULTIPLIER,
+                    cw_r,
+                    cr_r,
+                )
+        return self._apply_overlay_rates(tokens, rates)
 
     # ── internals ────────────────────────────────────────────────────
 

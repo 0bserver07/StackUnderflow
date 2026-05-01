@@ -33,7 +33,14 @@ class SessionRef:
 
 @dataclass(frozen=True, slots=True)
 class Record:
-    """One normalised message-level record. Same shape across providers."""
+    """One normalised message-level record. Same shape across providers.
+
+    ``speed`` flags Anthropic's priority/fast tier for Opus models (which
+    bills at ~6× standard rates). Detected per-message from
+    ``message.usage.service_tier`` on Claude JSONL records — see
+    ``ClaudeAdapter._parse_line``. Defaults to ``"standard"`` for every
+    other adapter; only the Anthropic pricer interprets the field today.
+    """
     provider: str
     session_id: str
     seq: int
@@ -51,6 +58,7 @@ class Record:
     uuid: str
     parent_uuid: str | None
     raw: dict
+    speed: Literal["standard", "fast"] = "standard"
 
 
 class SourceAdapter(Protocol):

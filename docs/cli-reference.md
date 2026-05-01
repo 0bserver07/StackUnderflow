@@ -786,6 +786,33 @@ can render symbols and labels without a second round-trip.
 
 ---
 
+## Cost Computation
+
+Costs are computed from per-message token usage via the
+`stackunderflow.infra.costs.compute_cost(tokens, model, provider, *, speed)`
+shim, which routes through provider-specific pricers in
+`stackunderflow.infra.providers/`. The Anthropic pricer recognises the
+priority/fast tier flag set by the Claude adapter from
+`message.usage.service_tier`:
+
+| Field value | `Record.speed` | Pricing impact |
+|---|---|---|
+| `"priority"` | `"fast"` | Opus models: 6× input + 6× output rate, cache rates unchanged. Sonnet/Haiku: 1× (unchanged). |
+| `"standard"` | `"standard"` | Standard rate card. |
+| `"batch"` | `"standard"` | Batch tier is cheaper (not faster); we conservatively price it at standard until separate batch rates are wired in. |
+| `null` / missing | `"standard"` | Pre-tier records and non-Claude adapters default here. |
+
+Unknown model ids (which fall back to the Sonnet-3.5 rate card) are
+priced at 1× even when `speed="fast"` so a misclassified record never
+gets accidentally over-charged. Aggregator collectors group tokens by
+`(model, speed)` so a session that mixes standard and fast records gets
+each subset priced at its correct rate. The store schema does not yet
+carry the speed flag — SQLite-backed stat queries
+(`store/queries.get_project_stats`) report standard rates until a
+follow-up migration lands.
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
