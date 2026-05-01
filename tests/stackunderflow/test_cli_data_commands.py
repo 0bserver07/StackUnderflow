@@ -139,7 +139,8 @@ class TestOptimizeCommand(unittest.TestCase):
             {"project": "beta", "looped_pairs": 2, "sample_questions": ["What does Z mean?"]},
         ]
         with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
-             patch("stackunderflow.cli.find_waste", return_value=waste):
+             patch("stackunderflow.cli.find_waste", return_value=waste), \
+             patch("stackunderflow.cli.find_patterns", return_value=[]):
             result = self.runner.invoke(cli, ["optimize"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertIn("alpha", result.output)
@@ -148,20 +149,69 @@ class TestOptimizeCommand(unittest.TestCase):
 
     def test_optimize_no_waste_message(self):
         with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
-             patch("stackunderflow.cli.find_waste", return_value=[]):
+             patch("stackunderflow.cli.find_waste", return_value=[]), \
+             patch("stackunderflow.cli.find_patterns", return_value=[]):
             result = self.runner.invoke(cli, ["optimize"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("No looped", result.output)
+        # New phrasing: covers both Q&A loops and structural patterns.
+        self.assertIn("No waste or structural patterns", result.output)
 
     def test_optimize_json_format(self):
         waste = [{"project": "alpha", "looped_pairs": 5, "sample_questions": ["Q?"]}]
         with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
-             patch("stackunderflow.cli.find_waste", return_value=waste):
+             patch("stackunderflow.cli.find_waste", return_value=waste), \
+             patch("stackunderflow.cli.find_patterns", return_value=[]):
             result = self.runner.invoke(cli, ["optimize", "--format", "json"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         parsed = json.loads(result.output)
-        self.assertEqual(len(parsed), 1)
-        self.assertEqual(parsed[0]["project"], "alpha")
+        # New JSON shape wraps everything: {scope, waste, patterns}.
+        self.assertIn("waste", parsed)
+        self.assertIn("patterns", parsed)
+        self.assertEqual(len(parsed["waste"]), 1)
+        self.assertEqual(parsed["waste"][0]["project"], "alpha")
+        self.assertEqual(parsed["patterns"], [])
+
+    def test_optimize_emits_pattern_findings(self):
+        from stackunderflow.reports.optimize import Finding
+        finding = Finding(
+            pattern_id="bloated_claude_md",
+            severity="high",
+            title="1 bloated CLAUDE.md file(s)",
+            description="One file is bloated.",
+            affected_count=1,
+            suggested_fix="Trim it.",
+            estimated_waste_tokens=12345,
+        )
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
+             patch("stackunderflow.cli.find_waste", return_value=[]), \
+             patch("stackunderflow.cli.find_patterns", return_value=[finding]):
+            result = self.runner.invoke(cli, ["optimize"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("Structural patterns:", result.output)
+        self.assertIn("bloated_claude_md", result.output)
+        self.assertIn("[HIGH]", result.output)
+        self.assertIn("12,345", result.output)
+        self.assertIn("Trim it.", result.output)
+
+    def test_optimize_json_includes_pattern_dict(self):
+        from stackunderflow.reports.optimize import Finding
+        finding = Finding(
+            pattern_id="ghost_agents",
+            severity="medium",
+            title="ghost",
+            description="d",
+            affected_count=2,
+            suggested_fix="fix",
+        )
+        with patch("stackunderflow.cli._open_store", return_value=MagicMock()), \
+             patch("stackunderflow.cli.find_waste", return_value=[]), \
+             patch("stackunderflow.cli.find_patterns", return_value=[finding]):
+            result = self.runner.invoke(cli, ["optimize", "--format", "json"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        parsed = json.loads(result.output)
+        self.assertEqual(len(parsed["patterns"]), 1)
+        self.assertEqual(parsed["patterns"][0]["pattern_id"], "ghost_agents")
+        self.assertEqual(parsed["patterns"][0]["severity"], "medium")
 
 
 if __name__ == "__main__":
