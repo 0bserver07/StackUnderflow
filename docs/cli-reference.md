@@ -130,8 +130,12 @@ Done: {'sessions': 412, 'messages': 58203}
 
 ### `stackunderflow clear-cache`
 
-Print guidance on clearing the in-memory and disk caches. The in-memory cache is
-always cleared on restart; pass `--fresh` to `start` to also wipe the disk cache.
+Wipe the on-disk Cursor parse cache (`~/.stackunderflow/cache/cursor-results.json`)
+and print guidance on clearing the rest. The Cursor parse cache is a
+fingerprint-keyed snapshot of the parsed `state.vscdb` records; deleting it
+forces the next ingest to re-read SQLite from scratch (slow but always
+correct). The in-memory cache is always cleared on restart; pass `--fresh`
+to `start` to also wipe the broader disk cache.
 
 ```
 Usage: stackunderflow clear-cache [OPTIONS] [PROJECT]
@@ -145,6 +149,7 @@ Usage: stackunderflow clear-cache [OPTIONS] [PROJECT]
 
 ```
 $ stackunderflow clear-cache
+  cursor parse cache cleared.
   in-memory cache is cleared on restart.
   use `stackunderflow start --fresh` to also wipe the disk cache.
 ```

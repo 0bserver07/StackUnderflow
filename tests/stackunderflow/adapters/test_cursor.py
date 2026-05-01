@@ -102,6 +102,23 @@ def _build_fixture(path: Path) -> None:
         conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cursor_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the Cursor parse cache into ``tmp_path`` for every test.
+
+    The adapter writes a fingerprint cache to ``~/.stackunderflow/cache/``
+    on every successful read; tests must not pollute the developer's
+    real cache directory.
+    """
+    from stackunderflow.infra import cursor_cache as _cc
+
+    monkeypatch.setattr(
+        _cc,
+        "_default_cache_path",
+        lambda: tmp_path / "cursor-results.json",
+    )
+
+
 @pytest.fixture()
 def vscdb_path(tmp_path: Path) -> Path:
     fp = tmp_path / "state.vscdb"
@@ -203,6 +220,69 @@ def test_record_uuid_is_stable_session_plus_rowid(vscdb_path: Path) -> None:
         assert rec.parent_uuid is None
 
 
+# ── fingerprint cache integration ─────────────────────────────────────
+
+
+def test_second_read_hits_cache_and_skips_sqlite(
+    vscdb_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the cache is warm, a second ``read()`` must not open SQLite.
+
+    Verified by counting calls to ``CursorAdapter._open_readonly`` —
+    the only path the adapter takes to touch the on-disk DB.
+    """
+    adapter = CursorAdapter(vscdb_path=vscdb_path)
+    refs = [r for r in adapter.enumerate() if r.session_id == CONV_ID]
+    assert refs
+
+    # First call — cache miss, must open SQLite.
+    first = list(adapter.read(refs[0]))
+    assert first
+
+    # Now wrap _open_readonly to count invocations on the second call.
+    calls = {"n": 0}
+    real_open = CursorAdapter._open_readonly
+
+    def counting_open(path):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real_open(path)
+
+    monkeypatch.setattr(CursorAdapter, "_open_readonly", staticmethod(counting_open))
+
+    second = list(adapter.read(refs[0]))
+    assert calls["n"] == 0, "second read must hit fingerprint cache, not SQLite"
+
+    # Records must match the live parse result.
+    assert [r.uuid for r in second] == [r.uuid for r in first]
+    assert [r.role for r in second] == [r.role for r in first]
+    assert [
+        (r.input_tokens, r.output_tokens) for r in second
+    ] == [(r.input_tokens, r.output_tokens) for r in first]
+
+
+def test_resume_read_bypasses_cache(
+    vscdb_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``since_offset > 0`` must always re-query SQLite (no cache slice)."""
+    adapter = CursorAdapter(vscdb_path=vscdb_path)
+    refs = [r for r in adapter.enumerate() if r.session_id == CONV_ID]
+    full = list(adapter.read(refs[0]))
+    assert full
+
+    calls = {"n": 0}
+    real_open = CursorAdapter._open_readonly
+
+    def counting_open(path):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real_open(path)
+
+    monkeypatch.setattr(CursorAdapter, "_open_readonly", staticmethod(counting_open))
+
+    midpoint = full[len(full) // 2].seq
+    list(adapter.read(refs[0], since_offset=midpoint))
+    assert calls["n"] == 1, "resume reads must always re-parse the DB"
+
+
 # ── shared adapter contract ────────────────────────────────────────────
 
 
@@ -213,10 +293,22 @@ class TestCursorAdapterContract(unittest.TestCase, AdapterContract):
         # Build a fresh fixture per test method into a tmpdir we own.
         import tempfile
 
+        from stackunderflow.infra import cursor_cache as _cc
+
         self._tmpdir = tempfile.TemporaryDirectory()
         path = Path(self._tmpdir.name) / "state.vscdb"
         _build_fixture(path)
+
+        # Redirect the parse cache into the same tmpdir so the test
+        # never touches the user's real ``~/.stackunderflow/cache/``.
+        cache_dir = Path(self._tmpdir.name)
+        self._orig_cache_path = _cc._default_cache_path
+        _cc._default_cache_path = lambda: cache_dir / "cursor-results.json"
+
         self.adapter = CursorAdapter(vscdb_path=path)
 
     def tearDown(self) -> None:
+        from stackunderflow.infra import cursor_cache as _cc
+
+        _cc._default_cache_path = self._orig_cache_path
         self._tmpdir.cleanup()

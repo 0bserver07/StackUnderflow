@@ -318,6 +318,10 @@ def _cfg_unset(ctx: click.Context, key: str):
 @click.argument("project", required=False)
 def clear_cache_cmd(project: str | None):
     """Clear cached data.  Use ``start --fresh`` for a clean boot."""
+    from stackunderflow.infra.cursor_cache import clear_cache as _clear_cursor_cache
+
+    if _clear_cursor_cache():
+        click.echo("  cursor parse cache cleared.")
     click.echo("  in-memory cache is cleared on restart.")
     click.echo("  use `stackunderflow start --fresh` to also wipe the disk cache.")
 

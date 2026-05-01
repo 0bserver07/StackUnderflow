@@ -153,11 +153,37 @@ class CursorAdapter:
             else None
         ) or ref.session_id
 
+        # Fingerprint cache fast-path — only when caller wants the full
+        # record stream (since_offset == 0). Resume reads always go to
+        # SQLite because the cache stores the full parse, not slices.
+        if since_offset == 0:
+            from stackunderflow.infra.cursor_cache import (
+                load_cached,
+                save_cached,
+            )
+
+            cached = load_cached(path)
+            if cached is not None:
+                # Yield only records belonging to this conversation.
+                # The cache stores every record in the DB (across all
+                # conversations) so the same payload serves every
+                # SessionRef pointing at the same vscdb.
+                for rec in cached:
+                    if rec.session_id == target_conv:
+                        yield rec
+                return
+
         try:
             conn = self._open_readonly(path)
         except sqlite3.Error as exc:
             _log.warning("Cannot open Cursor vscdb %s: %s", path, exc)
             return
+
+        # Buffer everything we parsed in this call so we can persist a
+        # cache entry after a successful full read. Resume reads
+        # (since_offset > 0) skip caching — the cache is keyed on the
+        # complete parse, not partials.
+        parsed_for_cache: list[Record] = []
 
         try:
             cur = conn.execute(
@@ -170,21 +196,49 @@ class CursorAdapter:
                 parsed = _safe_json_loads(value)
                 if parsed is None:
                     continue
-                if str(parsed.get("conversationId") or "") != target_conv:
+                conv_id = str(parsed.get("conversationId") or "")
+                # Rows without a conversationId can't be addressed from
+                # the cache by any SessionRef, so we drop them — same
+                # net effect as the pre-cache behaviour where the row
+                # was filtered out before record construction.
+                if not conv_id:
                     continue
                 rec = _record_from_row(
                     rowid=rowid,
                     key=key,
                     parsed=parsed,
-                    ref=ref,
+                    # The cache stores records for every conversation
+                    # in the DB, so we tag each record with its own
+                    # conversation id rather than the requested one.
+                    ref=SessionRef(
+                        provider=ref.provider,
+                        project_slug=ref.project_slug,
+                        session_id=conv_id,
+                        file_path=ref.file_path,
+                        file_mtime=ref.file_mtime,
+                        file_size=ref.file_size,
+                        source_kind=ref.source_kind,
+                        source_hint=ref.source_hint,
+                    ),
                     provider=self.name,
                 )
-                if rec is not None:
-                    yield rec
+                if rec is None:
+                    continue
+                if since_offset == 0:
+                    parsed_for_cache.append(rec)
+                if conv_id != target_conv:
+                    continue
+                yield rec
         except sqlite3.Error as exc:
             _log.warning("Cursor vscdb read failed on %s: %s", path, exc)
+            # Don't persist a partial cache on error.
+            parsed_for_cache = []
         finally:
             conn.close()
+
+        if since_offset == 0 and parsed_for_cache:
+            from stackunderflow.infra.cursor_cache import save_cached
+            save_cached(path, parsed_for_cache)
 
     # ── internals ─────────────────────────────────────────────────────
 
