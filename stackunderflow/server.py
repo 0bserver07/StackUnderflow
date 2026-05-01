@@ -23,6 +23,7 @@ from stackunderflow.routes import (
     cost,
     data,
     misc,
+    optimize,
     plan,
     projects,
     qa,
@@ -144,6 +145,7 @@ app.include_router(tags.router)
 app.include_router(bookmarks.router)
 app.include_router(misc.router)
 app.include_router(export_routes.router)
+app.include_router(optimize.router)
 app.include_router(plan.router)
 
 
