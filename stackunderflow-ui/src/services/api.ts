@@ -1,7 +1,7 @@
 import type {
   ProjectsResponse,
   SetProjectResponse,
-  JsonlFile,
+  JsonlFilesResponse,
   JsonlContentResponse,
   DashboardData,
   Message,
@@ -12,6 +12,7 @@ import type {
   BookmarkListResponse,
   Bookmark,
   PricingData,
+  CurrencyInfo,
 } from '../types/api'
 
 const BASE = '/api'
@@ -50,7 +51,12 @@ export async function getMessages(limit?: number): Promise<Message[]> {
 }
 
 // JSONL files
-export async function getJsonlFiles(project?: string): Promise<JsonlFile[]> {
+//
+// Returns the full {files, currency} envelope since v0.6.0 (multi-currency
+// PR wrapped the previously bare list). Callers that only need the file
+// metadata can destructure `.files`; the currency block is also propagated
+// upward so consumers can render cost columns in the active currency.
+export async function getJsonlFiles(project?: string): Promise<JsonlFilesResponse> {
   const params = project ? `?project=${encodeURIComponent(project)}` : ''
   return fetchJson(`${BASE}/jsonl-files${params}`)
 }
@@ -165,4 +171,57 @@ export async function reindexTags(): Promise<Record<string, unknown>> {
 // Pricing
 export async function getPricing(): Promise<PricingData> {
   return fetchJson(`${BASE}/pricing`)
+}
+
+// ---------------------------------------------------------------------------
+// Settings / configuration (v0.6.0 — currency, model aliases)
+// ---------------------------------------------------------------------------
+
+export interface CfgResponse {
+  settings: Record<string, unknown>
+  currency: CurrencyInfo
+}
+
+export async function getCfg(): Promise<CfgResponse> {
+  return fetchJson(`${BASE}/cfg`)
+}
+
+export interface CurrenciesResponse {
+  common: string[]
+  supported: string[]
+  current: CurrencyInfo
+}
+
+export async function getCurrencies(): Promise<CurrenciesResponse> {
+  return fetchJson(`${BASE}/cfg/currencies`)
+}
+
+export async function setCurrency(code: string): Promise<{ currency: CurrencyInfo }> {
+  return fetchJson(`${BASE}/cfg/currency`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })
+}
+
+export interface ModelAliasesResponse {
+  aliases: Record<string, string>
+}
+
+export async function getModelAliases(): Promise<ModelAliasesResponse> {
+  return fetchJson(`${BASE}/cfg/model-aliases`)
+}
+
+export async function setModelAlias(from: string, to: string): Promise<ModelAliasesResponse> {
+  return fetchJson(`${BASE}/cfg/model-aliases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to }),
+  })
+}
+
+export async function deleteModelAlias(from: string): Promise<ModelAliasesResponse> {
+  return fetchJson(`${BASE}/cfg/model-aliases?from=${encodeURIComponent(from)}`, {
+    method: 'DELETE',
+  })
 }

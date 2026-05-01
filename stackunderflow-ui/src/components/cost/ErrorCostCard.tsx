@@ -14,6 +14,7 @@ interface ErrorCostCardProps {
 const COLLAPSED_TOOL_COUNT = 6
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -59,6 +60,7 @@ interface TopErrorCommandRowProps {
 }
 
 function TopErrorCommandRow({ cmd }: TopErrorCommandRowProps) {
+  const { currency } = useCurrency()
   const errorCount = cmd.tool_count ?? 0
   const cost = cmd.cost ?? 0
   return (
@@ -80,13 +82,14 @@ function TopErrorCommandRow({ cmd }: TopErrorCommandRowProps) {
         {errorCount} err
       </span>
       <span className="text-[10px] text-gray-600 dark:text-gray-400 tabular-nums whitespace-nowrap w-14 text-right">
-        {formatCost(cost)}
+        {formatCost(cost, currency)}
       </span>
     </button>
   )
 }
 
 export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
+  const { currency } = useCurrency()
   const [expanded, setExpanded] = useState(false)
   const [topErrorsExpanded, setTopErrorsExpanded] = useState(false)
 
@@ -128,7 +131,7 @@ export default function ErrorCostCard({ errorCost }: ErrorCostCardProps) {
       {/* Hero — wasted retry $ is the lede; total error count is supporting detail. */}
       <div>
         <div className="text-4xl font-bold text-red-700 dark:text-red-300 leading-none tabular-nums">
-          {formatCost(retryCost)}
+          {formatCost(retryCost, currency)}
         </div>
         <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">
           wasted on{' '}

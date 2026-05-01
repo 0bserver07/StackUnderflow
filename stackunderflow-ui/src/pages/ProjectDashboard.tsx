@@ -24,6 +24,7 @@ import {
 } from '../services/navigation'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
+import ExportButton from '../components/common/ExportButton'
 import { Breadcrumb, BackButton } from '../components/common/Breadcrumb'
 import OverviewTab from '../components/dashboard/OverviewTab'
 import CommandsTab from '../components/dashboard/CommandsTab'
@@ -240,9 +241,10 @@ export default function ProjectDashboard() {
         </div>
       </div>
 
-      {/* Tab Bar */}
-      <div className="border-b border-gray-200 dark:border-gray-800">
-        <nav className="flex gap-0 -mb-px overflow-x-auto" data-testid="dashboard-tabs">
+      {/* Tab Bar — tabs scroll horizontally; the Export button stays
+          pinned to the right so it's reachable from any tab. */}
+      <div className="border-b border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
+        <nav className="flex gap-0 -mb-px overflow-x-auto flex-1 min-w-0" data-testid="dashboard-tabs">
           {visibleTabs.map(tab => {
             const Icon = tab.icon
             return (
@@ -263,6 +265,9 @@ export default function ProjectDashboard() {
             )
           })}
         </nav>
+        <div className="pb-1.5 flex-shrink-0">
+          <ExportButton tab={activeTab} />
+        </div>
       </div>
 
       {/* Breadcrumb strip — shown only when a deep-link param is active, to
