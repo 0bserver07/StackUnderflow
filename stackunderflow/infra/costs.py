@@ -63,6 +63,8 @@ def compute_cost(
     tokens: dict[str, int],
     model: str,
     provider: str = "anthropic",
+    *,
+    speed: str = "standard",
 ) -> dict[str, float]:
     """Return cost breakdown.
 
@@ -71,6 +73,14 @@ def compute_cost(
     first (a no-op for Anthropic, the cached-input subtraction for
     OpenAI), then priced.
 
+    ``speed`` lets callers thread Anthropic's priority/fast tier flag
+    through to the pricer (only the Anthropic pricer interprets it
+    today; everywhere else it's a no-op). Pass ``"fast"`` for Claude
+    records whose ``message.usage.service_tier == "priority"`` — the
+    Anthropic pricer applies a 6× multiplier to input + output rates
+    for Opus models in that case. See
+    ``ClaudeAdapter._parse_line`` for detection.
+
     A user-configured alias map (``settings.model_aliases``) is consulted
     first so proxy-rewritten model ids (e.g. ``openrouter/claude-opus``)
     resolve to a canonical id our rate tables know about. See
@@ -78,7 +88,10 @@ def compute_cost(
 
     A PricingService overlay (if initialised) takes precedence over the
     hardcoded rates — preserves the pre-refactor behaviour of letting
-    LiteLLM upstream override the canonical rate card.
+    LiteLLM upstream override the canonical rate card. Note: overlay
+    rates are not multiplied by the speed flag because the overlay
+    table is upstream-authoritative; users who want fast-tier overlay
+    pricing should provide separate entries.
     """
     model = resolve_model_alias(model, _user_aliases())
 
@@ -88,7 +101,7 @@ def compute_cost(
     overlay = _overlay_rates(model)
     if overlay is not None:
         return ProviderPricer._apply_overlay_rates(normalized, overlay)
-    return pricer.compute(normalized, model)
+    return pricer.compute(normalized, model, speed=speed)
 
 
 def format_dollars(amount: float) -> str:

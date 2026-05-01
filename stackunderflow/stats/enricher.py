@@ -41,6 +41,14 @@ class Record:
     # that never plumb a provider through still resolve to the canonical
     # rate card. See multi-provider spec §2.4.
     provider: str = "anthropic"
+    # Anthropic priority/fast tier flag. Sourced from
+    # ``message.usage.service_tier`` on Claude JSONL records — only
+    # ``"priority"`` resolves to ``"fast"``, everything else (incl.
+    # ``null`` on pre-tier records) stays ``"standard"``. Fast-tier Opus
+    # bills at ~6× standard rates; the AnthropicPricer applies the
+    # multiplier when this flag is set. See ``CHANGELOG.md`` and the
+    # ``feat/fast-mode-multiplier`` PR for the detection rationale.
+    speed: str = "standard"
 
 
 @dataclass(slots=True)
@@ -218,6 +226,7 @@ def _parse_entry(te: TaggedEntry) -> Record:
         cwd=raw.get("cwd", ""),
         raw_data=raw,
         provider=te.provider,
+        speed=_speed_from(msg),
     )
 
 
@@ -298,6 +307,25 @@ def _tools_from(msg: dict) -> list[dict[str, Any]]:
         for blk in body
         if isinstance(blk, dict) and blk.get("type") == "tool_use"
     ]
+
+
+def _speed_from(msg: dict) -> str:
+    """Extract Anthropic priority-tier flag from a message record.
+
+    Returns ``"fast"`` only when ``usage.service_tier == "priority"``;
+    every other value (``"standard"``, ``"batch"``, ``null``, missing,
+    or non-Claude records that simply don't have the field) maps to
+    ``"standard"``. The conservative default protects against
+    over-charging records that aren't actually on the priority tier.
+    """
+    if not isinstance(msg, dict):
+        return "standard"
+    usage = msg.get("usage")
+    if not isinstance(usage, dict):
+        return "standard"
+    if usage.get("service_tier") == "priority":
+        return "fast"
+    return "standard"
 
 
 def _has_result_block(msg: dict) -> bool:

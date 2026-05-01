@@ -138,6 +138,7 @@ class ClaudeAdapter:
             uuid=obj.get("uuid", ""),
             parent_uuid=obj.get("parentUuid"),
             raw=obj,
+            speed=_speed_from(usage),
         )
 
     def _read_history(self, ref: SessionRef) -> Iterable[Record]:
@@ -233,6 +234,26 @@ def _text_from(msg: dict) -> str:
         elif isinstance(blk, str):
             pieces.append(blk)
     return "\n".join(pieces)
+
+
+def _speed_from(usage: dict) -> str:
+    """Map Anthropic's ``service_tier`` field to our 2-value enum.
+
+    Anthropic's documented ``service_tier`` values are ``"standard"``,
+    ``"priority"`` (priority/fast tier — bills at ~6× standard for Opus),
+    and ``"batch"``. The field also appears as ``null`` on records that
+    pre-date the tier rollout. Anything other than ``"priority"`` is
+    treated as standard so we never *over-charge* a session: getting
+    Opus billed at 1× when it should have been 6× under-reports spend
+    (the reason this feature exists), but the inverse — billing
+    standard records at 6× — would be a far worse failure mode.
+    """
+    if not isinstance(usage, dict):
+        return "standard"
+    tier = usage.get("service_tier")
+    if tier == "priority":
+        return "fast"
+    return "standard"
 
 
 def _tools_from(msg: dict) -> tuple[str, ...]:
