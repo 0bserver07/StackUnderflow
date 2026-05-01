@@ -4,6 +4,11 @@ Handles two on-disk formats:
 1. Modern per-project JSONL files at ~/.claude/projects/<slug>/<uuid>.jsonl
 2. Legacy centralised ~/.claude/history.jsonl for projects that pre-date
    the per-project format (directories with only .continuation_cache.json).
+
+Defensive sizing: JSONL files larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line so peak memory stays bounded.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from pathlib import Path
 
 import orjson
 
+from ._streaming import iter_jsonl_lines
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -85,33 +91,28 @@ class ClaudeAdapter:
         only records whose ``seq`` is strictly greater than the floor —
         ``since_offset == 0`` is treated specially (yield all records,
         starting from the file head).
+
+        Files larger than ``adapters._streaming.MAX_SESSION_FILE_BYTES``
+        (128 MB) are skipped with a warning rather than parsed.
         """
-        try:
-            fp = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read %s: %s", ref.file_path, exc)
-            return
-        with fp:
-            fp.seek(since_offset)
-            offset = since_offset
-            for raw_line in fp:
-                line_offset = offset
-                offset += len(raw_line)
-                # `since_offset == 0` means "fresh read, yield everything".
-                # Otherwise, the caller already saw the record at exactly
-                # `since_offset`, so skip it.
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    obj = orjson.loads(stripped)
-                except (orjson.JSONDecodeError, ValueError):
-                    continue
-                record = self._parse_line(obj, ref=ref, seq=line_offset)
-                if record is not None:
-                    yield record
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            # `since_offset == 0` means "fresh read, yield everything".
+            # Otherwise, the caller already saw the record at exactly
+            # `since_offset`, so skip it.
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = orjson.loads(stripped)
+            except (orjson.JSONDecodeError, ValueError):
+                continue
+            record = self._parse_line(obj, ref=ref, seq=line_offset)
+            if record is not None:
+                yield record
 
     def _parse_line(self, obj: dict, *, ref: SessionRef, seq: int) -> Record | None:
         msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
@@ -142,15 +143,13 @@ class ClaudeAdapter:
     def _read_history(self, ref: SessionRef) -> Iterable[Record]:
         if not ref.file_path.is_file():
             return
-        try:
-            raw = ref.file_path.read_bytes()
-        except OSError as exc:
-            _log.warning("Cannot read history file %s: %s", ref.file_path, exc)
-            return
+        # ``iter_jsonl_lines`` enforces the 128 MB cap defensively (yields
+        # nothing for oversize files) and streams line-by-line, so a
+        # multi-MB legacy log never lands fully in memory.
         target_slug = ref.project_slug
         seq = 0
-        for line in raw.split(b"\n"):
-            stripped = line.strip()
+        for _line_offset, raw_line in iter_jsonl_lines(ref.file_path):
+            stripped = raw_line.strip()
             if not stripped:
                 continue
             try:

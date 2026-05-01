@@ -26,7 +26,11 @@ JSONL events look like::
 Storage: byte-offset resume (spec §1.4) — same as Codex.
 
 Spec §3 (multi-provider).
-"""
+
+Defensive sizing: JSONL sessions larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Smaller files stream
+line-by-line."""
 
 from __future__ import annotations
 
@@ -35,6 +39,7 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import iter_jsonl_lines
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -93,73 +98,67 @@ class PiAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        try:
-            fh = ref.file_path.open("rb")
-        except OSError as exc:
-            _log.warning("Cannot read %s: %s", ref.file_path, exc)
-            return
-
-        with fh:
-            fh.seek(since_offset)
-            offset = since_offset
-            for raw_line in fh:
-                line_offset = offset
-                offset += len(raw_line)
-                if since_offset > 0 and line_offset <= since_offset:
-                    continue
-                stripped = raw_line.strip()
-                if not stripped:
-                    continue
-                try:
-                    event = json.loads(stripped)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.debug(
-                        "Skipping malformed JSON line in %s: %s",
-                        ref.file_path, exc,
-                    )
-                    continue
-
-                if event.get("type") != "message":
-                    continue
-
-                message = event.get("message") or {}
-                if not isinstance(message, dict):
-                    continue
-                if message.get("role") != "assistant":
-                    continue
-                usage = message.get("usage")
-                if not isinstance(usage, dict):
-                    continue
-
-                model = (
-                    str(message.get("model"))
-                    if isinstance(message.get("model"), str)
-                    and message.get("model")
-                    else _DEFAULT_MODEL
+        # ``iter_jsonl_lines`` enforces the 128 MB defensive cap and
+        # streams line-by-line; oversize sessions are skipped with a
+        # warning rather than parsed.
+        for line_offset, raw_line in iter_jsonl_lines(
+            ref.file_path, since_offset=since_offset,
+        ):
+            if since_offset > 0 and line_offset <= since_offset:
+                continue
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError) as exc:
+                _log.debug(
+                    "Skipping malformed JSON line in %s: %s",
+                    ref.file_path, exc,
                 )
+                continue
 
-                tokens = _normalize_usage(usage)
-                content = message.get("content")
+            if event.get("type") != "message":
+                continue
 
-                yield Record(
-                    provider=self.name,
-                    session_id=ref.session_id,
-                    seq=line_offset,
-                    timestamp=str(event.get("timestamp") or ""),
-                    role="assistant",
-                    model=model,
-                    input_tokens=tokens["input"],
-                    output_tokens=tokens["output"],
-                    cache_create_tokens=tokens["cache_creation"],
-                    cache_read_tokens=tokens["cache_read"],
-                    content_text=_message_text(content),
-                    tools=_tools_from_content(content),
-                    cwd=event.get("cwd") or None,
-                    is_sidechain=False,
-                    uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
-                    parent_uuid=None,
-                    raw=event,
-                )
+            message = event.get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") != "assistant":
+                continue
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+
+            model = (
+                str(message.get("model"))
+                if isinstance(message.get("model"), str)
+                and message.get("model")
+                else _DEFAULT_MODEL
+            )
+
+            tokens = _normalize_usage(usage)
+            content = message.get("content")
+
+            yield Record(
+                provider=self.name,
+                session_id=ref.session_id,
+                seq=line_offset,
+                timestamp=str(event.get("timestamp") or ""),
+                role="assistant",
+                model=model,
+                input_tokens=tokens["input"],
+                output_tokens=tokens["output"],
+                cache_create_tokens=tokens["cache_creation"],
+                cache_read_tokens=tokens["cache_read"],
+                content_text=_message_text(content),
+                tools=_tools_from_content(content),
+                cwd=event.get("cwd") or None,
+                is_sidechain=False,
+                uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
+                parent_uuid=None,
+                raw=event,
+            )
 
 
 # ── helpers ───────────────────────────────────────────────────────────
