@@ -1064,6 +1064,113 @@ def _render_compare_table(payload: dict) -> None:
     console.print(table)
 
 
+# ── yield ─────────────────────────────────────────────────────────────────────
+#
+# Correlate sessions with the git commit history of their cwd. Each session
+# is classified ``productive`` / ``reverted`` / ``abandoned`` / ``no_repo``.
+# Costs come from the same per-(model, token) rollup the dashboard uses.
+
+_YIELD_PERIODS = ("today", "week", "month", "all", "7days", "30days")
+
+
+@cli.command("yield")
+@click.option(
+    "-p", "--period",
+    type=click.Choice(_YIELD_PERIODS),
+    default="month",
+    help="Period to analyse.",
+)
+@click.option(
+    "--project", "include", multiple=True,
+    help="Filter by project slug (repeatable).",
+)
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(_VALID_FORMATS),
+    default="text",
+    help="Output format.",
+)
+def yield_cmd(period: str, include: tuple[str, ...], fmt: str):
+    """Yield analysis: productive vs reverted vs abandoned sessions.
+
+    Cross-references each session's cwd with the git commit history of that
+    repo over a 24-hour window after the session started. A session is
+    "productive" if a non-reverted commit lands in that window, "reverted"
+    if the commit was later reverted (or wiped from HEAD), "abandoned" if
+    no commit followed, and "no_repo" if the cwd isn't a git repo.
+
+    Heuristic warning: this correlates by time, not by content. A commit
+    within 24h is credited to the session even if it's about something else.
+    """
+    from stackunderflow.services.yield_tracker import (
+        compute_yield,
+        to_dicts,
+        yield_summary,
+    )
+
+    project_filter = list(include) or None
+    conn = _open_store()
+    try:
+        entries = compute_yield(conn, period=period, project_filter=project_filter)
+    finally:
+        conn.close()
+
+    summary = yield_summary(entries)
+    sorted_entries = sorted(entries, key=lambda e: e.cost_usd, reverse=True)
+
+    if fmt == "json":
+        click.echo(json.dumps(
+            {
+                "period": period,
+                "summary": summary,
+                "entries": to_dicts(sorted_entries),
+            },
+            indent=2,
+        ))
+        return
+
+    if not sorted_entries:
+        click.echo(f"No sessions found for period '{period}'.")
+        return
+
+    click.echo(f"Yield analysis — period: {period}")
+    click.echo(
+        f"  productive: {summary['productive']:>4d}  "
+        f"(${summary['productive_cost']:.2f})"
+    )
+    click.echo(
+        f"  reverted:   {summary['reverted']:>4d}  "
+        f"(${summary['reverted_cost']:.2f})"
+    )
+    click.echo(
+        f"  abandoned:  {summary['abandoned']:>4d}  "
+        f"(${summary['abandoned_cost']:.2f})"
+    )
+    click.echo(
+        f"  no_repo:    {summary['no_repo']:>4d}  "
+        f"(${summary['no_repo_cost']:.2f})"
+    )
+    click.echo(
+        f"  total:      {summary['total']:>4d}  "
+        f"(${summary['total_cost']:.2f})"
+    )
+    click.echo("")
+    click.echo("Top sessions by cost:")
+    click.echo(f"  {'CLASS':<11}  {'COST':>8}  {'PROJECT':<28}  SESSION")
+    for e in sorted_entries[:20]:
+        click.echo(
+            f"  {e.classification:<11}  "
+            f"${e.cost_usd:>7.2f}  "
+            f"{(e.project_slug or '')[:28]:<28}  "
+            f"{e.session_id[:36]}"
+        )
+    click.echo("")
+    click.echo(
+        "  note: yield is correlated by time, not by content — a commit "
+        "within 24h is credited to the session even if unrelated."
+    )
+
+
 @cli.command()
 def reindex():
     """Rebuild the session store from scratch."""
