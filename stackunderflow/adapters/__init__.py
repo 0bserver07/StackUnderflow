@@ -13,6 +13,8 @@ Beta adapters are gated by environment variables (default: off):
   STACKUNDERFLOW_BETA_ROOCODE=1        # opt into the Roo Code adapter (Cline parser)
   STACKUNDERFLOW_BETA_OPENCODE=1       # opt into the OpenCode (SQLite) adapter
   STACKUNDERFLOW_BETA_CURSOR_AGENT=1   # opt into the Cursor Agent (transcripts + SQLite) adapter
+  STACKUNDERFLOW_BETA_QWEN=1           # opt into the Qwen (jsonl) adapter
+  STACKUNDERFLOW_BETA_GEMINI=1         # opt into the Gemini (jsonl/json) adapter
 """
 
 import os
@@ -92,3 +94,18 @@ if _beta_enabled("CURSOR_AGENT"):
     from .cursor_agent import CursorAgentAdapter as _CursorAgentAdapter  # noqa: E402
 
     register(_CursorAgentAdapter())
+
+# Beta: Qwen (JSONL). Off by default — set STACKUNDERFLOW_BETA_QWEN=1
+# to enable. macOS-only for v1; codeburn-catalog §13.
+if _beta_enabled("QWEN"):
+    from .qwen import QwenAdapter as _QwenAdapter  # noqa: E402
+
+    register(_QwenAdapter())
+
+# Beta: Gemini (JSONL or single JSON). Off by default — set
+# STACKUNDERFLOW_BETA_GEMINI=1 to enable. macOS-only for v1;
+# codeburn-catalog §7.
+if _beta_enabled("GEMINI"):
+    from .gemini import GeminiAdapter as _GeminiAdapter  # noqa: E402
+
+    register(_GeminiAdapter())
