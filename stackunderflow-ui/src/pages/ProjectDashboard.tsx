@@ -12,6 +12,8 @@ import {
   IconHelpCircle,
   IconBookmark,
   IconTag,
+  IconScale,
+  IconGitBranch,
 } from '@tabler/icons-react'
 import { setProjectByDir, getDashboardData, refreshData } from '../services/api'
 import { formatProjectName, getNameMode } from '../services/nameMode'
@@ -35,6 +37,8 @@ import BookmarksTab from '../components/dashboard/BookmarksTab'
 import TagsTab from '../components/dashboard/TagsTab'
 import SessionsTab from '../components/dashboard/SessionsTab'
 import CostTab from '../components/dashboard/CostTab'
+import CompareTab from '../components/dashboard/CompareTab'
+import YieldTab from '../components/dashboard/YieldTab'
 import { useBetaFeatures } from '../hooks/useBetaFeatures'
 import BetaBadge from '../components/common/BetaBadge'
 
@@ -49,6 +53,10 @@ const TABS: readonly Tab[] = [
   { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
   { id: 'sessions', label: 'Sessions', icon: IconFolders },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
+  // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
+  // and Commands. Both call dedicated /api/compare and /api/yield routes.
+  { id: 'compare', label: 'Compare', icon: IconScale },
+  { id: 'yield', label: 'Yield', icon: IconGitBranch, beta: true },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
@@ -283,6 +291,8 @@ export default function ProjectDashboard() {
       <div>
         {activeTab === 'overview' && <OverviewTab stats={stats} />}
         {activeTab === 'cost' && <CostTab stats={stats} />}
+        {activeTab === 'compare' && <CompareTab />}
+        {activeTab === 'yield' && <YieldTab />}
         {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
         {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
         {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
