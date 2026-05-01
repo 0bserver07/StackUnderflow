@@ -3,27 +3,19 @@
 Two layers live here:
 
 1. ``find_waste()`` — the original Q&A-loop heuristic. Surfaces projects
-   where the user had to push back on the assistant repeatedly. Keeps its
-   list-of-dicts return shape so existing callers (CLI ``--format json``,
-   tests) don't break.
+   where the user had to push back on the assistant repeatedly.
 
 2. ``find_patterns()`` — a broader waste-detection sweep that returns a
-   list of :class:`Finding` objects. Each ``Finding`` has a stable
-   ``pattern_id`` plus a one-line ``suggested_fix``. Patterns covered:
+   list of :class:`Finding` objects covering: bloated CLAUDE.md, unused
+   MCP servers, ghost agents, low read:edit ratio, junk reads, cache
+   overhead, bash output limits.
 
-      - ``bloated_claude_md`` (>5K tokens in CLAUDE.md inflates context)
-      - ``unused_mcp_servers`` (registered but never invoked in 30d)
-      - ``ghost_agents`` (defined under .claude/agents/ but never spawned)
-      - ``low_read_edit_ratio`` (Read 20+ files, Edit/Write zero)
-      - ``junk_reads`` (same file Read 5+ times in one session)
-      - ``cache_overhead`` (cache_create > 50% of total input tokens)
-      - ``bash_output_limits`` (bash output ≥50 KB; suggests head/tail/grep)
+3. ``find_context_budget_findings()`` — flags per-session context
+   overhead (system prompt + MCP + skills + memory files) that exceeds
+   ``CONTEXT_BUDGET_BLOAT_THRESHOLD``.
 
-The detectors are deliberately small + composable: each returns a
-``list[Finding]``; ``find_patterns()`` concatenates and sorts them. If a
-detector hits a missing file, an unparseable JSON, or a stat() failure
-it returns an empty list silently — these patterns are advisory, never
-load-bearing.
+Detectors return empty lists silently on filesystem / parse errors —
+patterns are advisory, never load-bearing.
 """
 
 from __future__ import annotations
@@ -37,6 +29,11 @@ from pathlib import Path
 from typing import Any
 
 from stackunderflow.reports.scope import Scope
+from stackunderflow.services.context_budget import (
+    ContextBudget,
+    estimate_context_budget,
+    estimate_global_budget,
+)
 from stackunderflow.services.qa_service import QAService
 from stackunderflow.store import queries
 
@@ -44,14 +41,12 @@ __all__ = [
     "Finding",
     "find_patterns",
     "find_waste",
+    "find_context_budget_findings",
+    "CONTEXT_BUDGET_BLOAT_THRESHOLD",
 ]
 
 
 # ── tunables ────────────────────────────────────────────────────────────────
-#
-# Everything here is a heuristic threshold. They live as module-level
-# constants so a downstream tool (or a test) can monkey-patch one without
-# rewriting the function body.
 
 CLAUDE_MD_TOKEN_THRESHOLD = 5_000      # ≈ 4 chars per token (rough)
 JUNK_READ_REPEAT_THRESHOLD = 5         # same path Read >= N times
@@ -59,6 +54,9 @@ LOW_READ_EDIT_READ_FLOOR = 20          # Reads >= N to qualify
 CACHE_OVERHEAD_RATIO = 0.5             # cache_create / total_input
 BASH_OUTPUT_BYTES_THRESHOLD = 50_000   # 50 KB output
 UNUSED_TOOL_LOOKBACK_DAYS = 30
+# Per-session context budget above this threshold flags as bloat — paid
+# on every turn. ~$6/mo just for the preamble at $3/M × 100 sessions/mo.
+CONTEXT_BUDGET_BLOAT_THRESHOLD = 20_000
 
 
 # ── Finding dataclass ───────────────────────────────────────────────────────
@@ -66,14 +64,7 @@ UNUSED_TOOL_LOOKBACK_DAYS = 30
 
 @dataclass(frozen=True)
 class Finding:
-    """A single waste-pattern hit.
-
-    ``pattern_id`` is the stable machine identifier. ``severity`` is one
-    of ``"low" | "medium" | "high"`` and drives both display order and
-    UI emphasis. ``estimated_waste_tokens`` is ``None`` when the pattern
-    can't compute a meaningful number (e.g. ghost agents — no per-call
-    token cost).
-    """
+    """A single waste-pattern hit."""
 
     pattern_id: str
     severity: str
@@ -85,8 +76,7 @@ class Finding:
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
 _SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -877,3 +867,79 @@ def find_patterns(
     return findings
 
 
+def find_context_budget_findings(
+    conn: sqlite3.Connection,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    threshold: int = CONTEXT_BUDGET_BLOAT_THRESHOLD,
+) -> list[dict]:
+    """Flag projects whose per-session context budget is bloated.
+
+    A finding is emitted (severity ``medium``) for every project whose
+    estimated total budget exceeds ``threshold`` tokens. The global
+    budget — i.e. the part that's the same regardless of which project
+    you're in — is reported once with ``project=None`` so the CLI can
+    cleanly distinguish "trim your skills" from "trim this project's
+    CLAUDE.md".
+
+    Defensive: a missing project directory contributes a zero-cost
+    project slice (the global slices still count); we never raise.
+    """
+    findings: list[dict] = []
+
+    # Global slices — emit one finding regardless of any project filter
+    # because trimming MCP servers / skills helps every project at once.
+    try:
+        global_budget = estimate_global_budget()
+    except Exception:  # noqa: BLE001 - estimator must never break optimize
+        global_budget = None
+    if global_budget is not None and global_budget.total_tokens > threshold:
+        findings.append(_finding_from_budget(slug=None, budget=global_budget, threshold=threshold))
+
+    # Per-project budgets
+    projects = queries.list_projects(conn)
+    slugs = [p.slug for p in projects]
+    if include is not None:
+        slugs = [s for s in slugs if s in include]
+    if exclude is not None:
+        slugs = [s for s in slugs if s not in exclude]
+
+    by_slug = {p.slug: p for p in projects}
+    for slug in slugs:
+        row = by_slug[slug]
+        if not row.path:
+            continue
+        project_dir = Path(row.path)
+        if not project_dir.exists():
+            continue
+        try:
+            budget = estimate_context_budget(project_dir)
+        except Exception:  # noqa: BLE001, S112 - estimator must never break optimize
+            continue
+        if budget.total_tokens > threshold:
+            findings.append(_finding_from_budget(slug=slug, budget=budget, threshold=threshold))
+
+    return findings
+
+
+def _finding_from_budget(*, slug: str | None, budget: ContextBudget, threshold: int) -> dict:
+    """Render one ``context_budget_bloat`` finding from a ``ContextBudget``."""
+    top_slices = sorted(
+        (s for s in budget.slices if s.tokens > 0),
+        key=lambda s: s.tokens,
+        reverse=True,
+    )[:5]
+    return {
+        "kind": "context_budget_bloat",
+        "severity": "medium",
+        "project": slug,  # None == global
+        "total_tokens": budget.total_tokens,
+        "threshold": threshold,
+        "cost_per_session_usd": budget.cost_per_session_usd,
+        "estimated_monthly_cost_usd": budget.estimated_monthly_cost_usd,
+        "top_slices": [
+            {"name": s.name, "tokens": s.tokens, "source_path": s.source_path}
+            for s in top_slices
+        ],
+    }
