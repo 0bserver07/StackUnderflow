@@ -20,6 +20,7 @@ import {
   deleteModelAlias,
 } from '../services/api'
 import BetaBadge from '../components/common/BetaBadge'
+import ContextBudgetCard from '../components/settings/ContextBudgetCard'
 
 // Hardcoded mirror of pages/ProjectDashboard.tsx TABS. Keep in sync when that
 // list changes. Order and beta flags from docs/specs/beta-features.md §Design.
@@ -33,6 +34,9 @@ const TABS: readonly TabMeta[] = [
   { id: 'overview', label: 'Overview', isBeta: false },
   { id: 'sessions', label: 'Sessions', isBeta: false },
   { id: 'cost', label: 'Cost', isBeta: false },
+  // v0.6.0 follow-up tabs.
+  { id: 'compare', label: 'Compare', isBeta: false },
+  { id: 'yield', label: 'Yield', isBeta: true },
   { id: 'commands', label: 'Commands', isBeta: false },
   { id: 'messages', label: 'Messages', isBeta: false },
   { id: 'search', label: 'Search', isBeta: false },
@@ -436,7 +440,10 @@ export default function Settings() {
         </div>
       </section>
 
-      {/* 6. Danger zone / reset ------------------------------------------ */}
+      {/* 6. Context budget (v0.6.0) ------------------------------------- */}
+      <ContextBudgetCard />
+
+      {/* 7. Danger zone / reset ------------------------------------------ */}
       <section className="bg-white dark:bg-gray-900 rounded-lg border border-red-200 dark:border-red-900/50 p-5">
         <h2 className="text-base font-semibold text-red-700 dark:text-red-400">Danger zone</h2>
         <p className="text-xs text-gray-500 mt-1">

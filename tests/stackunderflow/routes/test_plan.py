@@ -87,7 +87,13 @@ class TestPlanRoute:
         with p1, p2:
             r = client.get("/api/plan")
             assert r.status_code == 200
-            assert r.json() == {"plan": None, "usage": None}
+            body = r.json()
+            assert body["plan"] is None
+            assert body["usage"] is None
+            # Currency block is always stamped — same contract as every other
+            # cost-bearing endpoint. UI reads it once per fetch.
+            assert body["currency"]["code"] == "USD"
+            assert body["currency"]["rate_from_usd"] == 1.0
 
     def test_plan_set_but_no_messages(self, app_client, tmp_path):
         client, _ = app_client
@@ -193,3 +199,50 @@ class TestStatusBanding:
                 data = r.json()
                 assert data["usage"]["status"] == "over"
                 assert data["usage"]["remaining"] < 0
+
+
+# ── currency conversion ────────────────────────────────────────────────────
+
+
+class TestCurrencyConversion:
+    """`usage.*` dollar fields must be pre-converted via the active currency.
+
+    The plan's ``monthly_usd`` keeps the literal USD value (it's the user's
+    contract amount), but ``used`` / ``budget`` / ``remaining`` / ``projected``
+    inside ``usage`` track the active currency so a single ``formatCost`` callsite
+    renders correctly. Status banding is computed against USD before conversion
+    so the % thresholds stay stable across currencies.
+    """
+
+    def test_usage_fields_converted_when_non_usd(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        rate = 0.5  # 1 USD = 0.5 EUR (purely synthetic for the test)
+        with (
+            p1,
+            p2,
+            patch(
+                "stackunderflow.routes.plan.active_currency_payload",
+                return_value={"code": "EUR", "symbol": "€", "rate_from_usd": rate},
+            ),
+            patch(
+                "stackunderflow.routes.plan._spend_in_window",
+                return_value=10.0,
+            ),
+        ):
+            plans_mod.set_plan("claude-pro")  # $20 USD budget
+            r = client.get("/api/plan")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["currency"]["code"] == "EUR"
+            assert body["currency"]["rate_from_usd"] == rate
+            usage = body["usage"]
+            # Pre-converted: 10 USD spend × 0.5 = 5 EUR; 20 USD budget × 0.5 = 10 EUR.
+            assert usage["used"] == pytest.approx(5.0)
+            assert usage["budget"] == pytest.approx(10.0)
+            assert usage["remaining"] == pytest.approx(5.0)
+            # pct is dimensionless and computed pre-conversion: 10/20 = 50%.
+            assert usage["pct"] == pytest.approx(50.0)
+            assert usage["status"] == "ok"
+            # Plan keeps the canonical USD amount under its key.
+            assert body["plan"]["monthly_usd"] == 20.0

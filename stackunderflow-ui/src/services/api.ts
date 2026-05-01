@@ -13,6 +13,11 @@ import type {
   Bookmark,
   PricingData,
   CurrencyInfo,
+  CompareResponse,
+  YieldResponse,
+  PlanResponse,
+  OptimizeResponse,
+  ContextBudget,
 } from '../types/api'
 
 const BASE = '/api'
@@ -224,4 +229,46 @@ export async function deleteModelAlias(from: string): Promise<ModelAliasesRespon
   return fetchJson(`${BASE}/cfg/model-aliases?from=${encodeURIComponent(from)}`, {
     method: 'DELETE',
   })
+}
+
+// ---------------------------------------------------------------------------
+// v0.6.0 follow-up surfaces
+// ---------------------------------------------------------------------------
+
+/** Period selector accepted by `/api/compare`. */
+export type ComparePeriod = 'today' | 'week' | 'month' | 'all'
+
+/**
+ * Period selector accepted by `/api/yield`. Backend accepts a friendlier
+ * superset (today/week/month/all + 7days/30days); the UI only passes the
+ * canonical four.
+ */
+export type YieldPeriod = 'today' | 'week' | 'month' | 'all'
+
+/** Period selector accepted by `/api/optimize`. */
+export type OptimizePeriod = 'today' | '7days' | '30days' | 'month' | 'all'
+
+export async function getCompare(period: ComparePeriod = 'month'): Promise<CompareResponse> {
+  return fetchJson(`${BASE}/compare?period=${encodeURIComponent(period)}`)
+}
+
+export async function getYield(period: YieldPeriod = 'week'): Promise<YieldResponse> {
+  return fetchJson(`${BASE}/yield?period=${encodeURIComponent(period)}`)
+}
+
+export async function getPlan(): Promise<PlanResponse> {
+  return fetchJson(`${BASE}/plan`)
+}
+
+export async function getOptimize(period: OptimizePeriod = 'month'): Promise<OptimizeResponse> {
+  return fetchJson(`${BASE}/optimize?period=${encodeURIComponent(period)}`)
+}
+
+/**
+ * Global context-budget payload (no `project` query param). The route also
+ * supports a per-project view; the dashboard's settings card scopes to the
+ * global view because that's the only thing every install has.
+ */
+export async function getContextBudget(): Promise<ContextBudget> {
+  return fetchJson(`${BASE}/context-budget`)
 }
