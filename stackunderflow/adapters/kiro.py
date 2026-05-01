@@ -36,7 +36,11 @@ Each ``.chat`` file is a single JSON document::
   — Kiro files are small and aren't streamed.
 
 Spec §3 (multi-provider).
-"""
+
+Defensive sizing: ``.chat`` files larger than ``MAX_SESSION_FILE_BYTES``
+(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
+with a logged warning** rather than parsed. Single-document JSON cannot
+stream, so the cap is the only safety net."""
 
 from __future__ import annotations
 
@@ -45,6 +49,7 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
+from ._streaming import stat_or_skip
 from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
@@ -105,6 +110,12 @@ class KiroAdapter:
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
+        # Single-document JSON: must call ``json.load`` on the whole
+        # file, so the only safety net is the defensive 128 MB cap.
+        # Above the cap we yield nothing — same convention as the JSONL
+        # adapters.
+        if stat_or_skip(ref.file_path) is None:
+            return
         try:
             with ref.file_path.open("rb") as fh:
                 data = json.load(fh)
