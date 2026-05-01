@@ -55,6 +55,7 @@ function formatDateRange(iso: string): string {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 interface MiniStatCardProps {
   icon: React.ReactNode
@@ -78,6 +79,7 @@ function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-600 dar
 }
 
 export default function OverviewTab({ stats }: OverviewTabProps) {
+  const { currency } = useCurrency()
   // Trends moved off /api/dashboard-data into /api/cost-data (spec §A3) — lazy
   // fetch them in a non-blocking effect so the rest of the overview renders
   // immediately. `stats.trends` will normally be undefined here; we still seed
@@ -192,7 +194,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
         <MiniStatCard
           icon={<IconCurrencyDollar size={14} />}
           label="Total Cost"
-          value={formatCost(stats.overview.total_cost ?? 0)}
+          value={formatCost(stats.overview.total_cost ?? 0, currency)}
           color="text-green-400"
         />
         <MiniStatCard

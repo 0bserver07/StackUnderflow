@@ -761,7 +761,10 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
   if (filesQuery.isLoading) return <LoadingSpinner message="Loading sessions..." />
   if (filesQuery.isError) return <div className="text-red-400 p-4">Failed to load sessions</div>
 
-  const files = filesQuery.data!
+  // /api/jsonl-files returns {files, currency} since v0.6.0; unwrap the
+  // files list. The currency block is propagated app-wide via the
+  // CurrencyProvider, so we don't need to thread it from here.
+  const files = filesQuery.data!.files
 
   // Session content view — exit early, skips compare UI while viewing one session.
   if (selectedFile) {

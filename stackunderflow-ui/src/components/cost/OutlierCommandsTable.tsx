@@ -223,6 +223,7 @@ interface OutlierCommandsTableProps {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 import EstimatedCostMarker from '../common/EstimatedCostMarker'
 
 function formatTime(iso: string): string {
@@ -267,6 +268,7 @@ function OutlierSection({
   onOpenInteraction,
   onOpenSession,
 }: OutlierSectionProps) {
+  const { currency } = useCurrency()
   const { sorted, sortDir, sortKey, setSort } = useSortableTable<OutlierCommand>(rows, {
     key: countKey,
     dir: 'desc',
@@ -374,7 +376,7 @@ function OutlierSection({
                               <span className="text-gray-500">Cost:</span>{' '}
                               <span className="tabular-nums text-gray-800 dark:text-gray-200">
                                 <EstimatedCostMarker costSource={r.cost_source} />
-                                {formatCost(r.cost)}
+                                {formatCost(r.cost, currency)}
                               </span>
                             </div>
                             <div>
@@ -409,7 +411,7 @@ function OutlierSection({
                       </td>
                       <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         <EstimatedCostMarker costSource={r.cost_source} />
-                        {formatCost(r.cost)}
+                        {formatCost(r.cost, currency)}
                       </td>
                     </ExpandableRow>
                   )
@@ -434,7 +436,7 @@ function OutlierSection({
                     median
                   </td>
                   <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200 tabular-nums">
-                    {formatCost(medianCost)}
+                    {formatCost(medianCost, currency)}
                   </td>
                 </tr>
               </tfoot>

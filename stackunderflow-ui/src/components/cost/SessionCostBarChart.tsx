@@ -28,6 +28,8 @@ function shortSession(sid: string): string {
 }
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
+import type { CurrencyInfo } from '../../types/api'
 
 function formatDuration(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00:00'
@@ -67,9 +69,11 @@ interface TooltipPayloadEntry {
 function SessionTooltip({
   active,
   payload,
+  currency,
 }: {
   active?: boolean
   payload?: TooltipPayloadEntry[]
+  currency?: CurrencyInfo | null
 }) {
   if (!active || !payload || payload.length === 0) return null
   const p = payload[0]?.payload
@@ -106,7 +110,7 @@ function SessionTooltip({
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
         <span style={{ color: '#9CA3AF' }}>Cost</span>
-        <span style={{ color: '#F3F4F6', fontWeight: 600 }}>{formatCost(p.cost)}</span>
+        <span style={{ color: '#F3F4F6', fontWeight: 600 }}>{formatCost(p.cost, currency)}</span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
         <span style={{ color: '#9CA3AF' }}>Duration</span>
@@ -176,6 +180,7 @@ function SessionTooltip({
 }
 
 export default function SessionCostBarChart({ data, onSelect }: SessionCostBarChartProps) {
+  const { currency } = useCurrency()
   if (!data || data.length === 0) {
     return (
       <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
@@ -235,7 +240,7 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
             tick={{ fontSize: 10, fill: '#9CA3AF' }}
             tickLine={{ stroke: '#4B5563' }}
             axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={formatCost}
+            tickFormatter={(v: number) => formatCost(v, currency)}
           />
           <YAxis
             type="category"
@@ -247,7 +252,7 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
             interval={0}
           />
           <Tooltip
-            content={<SessionTooltip />}
+            content={<SessionTooltip currency={currency} />}
             cursor={{ fill: 'rgba(75, 85, 99, 0.15)' }}
           />
           <Bar
@@ -269,7 +274,7 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
               formatter={(value: any) => {
                 const n = typeof value === 'number' ? value : Number(value)
                 if (!Number.isFinite(n) || n <= labelThreshold) return ''
-                return formatCost(n)
+                return formatCost(n, currency)
               }}
             />
           </Bar>

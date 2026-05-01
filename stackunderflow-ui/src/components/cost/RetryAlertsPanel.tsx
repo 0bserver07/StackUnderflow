@@ -10,6 +10,7 @@ interface RetryAlertsPanelProps {
 type SeverityFilter = 'all' | 'ge2' | 'ge3'
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -56,6 +57,7 @@ const FILTERS: Array<{ id: SeverityFilter; label: string; predicate: (s: RetrySi
 ]
 
 export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
+  const { currency } = useCurrency()
   const [filter, setFilter] = useState<SeverityFilter>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -108,7 +110,7 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
       <div className="flex items-baseline justify-between mb-3 gap-2 flex-wrap">
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300" data-testid="retry-alerts-summary">
           {visible.length} retr{visible.length === 1 ? 'y' : 'ies'} wasted{' '}
-          <span className="tabular-nums">{formatCost(totalWasted)}</span> total
+          <span className="tabular-nums">{formatCost(totalWasted, currency)}</span> total
         </h3>
         <div
           className="flex items-center gap-1"
@@ -176,7 +178,7 @@ export default function RetryAlertsPanel({ signals }: RetryAlertsPanelProps) {
                   </div>
                   <div className="text-xs text-gray-600 dark:text-gray-400 mt-1 tabular-nums">
                     ~{formatTokens(sig.estimated_wasted_tokens)} wasted tokens ·{' '}
-                    {formatCost(sig.estimated_wasted_cost)} wasted cost
+                    {formatCost(sig.estimated_wasted_cost, currency)} wasted cost
                   </div>
                 </div>
               </button>

@@ -48,6 +48,7 @@ const SORTS: { key: SortKey; label: string }[] = [
 ]
 
 import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 
 function formatShort(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -63,6 +64,7 @@ function formatPct(p: number): string {
 }
 
 export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChartProps) {
+  const { currency } = useCurrency()
   const [sortKey, setSortKey] = useState<SortKey>('cost')
 
   const chartData = useMemo<ChartRow[]>(() => {
@@ -94,14 +96,14 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
     return sorted.map<ChartRow>((r) => {
       const raw = r[sortKey] || 0
       const pct = totalForSort > 0 ? (raw / totalForSort) * 100 : 0
-      const primary = sortKey === 'cost' ? formatCost(r.cost) : formatShort(raw)
+      const primary = sortKey === 'cost' ? formatCost(r.cost, currency) : formatShort(raw)
       return {
         ...r,
         pctOfTotal: pct,
         label: `${primary} · ${formatPct(pct)}`,
       }
     })
-  }, [data, sortKey])
+  }, [data, sortKey, currency])
 
   const hasData = chartData.length > 0
 
@@ -171,7 +173,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
   }
 
   const xTickFormatter =
-    sortKey === 'cost' ? (v: number) => formatCost(v) : (v: number) => formatShort(v)
+    sortKey === 'cost' ? (v: number) => formatCost(v, currency) : (v: number) => formatShort(v)
 
   const sortLabelLower = (SORTS.find((s) => s.key === sortKey)?.label ?? 'cost').toLowerCase()
 
@@ -211,7 +213,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
               const p = props?.payload as ChartRow | undefined
               if (!p) return ['', '']
               const lines = [
-                `${formatCost(p.cost)} · ${formatPct(p.pctOfTotal)} of ${sortLabelLower}`,
+                `${formatCost(p.cost, currency)} · ${formatPct(p.pctOfTotal)} of ${sortLabelLower}`,
                 `calls: ${formatShort(p.calls)}`,
                 `input: ${formatShort(p.input)} · output: ${formatShort(p.output)}`,
                 `cache read: ${formatShort(p.cacheRead)} · cache creation: ${formatShort(p.cacheCreation)}`,

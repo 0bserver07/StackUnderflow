@@ -57,6 +57,12 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/export` | Export |
 | GET | `/api/compare` | Compare |
 | GET | `/api/yield` | Yield |
+| GET | `/api/cfg` | Settings |
+| GET | `/api/cfg/currencies` | Settings |
+| POST | `/api/cfg/currency` | Settings |
+| GET | `/api/cfg/model-aliases` | Settings |
+| POST | `/api/cfg/model-aliases` | Settings |
+| DELETE | `/api/cfg/model-aliases` | Settings |
 | GET | `/api/health` | Misc |
 | GET | `/api/pricing` | Misc |
 | POST | `/api/pricing/refresh` | Misc |
@@ -1122,6 +1128,126 @@ List all bookmarks attached to a specific session.
 ```
 
 **Status codes:** `200` success; `503` service unavailable; `500` error.
+
+---
+
+## Settings
+
+These endpoints back the **Settings page** (`/settings` in the React UI) so the dashboard can
+read and write the same persistent settings that the `stackunderflow cfg` CLI manipulates.
+Writes go through the same `Settings.persist` machinery (validators run; the config file at
+`~/.stackunderflow/config.json` is the single source of truth) and invalidate the dashboard
+cache so the next `/api/dashboard-data` reflects the new values.
+
+**UI surfaces:**
+
+- `/settings` — Currency dropdown (24 common ISO codes plus an "Other" text-input branch),
+  Model aliases table (add/remove `from → to` pairs).
+- The dashboard tab bar — an **Export** button (top-right of every project tab) opens a
+  popover with format (CSV/JSON) and period (Today/7d/30d/All) controls; submit issues a
+  `GET /api/export?...` request and triggers a browser download.
+
+### GET /api/cfg
+
+Return all user-facing settings plus the currently active currency block.
+
+**Response**
+
+```json
+{
+  "settings": {
+    "currency": "EUR",
+    "model_aliases": {"openrouter/claude-opus": "claude-opus-4-6"},
+    "port": 8081,
+    "...": "..."
+  },
+  "currency": {"code": "EUR", "symbol": "€", "rate_from_usd": 0.93}
+}
+```
+
+**Status codes:** `200` always.
+
+---
+
+### GET /api/cfg/currencies
+
+Return the suggested + locally cached currency codes the UI can render.
+
+**Response**
+
+```json
+{
+  "common": ["USD", "EUR", "GBP", "JPY", "..."],
+  "supported": ["USD", "AUD", "BGN", "..."],
+  "current": {"code": "EUR", "symbol": "€", "rate_from_usd": 0.93}
+}
+```
+
+`common` is the shortlist always shown in the dropdown. `supported` is whatever Frankfurter has
+published locally (cached); the file may be empty until the first conversion fetch lands.
+
+**Status codes:** `200` always.
+
+---
+
+### POST /api/cfg/currency
+
+Set the active currency. Body: `{"code": "EUR"}` (or `{"currency": "EUR"}` — both are accepted).
+Codes are normalised to uppercase. Invalidates the dashboard cache so the next data fetch
+reflects the new currency.
+
+**Response**
+
+```json
+{"currency": {"code": "EUR", "symbol": "€", "rate_from_usd": 0.93}}
+```
+
+**Status codes:** `200` success; `400` if the code is not a 3-letter ISO 4217 string.
+
+---
+
+### GET /api/cfg/model-aliases
+
+Return the current proxy → canonical alias map.
+
+**Response**
+
+```json
+{"aliases": {"openrouter/claude-opus": "claude-opus-4-6"}}
+```
+
+**Status codes:** `200` always.
+
+---
+
+### POST /api/cfg/model-aliases
+
+Add or update one alias. Body: `{"from": "<proxy>", "to": "<canonical>"}`. Both fields must be
+non-empty strings.
+
+**Response**
+
+```json
+{"aliases": {"openrouter/claude-opus": "claude-opus-4-6", "...": "..."}}
+```
+
+**Status codes:** `200` success; `400` if either field is empty / missing.
+
+---
+
+### DELETE /api/cfg/model-aliases
+
+Remove one alias. The proxy id is passed as `?from=…` (query parameter, not path) because
+alias keys often contain slashes (`openrouter/...`) which would need double-encoding to round-trip
+a path component.
+
+**Response**
+
+```json
+{"aliases": {"...": "..."}}
+```
+
+**Status codes:** `200` success; `400` if `from` is empty / missing; `404` if the alias is not present.
 
 ---
 

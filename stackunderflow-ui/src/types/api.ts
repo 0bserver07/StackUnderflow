@@ -105,6 +105,28 @@ export interface JsonlFile {
   cost_source?: 'estimated' | 'actual'
 }
 
+/**
+ * Top-level currency block stamped onto every monetary API response since
+ * v0.6.0 (multi-currency PR). The UI reads `code` for labels, `symbol` for
+ * inline rendering via `formatCost(usd, currency)`, and `rate_from_usd`
+ * for any client-side conversions (rare — backend pre-converts).
+ */
+export interface CurrencyInfo {
+  code: string
+  symbol: string
+  rate_from_usd: number
+}
+
+/**
+ * `/api/jsonl-files` response shape since v0.6.0. The bare list of files
+ * was wrapped to also expose the active currency for the dashboard's
+ * cost-per-session column.
+ */
+export interface JsonlFilesResponse {
+  files: JsonlFile[]
+  currency: CurrencyInfo
+}
+
 export interface JsonlContentResponse {
   lines: Record<string, unknown>[]
   total_lines: number
@@ -184,6 +206,10 @@ export interface DashboardData {
     messages_initial_load: number
     max_date_range_days: number
   }
+  // Stamped at the top level of /api/dashboard-data since v0.6.0. The UI
+  // reads this to render cost figures in the active currency without
+  // re-fetching settings on every component.
+  currency?: CurrencyInfo
 }
 
 // ---------------------------------------------------------------------------

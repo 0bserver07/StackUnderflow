@@ -9,30 +9,42 @@
  * Use these everywhere a number meets a UI surface.
  */
 
+import type { CurrencyInfo } from '../types/api'
+
 /**
- * Format a USD amount.
+ * Format a monetary amount.
+ *
+ * The amount is always passed in the *display* currency — backend routes
+ * pre-convert the USD figure when ``currency.rate_from_usd != 1``, so the
+ * formatter only needs the right symbol and the standard precision rules.
  *
  * Policy:
- * - exactly 0       → `$0`
+ * - exactly 0       → `<symbol>0`
  * - 0 < |x| < 0.01  → 4-decimal precision so sub-cent values stay visible
  * - 0.01 ≤ |x| < 1k → 2 decimals
  * - |x| ≥ 1000      → 2 decimals with locale thousands separators
  *
  * Negative values get a leading `-` (preserved through all branches).
+ *
+ * @param cost The amount to render, *already in the active currency*.
+ * @param currency Optional currency block (typically from `useCurrency()` /
+ *   the `/api/dashboard-data` payload). When omitted, falls back to USD with
+ *   the `$` symbol so legacy callers keep rendering correctly.
  */
-export function formatCost(cost: number): string {
-  if (!Number.isFinite(cost)) return '$0'
-  if (cost === 0) return '$0'
+export function formatCost(cost: number, currency?: CurrencyInfo | null): string {
+  const symbol = currency?.symbol ?? '$'
+  if (!Number.isFinite(cost)) return `${symbol}0`
+  if (cost === 0) return `${symbol}0`
   const sign = cost < 0 ? '-' : ''
   const abs = Math.abs(cost)
-  if (abs < 0.01) return `${sign}$${abs.toFixed(4)}`
+  if (abs < 0.01) return `${sign}${symbol}${abs.toFixed(4)}`
   if (abs >= 1000) {
-    return `${sign}$${abs.toLocaleString(undefined, {
+    return `${sign}${symbol}${abs.toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`
   }
-  return `${sign}$${abs.toFixed(2)}`
+  return `${sign}${symbol}${abs.toFixed(2)}`
 }
 
 /**
