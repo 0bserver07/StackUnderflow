@@ -19,6 +19,44 @@ from .providers.openai import OpenAIPricer
 _MILLION = 1_000_000.0
 
 
+# ── alias resolution ─────────────────────────────────────────────────────────
+
+def resolve_model_alias(model_id: str, aliases: dict[str, str]) -> str:
+    """Map ``model_id`` through a user-provided alias table.
+
+    Returns the canonical id when ``model_id`` appears as a key, otherwise
+    the input unchanged. Single-step lookup only — no recursive chasing,
+    so a self-alias (``foo`` → ``foo``) terminates trivially and a
+    misconfigured chain (``a`` → ``b`` → ``c``) returns ``b`` rather than
+    iterating. Empty / non-dict input is treated as an empty map.
+    """
+    if not aliases or not isinstance(aliases, dict):
+        return model_id
+    return aliases.get(model_id, model_id)
+
+
+def _user_aliases() -> dict[str, str]:
+    """Load the user's alias map from settings.
+
+    Defensive: any error reading settings (corrupt file, unexpected types,
+    import failure during early bootstrap) falls back to an empty map so
+    cost computation never raises just because aliases are misconfigured.
+    """
+    try:
+        from stackunderflow.settings import Settings
+        raw = Settings().get("model_aliases", {})
+    except Exception:  # noqa: S110 - settings I/O errors must not break pricing
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    # Only string→string entries are usable; silently drop the rest.
+    return {
+        str(k): str(v)
+        for k, v in raw.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
 # ── public API ───────────────────────────────────────────────────────────────
 
 def compute_cost(
@@ -33,10 +71,17 @@ def compute_cost(
     first (a no-op for Anthropic, the cached-input subtraction for
     OpenAI), then priced.
 
+    A user-configured alias map (``settings.model_aliases``) is consulted
+    first so proxy-rewritten model ids (e.g. ``openrouter/claude-opus``)
+    resolve to a canonical id our rate tables know about. See
+    ``docs/cli-reference.md`` for CLI usage.
+
     A PricingService overlay (if initialised) takes precedence over the
     hardcoded rates — preserves the pre-refactor behaviour of letting
     LiteLLM upstream override the canonical rate card.
     """
+    model = resolve_model_alias(model, _user_aliases())
+
     pricer = get_pricer(provider)
     normalized = pricer.normalize_tokens(tokens)
 
@@ -118,6 +163,7 @@ def _overlay_rates(model: str) -> tuple[float, float, float, float] | None:
 
 
 def get_model_pricing(model: str) -> dict[str, float] | None:
+    model = resolve_model_alias(model, _user_aliases())
     overlay = _overlay_rates(model)
     if overlay is not None:
         i, o, cw, cr = overlay
@@ -151,4 +197,5 @@ __all__ = [
     "format_dollars",
     "get_dynamic_pricing",
     "get_model_pricing",
+    "resolve_model_alias",
 ]

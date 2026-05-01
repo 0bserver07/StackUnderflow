@@ -20,9 +20,14 @@ _CFG_FILE = _APP_DIR / "config.json"
 
 
 class _Opt:
-    """Descriptor that resolves  env → file → default  on every read."""
+    """Descriptor that resolves  env → file → default  on every read.
 
-    def __init__(self, default: Any, env: str) -> None:
+    ``env`` may be ``None`` for settings that have no sensible string-shape
+    representation (e.g. dict-typed settings like ``model_aliases``); those
+    are file-only and skip the env-var leg of the resolution chain.
+    """
+
+    def __init__(self, default: Any, env: str | None) -> None:
         self.default = default
         self.env = env
         self.attr: str = ""           # set by __set_name__
@@ -35,17 +40,25 @@ class _Opt:
         if obj is None:
             return self
 
-        # 1. environment variable
-        raw = os.getenv(self.env)
-        if raw is not None:
-            return self._cast(raw)
+        # 1. environment variable (skipped for env=None)
+        if self.env is not None:
+            raw = os.getenv(self.env)
+            if raw is not None:
+                return self._cast(raw)
 
         # 2. persisted file
         saved = _load()
         if self.attr in saved:
-            return saved[self.attr]
+            value = saved[self.attr]
+            # Defensive: a corrupt config (wrong type) falls back to default.
+            if isinstance(self.default, dict) and not isinstance(value, dict):
+                return dict(self.default)
+            return value
 
-        # 3. built-in default
+        # 3. built-in default — return a fresh copy for mutable types so
+        # callers can't accidentally mutate the class-level default.
+        if isinstance(self.default, dict):
+            return dict(self.default)
         return self.default
 
     def _cast(self, raw: str) -> Any:
@@ -78,6 +91,10 @@ class Settings:
     messages_initial_load        = _Opt(500,   "MESSAGES_INITIAL_LOAD")
     log_level                    = _Opt("INFO","LOG_LEVEL")
     auto_reindex_on_ingest       = _Opt(True,  "AUTO_REINDEX_ON_INGEST")
+    # User-provided alias map: proxy-rewritten model id → canonical id.
+    # File-only (no env var — a JSON dict is awkward to set in shell).
+    # Manage via ``stackunderflow cfg model-alias {set,rm,ls}``.
+    model_aliases                = _Opt({},    None)
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 

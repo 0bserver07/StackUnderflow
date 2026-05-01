@@ -171,9 +171,19 @@ def cfg_ls(as_json: bool):
     click.echo("Settings:")
     for key in sorted(data):
         val = data[key]
-        env_var = Settings.ENV_MAPPINGS.get(key, key.upper())
-        src = "env" if os.getenv(env_var) is not None else "file" if key in on_disk else "default"
-        click.echo(f"  {key:<34s}  {str(val):<14s}  [{src}]")
+        env_var = Settings.ENV_MAPPINGS.get(key)
+        # env_var may be None for file-only settings (e.g. dict-typed
+        # ``model_aliases``); skip the env-var probe in that case.
+        if env_var and os.getenv(env_var) is not None:
+            src = "env"
+        elif key in on_disk:
+            src = "file"
+        else:
+            src = "default"
+        # Dict-typed values render compactly (e.g. ``{}`` or
+        # ``{"foo": "bar"}``) so the table stays readable.
+        rendered = json.dumps(val) if isinstance(val, dict) else str(val)
+        click.echo(f"  {key:<34s}  {rendered:<14s}  [{src}]")
 
 
 @cfg_group.command("set")
@@ -187,6 +197,14 @@ def cfg_set(key: str, value: str):
             param_hint="KEY",
         )
     ref = Settings.DEFAULTS[key]
+    if isinstance(ref, dict):
+        # Dict-typed settings (like ``model_aliases``) need a structured
+        # interface — see ``cfg model-alias {set,rm,ls}``.
+        raise click.BadParameter(
+            f"'{key}' is a structured setting; use a dedicated subcommand "
+            f"(e.g. ``stackunderflow cfg model-alias set FROM TO``).",
+            param_hint="KEY",
+        )
     parsed: Any = value
     if isinstance(ref, bool):
         parsed = value.lower() in ("1", "true", "yes", "on")
@@ -202,6 +220,64 @@ def cfg_rm(key: str):
     """Remove KEY from the config file."""
     Settings().remove(key)
     click.echo(f"  {key} removed")
+
+
+# ── model alias management ──────────────────────────────────────────────────
+#
+# Aliases let users map a proxy-rewritten model id (e.g. emitted by
+# OpenRouter, LiteLLM, an internal gateway) to a canonical id we have rates
+# for, so ``compute_cost`` returns a non-zero number.
+#
+# Stored as a single dict under ``model_aliases`` in the config file. We
+# expose a dedicated subcommand because the generic ``cfg set KEY VALUE``
+# would need shell-quoted JSON for a dict and that's a bad UX.
+
+@cfg_group.group("model-alias")
+def cfg_model_alias_group():
+    """Manage model aliases (proxy → canonical model id)."""
+
+
+@cfg_model_alias_group.command("set")
+@click.argument("source")
+@click.argument("target")
+def cfg_model_alias_set(source: str, target: str):
+    """Map SOURCE (proxy id) → TARGET (canonical id) for cost lookup."""
+    s = Settings()
+    aliases = dict(s.get("model_aliases") or {})
+    aliases[source] = target
+    s.persist("model_aliases", aliases)
+    click.echo(f"  {source} -> {target}")
+
+
+@cfg_model_alias_group.command("rm")
+@click.argument("source")
+def cfg_model_alias_rm(source: str):
+    """Remove SOURCE from the alias map."""
+    s = Settings()
+    aliases = dict(s.get("model_aliases") or {})
+    if source not in aliases:
+        click.echo(f"  no alias for {source!r}")
+        return
+    aliases.pop(source)
+    s.persist("model_aliases", aliases)
+    click.echo(f"  {source} removed")
+
+
+@cfg_model_alias_group.command("ls")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def cfg_model_alias_ls(as_json: bool):
+    """List all configured model aliases."""
+    aliases = Settings().get("model_aliases") or {}
+    if as_json:
+        click.echo(json.dumps(aliases, indent=2, sort_keys=True))
+        return
+    if not aliases:
+        click.echo("No model aliases configured.")
+        return
+    click.echo("Model aliases:")
+    width = max(len(k) for k in aliases)
+    for src in sorted(aliases):
+        click.echo(f"  {src:<{width}s}  ->  {aliases[src]}")
 
 
 # backward compat: `stackunderflow config show/set/unset`
