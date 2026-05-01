@@ -1,11 +1,20 @@
-"""FastMCP server exposing `session_query` over stdio.
+"""FastMCP server exposing multi-provider session tools over stdio.
 
-Discovers Claude-Code-format JSONL session logs across the standard
-agent home directories (`~/.claude`, `~/.claude-opus`, `~/.claude-glm`,
-…) and parses them through `stackunderflow.adapters.claude.ClaudeAdapter`
-— no SQLite, no ingest pipeline, no schema lock-in.
+The server is **store-backed by default**: ``session_query``,
+``list_sessions`` and ``list_projects`` all read from the unified
+StackUnderflow SQLite store at ``~/.stackunderflow/store.db`` so a single
+MCP query can answer cross-provider questions ("what did I do today?")
+across every coding agent that's been ingested — claude, codex, cursor,
+cline, droid, kiro, openclaw, pi, copilot, etc.
 
-Run with: `stackunderflow-mcp` (stdio transport).
+For backward compatibility, when a requested ``session_id`` is *not*
+present in the store (e.g. the user has never run ``stackunderflow init``
+or just hasn't re-ingested yet) the server falls back to the legacy
+JSONL walk under the Claude-Code agent home directories. The fallback
+constants ``DEFAULT_AGENT_ROOTS`` are therefore preserved but only ever
+consulted on the fallback path.
+
+Run with: ``stackunderflow-mcp`` (stdio transport).
 """
 
 from __future__ import annotations
@@ -19,11 +28,16 @@ from mcp.server.fastmcp import FastMCP
 
 from stackunderflow.adapters.base import Record, SessionRef
 from stackunderflow.adapters.claude import ClaudeAdapter
+from stackunderflow.mcp import store_reader
 
 _log = logging.getLogger(__name__)
 
 # Standard locations where Claude-Code-format JSONL logs live. Each
-# directory is expected to contain `projects/<slug>/<session>.jsonl`.
+# directory is expected to contain ``projects/<slug>/<session>.jsonl``.
+#
+# These are only consulted on the JSONL **fallback** path — when a
+# session id is missing from the store. The store-backed path covers
+# every provider and ignores this list.
 DEFAULT_AGENT_ROOTS: tuple[str, ...] = (
     "~/.claude",
     "~/.claude-opus",
@@ -55,7 +69,7 @@ _adapter = ClaudeAdapter()
 
 
 def _enumerate_claude_format(root: Path, agent_label: str) -> Iterable[SessionRef]:
-    """Yield SessionRefs for every JSONL file under `root/projects/<slug>/`."""
+    """Yield SessionRefs for every JSONL file under ``root/projects/<slug>/``."""
     projects_dir = root / "projects"
     if not projects_dir.is_dir():
         return
@@ -82,9 +96,9 @@ def discover_sessions(
 ) -> list[SessionRef]:
     """Discover all session files across the given agent root directories.
 
-    Each root is expanded with `~` resolution; non-existent roots are
-    silently skipped. The agent label on each `SessionRef` is derived
-    from the root directory name (e.g. `~/.claude-opus` → `claude-opus`).
+    Each root is expanded with ``~`` resolution; non-existent roots are
+    silently skipped. The agent label on each ``SessionRef`` is derived
+    from the root directory name (e.g. ``~/.claude-opus`` → ``claude-opus``).
     """
     refs: list[SessionRef] = []
     for r in roots:
@@ -111,9 +125,9 @@ def _summarize_tool_args(raw_input: dict) -> dict:
     return out
 
 
-def _extract_tool_calls(rec: Record) -> list[dict]:
-    """Return [{name, args}, …] for each tool_use block in the record."""
-    msg = rec.raw.get("message") if isinstance(rec.raw, dict) else None
+def _extract_tool_calls_from_raw(raw: dict) -> list[dict]:
+    """Return ``[{name, args}, …]`` for each tool_use block in the raw payload."""
+    msg = raw.get("message") if isinstance(raw, dict) else None
     if not isinstance(msg, dict):
         return []
     body = msg.get("content")
@@ -130,9 +144,14 @@ def _extract_tool_calls(rec: Record) -> list[dict]:
     return calls
 
 
-def _is_error_record(rec: Record) -> bool:
+def _extract_tool_calls(rec: Record) -> list[dict]:
+    """Return ``[{name, args}, …]`` for each tool_use block in the record."""
+    return _extract_tool_calls_from_raw(rec.raw if isinstance(rec.raw, dict) else {})
+
+
+def _is_error_payload(raw: dict) -> bool:
     """Heuristic: a tool_result block flagged is_error, or with error-like text."""
-    msg = rec.raw.get("message") if isinstance(rec.raw, dict) else None
+    msg = raw.get("message") if isinstance(raw, dict) else None
     if not isinstance(msg, dict):
         return False
     body = msg.get("content")
@@ -152,6 +171,10 @@ def _is_error_record(rec: Record) -> bool:
                     if _looks_like_error(sub["text"]):
                         return True
     return False
+
+
+def _is_error_record(rec: Record) -> bool:
+    return _is_error_payload(rec.raw if isinstance(rec.raw, dict) else {})
 
 
 def _looks_like_error(text: str) -> bool:
@@ -179,23 +202,26 @@ def _summarize_record(rec: Record, ref: SessionRef) -> dict:
     }
 
 
-def session_query_impl(
-    session_id: str | None = None,
-    limit: int = 20,
-    kind: Literal["tool_calls", "errors", "all"] = "all",
-    *,
-    roots: Iterable[str | Path] = DEFAULT_AGENT_ROOTS,
-) -> list[dict]:
-    """Implementation — see `session_query` for the user-facing tool docs.
+def _decorate_store_message(msg: dict) -> dict:
+    """Attach derived ``tool_calls`` to a store-sourced message dict.
 
-    Reads sessions in mtime-descending order so we hit recent activity
-    first; stops after gathering ~4×limit candidates and then sorts by
-    record timestamp. This avoids parsing every record on disk for the
-    common "show me the last 20 events" query.
+    The store reader returns the raw payload but doesn't compute
+    ``tool_calls`` (that's MCP-server-specific shaping). We add it here
+    and drop the raw blob from the surface so the response shape matches
+    the JSONL path byte-for-byte.
     """
-    if limit <= 0:
-        return []
+    raw = msg.pop("raw", {}) or {}
+    msg["tool_calls"] = _extract_tool_calls_from_raw(raw)
+    return msg
 
+
+def _session_query_jsonl(
+    session_id: str | None,
+    limit: int,
+    kind: Literal["tool_calls", "errors", "all"],
+    roots: Iterable[str | Path],
+) -> list[dict]:
+    """Legacy fallback: walk JSONL files directly."""
     refs = discover_sessions(roots)
     if session_id is not None:
         refs = [r for r in refs if r.session_id == session_id]
@@ -221,6 +247,126 @@ def session_query_impl(
     return matches[:limit]
 
 
+def session_query_impl(
+    session_id: str | None = None,
+    limit: int = 20,
+    kind: Literal["tool_calls", "errors", "all"] = "all",
+    *,
+    roots: Iterable[str | Path] = DEFAULT_AGENT_ROOTS,
+    conn=None,
+) -> list[dict]:
+    """Implementation — see ``session_query`` for the user-facing tool docs.
+
+    Resolution order:
+
+    1. If ``session_id`` is given **and** present in the store, read its
+       messages from the store (covers every ingested provider).
+    2. If ``session_id`` is given and *not* in the store, fall back to
+       the legacy JSONL walk so users who haven't re-ingested still see
+       their data.
+    3. If ``session_id`` is ``None``, return recent events across all
+       providers from the store (or fall back to JSONL if the store
+       doesn't exist).
+    """
+    if limit <= 0:
+        return []
+
+    store_ok = store_reader.store_available(conn=conn)
+
+    # ── store-backed: specific session ──────────────────────────────────
+    if session_id is not None and store_ok:
+        sess = store_reader.find_session(session_id, conn=conn)
+        if sess is not None:
+            msgs = store_reader.get_session_messages(
+                session_id,
+                kind=kind,
+                limit=limit,
+                conn=conn,
+                is_error=_is_error_payload,
+            )
+            decorated = [_decorate_store_message(m) for m in msgs]
+            decorated.sort(key=lambda m: m["timestamp"] or "", reverse=True)
+            return decorated[:limit]
+        # else: fall through to JSONL fallback for this id
+
+    # ── store-backed: cross-session recent feed ─────────────────────────
+    if session_id is None and store_ok:
+        recent = store_reader.list_recent_sessions(
+            limit=max(limit, 20),
+            conn=conn,
+        )
+        bag: list[dict] = []
+        for s in recent:
+            msgs = store_reader.get_session_messages(
+                s.session_id,
+                kind=kind,
+                # Pull a few more than we strictly need so the final
+                # timestamp-sort across sessions has options to choose from.
+                limit=max(limit, 20),
+                conn=conn,
+                is_error=_is_error_payload,
+            )
+            bag.extend(_decorate_store_message(m) for m in msgs)
+            if len(bag) >= limit * 4:
+                break
+        if bag:
+            bag.sort(key=lambda m: m["timestamp"] or "", reverse=True)
+            return bag[:limit]
+        # store empty → fall through to JSONL fallback
+
+    # ── JSONL fallback ──────────────────────────────────────────────────
+    return _session_query_jsonl(session_id, limit, kind, roots)
+
+
+def list_sessions_impl(
+    provider: str | None = None,
+    limit: int = 50,
+    since: str | None = None,
+    *,
+    conn=None,
+) -> list[dict]:
+    """Return recent session metadata across providers (store-backed)."""
+    sessions = store_reader.list_recent_sessions(
+        limit=limit,
+        provider=provider,
+        since=since,
+        conn=conn,
+    )
+    return [
+        {
+            "session_id": s.session_id,
+            "provider": s.provider,
+            "project_slug": s.project_slug,
+            "project_display_name": s.project_display_name,
+            "started_at": s.started_at,
+            "last_ts": s.last_ts,
+            "message_count": s.message_count,
+            "cost_usd": round(s.cost_usd, 6),
+        }
+        for s in sessions
+    ]
+
+
+def list_projects_impl(
+    provider: str | None = None,
+    *,
+    conn=None,
+) -> list[dict]:
+    """Return projects in the store, optionally filtered by provider."""
+    projects = store_reader.list_stored_projects(provider=provider, conn=conn)
+    return [
+        {
+            "slug": p.slug,
+            "provider": p.provider,
+            "display_name": p.display_name,
+            "first_seen": p.first_seen,
+            "last_modified": p.last_modified,
+            "path": p.path,
+        }
+        for p in projects
+    ]
+
+
 mcp = FastMCP("stackunderflow")
 
 
@@ -232,18 +378,22 @@ def session_query(
 ) -> list[dict]:
     """Return recent events from local coding-agent session logs.
 
-    Scans Claude-Code-format JSONL files under `~/.claude*` directories
-    (`~/.claude`, `~/.claude-opus`, `~/.claude-glm`, …) and returns a
-    flat, timestamp-sorted list of events. Useful for asking the agent
-    questions like "what tools did I run last hour?" or "find the last
-    error I hit".
+    Reads from the unified StackUnderflow store
+    (``~/.stackunderflow/store.db``), which aggregates sessions across
+    every ingested provider — claude, codex, cursor, cline, droid, kiro,
+    openclaw, pi, copilot — so a cross-provider question like *"what did
+    I do today?"* sees them all.
+
+    If a ``session_id`` is supplied and not yet ingested, falls back to
+    walking ``~/.claude*`` JSONL files directly so the tool keeps working
+    on fresh installs.
 
     Args:
         session_id: If set, only events from this session_id are returned.
         limit: Maximum events to return (default 20).
-        kind: Filter — "tool_calls" returns only assistant records that
-            invoked at least one tool; "errors" returns records whose
-            tool_result blocks look like errors; "all" returns everything.
+        kind: Filter — ``"tool_calls"`` returns only assistant records that
+            invoked at least one tool; ``"errors"`` returns records whose
+            tool_result blocks look like errors; ``"all"`` returns everything.
 
     Returns:
         List of dicts with: agent, project_slug, session_id, timestamp,
@@ -251,6 +401,47 @@ def session_query(
         content_preview, is_sidechain, uuid.
     """
     return session_query_impl(session_id=session_id, limit=limit, kind=kind)
+
+
+@mcp.tool()
+def list_sessions(
+    provider: str | None = None,
+    limit: int = 50,
+    since: str | None = None,
+) -> list[dict]:
+    """List recent sessions across providers (store-backed).
+
+    Useful when an MCP client wants to ask *"what have I been working on
+    lately?"* without already knowing a specific session id.
+
+    Args:
+        provider: If set, restrict to one provider (``"claude"``,
+            ``"codex"``, ``"cursor"``, ``"cline"``, …).
+        limit: Maximum sessions to return (default 50).
+        since: ISO-8601 lower bound on session ``last_ts`` (inclusive).
+
+    Returns:
+        List of dicts with: session_id, provider, project_slug,
+        project_display_name, started_at, last_ts, message_count,
+        cost_usd.
+    """
+    return list_sessions_impl(provider=provider, limit=limit, since=since)
+
+
+@mcp.tool()
+def list_projects(provider: str | None = None) -> list[dict]:
+    """List projects known to the store, optionally filtered by provider.
+
+    Returns the unified project list across every ingested provider.
+
+    Args:
+        provider: If set, restrict to one provider.
+
+    Returns:
+        List of dicts with: slug, provider, display_name, first_seen,
+        last_modified, path.
+    """
+    return list_projects_impl(provider=provider)
 
 
 def main() -> None:

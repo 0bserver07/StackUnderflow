@@ -89,6 +89,19 @@ def _user_tool_result(
     }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_store(monkeypatch, tmp_path: Path) -> None:
+    """Force the JSONL fallback path by pointing the store at a missing file.
+
+    These legacy tests exercise the file-walk implementation; without
+    isolation they would hit the user's real ``~/.stackunderflow/store.db``
+    and read whatever sessions happen to live there.
+    """
+    from stackunderflow import deps
+
+    monkeypatch.setattr(deps, "store_path", tmp_path / "no-such-store.db")
+
+
 @pytest.fixture
 def fake_agent_home(tmp_path: Path) -> Path:
     """Lay out two agent roots: ~/.claude and ~/.claude-opus."""
