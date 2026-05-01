@@ -56,6 +56,7 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/bookmarks/session/{id}` | Bookmarks |
 | GET | `/api/export` | Export |
 | GET | `/api/compare` | Compare |
+| GET | `/api/yield` | Yield |
 | GET | `/api/health` | Misc |
 | GET | `/api/pricing` | Misc |
 | POST | `/api/pricing/refresh` | Misc |
@@ -1292,6 +1293,19 @@ Per-model side-by-side comparison over a window. Same surface as the
 | `period`   | `today \| week \| month \| all`   | `month` | Window over which to aggregate. |
 | `project`  | string (repeatable)               | —       | Restrict to these project slugs. |
 | `provider` | string                            | —       | Filter by provider id (`claude`, `codex`, `cursor`, …). |
+## Yield
+
+### GET /api/yield
+
+Yield analysis — productive vs reverted vs abandoned breakdown for the
+sessions in a window. Same surface as `stackunderflow yield`.
+
+**Query parameters**
+
+| Name      | Type                                        | Required | Description |
+|-----------|---------------------------------------------|----------|-------------|
+| `period`  | `today \| week \| month \| all \| 7days \| 30days` | no | Defaults to `month`. |
+| `project` | string (repeatable)                         | no       | Filter to one or more project slugs. |
 
 **Response**
 
@@ -1332,3 +1346,51 @@ epoch float. Per-row fields:
 
 **Status codes:** `200` success; `400` unknown `period`. Empty store
 returns `{"period": <period>, "models": [], "generated": <ts>}`.
+  "summary": {
+    "productive": 42,
+    "reverted": 3,
+    "abandoned": 18,
+    "no_repo": 5,
+    "total": 68,
+    "productive_cost": 124.55,
+    "reverted_cost": 9.12,
+    "abandoned_cost": 47.30,
+    "no_repo_cost": 0.42,
+    "total_cost": 181.39
+  },
+  "entries": [
+    {
+      "session_id": "ada0010e-f34f-4db5-9025-caa4a0db2b6a",
+      "project_slug": "-Users-you-dev-myproj",
+      "cwd": "/Users/you/dev/myproj",
+      "started_at": "2026-04-25T14:02:11+00:00",
+      "cost_usd": 12.43,
+      "classification": "productive",
+      "follow_commit_sha": "abc123def4567...",
+      "follow_commit_msg": "feat: add yield route",
+      "follow_commit_age_hours": 1.8
+    }
+  ],
+  "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0},
+  "warning": "Yield is correlated by time, not by content. ..."
+}
+```
+
+`entries` is sorted by `cost_usd` descending. Cost figures are in the
+active currency (USD by default; converted at the API boundary like every
+other cost endpoint). The `warning` field always carries the heuristic
+caveat — frontend consumers should render it inline so users understand
+the breakdown is a smoke signal, not an audit.
+
+**Status codes**
+
+- `200` — success.
+- `400` — `period` is not one of the accepted values.
+
+**Heuristic warning**
+
+Yield correlates sessions with commits by **time**, not by content. A
+commit landing within 24h of a session start is credited to that session
+even if it was about something else. Multiple sessions in the same repo
+on the same day will share follow-up commit attribution. See the CLI
+reference for the per-class definitions.

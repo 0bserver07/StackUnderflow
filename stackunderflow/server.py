@@ -31,6 +31,7 @@ from stackunderflow.routes import (
     search,
     sessions,
     tags,
+    yield_route,
 )
 from stackunderflow.routes import (
     export as export_routes,
@@ -149,6 +150,7 @@ app.include_router(export_routes.router)
 app.include_router(optimize.router)
 app.include_router(plan.router)
 app.include_router(compare.router)
+app.include_router(yield_route.router)
 
 
 
