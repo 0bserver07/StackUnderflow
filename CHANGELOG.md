@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **Multi-provider docs round.** Added `docs/multi-provider.md` (user-facing guide for the v0.4.0 multi-provider work — supported providers, beta opt-in env vars, troubleshooting, end-to-end mermaid diagram). Added `docs/adapters.md` as the canonical contributor guide for writing a new source adapter (the `SourceAdapter` protocol, `enumerate()` / `read()` resume semantics, `ProviderPricer` extension points, beta-flag wiring, the inheritable `AdapterContract` test mixin, sequence diagram). Added `examples/` directory with three runnable scripts (`list_projects.py`, `process_session.py`, `cross_provider_costs.py`) plus a short `examples/README.md` index.
+- **README + CONTRIBUTING refreshed for v0.4.0.** Replaced the "Currently supports Claude Code only" line with the four-provider table and a beta-opt-in subsection. Pointed the contributor adapter section at `docs/adapters.md` rather than the obsolete RFC.
+- **`docs/codex-adapter-spec.md` relabeled HISTORICAL.** Status block now points readers to `docs/adapters.md` for current adapter authoring; the old design context is preserved.
+- **`docs/api-reference.md` gained the `provider` field** on `/api/projects` (with `providers` array) and `/api/jsonl-files` response shapes — was already wired in code (PR #24) but undocumented.
+
 ## [0.4.0] - 2026-04-30
 
 ### Added
