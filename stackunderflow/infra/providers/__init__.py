@@ -15,9 +15,11 @@ from .base import ProviderPricer
 from .cline import ClinePricer
 from .cursor import CursorPricer
 from .cursor_agent import CursorAgentPricer
+from .gemini import GeminiPricer
 from .kilocode import KiloCodePricer
 from .openai import OpenAIPricer
 from .opencode import OpenCodePricer
+from .qwen import QwenPricer
 from .roocode import RooCodePricer
 
 __all__ = ["ProviderPricer", "get_pricer"]
@@ -31,14 +33,16 @@ _KILOCODE = KiloCodePricer()
 _ROOCODE = RooCodePricer()
 _OPENCODE = OpenCodePricer()
 _CURSOR_AGENT = CursorAgentPricer()
+_QWEN = QwenPricer()
+_GEMINI = GeminiPricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
 # (``claude`` / ``codex`` / ``cursor`` / ``cline`` / ``kilocode`` /
-# ``roocode`` / ``opencode`` / ``cursor-agent``) and from explicit
-# provider arguments (``anthropic`` / ``openai``) to the right pricer
-# singleton. Multiple names point at the same instance so callers can
-# compare with ``is``.
+# ``roocode`` / ``opencode`` / ``cursor-agent`` / ``qwen`` / ``gemini``)
+# and from explicit provider arguments (``anthropic`` / ``openai``) to the
+# right pricer singleton. Multiple names point at the same instance so
+# callers can compare with ``is``.
 _REGISTRY: dict[str, ProviderPricer] = {
     "anthropic": _ANTHROPIC,
     "claude": _ANTHROPIC,
@@ -50,6 +54,8 @@ _REGISTRY: dict[str, ProviderPricer] = {
     "roocode": _ROOCODE,
     "opencode": _OPENCODE,
     "cursor-agent": _CURSOR_AGENT,
+    "qwen": _QWEN,
+    "gemini": _GEMINI,
 }
 
 
