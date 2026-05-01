@@ -20,6 +20,7 @@ import stackunderflow.deps as deps
 from stackunderflow.routes import (
     bookmarks,
     commands,
+    compare,
     cost,
     data,
     misc,
@@ -147,6 +148,7 @@ app.include_router(misc.router)
 app.include_router(export_routes.router)
 app.include_router(optimize.router)
 app.include_router(plan.router)
+app.include_router(compare.router)
 
 
 
