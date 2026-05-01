@@ -21,6 +21,7 @@ from stackunderflow.routes import (
     bookmarks,
     commands,
     compare,
+    context_budget,
     cost,
     data,
     misc,
@@ -151,6 +152,7 @@ app.include_router(optimize.router)
 app.include_router(plan.router)
 app.include_router(compare.router)
 app.include_router(yield_route.router)
+app.include_router(context_budget.router)
 
 
 

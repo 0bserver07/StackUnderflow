@@ -1171,6 +1171,61 @@ def yield_cmd(period: str, include: tuple[str, ...], fmt: str):
     )
 
 
+@cli.command("context-budget")
+@click.option("--project", "project_dir", type=click.Path(file_okay=False, exists=False),
+              default=None, help="Project directory (default: cwd)")
+@click.option("--global", "use_global", is_flag=True,
+              help="Estimate the global budget only (~/.claude); ignore project files.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              help="Output format")
+def context_budget_cmd(project_dir: str | None, use_global: bool, fmt: str):
+    """Estimate the per-session context tax (system prompt + MCP + skills + memory).
+
+    Inspects the visible config files (CLAUDE.md, ~/.claude.json mcpServers,
+    ~/.claude/skills/, agents) and produces a token / cost estimate. The
+    ``len(text) // 4`` heuristic is approximate — useful for spotting bloat,
+    not for billing.
+    """
+    from stackunderflow.services.context_budget import (
+        estimate_context_budget,
+        estimate_global_budget,
+    )
+
+    if use_global:
+        budget = estimate_global_budget()
+    else:
+        target = Path(project_dir).resolve() if project_dir else Path.cwd()
+        budget = estimate_context_budget(target)
+
+    if fmt == "json":
+        click.echo(json.dumps(budget.to_dict(), indent=2))
+        return
+
+    click.echo("Context budget (per-session estimate)")
+    click.echo(f"  heuristic: {budget.heuristic}")
+    click.echo("")
+    if not budget.slices:
+        click.echo("  (no slices found)")
+    else:
+        # Compute column widths against the visible slices.
+        name_w = max(len(s.name) for s in budget.slices)
+        name_w = max(name_w, len("source"))
+        for s in budget.slices:
+            tokens = f"{s.tokens:>7,}"
+            src = s.source_path or "(fixed)"
+            click.echo(f"  {s.name:<{name_w}s}  {tokens} tok   {src}")
+    click.echo("")
+    click.echo(f"  total: {budget.total_tokens:,} tokens")
+    click.echo(f"  cost per session: ${budget.cost_per_session_usd:.4f}")
+    click.echo(f"  estimated monthly cost: ${budget.estimated_monthly_cost_usd:.2f}")
+    if budget.total_tokens > 20_000:
+        click.secho(
+            "  ⚠  budget exceeds 20k tokens — consider trimming MCP servers, "
+            "skills, or memory files.",
+            fg="yellow",
+        )
+
+
 @cli.command()
 def reindex():
     """Rebuild the session store from scratch."""
