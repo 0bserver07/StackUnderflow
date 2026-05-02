@@ -27,7 +27,7 @@ function shortSession(sid: string): string {
   return sid.length > 8 ? sid.slice(0, 8) : sid
 }
 
-import { formatCost } from '../../services/format'
+import { formatCost, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import type { CurrencyInfo } from '../../types/api'
 
@@ -165,13 +165,13 @@ function SessionTooltip({
           <div
             style={{
               color: '#D1D5DB',
-              fontFamily: 'monospace',
               fontSize: '11px',
               whiteSpace: 'normal',
               wordBreak: 'break-word',
             }}
+            title={p.models_used.join(', ')}
           >
-            {p.models_used.join(', ')}
+            {p.models_used.map(formatModelName).join(', ')}
           </div>
         </div>
       )}

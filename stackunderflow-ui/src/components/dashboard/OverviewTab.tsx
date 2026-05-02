@@ -56,7 +56,7 @@ function formatDateRange(iso: string): string {
   })
 }
 
-import { formatCost } from '../../services/format'
+import { formatCost, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 
 interface MiniStatCardProps {
@@ -231,7 +231,7 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
           icon={<IconCpu size={14} />}
           label="Models Used"
           value={String(Object.keys(modelsUsed).length)}
-          sublabel={Object.keys(modelsUsed).slice(0, 2).join(', ')}
+          sublabel={Object.keys(modelsUsed).slice(0, 2).map(formatModelName).join(', ')}
           color="text-pink-400"
         />
         <MiniStatCard

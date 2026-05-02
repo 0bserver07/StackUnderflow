@@ -1,4 +1,5 @@
 import Markdown from '../common/Markdown'
+import { formatModelName } from '../../services/format'
 
 interface QuestionCardProps {
   question: string
@@ -49,7 +50,7 @@ export default function QuestionCard({ question, tags, timestamp, model }: Quest
         {model && (
           <>
             <span className="text-gray-500">|</span>
-            <span className="font-mono text-gray-500">{model}</span>
+            <span className="text-gray-500" title={model}>{formatModelName(model)}</span>
           </>
         )}
       </div>

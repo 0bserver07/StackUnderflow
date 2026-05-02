@@ -14,6 +14,7 @@ import type { QAPair, ResolutionStatus } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import TimeAgo from '../common/TimeAgo'
+import { formatModelName } from '../../services/format'
 
 interface QATabProps {
   projectName: string
@@ -99,7 +100,7 @@ function QAItem({
         )}
 
         {qa.model && (
-          <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">{qa.model}</span>
+          <span className="text-[10px] text-gray-600 dark:text-gray-400" title={qa.model}>{formatModelName(qa.model)}</span>
         )}
 
         <span className="ml-auto">
