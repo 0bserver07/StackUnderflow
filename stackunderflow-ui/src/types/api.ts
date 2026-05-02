@@ -568,6 +568,28 @@ export interface CompareResponse {
 }
 
 /**
+ * One row of the per-provider cost rollup served by
+ * `/api/cost-data/by-provider`. Powers the Cost tab's
+ * `CostByProviderCard`.
+ *
+ * `cost_usd` is already converted into the active currency by the route
+ * (despite the name — kept for parity with the rest of the codebase). The
+ * `currency` block on the parent response carries the symbol/code.
+ */
+export interface CostByProviderRow {
+  provider: string
+  cost_usd: number
+  message_count: number
+  session_count: number
+}
+
+export interface CostByProviderResponse {
+  period: string
+  rows: CostByProviderRow[]
+  currency: CurrencyInfo
+}
+
+/**
  * One session's yield classification — `services/yield_tracker.py::YieldEntry`
  * with `cost_usd` already converted to the active currency by the route.
  */

@@ -20,6 +20,7 @@ import type {
 import { getParam, openInteraction, openSession } from '../../services/navigation'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
+import CostByProviderCard from '../cost/CostByProviderCard'
 import ErrorCostCard from '../cost/ErrorCostCard'
 import SessionCostBarChart from '../cost/SessionCostBarChart'
 import CommandCostList from '../cost/CommandCostList'
@@ -443,6 +444,19 @@ export default function CostTab({ stats }: CostTabProps) {
         onRangeChange={handleRangeChange}
         onClearSession={handleClearSession}
         onClearTool={handleClearTool}
+      />
+
+      {/* 0. Spend-by-agent card — v0.6.1 multi-provider polish. Surfaces
+          the per-provider total cost split for the active period above
+          everything else so users with multi-agent setups see the share
+          first. The card reads its own period independently from the
+          tab-level range filter — both are useful: range filters the
+          per-session/per-tool charts below, the card's period drives a
+          purpose-built backend rollup. */}
+      <CostByProviderCard
+        initialPeriod={
+          filter.range === '7d' ? 'week' : filter.range === '30d' ? 'month' : 'all'
+        }
       />
 
       {/* 1. Trend strip full-width */}

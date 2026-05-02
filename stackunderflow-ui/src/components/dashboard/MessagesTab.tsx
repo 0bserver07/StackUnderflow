@@ -7,7 +7,9 @@ import DataTable from '../common/DataTable'
 import Badge from '../common/Badge'
 import Modal from '../common/Modal'
 import Markdown from '../common/Markdown'
-import { getMessages } from '../../services/api'
+import ProviderChip from '../common/ProviderChip'
+import { getMessages, getProjects } from '../../services/api'
+import { shortenModelId } from '../../services/providerStyle'
 import { getParam, NAV_EVENT, type NavDetail } from '../../services/navigation'
 import { formatModelName } from '../../services/format'
 
@@ -142,6 +144,18 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
   const [pulse, setPulse] = useState(false)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const pulseTimerRef = useRef<number | null>(null)
+
+  // Resolve the active project's provider so we can render a chip alongside
+  // every model id. The project list is small + cached via react-query, so
+  // a separate fetch here adds negligible cost. v0.6.1 multi-provider polish.
+  const projectsQuery = useQuery({
+    queryKey: ['projectsList'],
+    queryFn: () => getProjects(false),
+    staleTime: 60_000,
+  })
+  const activeProvider: string | undefined = projectsQuery.data?.projects.find(
+    (p) => p.dir_name === projectName || p.url_slug === projectName,
+  )?.provider
 
   // Initial messages from dashboard data
   const initialMessages = data.messages_page?.messages ?? []
@@ -280,11 +294,25 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
     {
       key: 'model',
       label: 'Model',
-      width: '140px',
+      // Widened from 140px → 200px to give the provider chip + truncated
+      // model id breathing room without the cell forcing horizontal scroll
+      // on long Cursor / Gemini ids. Truncation + tooltip preserves the
+      // full id on hover so nothing is lost.
+      width: '200px',
       render: (row) => (
-        row.model
-          ? <span className="text-gray-600 dark:text-gray-400 text-xs" title={row.model}>{formatModelName(row.model)}</span>
-          : <span className="text-gray-500 text-xs">-</span>
+        row.model ? (
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <ProviderChip provider={activeProvider} />
+            <span
+              className="text-gray-600 dark:text-gray-400 text-xs truncate"
+              title={row.model}
+            >
+              {formatModelName(row.model)}
+            </span>
+          </span>
+        ) : (
+          <span className="text-gray-500 text-xs">-</span>
+        )
       ),
     },
     {
@@ -317,7 +345,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
         )
       ),
     },
-  ], [])
+  ], [activeProvider])
 
   const handleRowClick = (row: Message) => {
     setSelectedMessage(row)
@@ -453,11 +481,14 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
                 {selectedMessage.type}
               </Badge>
               {selectedMessage.model && (
-                <span
-                  className="text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-0.5 rounded"
-                  title={selectedMessage.model}
-                >
-                  {formatModelName(selectedMessage.model)}
+                <span className="inline-flex items-center gap-1.5">
+                  <ProviderChip provider={activeProvider} />
+                  <span
+                    className="text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-0.5 rounded"
+                    title={selectedMessage.model}
+                  >
+                    {formatModelName(selectedMessage.model)}
+                  </span>
                 </span>
               )}
               <span className="text-xs text-gray-500">
