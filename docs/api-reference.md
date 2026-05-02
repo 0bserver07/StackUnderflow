@@ -57,6 +57,10 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/export` | Export |
 | GET | `/api/compare` | Compare |
 | GET | `/api/yield` | Yield |
+| GET | `/api/plan` | Plan |
+| GET | `/api/optimize` | Optimize |
+| GET | `/api/context-budget` | Context Budget |
+| GET | `/api/tool-distribution` | Cost analytics |
 | GET | `/api/cfg` | Settings |
 | GET | `/api/cfg/currencies` | Settings |
 | POST | `/api/cfg/currency` | Settings |
@@ -1520,3 +1524,242 @@ commit landing within 24h of a session start is credited to that session
 even if it was about something else. Multiple sessions in the same repo
 on the same day will share follow-up commit attribution. See the CLI
 reference for the per-class definitions.
+
+---
+
+## Plan
+
+### GET /api/plan
+
+Active plan + current usage against budget. Same payload as
+`stackunderflow plan show --format json`; see the CLI reference's
+"Plan Budget Commands" section for the field-by-field semantics.
+Status banding (`ok` / `warn` / `over`) and the linear `projected`
+month-end figure are computed identically to the CLI.
+
+**Query parameters** — none.
+
+**Response (no plan configured)**
+
+```json
+{
+  "plan": null,
+  "usage": null,
+  "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
+}
+```
+
+When no plan is set, both `plan` and `usage` are `null` so the frontend
+can render an "add a plan" CTA without parsing fields.
+
+**Response (plan configured)**
+
+```json
+{
+  "plan": {
+    "name": "claude-pro",
+    "monthly_usd": 20.0,
+    "reset_day": 1
+  },
+  "usage": {
+    "used": 12.50,
+    "budget": 20.00,
+    "remaining": 7.50,
+    "pct": 62.5,
+    "projected": 32.29,
+    "status": "ok",
+    "period_start": "2026-05-01",
+    "period_end": "2026-05-31",
+    "days_so_far": 12,
+    "days_in_period": 31
+  },
+  "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
+}
+```
+
+**Field notes**
+
+- `plan.monthly_usd` — canonical USD amount the user signed up for.
+  Always in USD regardless of the active currency, because it's the
+  user's contract amount.
+- `usage.used`, `usage.budget`, `usage.remaining`, `usage.projected`
+  are pre-converted to the active currency via `currency.rate_from_usd`
+  (same convention as `/api/cost-data` and `/api/yield`).
+- `usage.pct` is dimensionless and computed pre-conversion so the
+  status banding (`pct < 80 → ok`, `80 ≤ pct ≤ 100 → warn`,
+  `pct > 100 → over`) is identical across currencies.
+- `usage.projected` is a **simple linear** extrapolation
+  (`used + daily_burn × days_left`) — read it as a directional signal,
+  not a forecast.
+- `currency` is always present on both branches.
+
+**Status codes:** `200` always.
+
+---
+
+## Optimize
+
+### GET /api/optimize
+
+Run waste-detection (legacy looped Q&A heuristic) and structural-pattern
+findings (CLAUDE.md bloat, unused MCP, ghost agents, junk reads, cache
+thrash, oversized bash output, exploration-only sessions) over a period.
+Same surface as `stackunderflow optimize`.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `period` | string | `30days` | One of `today`, `7days`, `30days`, `month`, `all`. Unknown values return 400. |
+| `project` | string (repeatable) | — | Narrow project scope to these slugs |
+| `exclude` | string (repeatable) | — | Drop these project slugs |
+
+**Response**
+
+```json
+{
+  "scope": "this month (May 2026)",
+  "waste": [
+    {
+      "project": "-Users-yadkonrad-dev-myproject",
+      "looped_pairs": 7,
+      "sample_questions": ["why did the test fail again", "..."]
+    }
+  ],
+  "patterns": [
+    {
+      "pattern_id": "unused_mcp_servers",
+      "severity": "high",
+      "title": "6 unused MCP server(s)",
+      "description": "6 MCP server(s) registered but no tool calls observed in the last 30 days.",
+      "affected_count": 6,
+      "suggested_fix": "Remove unused MCP server entries from ~/.claude.json — every server adds tool definitions to each request's context.",
+      "estimated_waste_tokens": null,
+      "details": {
+        "unused_servers": ["apple-calendar", "tavily", "..."],
+        "registered_total": 6,
+        "lookback_days": 30
+      }
+    }
+  ]
+}
+```
+
+**Field notes**
+
+- `scope` — human-readable label for the resolved period (e.g.
+  `"this month (May 2026)"`, `"last 7 days"`, `"all time"`).
+- `waste` — legacy Q&A loop heuristic. List of
+  `{project, looped_pairs, sample_questions}` with at most 3 sample
+  question strings each. Empty when no looped pairs are present.
+- `patterns` — list of `Finding` dicts emitted by the structural
+  detectors in `stackunderflow/reports/optimize.py`. Each finding has:
+  `pattern_id` (one of `bloated_claude_md`, `unused_mcp_servers`,
+  `ghost_agents`, `low_read_edit_ratio`, `junk_reads`, `cache_overhead`,
+  `bash_output_limits`), `severity` (`high` | `medium` | `low`),
+  `title`, `description`, `affected_count`, `suggested_fix`,
+  `estimated_waste_tokens` (int or null when not applicable), and a
+  `details` dict whose keys vary by pattern. Sorted by severity desc,
+  then by `estimated_waste_tokens` desc.
+
+**Status codes:** `200` success; `400` unknown `period`
+(message lists the valid values).
+
+---
+
+## Context Budget
+
+### GET /api/context-budget
+
+Per-session "context tax" estimator — system prompt, registered MCP
+servers, available skills, agent definitions, memory files. Same payload
+as `stackunderflow context-budget --format json`. The estimator walks
+visible config files defensively: any missing file contributes a
+zero-token slice rather than raising.
+
+**Query parameters**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project` | string | no | Project slug (the `url_slug` from `/api/projects`). When omitted, the **global** budget (`~/.claude` only — system prompt, global CLAUDE.md, registered MCP servers, every `~/.claude/skills/*/SKILL.md`) is returned. |
+
+**Response**
+
+```json
+{
+  "total_tokens": 19399,
+  "slices": [
+    {"name": "system_prompt", "tokens": 3000, "source_path": null},
+    {"name": "memory:global_CLAUDE.md", "tokens": 401, "source_path": "/Users/you/.claude/CLAUDE.md"},
+    {"name": "mcp:apple-calendar", "tokens": 400, "source_path": "/Users/you/.claude.json"},
+    {"name": "skill:anti-slop-guide", "tokens": 5856, "source_path": "/Users/you/.claude/skills/anti-slop-guide/SKILL.md"}
+  ],
+  "cost_per_session_usd": 0.058197,
+  "estimated_monthly_cost_usd": 5.8197,
+  "heuristic": "len(text) // 4; per-MCP-server 200 + 50/tool"
+}
+```
+
+**Field notes**
+
+- `total_tokens` — sum of `tokens` across every slice.
+- `slices` — list of `ContextSlice` dicts. `name` follows
+  `<kind>:<id>` for kinds `mcp`, `skill`, `agent`, `memory`; the
+  system prompt slice is named `system_prompt` with `source_path: null`.
+  `tokens` is `len(text) // 4` (rounded down — see `heuristic`).
+  `source_path` is the absolute path of the file that produced the
+  slice, or `null` for synthetic slices.
+- `cost_per_session_usd` — `total_tokens × current Anthropic Sonnet
+  input rate`. USD; not pre-converted to the active currency.
+- `estimated_monthly_cost_usd` — `cost_per_session_usd × 100`
+  (a flat 100-sessions/mo assumption). USD.
+- `heuristic` — the approximation string baked into every payload so
+  consumers know the numbers are advisory.
+
+When `project` points to a slug that exists in the store but whose
+on-disk path is gone, the global-budget shape is returned as a
+fallback (the project-CLAUDE.md slice silently contributes zero).
+
+**Status codes:** `200` success; `404` unknown project slug
+(`{"detail": "Unknown project slug: <slug>"}`).
+
+---
+
+### GET /api/tool-distribution
+
+The `tool_count_distribution` map — number of commands keyed by how
+many tool calls each command made. Split off `/api/dashboard-data`
+(spec §D2) so the Overview chart can lazy-fetch this section without
+blocking initial paint. Mirrors the `/api/cost-data` pattern: same
+canonical `queries.get_project_stats` call, projected to a single key.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `log_path` | string | current project | Override the active project (full log path, e.g. `/Users/you/.claude/projects/<slug>`) |
+| `timezone_offset` | int | `0` | Minutes offset from UTC for daily bucketing (forwarded to `get_project_stats`) |
+
+**Response**
+
+```json
+{
+  "tool_count_distribution": {
+    "0": 273,
+    "1": 111,
+    "3": 41,
+    "13": 7,
+    "31": 1
+  }
+}
+```
+
+Keys are the per-command tool count as a string (`"0"` = commands that
+made no tool calls, `"3"` = commands that made exactly 3, etc.); values
+are the number of commands with that exact tool count. Missing data
+resolves to `{"tool_count_distribution": {}}` so the chart renders its
+empty state rather than 500ing.
+
+**Status codes:** `200` success; `400` no project selected and no
+`log_path` provided; `404` project not in store
+(run `POST /api/refresh` first).
