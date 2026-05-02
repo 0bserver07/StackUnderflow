@@ -86,6 +86,13 @@ $ stackunderflow start --fresh
   Ctrl+C to stop
 ```
 
+> **Restart after upgrades.** `stackunderflow start` is a long-lived
+> process that loads the application code into memory once at boot.
+> New releases (`pip install -U stackunderflow`) and any locally
+> installed code changes only take effect after the server restarts —
+> stop with Ctrl+C and re-run `stackunderflow start`. Routes added in a
+> new version will return `404` until then.
+
 ---
 
 ### `stackunderflow init`
