@@ -20,6 +20,101 @@ def list_projects(conn: sqlite3.Connection) -> list[ProjectRow]:
     return [ProjectRow(**dict(r)) for r in rows]
 
 
+def bulk_session_counts(conn: sqlite3.Connection) -> dict[int, int]:
+    """Return ``{project_id: session_count}`` in one query.
+
+    Replaces N+1 ``list_sessions(conn, project_id=…)`` loops over the
+    full project list. ~30ms for ~1000 sessions vs N×10ms otherwise.
+    """
+    rows = conn.execute(
+        "SELECT project_id, COUNT(*) FROM sessions GROUP BY project_id"
+    ).fetchall()
+    return {int(r[0]): int(r[1]) for r in rows}
+
+
+def bulk_project_lite_stats(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Return ``{project_id: {tokens, cost-driving counts, dates}}`` in one query.
+
+    Lite stats fill the project-list cards on the dashboard without
+    running the per-project aggregator pipeline (which is single-pass
+    over every message and takes ~100ms × N projects on real data).
+    Fields not derivable from a single GROUP BY (avg_steps_per_command,
+    compact_summary_count, etc.) default to 0/None so the UI shape stays
+    backwards-compatible — those are only meaningful in the per-project
+    detail view, which still runs the full aggregator on demand.
+    """
+    rows = conn.execute(
+        "SELECT s.project_id, "
+        "       SUM(m.input_tokens), SUM(m.output_tokens), "
+        "       SUM(m.cache_read_tokens), SUM(m.cache_create_tokens), "
+        "       MIN(m.timestamp), MAX(m.timestamp), "
+        "       SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) AS user_msgs, "
+        "       COUNT(*) AS total_msgs "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "WHERE m.model IS NULL OR m.model != '<synthetic>' "
+        "GROUP BY s.project_id"
+    ).fetchall()
+    out: dict[int, dict] = {}
+    for r in rows:
+        pid = int(r[0])
+        out[pid] = {
+            "total_input_tokens": int(r[1] or 0),
+            "total_output_tokens": int(r[2] or 0),
+            "total_cache_read": int(r[3] or 0),
+            "total_cache_write": int(r[4] or 0),
+            "first_message_date": r[5],
+            "last_message_date": r[6],
+            "total_commands": int(r[7] or 0),
+            "total_messages": int(r[8] or 0),
+            # Filled by route layer using the cost helpers + currency
+            "total_cost": 0.0,
+            # Aggregator-only fields default to 0/None for the list view
+            "avg_tokens_per_command": 0,
+            "avg_steps_per_command": 0,
+            "compact_summary_count": 0,
+        }
+    return out
+
+
+def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
+    """Return ``{project_id: total_cost_usd}`` keyed by aggregated tokens
+    × ``compute_cost`` per (model, speed) bucket.
+
+    One pass: gather per-(project_id, model, speed) totals, fold to USD
+    using the current rate card. Replaces the per-project aggregator
+    pipeline for the project-list view's cost field.
+    """
+    from stackunderflow.infra.costs import compute_cost
+
+    rows = conn.execute(
+        "SELECT s.project_id, "
+        "       COALESCE(m.model, ''), "
+        "       COALESCE(m.speed, 'standard'), "
+        "       SUM(m.input_tokens), SUM(m.output_tokens), "
+        "       SUM(m.cache_read_tokens), SUM(m.cache_create_tokens) "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "WHERE m.model IS NOT NULL AND m.model != '' AND m.model != '<synthetic>' "
+        "GROUP BY s.project_id, m.model, m.speed"
+    ).fetchall()
+    cost_by_pid: dict[int, float] = {}
+    for r in rows:
+        pid = int(r[0])
+        model = r[1] or ""
+        speed = r[2] or "standard"
+        tokens = {
+            "input": int(r[3] or 0),
+            "output": int(r[4] or 0),
+            "cache_read": int(r[5] or 0),
+            "cache_creation": int(r[6] or 0),
+        }
+        breakdown = compute_cost(tokens, model, speed=speed) if model else None
+        usd = float(breakdown["total_cost"]) if breakdown else 0.0
+        cost_by_pid[pid] = cost_by_pid.get(pid, 0.0) + usd
+    return cost_by_pid
+
+
 def get_project(conn: sqlite3.Connection, *, slug: str) -> ProjectRow | None:
     row = conn.execute(
         "SELECT id, provider, slug, path, display_name, first_seen, last_modified "
