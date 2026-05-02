@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`formatModelName()` model display normalizer.** Compact, human-readable display names (`claude-opus-4-7` → `Opus 4.7`, `gemini-2.5-pro-preview-05-06` → `Gemini 2.5 Pro Preview`) used by every component that renders a model id. Full id preserved as the `title` attribute (browser tooltip on hover). Reduces table-column overflow on multi-provider stores. UI-only — no backend or API changes.
+
 ## [0.6.1] - 2026-05-01
 
 ### Fixed

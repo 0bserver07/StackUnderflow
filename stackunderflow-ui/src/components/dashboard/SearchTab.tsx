@@ -13,6 +13,7 @@ import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import Badge from '../common/Badge'
 import TimeAgo from '../common/TimeAgo'
+import { formatModelName } from '../../services/format'
 
 interface SearchTabProps {
   projectName: string
@@ -108,7 +109,7 @@ function SearchResultItem({ result }: { result: SearchResult }) {
           <div className="flex items-center gap-2 flex-wrap">
             <Badge color={roleBadgeColor(result.role)}>{result.role}</Badge>
             {result.model && result.model !== 'N/A' && (
-              <span className="text-[10px] text-gray-500 font-mono">{result.model}</span>
+              <span className="text-[10px] text-gray-500" title={result.model}>{formatModelName(result.model)}</span>
             )}
             <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono truncate max-w-[180px]">
               {result.session_id}

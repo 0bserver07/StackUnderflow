@@ -21,7 +21,7 @@ function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
-import { formatCost } from '../../services/format'
+import { formatCost, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 
 function formatPercent(value: number): string {
@@ -141,7 +141,7 @@ export default function StatsCards({ stats }: StatsCardsProps) {
         icon={<IconMessageCircle size={18} />}
         label="Models Used"
         value={String(modelsCount)}
-        sublabel={Object.keys(stats.models ?? {}).slice(0, 2).join(', ')}
+        sublabel={Object.keys(stats.models ?? {}).slice(0, 2).map(formatModelName).join(', ')}
       />
 
       {/* Row 2 */}

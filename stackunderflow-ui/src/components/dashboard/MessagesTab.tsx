@@ -9,6 +9,7 @@ import Modal from '../common/Modal'
 import Markdown from '../common/Markdown'
 import { getMessages } from '../../services/api'
 import { getParam, NAV_EVENT, type NavDetail } from '../../services/navigation'
+import { formatModelName } from '../../services/format'
 
 interface MessagesTabProps {
   data: DashboardData
@@ -282,7 +283,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
       width: '140px',
       render: (row) => (
         row.model
-          ? <span className="text-gray-600 dark:text-gray-400 text-xs font-mono">{row.model}</span>
+          ? <span className="text-gray-600 dark:text-gray-400 text-xs" title={row.model}>{formatModelName(row.model)}</span>
           : <span className="text-gray-500 text-xs">-</span>
       ),
     },
@@ -452,8 +453,11 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
                 {selectedMessage.type}
               </Badge>
               {selectedMessage.model && (
-                <span className="text-xs text-gray-600 dark:text-gray-400 font-mono bg-white dark:bg-gray-800 px-2 py-0.5 rounded">
-                  {selectedMessage.model}
+                <span
+                  className="text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-0.5 rounded"
+                  title={selectedMessage.model}
+                >
+                  {formatModelName(selectedMessage.model)}
                 </span>
               )}
               <span className="text-xs text-gray-500">
@@ -576,8 +580,11 @@ function LoadedMessageView({ message }: { message: Message }) {
       <div className="flex items-center gap-2 flex-wrap">
         <Badge color={getTypeColor(message.type)} size="sm">{message.type}</Badge>
         {message.model && (
-          <span className="text-[10px] text-gray-600 dark:text-gray-400 font-mono bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded">
-            {message.model}
+          <span
+            className="text-[10px] text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded"
+            title={message.model}
+          >
+            {formatModelName(message.model)}
           </span>
         )}
         <span className="text-[10px] text-gray-500">{formatTimestamp(message.timestamp)}</span>
@@ -606,7 +613,7 @@ function FetchedInteractionView({ ix }: { ix: InteractionResponse }) {
         {ix.model && (
           <>
             <span>•</span>
-            <span className="font-mono">{ix.model}</span>
+            <span title={ix.model}>{formatModelName(ix.model)}</span>
           </>
         )}
       </div>
