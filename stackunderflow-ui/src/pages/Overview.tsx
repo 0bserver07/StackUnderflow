@@ -49,6 +49,7 @@ function formatDate(ts: number): string {
 
 import { formatCost, formatModelName } from '../services/format'
 import FilterBar from '../components/common/FilterBar'
+import { useFilters } from '../services/filters'
 import { useCurrency } from '../services/currency'
 
 function formatDuration(firstDate: string | undefined, lastDate: string | undefined): string {
@@ -89,7 +90,12 @@ export default function Overview() {
   const [page, setPage] = useState(1)
   const [perPage, setPerPage] = useState(20)
   const [dateRange, setDateRange] = useState<DateRange>('30d')
-  const [selectedModel, setSelectedModel] = useState<string>('all')
+  // Single source of truth for the model filter is FilterBar
+  // (FiltersProvider, URL-synced). The first selected model — if any —
+  // narrows Overview's per-model cost timeline; "all" means no model
+  // filter is active.
+  const { filters } = useFilters()
+  const selectedModel = filters.models[0] ?? 'all'
   const [nameMode, setNameModeLocal] = useState<NameMode>(getNameMode())
   const setNameModeAndPersist = (m: NameMode) => { setNameModeLocal(m); persistNameMode(m) }
 
@@ -278,35 +284,10 @@ export default function Overview() {
               </button>
             ))}
           </div>
-          {/* Model filter */}
-          {availableModels.length > 1 && (
-            <div className="flex items-center bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 overflow-hidden">
-              <button
-                onClick={() => setSelectedModel('all')}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  selectedModel === 'all'
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
-                }`}
-              >
-                All models
-              </button>
-              {availableModels.map(m => (
-                <button
-                  key={m}
-                  onClick={() => setSelectedModel(m)}
-                  title={m}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                    selectedModel === m
-                      ? 'bg-emerald-600 text-white'
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  {shortModelName(m)}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* The model + provider filters live in <FilterBar/> above. Stripped
+              the local 20-chip strip that previously stretched horizontally
+              past the viewport — its job is now done by FilterBar, single
+              source of truth via useFilters(). */}
           <button
             onClick={() => refreshMutation.mutate()}
             disabled={refreshMutation.isPending}
