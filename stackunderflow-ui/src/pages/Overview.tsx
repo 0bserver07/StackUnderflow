@@ -48,6 +48,7 @@ function formatDate(ts: number): string {
 }
 
 import { formatCost, formatModelName } from '../services/format'
+import FilterBar from '../components/common/FilterBar'
 import { useCurrency } from '../services/currency'
 
 function formatDuration(firstDate: string | undefined, lastDate: string | undefined): string {
@@ -243,6 +244,12 @@ export default function Overview() {
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
+      {/* Provider/model FilterBar — scopes the entire Overview page to the
+          selected providers/models, URL-synced via FiltersProvider so a
+          shared link or refresh restores the filter set. Hidden when the
+          store has only one provider and no filters are active. */}
+      <FilterBar modelOptions={availableModels} />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
