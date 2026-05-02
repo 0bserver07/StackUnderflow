@@ -14,6 +14,7 @@ import type {
   PricingData,
   CurrencyInfo,
   CompareResponse,
+  CostByProviderResponse,
   YieldResponse,
   PlanResponse,
   OptimizeResponse,
@@ -250,6 +251,17 @@ export type OptimizePeriod = 'today' | '7days' | '30days' | 'month' | 'all'
 
 export async function getCompare(period: ComparePeriod = 'month'): Promise<CompareResponse> {
   return fetchJson(`${BASE}/compare?period=${encodeURIComponent(period)}`)
+}
+
+/**
+ * Fetch per-provider cost rollup for the active period. Powers the
+ * `CostByProviderCard` widget at the top of the Cost tab. Reuses the
+ * `ComparePeriod` enum so card + table stay in sync.
+ */
+export async function getCostByProvider(
+  period: ComparePeriod = 'month',
+): Promise<CostByProviderResponse> {
+  return fetchJson(`${BASE}/cost-data/by-provider?period=${encodeURIComponent(period)}`)
 }
 
 export async function getYield(period: YieldPeriod = 'week'): Promise<YieldResponse> {

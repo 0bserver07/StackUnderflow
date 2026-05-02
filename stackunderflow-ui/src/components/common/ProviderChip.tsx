@@ -1,28 +1,15 @@
 import Badge from './Badge'
+import { getProviderColor, getProviderLabel } from '../../services/providerStyle'
 
 // Multi-provider polish (spec.md §6 Step 5).
 // Renders a small chip showing which provider a session/project came from.
 // Backend gap: as of wave2/foundation neither /api/jsonl-files nor
 // /api/projects emits `provider`, so callers will pass `undefined` and we
 // fall back to "unknown" (gray).
-
-type BadgeColor = 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'orange' | 'gray'
-
-const PROVIDER_COLORS: Record<string, BadgeColor> = {
-  claude: 'blue',
-  anthropic: 'blue',
-  codex: 'green',
-  openai: 'green',
-  cursor: 'purple',
-  cline: 'orange',
-}
-
-// Normalise the wire provider value (e.g. "anthropic", "claude") to a label
-// that matches the spec's color hints: claude, codex, cursor, cline.
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'claude',
-  openai: 'codex',
-}
+//
+// v0.6.1 follow-up: the colour palette + label normalisation now lives in
+// `services/providerStyle.ts` so the Compare table, the Cost-by-provider
+// card, and the existing chip all stay in lock-step.
 
 interface ProviderChipProps {
   provider: string | null | undefined
@@ -30,9 +17,8 @@ interface ProviderChipProps {
 }
 
 export default function ProviderChip({ provider, size = 'sm' }: ProviderChipProps) {
-  const raw = (provider ?? '').toLowerCase().trim()
-  const label = PROVIDER_LABELS[raw] ?? (raw || 'unknown')
-  const color: BadgeColor = PROVIDER_COLORS[raw] ?? 'gray'
+  const color = getProviderColor(provider)
+  const label = getProviderLabel(provider)
   return (
     <Badge color={color} size={size}>
       {label}
