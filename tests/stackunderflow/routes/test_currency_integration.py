@@ -122,13 +122,14 @@ async def test_cost_data_passes_through_when_currency_is_usd(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_cost_data_falls_back_to_usd_when_rate_unavailable(tmp_path, monkeypatch):
-    """If currency=ZZZ resolves to an unknown ISO code or fetch fails, the
-    response must still be coherent — code echoes the user's choice but
-    the rate degrades to 1.0 so amounts are unchanged."""
+    """If currency=ZZZ resolves to a code that exists in no table, the
+    response must NOT silently mislabel USD numbers with the wrong symbol.
+    The new contract: code switches back to USD, rate stays 1.0, and a
+    ``warning`` is populated so the UI can banner it."""
     monkeypatch.setenv("STACKUNDERFLOW_CURRENCY", "ZZZ")  # not in any table
     monkeypatch.setattr(currency.Path, "home", classmethod(lambda cls: tmp_path))
     # Simulate offline so the fetch fails — combined with an unknown code
-    # this should fall back to rate=1.0 (USD-equivalent amounts).
+    # this should bottom-out and switch back to USD with a warning.
     monkeypatch.setattr(currency, "_fetch_from_frankfurter", lambda: None)
 
     store_db = tmp_path / "store.db"
@@ -144,7 +145,45 @@ async def test_cost_data_falls_back_to_usd_when_rate_unavailable(tmp_path, monke
 
     payload = await get_cost_data()
 
-    assert payload["currency"]["code"] == "ZZZ"
+    # The loud failure mode: code switches to USD, warning is set.
+    assert payload["currency"]["code"] == "USD"
+    assert payload["currency"]["symbol"] == "$"
     assert payload["currency"]["rate_from_usd"] == 1.0
-    # Amounts should be unchanged because rate fell through to 1.0
+    assert payload["currency"]["warning"] is not None
+    assert "ZZZ" in payload["currency"]["warning"]
+    # Amounts unchanged because we degraded to USD.
     assert payload["session_costs"][0]["cost"] == 10.00
+
+
+@pytest.mark.asyncio
+async def test_cost_data_uses_snapshot_when_frankfurter_403(tmp_path, monkeypatch):
+    """End-to-end smoke for the snapshot fallback: GBP active, Frankfurter
+    mocked to fail (the 403 case from the bug report), no cache. Response
+    must keep ``code='GBP'``, scale costs by the snapshot rate, and carry
+    a non-null ``warning`` for the banner."""
+    monkeypatch.setenv("STACKUNDERFLOW_CURRENCY", "GBP")
+    monkeypatch.setattr(currency.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(currency, "_fetch_from_frankfurter", lambda: None)
+
+    store_db = tmp_path / "store.db"
+    slug = "-gbp-403-proj"
+    _seed_project(store_db, slug)
+
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], _stats_with_costs()),
+    )
+
+    payload = await get_cost_data()
+
+    # Code must NOT degrade to USD — that was the original bug.
+    assert payload["currency"]["code"] == "GBP"
+    assert payload["currency"]["symbol"] == "£"
+    snap = currency.RATES_SNAPSHOT["GBP"]
+    assert payload["currency"]["rate_from_usd"] == snap
+    assert payload["currency"]["rate_from_usd"] != 1.0
+    assert payload["currency"]["warning"] is not None
+    # Costs scaled by the snapshot rate (USD * snap)
+    assert payload["session_costs"][0]["cost"] == pytest.approx(10.0 * snap)
