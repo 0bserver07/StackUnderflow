@@ -137,6 +137,9 @@ def test_enumerate_yields_one_session_ref_per_conversation(vscdb_path: Path) -> 
     ref = by_id[CONV_ID]
     assert isinstance(ref, SessionRef)
     assert ref.provider == "cursor"
+    # Synthetic fixture has no workspace metadata in any bubble, so the
+    # adapter falls back to the literal "cursor" slug. The dedicated
+    # per-workspace tests below seed real fsPath fields.
     assert ref.project_slug == "cursor"
     assert ref.source_kind == "database"
     assert ref.source_hint == {"conversation_id": CONV_ID}
@@ -305,6 +308,246 @@ def test_resume_read_bypasses_cache(
     midpoint = full[len(full) // 2].seq
     list(adapter.read(refs[0], since_offset=midpoint))
     assert calls["n"] == 1, "resume reads must always re-parse the DB"
+
+
+# ── per-workspace project_slug ────────────────────────────────────────
+
+
+def _bubble_with_paths(
+    conv: str,
+    bubble_id: str,
+    file_paths: list[str] | None = None,
+    tool_target: str | None = None,
+    text: str = "hello",
+) -> tuple[str, str]:
+    """Build a (key, json_value) pair shaped like a Cursor v3+ bubble.
+
+    ``file_paths`` populates ``context.fileSelections`` with the
+    canonical Cursor URI shape; ``tool_target`` plants an absolute path
+    inside ``toolFormerData.params`` (the dominant signal in the user's
+    real vscdb).
+    """
+    payload: dict = {"_v": 3, "type": 1, "text": text}
+    if file_paths:
+        payload["context"] = {
+            "fileSelections": [
+                {
+                    "uri": {"fsPath": p, "path": p, "scheme": "file"},
+                    "uuid": str(i),
+                }
+                for i, p in enumerate(file_paths)
+            ],
+        }
+    if tool_target:
+        payload["toolFormerData"] = {
+            "name": "read_file",
+            "params": json.dumps({"targetFile": tool_target}),
+        }
+    return f"bubbleId:{conv}:{bubble_id}", json.dumps(payload)
+
+
+def _build_workspace_fixture(
+    path: Path, rows: list[tuple[str, str]]
+) -> None:
+    """Materialise ``rows`` into a fresh state.vscdb at *path*."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)"
+        )
+        conn.executemany(
+            "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)", rows
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_enumerate_assigns_distinct_slugs_for_distinct_workspaces(
+    tmp_path: Path,
+) -> None:
+    """Two conversations rooted at different cwds → two distinct slugs.
+
+    Reproduces the user-facing bug where every cursor conversation
+    collapsed under one ``"cursor"`` project. The fixture references
+    ``/Users/dev/projects/alpha`` from one conv and
+    ``/Users/dev/projects/beta`` from another; each must surface its
+    own Claude-style ``-Users-dev-projects-X`` slug.
+    """
+    db = tmp_path / "state.vscdb"
+    rows = [
+        _bubble_with_paths(
+            "conv-alpha",
+            "b1",
+            file_paths=[
+                "/Users/dev/projects/alpha/src/main.ts",
+                "/Users/dev/projects/alpha/README.md",
+            ],
+        ),
+        _bubble_with_paths(
+            "conv-alpha",
+            "b2",
+            tool_target="/Users/dev/projects/alpha/package.json",
+        ),
+        _bubble_with_paths(
+            "conv-beta",
+            "b1",
+            file_paths=[
+                "/Users/dev/projects/beta/lib/util.py",
+                "/Users/dev/projects/beta/tests/test_util.py",
+            ],
+        ),
+    ]
+    _build_workspace_fixture(db, rows)
+
+    adapter = CursorAdapter(vscdb_path=db)
+    refs = sorted(adapter.enumerate(), key=lambda r: r.session_id)
+    assert [r.session_id for r in refs] == ["conv-alpha", "conv-beta"]
+    assert refs[0].project_slug == "-Users-dev-projects-alpha"
+    assert refs[1].project_slug == "-Users-dev-projects-beta"
+    # And, critically, the two slugs differ — the bug was that they
+    # both collapsed to "cursor".
+    assert refs[0].project_slug != refs[1].project_slug
+
+
+def test_enumerate_falls_back_to_cursor_when_no_paths(tmp_path: Path) -> None:
+    """A conversation with zero referenced paths gets the fallback slug.
+
+    Mirrors the user's real machine where one short chat ("how does the
+    diff feature work") has no fsPath data anywhere — graceful
+    degradation must keep that conversation visible under the legacy
+    ``"cursor"`` umbrella rather than dropping it.
+    """
+    db = tmp_path / "state.vscdb"
+    rows = [
+        _bubble_with_paths("conv-empty", "b1", text="just a question"),
+    ]
+    _build_workspace_fixture(db, rows)
+
+    refs = list(CursorAdapter(vscdb_path=db).enumerate())
+    assert len(refs) == 1
+    assert refs[0].project_slug == "cursor"
+
+
+def test_enumerate_picks_majority_workspace_when_paths_diverge(
+    tmp_path: Path,
+) -> None:
+    """When most paths root at one workspace and a stray path leaks
+    elsewhere, the slug must reflect the dominant workspace — not the
+    home-directory LCP.
+
+    Without the >= 50 % coverage rule the LCP of all paths would be
+    ``/Users/dev`` (which we'd then slug as ``-Users-dev``), losing the
+    workspace signal. The user's real ``KayTEL`` conversation hit this
+    case before the fix.
+    """
+    db = tmp_path / "state.vscdb"
+    rows = [
+        _bubble_with_paths(
+            "conv-mixed",
+            "b1",
+            file_paths=[
+                "/Users/dev/work/kaytel/src/a.ts",
+                "/Users/dev/work/kaytel/src/b.ts",
+                "/Users/dev/work/kaytel/README.md",
+            ],
+        ),
+        _bubble_with_paths(
+            # Single stray reference — must NOT poison the slug.
+            "conv-mixed",
+            "b2",
+            tool_target="/Users/dev/elsewhere/notes.md",
+        ),
+    ]
+    _build_workspace_fixture(db, rows)
+
+    refs = list(CursorAdapter(vscdb_path=db).enumerate())
+    assert len(refs) == 1
+    assert refs[0].project_slug == "-Users-dev-work-kaytel"
+
+
+def test_enumerate_uses_mentions_folder_selections(tmp_path: Path) -> None:
+    """``context.mentions.folderSelections`` is also a workspace signal.
+
+    Cursor records folders the user dragged onto the chat under the
+    ``mentions`` map keyed by ``file://`` URI; we should treat those
+    folders as candidates exactly like file selections.
+    """
+    db = tmp_path / "state.vscdb"
+    payload = {
+        "_v": 3,
+        "type": 1,
+        "text": "look at this folder",
+        "context": {
+            "mentions": {
+                "folderSelections": {
+                    "file:///Users/dev/projects/zeta": [{"uuid": "1"}],
+                },
+                "fileSelections": {},
+            },
+        },
+    }
+    rows = [(f"bubbleId:conv-zeta:b1", json.dumps(payload))]
+    _build_workspace_fixture(db, rows)
+
+    refs = list(CursorAdapter(vscdb_path=db).enumerate())
+    assert len(refs) == 1
+    assert refs[0].project_slug == "-Users-dev-projects-zeta"
+
+
+def test_enumerate_rejects_paths_above_user_directory(tmp_path: Path) -> None:
+    """A bare ``/Users/dev`` reference must not become the workspace.
+
+    The minimum-depth guard ensures we don't emit ``-Users-dev`` as a
+    slug — that would be the user's whole home directory and defeats
+    the per-workspace split.
+    """
+    db = tmp_path / "state.vscdb"
+    rows = [
+        _bubble_with_paths(
+            "conv-shallow",
+            "b1",
+            file_paths=["/Users/dev"],
+        ),
+    ]
+    _build_workspace_fixture(db, rows)
+
+    refs = list(CursorAdapter(vscdb_path=db).enumerate())
+    assert len(refs) == 1
+    # Path is too shallow to count as a workspace root — fall back.
+    assert refs[0].project_slug == "cursor"
+
+
+def test_read_propagates_workspace_slug(tmp_path: Path) -> None:
+    """Records are still keyed on session_id, but the SessionRef carries
+    the workspace slug end-to-end so the store/aggregator stamps the
+    correct ``project_id``."""
+    db = tmp_path / "state.vscdb"
+    rows = [
+        _bubble_with_paths(
+            "conv-alpha",
+            "b1",
+            file_paths=[
+                # Two files under different subdirectories of the same
+                # project root — coverage breaks the tie so the slug
+                # lands on ``alpha`` rather than a stray subdirectory.
+                "/Users/dev/projects/alpha/src/main.ts",
+                "/Users/dev/projects/alpha/tests/test_main.ts",
+            ],
+        ),
+    ]
+    _build_workspace_fixture(db, rows)
+
+    adapter = CursorAdapter(vscdb_path=db)
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].project_slug == "-Users-dev-projects-alpha"
+    records = list(adapter.read(refs[0]))
+    # The records themselves don't carry project_slug (it lives on the
+    # SessionRef the caller already holds), so just confirm that the
+    # adapter still produces records correctly under a real slug.
+    assert len(records) >= 1
+    assert all(r.session_id == "conv-alpha" for r in records)
 
 
 # ── shared adapter contract ────────────────────────────────────────────
