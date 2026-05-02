@@ -143,7 +143,7 @@ def test_v004_redistributes_sessions_with_path_data(tmp_path: Path) -> None:
         ]
         # Legacy collapse removed.
         assert "cursor" not in slugs
-        assert conn.execute("PRAGMA user_version = 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     finally:
         conn.close()
 
@@ -264,7 +264,7 @@ def test_v004_no_op_when_no_legacy_cursor_project(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "store.db")
     try:
         schema.apply(conn)
-        assert conn.execute("PRAGMA user_version = 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         # No cursor project should have appeared from thin air.
         cnt = conn.execute(
             "SELECT COUNT(*) FROM projects WHERE provider = 'cursor'"
