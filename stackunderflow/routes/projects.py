@@ -170,6 +170,13 @@ async def get_projects(
         try:
             project_rows = queries.list_projects(conn)
 
+            # Single bulk-aggregate pass for session counts + per-project
+            # token/date totals + cost; replaces per-project N+1 queries
+            # that took 26s on 188-project / 228K-message stores.
+            session_counts = queries.bulk_session_counts(conn)
+            lite_stats = queries.bulk_project_lite_stats(conn) if include_stats else {}
+            cost_by_pid = queries.bulk_project_cost(conn) if include_stats else {}
+
             # Schema has UNIQUE(provider, slug) — same project used through
             # multiple providers (e.g. claude + codex) yields multiple rows.
             # Merge them so the user-facing list has one entry per slug.
@@ -186,8 +193,7 @@ async def get_projects(
                         "dir_name": slug,
                         "log_path": log_path,
                         "file_count": sum(
-                            len(queries.list_sessions(conn, project_id=p.id))
-                            for p in group
+                            session_counts.get(p.id, 0) for p in group
                         ),
                         "total_size_mb": _dir_size_mb(log_path),
                         "last_modified": max(p.last_modified for p in group),
@@ -217,7 +223,9 @@ async def get_projects(
 
             if include_stats:
                 for proj in projects:
-                    proj["stats"] = _merge_stats_for_ui(conn, proj["_ids"])
+                    proj["stats"] = _bulk_lite_merge(
+                        proj["_ids"], lite_stats, cost_by_pid
+                    )
 
             for proj in projects:
                 proj.pop("_ids", None)
@@ -258,19 +266,81 @@ def _resolve_log_dir(path: str | None, slug: str) -> str:
     return str(Path.home() / ".claude" / "projects" / slug)
 
 
+# Per-(path, mtime) cache so the project list doesn't re-glob the
+# filesystem for 188 directories on every list request. mtime-keyed
+# entries auto-invalidate when files are added/removed.
+_dir_size_cache: dict[tuple[str, float], float] = {}
+
+
 def _dir_size_mb(log_dir: str) -> float:
     p = Path(log_dir)
-    if not p.is_dir():
+    try:
+        st = p.stat()
+    except OSError:
         return 0.0
+    if not Path(log_dir).is_dir():
+        return 0.0
+    key = (log_dir, st.st_mtime)
+    if key in _dir_size_cache:
+        return _dir_size_cache[key]
     try:
         total = sum(f.stat().st_size for f in p.glob("*.jsonl"))
     except OSError:
         return 0.0
-    return round(total / (1024 * 1024), 2)
+    mb = round(total / (1024 * 1024), 2)
+    _dir_size_cache[key] = mb
+    return mb
+
+
+def _bulk_lite_merge(
+    project_ids: list[int],
+    lite_stats: dict[int, dict],
+    cost_by_pid: dict[int, float],
+) -> dict:
+    """Merge bulk-lite per-pid totals across provider-duplicates of one slug.
+
+    Used by the project-list endpoint instead of running the per-project
+    aggregator pipeline, which was N+1 single-pass over the message
+    table and dominated cold-load time on multi-provider stores.
+    """
+    parts = [lite_stats[pid] for pid in project_ids if pid in lite_stats]
+    if not parts:
+        return {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read": 0,
+            "total_cache_write": 0,
+            "total_commands": 0,
+            "avg_tokens_per_command": 0,
+            "avg_steps_per_command": 0,
+            "compact_summary_count": 0,
+            "first_message_date": None,
+            "last_message_date": None,
+            "total_cost": 0.0,
+        }
+    starts = [p["first_message_date"] for p in parts if p["first_message_date"]]
+    ends = [p["last_message_date"] for p in parts if p["last_message_date"]]
+    return {
+        "total_input_tokens": sum(p["total_input_tokens"] for p in parts),
+        "total_output_tokens": sum(p["total_output_tokens"] for p in parts),
+        "total_cache_read": sum(p["total_cache_read"] for p in parts),
+        "total_cache_write": sum(p["total_cache_write"] for p in parts),
+        "total_commands": sum(p["total_commands"] for p in parts),
+        "avg_tokens_per_command": 0,
+        "avg_steps_per_command": 0,
+        "compact_summary_count": 0,
+        "first_message_date": min(starts) if starts else None,
+        "last_message_date": max(ends) if ends else None,
+        "total_cost": sum(cost_by_pid.get(pid, 0.0) for pid in project_ids),
+    }
 
 
 def _merge_stats_for_ui(conn, project_ids: list[int]) -> dict:
-    """Sum / max / min ProjectStats across provider-duplicates of one slug."""
+    """Sum / max / min ProjectStats across provider-duplicates of one slug.
+
+    Kept for callers that still need full per-project aggregator output
+    (none currently — the list endpoint moved to ``_bulk_lite_merge``).
+    """
     parts = [_project_stats_for_ui(conn, pid) for pid in project_ids]
     if len(parts) == 1:
         return parts[0]
