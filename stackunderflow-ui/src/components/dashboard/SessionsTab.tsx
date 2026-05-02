@@ -16,6 +16,7 @@ import {
   IconChevronRight as IconChevronRightNav,
 } from '@tabler/icons-react'
 import { getJsonlFiles, getJsonlContent, setProjectByDir } from '../../services/api'
+import { useFilters } from '../../services/filters'
 import type { JsonlFile, JsonlContentResponse, SessionEfficiency } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
@@ -680,9 +681,11 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
   const [highlightedSession, setHighlightedSession] = useState<string | null>(null)
   const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
 
+  const { filters } = useFilters()
+
   const filesQuery = useQuery({
-    queryKey: ['jsonlFiles', projectName],
-    queryFn: () => getJsonlFiles(projectName),
+    queryKey: ['jsonlFiles', projectName, filters.providers],
+    queryFn: () => getJsonlFiles(projectName, { providers: filters.providers }),
   })
 
   const contentQuery = useQuery({
@@ -768,7 +771,15 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
   // /api/jsonl-files returns {files, currency} since v0.6.0; unwrap the
   // files list. The currency block is propagated app-wide via the
   // CurrencyProvider, so we don't need to thread it from here.
-  const files = filesQuery.data!.files
+  let files = filesQuery.data!.files
+  // Apply model filter client-side — backend route doesn't accept ?model=
+  // and adding it would require joining messages → sessions in the SQL.
+  // The list is already paginated to one project, so the filter cost is
+  // negligible.
+  if (filters.models.length > 0) {
+    const wanted = new Set(filters.models)
+    files = files.filter((f) => f.model != null && wanted.has(f.model.toLowerCase()))
+  }
 
   // Session content view — exit early, skips compare UI while viewing one session.
   if (selectedFile) {

@@ -27,7 +27,9 @@ import {
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
 import ExportButton from '../components/common/ExportButton'
+import FilterBar from '../components/common/FilterBar'
 import { Breadcrumb, BackButton } from '../components/common/Breadcrumb'
+import { useFilters } from '../services/filters'
 import OverviewTab from '../components/dashboard/OverviewTab'
 import CommandsTab from '../components/dashboard/CommandsTab'
 import MessagesTab from '../components/dashboard/MessagesTab'
@@ -78,9 +80,25 @@ function resolveInitialTab(): TabId {
   return isValidTab(fromUrl) ? fromUrl : 'overview'
 }
 
+/**
+ * Pick the top-N model ids from `stats.models` (sorted by count desc) to
+ * surface as filter chips. Models the user already has filtered are
+ * preserved by FilterBar itself, so this list only needs to cover the
+ * "common" suggestions.
+ */
+function extractModelOptions(models: Record<string, { count?: number }> | undefined): string[] {
+  if (!models) return []
+  const entries = Object.entries(models)
+    .filter(([k]) => k !== '<synthetic>' && k.toLowerCase() !== 'unknown')
+    .map(([k, v]) => ({ model: k, count: typeof v?.count === 'number' ? v.count : 0 }))
+  entries.sort((a, b) => b.count - a.count)
+  return entries.slice(0, 6).map(e => e.model)
+}
+
 export default function ProjectDashboard() {
   const { name } = useParams<{ name: string }>()
   const queryClient = useQueryClient()
+  const { filters } = useFilters()
 
   // Initial tab comes from `?tab=` if present and valid.
   const [activeTab, setActiveTab] = useState<TabId>(resolveInitialTab)
@@ -112,10 +130,15 @@ export default function ProjectDashboard() {
     staleTime: 60_000,
   })
 
-  // Load dashboard data
+  // Load dashboard data — include the active filter set in the query key so
+  // toggling a provider/model chip triggers a refetch (and avoids React
+  // Query serving stale, unfiltered data).
   const { data: dashboardData, isLoading: loadingData, error: dataError } = useQuery({
-    queryKey: ['dashboardData', name],
-    queryFn: () => getDashboardData(new Date().getTimezoneOffset()),
+    queryKey: ['dashboardData', name, filters.providers, filters.models],
+    queryFn: () => getDashboardData(new Date().getTimezoneOffset(), {
+      providers: filters.providers,
+      models: filters.models,
+    }),
     enabled: !!name && !settingProject,
   })
 
@@ -277,6 +300,15 @@ export default function ProjectDashboard() {
           <ExportButton tab={activeTab} />
         </div>
       </div>
+
+      {/* FilterBar — provider/model multi-select. Sits between the tab
+          strip and the tab content so the user always sees what they've
+          scoped to. State is URL-synced via FiltersProvider, so a refresh
+          or shared link restores filter state. The bar self-hides when
+          there's only one provider in the store and no filters active. */}
+      <FilterBar
+        modelOptions={extractModelOptions(stats?.models)}
+      />
 
       {/* Breadcrumb strip — shown only when a deep-link param is active, to
           avoid clutter on the main tab views. */}

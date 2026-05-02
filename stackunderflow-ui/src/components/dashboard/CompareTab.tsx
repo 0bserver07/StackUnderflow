@@ -9,6 +9,7 @@ import ProviderChip from '../common/ProviderChip'
 import { formatCost, formatNumber, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import { shortenModelId } from '../../services/providerStyle'
+import { useFilters } from '../../services/filters'
 
 // ---------------------------------------------------------------------------
 // CompareTab — v0.6.1 multi-provider polish.
@@ -68,11 +69,19 @@ interface CompareRowProps {
   row: ModelStats
   showProviderChip: boolean
   currency: ReturnType<typeof useCurrency>['currency']
+  onSelect?: (row: ModelStats) => void
 }
 
-function CompareRow({ row, showProviderChip, currency }: CompareRowProps) {
+function CompareRow({ row, showProviderChip, currency, onSelect }: CompareRowProps) {
+  const clickable = !!onSelect
   return (
-    <tr className="border-t border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
+    <tr
+      onClick={onSelect ? () => onSelect(row) : undefined}
+      className={`border-t border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40 ${
+        clickable ? 'cursor-pointer' : ''
+      }`}
+      title={clickable ? 'Click to filter the dashboard to this (provider, model)' : undefined}
+    >
       <td className="px-3 py-2">
         <div className="inline-flex items-center gap-2 min-w-0">
           {showProviderChip && <ProviderChip provider={row.provider} />}
@@ -236,20 +245,52 @@ function GroupToggle({ mode, onChange }: GroupToggleProps) {
 
 export default function CompareTab() {
   const { currency } = useCurrency()
+  const { filters, setProviders, setModels } = useFilters()
   const [period, setPeriod] = useState<ComparePeriod>('month')
   const [groupMode, setGroupMode] = useState<GroupMode>('agent_model')
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['compare', period],
-    queryFn: () => getCompare(period),
+    queryKey: ['compare', period, filters.providers, filters.models],
+    queryFn: () => getCompare(period, {
+      providers: filters.providers,
+      models: filters.models,
+    }),
     staleTime: 60_000,
   })
 
-  const visibleRows = useMemo(() => {
+  // Apply client-side filters: backend's `?provider=` only handles a single
+  // value; multi-select scoping happens here. Same for the model filter,
+  // which the route doesn't read at all.
+  const filteredRows = useMemo(() => {
     if (!data) return [] as ModelStats[]
-    if (groupMode === 'agent_model') return data.models
-    return aggregateByModel(data.models)
-  }, [data, groupMode])
+    let rows = data.models
+    if (filters.providers.length > 0) {
+      const wanted = new Set(filters.providers)
+      rows = rows.filter((r) => wanted.has((r.provider ?? '').toLowerCase()))
+    }
+    if (filters.models.length > 0) {
+      const wanted = new Set(filters.models)
+      rows = rows.filter((r) => wanted.has((r.model ?? '').toLowerCase()))
+    }
+    return rows
+  }, [data, filters])
+
+  const visibleRows = useMemo(() => {
+    if (groupMode === 'agent_model') return filteredRows
+    return aggregateByModel(filteredRows)
+  }, [filteredRows, groupMode])
+
+  // Click-to-filter: pin (provider, model) for the row. The Compare tab
+  // stays put — but every other tab's data scopes to the chosen pair the
+  // moment the user clicks somewhere else.
+  const handleRowClick = (row: ModelStats) => {
+    if (row.provider && row.provider !== '(combined)') {
+      setProviders([row.provider])
+    }
+    if (row.model) {
+      setModels([row.model])
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -351,6 +392,7 @@ export default function CompareTab() {
                   row={row}
                   showProviderChip={groupMode === 'agent_model'}
                   currency={currency}
+                  onSelect={groupMode === 'agent_model' ? handleRowClick : undefined}
                 />
               ))}
             </tbody>

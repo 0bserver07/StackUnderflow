@@ -111,16 +111,63 @@ async def get_stats(timezone_offset: int = 0):
 
 
 @router.get("/api/dashboard-data")
-async def get_dashboard_data(timezone_offset: int = 0):
-    """Get optimized data for initial dashboard load."""
+async def get_dashboard_data(
+    timezone_offset: int = 0,
+    provider: list[str] | None = None,
+    model: list[str] | None = None,
+):
+    """Get optimized data for initial dashboard load.
+
+    Args:
+        timezone_offset: Browser timezone offset for daily-bucket bucketing.
+        provider: Optional repeated query param scoping the response to those
+            providers. The current project is per-provider in the store, so
+            an active filter that excludes the project's provider returns an
+            empty payload (signals "no data in this scope" to the UI).
+        model: Optional repeated query param scoping the per-model breakdown
+            inside `models`. The aggregator runs project-wide; we filter the
+            top-level `models` map so the model-distribution card respects
+            the user's selection.
+    """
     log_path = _require_project()
     t0 = time.time()
     slug = Path(log_path).name
     cache_key = (slug, timezone_offset)
 
+    provider_filter: set[str] | None = None
+    if provider:
+        normed = {p.strip().lower() for p in provider if p and p.strip()}
+        if normed:
+            provider_filter = normed
+
+    model_filter: set[str] | None = None
+    if model:
+        normed_m = {m.strip().lower() for m in model if m and m.strip()}
+        if normed_m:
+            model_filter = normed_m
+
     conn = db.connect(deps.store_path)
     try:
         project_id = _get_project_id(conn, log_path)
+        # Provider filter: if the active project's provider is excluded,
+        # short-circuit to an empty stats body. The UI's empty-state path
+        # already handles this gracefully.
+        if provider_filter is not None:
+            project_row = queries.get_project(conn, slug=slug)
+            if project_row is not None and (project_row.provider or "").lower() not in provider_filter:
+                currency = active_currency_payload()
+                return {
+                    "statistics": {},
+                    "messages_page": {"messages": [], "page": 1, "per_page": 50, "total": 0},
+                    "message_count": 0,
+                    "is_reindexing": deps.is_reindexing,
+                    "config": {
+                        "messages_initial_load": deps.config.get("messages_initial_load"),
+                        "max_date_range_days": deps.config.get("max_date_range_days"),
+                    },
+                    "currency": currency,
+                    "filtered": True,
+                }
         sig = _dashboard_signature(conn, project_id)
 
         with _DASHBOARD_CACHE_LOCK:
@@ -133,6 +180,22 @@ async def get_dashboard_data(timezone_offset: int = 0):
                 "max_date_range_days": deps.config.get("max_date_range_days"),
             }
             payload["statistics"] = _apply_currency_to_stats(payload["statistics"])
+            # Apply model filter on the cached payload too so a filter change
+            # doesn't require waiting for the cache to expire. We deep-copy
+            # before mutating because `_apply_currency_to_stats` already
+            # returned a copy at rate ≠ 1, but at rate == 1 it returns the
+            # cached dict by reference — filtering would otherwise corrupt
+            # the cache entry.
+            if model_filter is not None:
+                stats_copy = payload["statistics"]
+                if isinstance(stats_copy, dict) and isinstance(stats_copy.get("models"), dict):
+                    import copy as _copy
+                    stats_copy = _copy.deepcopy(stats_copy)
+                    stats_copy["models"] = {
+                        k: v for k, v in stats_copy["models"].items()
+                        if k.lower() in model_filter
+                    }
+                    payload["statistics"] = stats_copy
             payload["currency"] = active_currency_payload()
             deps.logger.debug(
                 f"dashboard-data [hit] {(time.time()-t0)*1000:.1f}ms"
@@ -162,6 +225,20 @@ async def get_dashboard_data(timezone_offset: int = 0):
             k: v for k, v in ui.items()
             if k not in {"command_details", "tool_count_distribution"}
         }
+    # Apply model filter to the `models` map so the Overview tab's model
+    # distribution card respects the active selection. We don't recompute
+    # downstream aggregates (cost, tokens) — the dashboard surfaces them
+    # at the project level and recomputing would be expensive without a
+    # corresponding visible payoff. Frontend tabs that care about per-model
+    # cost (Compare, Cost-by-provider) hit purpose-built endpoints that
+    # already accept ``?model=`` independently.
+    if model_filter is not None:
+        models = lean_stats.get("models")
+        if isinstance(models, dict):
+            lean_stats["models"] = {
+                k: v for k, v in models.items()
+                if k.lower() in model_filter
+            }
     payload = {
         "statistics": lean_stats,
         "messages_page": first_page,
@@ -198,16 +275,56 @@ def _apply_currency_to_stats(stats: dict) -> dict:
 
 
 @router.get("/api/messages")
-async def get_messages(limit: int | None = None, timezone_offset: int = 0):
-    """Get messages for the current project."""
+async def get_messages(
+    limit: int | None = None,
+    timezone_offset: int = 0,
+    provider: list[str] | None = None,
+    model: list[str] | None = None,
+):
+    """Get messages for the current project.
+
+    Args:
+        limit: Maximum number of messages to return.
+        timezone_offset: Browser timezone offset.
+        provider: Optional repeated query param scoping to those providers.
+            The current project belongs to one provider, so an active filter
+            that excludes it returns an empty list.
+        model: Optional repeated query param scoping by model id. Filtered
+            client-side after the messages list comes back from the store
+            (the messages table doesn't have a separate index on model and
+            this list is already loaded fully into memory at the API).
+    """
     log_path = _require_project()
     t0 = time.time()
+
+    provider_filter: set[str] | None = None
+    if provider:
+        normed = {p.strip().lower() for p in provider if p and p.strip()}
+        if normed:
+            provider_filter = normed
+
+    model_filter: set[str] | None = None
+    if model:
+        normed_m = {m.strip().lower() for m in model if m and m.strip()}
+        if normed_m:
+            model_filter = normed_m
+
     conn = db.connect(deps.store_path)
     try:
         project_id = _get_project_id(conn, log_path)
+        # Provider filter — short-circuit when the project is excluded.
+        if provider_filter is not None:
+            slug = Path(log_path).name
+            project_row = queries.get_project(conn, slug=slug)
+            if project_row is not None and (project_row.provider or "").lower() not in provider_filter:
+                return []
         messages = queries.get_project_messages(conn, project_id=project_id, limit=limit)
     finally:
         conn.close()
+
+    if model_filter is not None and messages:
+        messages = [m for m in messages if (m.get("model") or "").lower() in model_filter]
+
     deps.logger.debug(f"messages [store] {(time.time()-t0)*1000:.1f}ms")
     return messages
 

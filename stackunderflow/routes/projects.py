@@ -151,7 +151,11 @@ async def get_recent_projects():
 # Comprehensive projects endpoint for global stats
 @router.get("/api/projects")
 async def get_projects(
-    include_stats: bool = False, sort_by: str = "last_modified", limit: int | None = None, offset: int = 0
+    include_stats: bool = False,
+    sort_by: str = "last_modified",
+    limit: int | None = None,
+    offset: int = 0,
+    provider: list[str] | None = None,
 ):
     """
     Get all available Claude projects with metadata.
@@ -161,14 +165,31 @@ async def get_projects(
         sort_by: Sort field (last_modified, first_seen, size, name)
         limit: Maximum number of projects to return
         offset: Offset for pagination
+        provider: Optional repeated query param (``?provider=cursor&provider=cline``)
+            scoping the project list to those providers. Empty = "all".
+            Case-insensitive on read, lowercased before comparison.
 
     Returns:
         JSON with projects list and metadata
     """
+    # Normalise provider filter: lowercase + drop empties so callers that
+    # pass `?provider=Cursor` work without round-tripping through the URL
+    # canonicalisation in `services/filters.tsx`.
+    provider_filter: set[str] | None = None
+    if provider:
+        normed = {p.strip().lower() for p in provider if p and p.strip()}
+        if normed:
+            provider_filter = normed
+
     try:
         conn = db.connect(deps.store_path)
         try:
             project_rows = queries.list_projects(conn)
+            if provider_filter is not None:
+                project_rows = [
+                    p for p in project_rows
+                    if (p.provider or "").lower() in provider_filter
+                ]
 
             # Single bulk-aggregate pass for session counts + per-project
             # token/date totals + cost; replaces per-project N+1 queries
@@ -406,6 +427,49 @@ def _project_stats_for_ui(conn, project_id: int) -> dict:
         "total_cost": float(overview.get("total_cost", 0.0)),
     }
 
+
+
+@router.get("/api/providers")
+async def get_providers():
+    """List every provider currently active in the store.
+
+    Powers the dashboard's `FilterBar` chip row. Returns one entry per
+    distinct ``projects.provider`` value with project + session counts so
+    the UI can render counts inline (the user wants to know "how much
+    Cursor data am I about to scope to?" before they click).
+
+    Cheap query — single GROUP BY over the projects table plus a join
+    onto sessions for the count column. Empty stores return an empty
+    array, never a 500.
+    """
+    try:
+        conn = db.connect(deps.store_path)
+        try:
+            rows = conn.execute(
+                "SELECT projects.provider AS provider, "
+                "       COUNT(DISTINCT projects.id) AS project_count, "
+                "       COUNT(DISTINCT sessions.id) AS session_count "
+                "FROM projects "
+                "LEFT JOIN sessions ON sessions.project_id = projects.id "
+                "GROUP BY projects.provider "
+                "ORDER BY project_count DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+        providers = [
+            {
+                "provider": (r["provider"] or "unknown").lower(),
+                "project_count": int(r["project_count"] or 0),
+                "session_count": int(r["session_count"] or 0),
+            }
+            for r in rows
+        ]
+        return JSONResponse({"providers": providers})
+    except Exception as e:
+        return JSONResponse(
+            {"providers": [], "error": f"Failed to list providers: {str(e)}"},
+            status_code=500,
+        )
 
 
 @router.get("/api/global-stats")
