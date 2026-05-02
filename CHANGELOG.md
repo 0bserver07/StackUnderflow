@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - **API reference: documented 4 missing routes (plan, optimize, context-budget, tool-distribution).**
+### Fixed
+- **Stop emitting `<synthetic>` model id into user-facing reports.** Claude Code stamps `message.model = "<synthetic>"` on its locally generated placeholder records — API errors ("Rate limit reached", "ECONNRESET", "Not logged in"), invalid-request stubs, and the "No response requested." marker. The Claude adapter previously passed that sentinel through verbatim, so it landed in the `messages.model` column and surfaced as a distinct `<synthetic>` row in `stackunderflow compare` (zero tokens, zero cost — pure noise; verified at 221 rows on a real store). New `_model_from(msg)` helper in `stackunderflow/adapters/claude.py` translates the sentinel to `None` at the adapter boundary; downstream cost/compare paths already skip `model IS NULL` rows the right way (see `services/compare.py` line 222), so the row simply disappears from user-facing surfaces while the underlying error message stays in `content_text` and `raw_json`. New migration `v004_clean_synthetic_models.sql` rewrites existing rows (`UPDATE messages SET model = NULL WHERE model = '<synthetic>'`); `schema.CURRENT_VERSION` bumps to 4. Verified on the maintainer's real store: 221 `<synthetic>` rows before → 0 after, compare table now lists 20 real models with no sentinel row. New regression test `tests/stackunderflow/adapters/test_claude.py::test_read_drops_synthetic_model_sentinel` ingests an error stub + a "No response requested." marker + a normal assistant message and confirms the sentinel never lands on the `Record`. Migration tests in `tests/stackunderflow/store/test_migration_v004.py` (3: clears synthetic rows only, preserves `content_text`/`raw_json`, idempotent on a clean store).
+
 
 ## [0.6.0] - 2026-05-01
 

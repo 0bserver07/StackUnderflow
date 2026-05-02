@@ -220,6 +220,51 @@ def test_read_treats_batch_service_tier_as_standard(fake_home: Path) -> None:
     assert records[0].speed == "standard"
 
 
+def test_read_drops_synthetic_model_sentinel(fake_home: Path) -> None:
+    """Claude Code stamps ``message.model = "<synthetic>"`` on locally
+    generated placeholder records — API errors, "No response requested.",
+    rate-limit stubs. The literal string used to leak into the SQLite
+    store and surface as a distinct row in ``stackunderflow compare``.
+    The adapter must translate it to ``None`` so cost/compare paths skip
+    the row the way they skip any other ``model is None`` record."""
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        # An error stub from a real session: model="<synthetic>",
+        # isApiErrorMessage=true, zero usage.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:00Z",'
+        '"uuid":"u1","message":{"role":"assistant","model":"<synthetic>",'
+        '"content":[{"type":"text","text":"API Error: rate limit reached"}],'
+        '"usage":{"input_tokens":0,"output_tokens":0}},'
+        '"isApiErrorMessage":true,"error":"rate_limit"}\n'
+        # A "No response requested." marker — also model="<synthetic>" but
+        # not flagged as an error message.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u2","message":{"role":"assistant","model":"<synthetic>",'
+        '"content":[{"type":"text","text":"No response requested."}],'
+        '"usage":{"input_tokens":0,"output_tokens":0}}}\n'
+        # A normal record sandwiched between them — model id must survive.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:02Z",'
+        '"uuid":"u3","message":{"role":"assistant","model":"claude-opus-4-7",'
+        '"content":[{"type":"text","text":"hi"}],'
+        '"usage":{"input_tokens":5,"output_tokens":2}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 3
+    # Both synthetic rows surface with model=None — content is preserved.
+    assert records[0].model is None
+    assert records[0].content_text == "API Error: rate limit reached"
+    assert records[1].model is None
+    assert records[1].content_text == "No response requested."
+    # The real record's model id is untouched.
+    assert records[2].model == "claude-opus-4-7"
+    # Sanity: no record carries the literal sentinel anywhere we expose.
+    assert all(r.model != "<synthetic>" for r in records)
+
+
 class TestClaudeAdapterContract(unittest.TestCase, AdapterContract):
     """Runs every AdapterContract invariant against a ClaudeAdapter backed by a fake HOME."""
 
