@@ -36,8 +36,18 @@ def _duration_minutes(first: str | None, last: str | None) -> float | None:
 
 
 @router.get("/api/jsonl-files")
-async def get_jsonl_files(project: str | None = None):
-    """Get list of JSONL files for a project with metadata"""
+async def get_jsonl_files(
+    project: str | None = None,
+    provider: list[str] | None = None,
+):
+    """Get list of JSONL files for a project with metadata.
+
+    Args:
+        project: Project slug to scope to. Falls back to ``deps.current_log_path``.
+        provider: Optional repeated query param scoping the session list to
+            those providers. Empty = "all" (preserves existing contract).
+            Case-insensitive on read.
+    """
     log_path = deps.current_log_path
 
     if project:
@@ -47,12 +57,24 @@ async def get_jsonl_files(project: str | None = None):
     else:
         raise HTTPException(status_code=400, detail="No project selected")
 
+    provider_filter: set[str] | None = None
+    if provider:
+        normed = {p.strip().lower() for p in provider if p and p.strip()}
+        if normed:
+            provider_filter = normed
+
     try:
         conn = db.connect(deps.store_path)
         try:
             project_row = queries.get_project(conn, slug=slug)
             if project_row is None:
                 return JSONResponse([])
+            # Honour provider scoping at the API layer: a project's sessions
+            # all share the project's provider, so filter the whole response
+            # to empty when the project's provider isn't in the active set.
+            if provider_filter is not None and (project_row.provider or "").lower() not in provider_filter:
+                currency = active_currency_payload()
+                return JSONResponse({"files": [], "currency": currency})
 
             sessions = queries.list_sessions(conn, project_id=project_row.id)
 

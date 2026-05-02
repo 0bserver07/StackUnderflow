@@ -9,6 +9,7 @@ import Modal from '../common/Modal'
 import Markdown from '../common/Markdown'
 import ProviderChip from '../common/ProviderChip'
 import { getMessages, getProjects } from '../../services/api'
+import { useFilters } from '../../services/filters'
 import { shortenModelId } from '../../services/providerStyle'
 import { getParam, NAV_EVENT, type NavDetail } from '../../services/navigation'
 import { formatModelName } from '../../services/format'
@@ -160,10 +161,17 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
   // Initial messages from dashboard data
   const initialMessages = data.messages_page?.messages ?? []
 
-  // Load ALL messages from the API
+  const { filters } = useFilters()
+
+  // Load ALL messages from the API. Filter set goes into the query key so
+  // toggling a chip refetches; the API helper splices the params onto the
+  // outbound URL so the route does the heavy lifting.
   const { data: allMessages, isLoading, error } = useQuery({
-    queryKey: ['allMessages', projectName],
-    queryFn: () => getMessages(),
+    queryKey: ['allMessages', projectName, filters.providers, filters.models],
+    queryFn: () => getMessages(undefined, {
+      providers: filters.providers,
+      models: filters.models,
+    }),
     // Fall back to dashboard messages while loading
     placeholderData: initialMessages,
   })

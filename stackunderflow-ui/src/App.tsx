@@ -6,6 +6,7 @@ import Overview from './pages/Overview'
 import ProjectDashboard from './pages/ProjectDashboard'
 import Settings from './pages/Settings'
 import { CurrencyProvider } from './services/currency'
+import { FiltersProvider } from './services/filters'
 
 function AppLayout() {
   const [chatOpen, setChatOpen] = useState(false)
@@ -29,7 +30,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <CurrencyProvider>
-        <AppLayout />
+        <FiltersProvider>
+          <AppLayout />
+        </FiltersProvider>
       </CurrencyProvider>
     </BrowserRouter>
   )

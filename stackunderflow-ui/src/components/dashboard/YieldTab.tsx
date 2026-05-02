@@ -9,6 +9,7 @@ import {
   IconTrendingUp,
 } from '@tabler/icons-react'
 import { getYield, type YieldPeriod } from '../../services/api'
+import { useFilters } from '../../services/filters'
 import type { YieldClassification, YieldEntry, YieldSummary } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
@@ -134,11 +135,12 @@ function HeuristicBanner({ warning }: { warning: string }) {
 
 export default function YieldTab() {
   const { currency } = useCurrency()
+  const { filters } = useFilters()
   const [period, setPeriod] = useState<YieldPeriod>('week')
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['yield', period],
-    queryFn: () => getYield(period),
+    queryKey: ['yield', period, filters.providers, filters.models],
+    queryFn: () => getYield(period, { providers: filters.providers, models: filters.models }),
     staleTime: 60_000,
   })
 

@@ -7,6 +7,7 @@ import {
   IconBulb,
 } from '@tabler/icons-react'
 import { getOptimize } from '../../services/api'
+import { useFilters } from '../../services/filters'
 import type { Finding, FindingSeverity } from '../../types/api'
 import Badge from '../common/Badge'
 import { formatNumber } from '../../services/format'
@@ -71,9 +72,10 @@ function FindingRow({ finding }: FindingRowProps) {
 
 export default function OptimizeFindingsPanel() {
   const [expanded, setExpanded] = useState(false)
+  const { filters } = useFilters()
   const { data, isLoading, error } = useQuery({
-    queryKey: ['optimize', 'month'],
-    queryFn: () => getOptimize('month'),
+    queryKey: ['optimize', 'month', filters.providers, filters.models],
+    queryFn: () => getOptimize('month', { providers: filters.providers, models: filters.models }),
     staleTime: 5 * 60_000,
   })
 

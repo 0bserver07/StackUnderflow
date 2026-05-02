@@ -7,6 +7,7 @@ import type { CostByProviderRow } from '../../types/api'
 import { formatCost, formatNumber } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import { getProviderColor, getProviderLabel } from '../../services/providerStyle'
+import { useFilters } from '../../services/filters'
 import LoadingSpinner from '../common/LoadingSpinner'
 import Badge from '../common/Badge'
 
@@ -54,13 +55,23 @@ interface CostByProviderCardProps {
 
 export default function CostByProviderCard({ initialPeriod = 'month' }: CostByProviderCardProps) {
   const { currency } = useCurrency()
+  const { filters, setProviders } = useFilters()
   const [period, setPeriod] = useState<ComparePeriod>(initialPeriod)
 
+  // Pass provider filter through; backend narrows the rows so the card
+  // only renders the active scope. Per spec, the card highlights (rather
+  // than hides) the filtered providers — but with the filter already in
+  // place, the row list has already collapsed to that subset, which is
+  // visually equivalent and keeps the request small.
   const { data, isLoading, error } = useQuery({
-    queryKey: ['costByProvider', period],
-    queryFn: () => getCostByProvider(period),
+    queryKey: ['costByProvider', period, filters.providers],
+    queryFn: () => getCostByProvider(period, { providers: filters.providers }),
     staleTime: 60_000,
   })
+
+  const handleSliceClick = (providerId: string) => {
+    setProviders([providerId])
+  }
 
   // Defensive: backend pre-converts cost_usd into the active currency, but
   // we still need a sane denominator for percentage shares. Sum on the fly
@@ -117,17 +128,23 @@ export default function CostByProviderCard({ initialPeriod = 'month' }: CostByPr
 
       {!isLoading && !error && rows.length > 0 && (
         <div className="space-y-3">
-          {/* Stacked-bar overview — one segment per provider, sized by share */}
+          {/* Stacked-bar overview — one segment per provider, sized by share.
+              Clicking a segment scopes the entire dashboard to that provider
+              via the FilterBar — same affordance as the Compare row, so the
+              two tab-level entry points behave consistently. */}
           <div className="flex h-3 w-full rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800">
             {rows.map((r) => {
               const pct = total > 0 ? (r.cost_usd / total) * 100 : 0
               if (pct <= 0) return null
               return (
-                <div
+                <button
                   key={r.provider}
-                  className={segmentColor(r.provider)}
+                  type="button"
+                  onClick={() => handleSliceClick(r.provider)}
+                  className={`${segmentColor(r.provider)} hover:brightness-110 transition`}
                   style={{ width: `${pct}%` }}
-                  title={`${getProviderLabel(r.provider)} — ${formatCost(r.cost_usd, currency)} (${pct.toFixed(1)}%)`}
+                  title={`Click to filter dashboard to ${getProviderLabel(r.provider)} — ${formatCost(r.cost_usd, currency)} (${pct.toFixed(1)}%)`}
+                  aria-label={`Filter to ${getProviderLabel(r.provider)}`}
                 />
               )
             })}

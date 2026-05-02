@@ -151,7 +151,10 @@ _BY_PROVIDER_PERIOD_MAP: dict[str, str] = {
 
 
 @router.get("/api/cost-data/by-provider")
-async def get_cost_by_provider(period: str = "month"):
+async def get_cost_by_provider(
+    period: str = "month",
+    provider: list[str] | None = None,
+):
     """Return total cost / message count / session count grouped by provider.
 
     Powers the Cost tab's `CostByProviderCard` (v0.6.1 multi-provider polish).
@@ -254,6 +257,15 @@ async def get_cost_by_provider(period: str = "month"):
             }
         )
     out_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+
+    # Provider filter: empty = all (preserve existing API contract). When
+    # callers pass ``?provider=cursor&provider=cline`` we narrow the rows
+    # so the card renders only the requested providers — the dashboard's
+    # FilterBar passes the active set through verbatim.
+    if provider:
+        wanted = {p.strip().lower() for p in provider if p and p.strip()}
+        if wanted:
+            out_rows = [r for r in out_rows if r["provider"].lower() in wanted]
 
     return {
         "period": period,
