@@ -14,6 +14,26 @@ One ``SessionRef`` is yielded per ``conversationId``. ``source_kind`` is
 ``"database"`` and ``seq`` is the SQLite ``rowid`` so resumable reads use
 the rowid as a high-water mark (spec §1.4 — storage-aware).
 
+Project slug derivation
+-----------------------
+Cursor stores no explicit ``cwd`` per conversation — every chat is
+nominally part of one global vscdb. To split conversations by workspace
+we infer a workspace root from absolute filesystem paths referenced
+inside each conversation's bubbles:
+
+- ``context.fileSelections[].uri.fsPath`` and ``.path``
+- ``context.mentions.fileSelections`` / ``folderSelections`` keys
+  (``file://`` URIs)
+- ``toolFormerData.params`` / ``rawArgs`` strings
+- ``attachedFoldersNew[].path``
+
+For each conversation we collect every absolute path, then pick the
+deepest directory that is an ancestor of >= 50 % of those paths. That
+directory is fed through the same Claude/Codex slug rule
+(``/Users/foo/bar`` → ``-Users-foo-bar``). Conversations with no usable
+path data fall back to the literal slug ``"cursor"`` so they remain
+visible — the slug just isn't workspace-specific.
+
 Token policy: explicit ``tokenCount`` values are preferred when non-zero;
 otherwise we fall back to ``len(text) // 4`` and stamp
 ``record.raw["cost_source"] = "estimated"`` so downstream consumers can
@@ -29,6 +49,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -107,6 +128,7 @@ class CursorAdapter:
         # logical conversation — spec §3.1 ("one SessionRef per
         # conversationId").
         seen: set[str] = set()
+        slugs: dict[str, str] = {}
         try:
             cur = conn.execute(
                 "SELECT key, value FROM cursorDiskKV "
@@ -119,6 +141,11 @@ class CursorAdapter:
                 if not conv_id or conv_id in seen:
                     continue
                 seen.add(conv_id)
+            # Derive a per-workspace slug for every conversation we found.
+            # Done in a second pass so we can issue one targeted query per
+            # conversation rather than holding every bubble in memory.
+            for conv_id in seen:
+                slugs[conv_id] = _workspace_slug_for_conversation(conv_id, conn)
         except sqlite3.Error as exc:
             _log.warning("Cursor vscdb query failed on %s: %s", path, exc)
             conn.close()
@@ -129,7 +156,7 @@ class CursorAdapter:
         for conv_id in seen:
             yield SessionRef(
                 provider=self.name,
-                project_slug="cursor",
+                project_slug=slugs.get(conv_id, "cursor"),
                 session_id=conv_id,
                 file_path=path,
                 file_mtime=stat.st_mtime,
@@ -417,6 +444,197 @@ def _tokens_from_payload(parsed: dict, *, text: str) -> tuple[int, int, bool]:
 
     estimate = max(len(text) // 4, 0)
     return estimate, 0, True
+
+
+# ── workspace-slug derivation ─────────────────────────────────────────
+
+
+# Match an absolute POSIX path. The character class is conservative —
+# we only sweep for paths buried inside JSON-encoded strings (where the
+# host filesystem layout has already been written by Cursor itself), so
+# false positives from natural prose are rare. Tighten as needed.
+_PATH_RE = re.compile(r"/(?:Users|home|var|opt)/[A-Za-z0-9_./\-]+")
+
+# A path must have at least this many segments below ``/`` before we
+# consider it a workspace candidate. Rejects ``/Users/foo`` itself and
+# any sibling we wouldn't want to treat as a project root.
+_MIN_PATH_DEPTH = 3
+
+# Slug returned when no workspace evidence exists in any bubble — keeps
+# legacy behaviour for tiny / model-only conversations.
+_FALLBACK_SLUG = "cursor"
+
+
+def _workspace_slug_for_conversation(
+    conv_id: str, conn: sqlite3.Connection
+) -> str:
+    """Best-effort ``project_slug`` for one Cursor conversation.
+
+    Reads every ``bubbleId:<conv_id>:%`` row, extracts absolute file
+    paths from the structured fields Cursor populates (file selections,
+    folder mentions, tool former payloads, attached folders), and
+    returns the slug for the deepest directory that is an ancestor of
+    at least half of the collected paths. Falls back to ``"cursor"``
+    when no signal is available (e.g. model-only chats with no file
+    references).
+
+    Conn is borrowed read-only and never closed here.
+    """
+    paths = _collect_paths_for_conversation(conv_id, conn)
+    root = _derive_workspace_root(paths)
+    if root is None:
+        return _FALLBACK_SLUG
+    return _slug_for(root)
+
+
+def _collect_paths_for_conversation(
+    conv_id: str, conn: sqlite3.Connection
+) -> list[str]:
+    """Pull every absolute path referenced by *conv_id*'s bubbles."""
+    paths: list[str] = []
+    try:
+        cur = conn.execute(
+            "SELECT value FROM cursorDiskKV WHERE key LIKE ?",
+            (f"bubbleId:{conv_id}:%",),
+        )
+    except sqlite3.Error as exc:
+        _log.debug("Cursor path lookup failed for conv %s: %s", conv_id, exc)
+        return paths
+
+    for (value,) in cur:
+        parsed = _safe_json_loads(value)
+        if parsed is None:
+            continue
+        paths.extend(_paths_in_bubble(parsed))
+    return paths
+
+
+def _paths_in_bubble(parsed: dict) -> Iterator[str]:
+    """Yield absolute paths from one parsed bubble payload.
+
+    Walks the structured fields that Cursor consistently populates with
+    workspace-relative data; falls back to a regex sweep over the
+    ``toolFormerData`` JSON-encoded params for paths the model passed
+    through tool calls.
+    """
+    ctx = parsed.get("context")
+    if isinstance(ctx, dict):
+        # Direct file selections (chip-attached files).
+        for fs in ctx.get("fileSelections") or []:
+            if isinstance(fs, dict):
+                uri = fs.get("uri")
+                if isinstance(uri, dict):
+                    for k in ("fsPath", "path"):
+                        v = uri.get(k)
+                        if isinstance(v, str) and v.startswith("/"):
+                            yield v
+        # `mentions` keeps URI-keyed maps for both files and folders.
+        mentions = ctx.get("mentions")
+        if isinstance(mentions, dict):
+            for bucket in ("fileSelections", "folderSelections"):
+                container = mentions.get(bucket)
+                if isinstance(container, dict):
+                    for k in container.keys():
+                        if isinstance(k, str) and k.startswith("file://"):
+                            yield k[len("file://"):]
+
+    # Folders explicitly attached to the chat (drag-and-dropped).
+    for af in parsed.get("attachedFoldersNew") or []:
+        if isinstance(af, dict):
+            uri = af.get("uri")
+            if isinstance(uri, dict):
+                v = uri.get("fsPath") or uri.get("path")
+                if isinstance(v, str) and v.startswith("/"):
+                    yield v
+            v = af.get("path")
+            if isinstance(v, str) and v.startswith("/"):
+                yield v
+
+    # Tool calls embed paths inside JSON-encoded strings — sweep them
+    # as a single block so we pick up `target_file`, `targetFile`,
+    # `effectiveUri`, etc. without enumerating every tool's schema.
+    tfd = parsed.get("toolFormerData")
+    if isinstance(tfd, dict):
+        for field in ("rawArgs", "params"):
+            v = tfd.get(field)
+            if isinstance(v, str):
+                yield from _PATH_RE.findall(v)
+
+
+def _derive_workspace_root(paths: list[str]) -> str | None:
+    """Pick the deepest directory covering >= 50 % of *paths*.
+
+    Strategy: enumerate every ancestor directory of every path,
+    score each candidate by the number of input paths it contains,
+    and return the longest candidate that meets the coverage
+    threshold. Ties on coverage are broken by directory depth (longer
+    wins), then alphabetically for determinism.
+    """
+    if not paths:
+        return None
+
+    # A workspace is always a directory, never a single file. Drop the
+    # basename of each collected path (most are files like ``a/b/c.ts``)
+    # and let the ancestor walk supply the rest. Inputs that already
+    # look like a directory (no extension on the leaf) are kept as-is —
+    # ``_MIN_PATH_DEPTH`` filters anything too shallow downstream.
+    candidates: set[str] = set()
+    for p in paths:
+        leaf = p.rsplit("/", 1)[-1]
+        cur = p.rsplit("/", 1)[0] if ("." in leaf and leaf != "") else p
+        if not cur:
+            continue
+        candidates.add(cur)
+        while True:
+            parent = cur.rsplit("/", 1)[0]
+            if not parent or parent == cur:
+                break
+            cur = parent
+            candidates.add(cur)
+
+    # Coverage threshold: at least half (rounded up). With only 1 or 2
+    # paths total we still demand full coverage so a stray reference
+    # cannot become the workspace by itself.
+    n = len(paths)
+    threshold = n if n <= 2 else (n + 1) // 2
+    scored: list[tuple[int, int, str]] = []
+    for cand in candidates:
+        # ``/Users/foo`` is two segments — skip until we're at least one
+        # level into the user's filesystem so we don't pick the home
+        # directory as a project root.
+        parts = cand.strip("/").split("/")
+        if len(parts) < _MIN_PATH_DEPTH:
+            continue
+        coverage = sum(1 for p in paths if _is_ancestor_of(cand, p))
+        if coverage >= threshold:
+            scored.append((coverage, len(cand), cand))
+
+    if not scored:
+        return None
+    scored.sort(reverse=True)  # (coverage desc, length desc, name desc)
+    return scored[0][2]
+
+
+def _is_ancestor_of(directory: str, path: str) -> bool:
+    """True when *directory* is an ancestor of (or equal to) *path*."""
+    if path == directory:
+        return True
+    return path.startswith(directory.rstrip("/") + "/")
+
+
+def _slug_for(project_path: str) -> str:
+    """Match the Claude/Codex slug rule: ``/a/b`` → ``-a-b``.
+
+    Identical to ``stackunderflow.adapters.claude._slug_for`` so the same
+    workspace ingested via cursor / claude / codex collapses to one
+    project row in the store.
+    """
+    return (
+        os.path.abspath(project_path)
+        .rstrip(os.sep)
+        .replace(os.sep, "-")
+        .replace("_", "-")
+    )
 
 
 def _normalize_timestamp(raw: object) -> str:
