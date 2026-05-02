@@ -110,11 +110,18 @@ export interface JsonlFile {
  * v0.6.0 (multi-currency PR). The UI reads `code` for labels, `symbol` for
  * inline rendering via `formatCost(usd, currency)`, and `rate_from_usd`
  * for any client-side conversions (rare — backend pre-converts).
+ *
+ * `warning` is non-null when the backend had to fall back past the live
+ * Frankfurter feed (e.g. 403, offline, or rate-limited). The dashboard
+ * surfaces it as a banner so non-USD users aren't shown numbers labelled
+ * with the wrong currency without explanation. It self-clears the next
+ * time a successful fetch produces a warning-free payload.
  */
 export interface CurrencyInfo {
   code: string
   symbol: string
   rate_from_usd: number
+  warning?: string | null
 }
 
 /**

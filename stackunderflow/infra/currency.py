@@ -4,16 +4,26 @@ Used at the API boundary so cost figures can be rendered in the user's
 preferred currency. Costs are still computed in USD internally — model
 rate cards are USD-denominated — and converted only when serialised.
 
-Resolution at runtime:
+Resolution chain at runtime (see ``get_rate``):
+
   1. ``Settings().currency`` picks the active ISO code (default ``USD``).
-  2. ``get_rate(target)`` consults a 24h JSON cache at
-     ``~/.stackunderflow/cache/exchange-rate.json``; on miss it fetches
-     from ``api.frankfurter.app`` and writes the cache.
-  3. Any failure (network, parse, bounds rejection) falls back to a
-     ``rate=1.0`` USD response and emits a WARNING — never raises.
+  2. ``get_rate(target)``:
+       a. cache fresh (≤24h)            → use it, no warning
+       b. live fetch from Frankfurter   → use it, write cache, no warning
+       c. cache stale (>24h, ≤30d)      → use it + warning "rate is N days old"
+       d. ``RATES_SNAPSHOT[code]``      → use it + warning "using built-in
+                                          snapshot from <RATES_SNAPSHOT_DATE>"
+       e. unknown code                  → raise ``CurrencyError``
 
 The cache file shape is:
   ``{"fetched_at": "<ISO-UTC>", "rates": {"EUR": 0.93, "GBP": 0.79, ...}}``
+
+The hardcoded ``RATES_SNAPSHOT`` is the last line of defence so non-USD
+users never silently see USD numbers labelled with their currency symbol.
+It is intentionally out-of-date by definition: refresh it whenever you
+notice ``RATES_SNAPSHOT_DATE`` is more than ~6 months old. The ECB
+cross-rates against USD typically drift 1-2% per month — that's well
+within the precision users care about for cost dashboards.
 """
 
 from __future__ import annotations
@@ -34,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 _FRANKFURTER_URL = "https://api.frankfurter.app/latest?from=USD"
 _CACHE_TTL = timedelta(hours=24)
+# How long a cache is allowed to live as a "stale-serve" fallback before we
+# give up and fall through to the embedded snapshot. 30 days is generous —
+# a user offline for a month still gets approximately-right numbers, with a
+# loud warning telling them why.
+_STALE_CACHE_MAX = timedelta(days=30)
 _FETCH_TIMEOUT_S = 10
 
 # Defensive bounds on any FX rate. Anything outside is either a parse bug or
@@ -84,6 +99,77 @@ _SYMBOLS: dict[str, str] = {
 }
 
 
+# ── hardcoded snapshot ───────────────────────────────────────────────────────
+#
+# Last-resort fallback when Frankfurter is unreachable AND we have no usable
+# disk cache. Values are USD-base cross-rates (multiply a USD amount by the
+# rate to get the target currency), modelled on ECB reference rates around
+# the snapshot date. Refresh this table when it is more than ~6 months old.
+#
+# NOTE: these numbers will drift. The resolution chain only reaches this
+# table when *both* the live API and a 30-day cache have failed, in which
+# case the user is shown a banner explaining what happened.
+RATES_SNAPSHOT_DATE = "2026-04-15"
+RATES_SNAPSHOT: dict[str, float] = {
+    # Anchor — USD is identity by definition.
+    "USD": 1.0,
+    # Major Western currencies
+    "EUR": 0.92,
+    "GBP": 0.79,
+    "CHF": 0.88,
+    "CAD": 1.36,
+    "AUD": 1.52,
+    "NZD": 1.66,
+    # Asia-Pacific
+    "JPY": 152.0,
+    "CNY": 7.20,
+    "INR": 83.5,
+    "KRW": 1380.0,
+    "SGD": 1.34,
+    "HKD": 7.81,
+    "TWD": 32.5,
+    "THB": 36.5,
+    "MYR": 4.70,
+    "IDR": 16200.0,
+    "PHP": 57.0,
+    # Americas
+    "MXN": 17.5,
+    "BRL": 5.10,
+    # Middle East / Africa
+    "ILS": 3.70,
+    "AED": 3.6725,   # USD peg
+    "SAR": 3.7500,   # USD peg
+    "TRY": 32.5,
+    "ZAR": 18.5,
+    # Europe (non-EUR)
+    "NOK": 10.7,
+    "SEK": 10.5,
+    "DKK": 6.85,
+    "PLN": 3.95,
+    "RUB": 92.0,
+    # Additional EU / EEA
+    "CZK": 23.2,
+    "HUF": 360.0,
+    "RON": 4.55,
+    "BGN": 1.80,
+    # Latin America (extra)
+    "ARS": 880.0,
+}
+
+
+# ── public exception ─────────────────────────────────────────────────────────
+
+
+class CurrencyError(Exception):
+    """Raised when no rate is resolvable for a non-USD ISO code.
+
+    The resolution chain falls through every fallback (live, fresh cache,
+    stale cache, snapshot) before raising. Callers at the API boundary
+    catch this and degrade to an unconverted USD payload with a
+    user-visible warning.
+    """
+
+
 # ── cache I/O ────────────────────────────────────────────────────────────────
 
 def _cache_path() -> Path:
@@ -114,14 +200,20 @@ def _write_cache(rates: dict[str, float]) -> None:
         logger.info("currency: failed to write cache: %s", e)
 
 
-def _is_fresh(fetched_at: str | None) -> bool:
+def _cache_age(fetched_at: str | None) -> timedelta | None:
+    """Return the age of a cache entry, or ``None`` if its timestamp is unparseable."""
     if not fetched_at:
-        return False
+        return None
     try:
         ts = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
-        return False
-    return (datetime.now(UTC) - ts) < _CACHE_TTL
+        return None
+    return datetime.now(UTC) - ts
+
+
+def _is_fresh(fetched_at: str | None) -> bool:
+    age = _cache_age(fetched_at)
+    return age is not None and age < _CACHE_TTL
 
 
 # ── network ──────────────────────────────────────────────────────────────────
@@ -130,7 +222,8 @@ def _fetch_from_frankfurter() -> dict[str, float] | None:
     """Pull the full USD-base rate table from Frankfurter.
 
     Returns the validated rates dict on success, ``None`` on any failure
-    (network, parse, schema). All callers gracefully degrade to USD.
+    (network, parse, schema). Callers fall through to the cache / snapshot
+    chain in ``get_rate``.
     """
     try:
         with urllib.request.urlopen(_FRANKFURTER_URL, timeout=_FETCH_TIMEOUT_S) as resp:
@@ -165,44 +258,80 @@ def _is_valid_rate(value: Any) -> bool:
 
 # ── public API ───────────────────────────────────────────────────────────────
 
-def get_rate(target_currency: str) -> float:
-    """Return the USD → ``target_currency`` rate.
 
-    USD is identity (1.0). Anything else hits the 24h cache or refetches.
-    Any failure path (offline, parse error, missing code) returns 1.0
-    so callers always have a usable number.
+def resolve_rate(target_currency: str) -> tuple[float, str | None]:
+    """Resolve the USD → ``target_currency`` rate plus an optional warning.
+
+    Walks the resolution chain documented at the top of this module. The
+    warning string is non-``None`` only when we had to fall back past the
+    live fetch + fresh cache; the UI uses it to render a banner.
+
+    Raises ``CurrencyError`` when every fallback fails (unknown code).
     """
     code = (target_currency or "USD").upper()
     if code == "USD":
-        return 1.0
+        return 1.0, None
     if not _ISO_CODE_RE.match(code):
-        return 1.0
+        raise CurrencyError(f"invalid currency code: {target_currency!r}")
 
     cached = _read_cache()
+
+    # (a) cache fresh — best case, no warning.
     if cached and _is_fresh(cached.get("fetched_at")):
         rate = cached.get("rates", {}).get(code)
         if _is_valid_rate(rate):
-            return float(rate)
+            return float(rate), None
 
+    # (b) live fetch — refresh and use it, no warning.
     fresh = _fetch_from_frankfurter()
     if fresh is not None:
         _write_cache(fresh)
         rate = fresh.get(code)
         if _is_valid_rate(rate):
-            return float(rate)
+            return float(rate), None
+        # Fetch succeeded but didn't include this code (e.g. KPW). Fall
+        # through to the snapshot before raising — the snapshot may know it.
 
-    # Last resort: fall back to a stale cache if any rate is still in band.
+    # (c) stale cache — within 30 days, warn but use it.
     if cached:
+        age = _cache_age(cached.get("fetched_at"))
         rate = cached.get("rates", {}).get(code)
-        if _is_valid_rate(rate):
-            logger.warning(
-                "currency: serving stale rate for %s (Frankfurter unreachable)",
-                code,
+        if age is not None and age <= _STALE_CACHE_MAX and _is_valid_rate(rate):
+            days = max(1, age.days)
+            warning = (
+                f"FX rate for {code} is {days} day(s) old "
+                f"(Frankfurter unreachable, cache stale)."
             )
-            return float(rate)
+            logger.warning("currency: %s", warning)
+            return float(rate), warning
 
-    logger.warning("currency: no rate for %s — falling back to USD", code)
-    return 1.0
+    # (d) hardcoded snapshot — last resort before raising.
+    snap = RATES_SNAPSHOT.get(code)
+    if _is_valid_rate(snap):
+        warning = (
+            f"Frankfurter unreachable; using built-in FX snapshot "
+            f"from {RATES_SNAPSHOT_DATE} for {code}. "
+            f"Numbers may be 1-2% off per month since the snapshot."
+        )
+        logger.warning("currency: %s", warning)
+        return float(snap), warning
+
+    # (e) nothing left.
+    raise CurrencyError(f"no rate available for {code}")
+
+
+def get_rate(target_currency: str) -> float:
+    """Backwards-compatible rate lookup that swallows fallback warnings.
+
+    Returns the rate from ``resolve_rate``, or ``1.0`` if every fallback
+    fails. Prefer ``resolve_rate`` (or ``active_currency_payload``) when
+    you want to surface the warning to the user.
+    """
+    try:
+        rate, _ = resolve_rate(target_currency)
+        return rate
+    except CurrencyError:
+        return 1.0
 
 
 def get_symbol(currency: str) -> str:
@@ -217,48 +346,78 @@ def convert_usd(usd: float, target: str) -> float:
 
 
 def list_supported() -> list[str]:
-    """Return the list of ISO codes Frankfurter publishes (plus USD).
+    """Return the list of ISO codes the UI can offer in the dropdown.
 
-    Reads the cache only — does not trigger a network fetch. If no cache
-    is present yet, returns ``["USD"]`` so callers can still render
-    something sensible.
+    Includes USD, anything in the local cache, and every code in
+    ``RATES_SNAPSHOT`` so the picker is non-empty even on a brand-new
+    install with no successful fetch yet. Sorted alphabetically with USD
+    pinned to the front.
     """
-    out = ["USD"]
+    seen: set[str] = {"USD"}
+    seen.update(c for c in RATES_SNAPSHOT if _ISO_CODE_RE.match(c))
     cached = _read_cache()
     if cached and isinstance(cached.get("rates"), dict):
-        out.extend(sorted(c for c in cached["rates"] if _ISO_CODE_RE.match(c)))
-    return out
+        seen.update(c for c in cached["rates"] if _ISO_CODE_RE.match(c))
+    return ["USD"] + sorted(seen - {"USD"})
 
 
 def format_in_currency(usd: float, target: str | None = None) -> dict[str, Any]:
-    """Return the canonical ``{code, symbol, rate_from_usd, amount}`` payload.
+    """Return the canonical ``{code, symbol, rate_from_usd, amount, warning}`` payload.
 
     If ``target`` is omitted, the active ``Settings().currency`` is used.
-    Always succeeds — falls back to USD on any error.
+
+    On the happy path (live fetch or fresh cache) ``warning`` is ``None``.
+    On a stale-cache or snapshot fallback ``warning`` carries a
+    user-readable string explaining what happened — the UI shows it as a
+    banner.
+
+    If the chain bottoms out with an unknown code, this function returns
+    a USD-denominated payload with a warning rather than raising — the
+    correctness rule is "never silently emit ``rate_from_usd=1.0`` for a
+    non-USD code", so we explicitly switch ``code`` to ``USD``.
     """
     if target is None:
         # Imported lazily to avoid a circular import via settings → infra.
         from stackunderflow.settings import Settings
         target = Settings().currency or "USD"
 
-    code = (target or "USD").upper()
-    if not _ISO_CODE_RE.match(code):
+    requested = (target or "USD").upper()
+    if not _ISO_CODE_RE.match(requested):
+        requested = "USD"
+
+    try:
+        rate, warning = resolve_rate(requested)
+        code = requested
+    except CurrencyError as e:
+        # Drop back to USD with a loud warning rather than mislabel a
+        # USD number with the user's chosen symbol.
+        logger.warning("currency: %s — falling back to USD", e)
         code = "USD"
-    rate = get_rate(code)
+        rate = 1.0
+        warning = (
+            f"Frankfurter unreachable and no offline rate available for "
+            f"{requested}; showing USD instead. "
+            f"Set CURRENCY=USD to silence this banner."
+        )
+
     return {
         "code": code,
         "symbol": get_symbol(code),
         "rate_from_usd": rate,
         "amount": float(usd) * rate,
+        "warning": warning,
     }
 
 
 def active_currency_payload() -> dict[str, Any]:
     """The ``currency`` block stamped onto every API response.
 
-    Shape: ``{"code", "symbol", "rate_from_usd"}``. Independent of any
-    specific dollar amount — meant to live at the top level of the JSON
-    response so the UI can pull it once per fetch.
+    Shape: ``{"code", "symbol", "rate_from_usd", "warning"}``. Independent
+    of any specific dollar amount — meant to live at the top level of the
+    JSON response so the UI can pull it once per fetch.
+
+    ``warning`` is ``None`` on the happy path and a human-readable string
+    when a fallback was used. The UI surfaces it as a banner.
     """
     payload = format_in_currency(0.0)
     payload.pop("amount", None)
@@ -266,10 +425,14 @@ def active_currency_payload() -> dict[str, Any]:
 
 
 __all__ = [
+    "CurrencyError",
+    "RATES_SNAPSHOT",
+    "RATES_SNAPSHOT_DATE",
     "active_currency_payload",
     "convert_usd",
     "format_in_currency",
     "get_rate",
     "get_symbol",
     "list_supported",
+    "resolve_rate",
 ]
