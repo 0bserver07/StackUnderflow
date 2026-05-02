@@ -75,11 +75,23 @@ Adapter source: `stackunderflow/adapters/cursor.py`, `stackunderflow/adapters/cl
 
 Provider chips render on the session table and project cards, color-coded per provider. When the same project slug is ingested through more than one adapter (the schema's `UNIQUE(provider, slug)` constraint allows one row per provider), the project card renders one chip per provider. Implementation: `stackunderflow-ui/src/components/common/ProviderChip.tsx`. The API surfaces the field on `/api/projects` (as `provider` plus a `providers` array) and on `/api/jsonl-files` (as `provider`).
 
+## Cursor pricing
+
+Cursor doesn't publish a per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) classifies real cursor model ids into three groups:
+
+| Class | Examples | Rate source |
+|-------|----------|-------------|
+| Vendor-prefixed | `claude-4.5-sonnet-thinking`, `claude-4.6-sonnet`, `gpt-5-codex`, `gpt-4o`, `gemini-2.5-pro-preview-05-06`, `gemini-3-pro` | Delegates to AnthropicPricer / OpenAIPricer / GeminiPricer. A Claude-via-Cursor record costs the same as a native Claude record. Gemini ids with `-preview-MM-DD` or `-experimental` suffixes strip back to the base id and retry. |
+| Cursor-trained composer line | `composer-1`, `composer-2` | **ESTIMATED** at Anthropic Sonnet 4.x rates (input $3/M, output $15/M, cache-write $3.75/M, cache-read $0.30/M). Cursor doesn't publish per-token pricing for its own agents as of 2026-04; Sonnet-tier is the closest publicly-acknowledged analogue for an agentic Sonnet-class model. |
+| Autoselectors | `cursor-auto`, `cursor-fast` | Same **ESTIMATED** Sonnet-tier rates — when Cursor picks the model for the user we don't know which engine actually ran, and the Sonnet-tier estimate keeps these records out of $0-territory in compare / cost reports. |
+
+Unknown ids fall back to the same Sonnet-tier estimate rather than returning `None`, so a record with non-zero token counts always contributes a real dollar figure. The estimate is conservative-ish and explicitly flagged in the source comments and the rate-table comments.
+
 ## The estimated-cost marker
 
-When a record's `record.raw["cost_source"] == "estimated"`, the UI prefixes its cost with `≈` and exposes a tooltip ("estimated cost — provider does not surface per-message tokens"). The Cursor adapter sets this flag whenever it falls back to the `len(text) // 4` heuristic because the bubble has zero `tokenCount.{inputTokens, outputTokens}` (see `stackunderflow/adapters/cursor.py:340`).
+When a record's `record.raw["cost_source"] == "estimated"`, the UI prefixes its cost with `≈` and exposes a tooltip ("estimated cost — provider does not surface per-message tokens"). The Cursor adapter sets this flag whenever it falls back to the `len(text) // 4` heuristic because the bubble has zero `tokenCount.{inputTokens, outputTokens}` (Cursor v3 returns zero counts on every bubble; see `stackunderflow/adapters/cursor.py`).
 
-The flag is set on the adapter record. It does not yet flow through the aggregator into `session_costs` / `command_costs` API rows — the UI types in `stackunderflow-ui/src/types/analytics.ts` carry an optional `cost_source` field, but the backend pipeline does not populate it. Tracking this as a pending follow-up against `docs/specs/multi-provider/spec.md` §2.5; the marker renders dormant on Cursor sessions until the propagation lands.
+The flag is set on the adapter record and persists in `messages.raw_json`. It does not yet flow through the aggregator into `session_costs` / `command_costs` API rows — the UI types in `stackunderflow-ui/src/types/analytics.ts` carry an optional `cost_source` field, but the backend pipeline does not populate it. Tracking this as a pending follow-up against `docs/specs/multi-provider/spec.md` §2.5; the marker renders on the SessionsTab cost column today and stays dormant on the Compare/Cost surfaces until the propagation lands.
 
 ## Architecture
 
@@ -105,6 +117,6 @@ flowchart LR
 
 **I enabled a beta adapter but no data shows up.** Same pattern: confirm the on-disk source exists for the adapter you opted into (paths are listed in the table above), then re-run `stackunderflow reindex` with the env var set.
 
-**My Cursor sessions show $0 (or a `≈` marker).** Cursor v3 returns zero `tokenCount` on every bubble. The adapter falls back to a `len(text) // 4` estimate and stamps `cost_source="estimated"` on the record. End-to-end propagation of `cost_source` into the cost API rows is pending; until it ships, the dashboard chips render as `unknown` and the marker stays dormant on these rows.
+**My Cursor sessions show $0 (or a `≈` marker).** As of the cursor-pricing fix, cursor records with non-zero token counts always price at a real dollar figure: vendor-prefixed ids (`claude-*`, `gpt-*`, `gemini-*`) delegate to the upstream pricer; `composer-*` and the `cursor-auto` / `cursor-fast` autoselectors use **ESTIMATED** Anthropic Sonnet 4.x rates (see "Cursor pricing" above). A record still showing $0 means its token counts are zero — Cursor v3 stores zero `tokenCount.{inputTokens, outputTokens}` on every bubble, and the adapter's `len(text) // 4` fallback estimate also returns 0 when the bubble's text payload is empty (the v3 bubble shape stores rich JSON with diffs and code chunks instead of a top-level `text` field, so some assistant bubbles legitimately have no estimable text). The `≈` marker on Sessions table rows reflects the estimated-tokens flag; cost _is_ estimated even when the dollar figure is non-zero.
 
 **How do I disable a beta adapter?** Unset the env var (`unset STACKUNDERFLOW_BETA_QWEN`) and restart the server. The adapter is no longer registered and any existing rows in the store stay put — running `stackunderflow reindex` again only refreshes whatever the registered adapters can see. Cursor and Cline can no longer be disabled via env var (they're default-on as of v0.7.0); to skip them, comment out the `register(_CursorAdapter())` / `register(_ClineAdapter())` calls in `stackunderflow/adapters/__init__.py` or run a custom build.
