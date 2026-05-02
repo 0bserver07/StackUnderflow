@@ -32,9 +32,61 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// ---------------------------------------------------------------------------
+// Filter helpers — every dashboard route that gained a `?provider=` and/or
+// `?model=` query param shares the same encoding contract: lowercased on
+// emit, repeated for multi-select. ``buildFilterParams`` centralises that
+// so each call site doesn't reimplement it.
+// ---------------------------------------------------------------------------
+
+export interface FilterParams {
+  providers?: string[]
+  models?: string[]
+}
+
+function buildFilterParams(params: URLSearchParams, filters?: FilterParams): URLSearchParams {
+  if (filters?.providers) {
+    for (const p of filters.providers) {
+      if (p && p.trim()) params.append('provider', p.toLowerCase().trim())
+    }
+  }
+  if (filters?.models) {
+    for (const m of filters.models) {
+      if (m && m.trim()) params.append('model', m.toLowerCase().trim())
+    }
+  }
+  return params
+}
+
 // Projects
-export async function getProjects(includeStats = false): Promise<ProjectsResponse> {
-  return fetchJson(`${BASE}/projects?include_stats=${includeStats}`)
+export async function getProjects(
+  includeStats = false,
+  filters?: FilterParams,
+): Promise<ProjectsResponse> {
+  const params = new URLSearchParams({ include_stats: String(includeStats) })
+  buildFilterParams(params, filters)
+  return fetchJson(`${BASE}/projects?${params}`)
+}
+
+// ---------------------------------------------------------------------------
+// Provider catalogue — drives the dashboard's FilterBar chip row. Returns
+// every provider currently active in the store with project + session
+// counts so the UI can render counts inline next to each chip.
+// ---------------------------------------------------------------------------
+
+export interface ProviderInfo {
+  provider: string
+  project_count: number
+  session_count: number
+}
+
+export interface ProvidersResponse {
+  providers: ProviderInfo[]
+  error?: string
+}
+
+export async function getProviders(): Promise<ProvidersResponse> {
+  return fetchJson(`${BASE}/providers`)
 }
 
 export async function setProjectByDir(dirName: string): Promise<SetProjectResponse> {
@@ -46,14 +98,25 @@ export async function setProjectByDir(dirName: string): Promise<SetProjectRespon
 }
 
 // Dashboard
-export async function getDashboardData(timezoneOffset = 0): Promise<DashboardData> {
-  return fetchJson(`${BASE}/dashboard-data?timezone_offset=${timezoneOffset}`)
+export async function getDashboardData(
+  timezoneOffset = 0,
+  filters?: FilterParams,
+): Promise<DashboardData> {
+  const params = new URLSearchParams({ timezone_offset: String(timezoneOffset) })
+  buildFilterParams(params, filters)
+  return fetchJson(`${BASE}/dashboard-data?${params}`)
 }
 
 // Messages
-export async function getMessages(limit?: number): Promise<Message[]> {
-  const params = limit ? `?limit=${limit}` : ''
-  return fetchJson(`${BASE}/messages${params}`)
+export async function getMessages(
+  limit?: number,
+  filters?: FilterParams,
+): Promise<Message[]> {
+  const params = new URLSearchParams()
+  if (limit) params.set('limit', String(limit))
+  buildFilterParams(params, filters)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/messages${qs ? `?${qs}` : ''}`)
 }
 
 // JSONL files
@@ -62,9 +125,15 @@ export async function getMessages(limit?: number): Promise<Message[]> {
 // PR wrapped the previously bare list). Callers that only need the file
 // metadata can destructure `.files`; the currency block is also propagated
 // upward so consumers can render cost columns in the active currency.
-export async function getJsonlFiles(project?: string): Promise<JsonlFilesResponse> {
-  const params = project ? `?project=${encodeURIComponent(project)}` : ''
-  return fetchJson(`${BASE}/jsonl-files${params}`)
+export async function getJsonlFiles(
+  project?: string,
+  filters?: FilterParams,
+): Promise<JsonlFilesResponse> {
+  const params = new URLSearchParams()
+  if (project) params.set('project', project)
+  buildFilterParams(params, filters)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/jsonl-files${qs ? `?${qs}` : ''}`)
 }
 
 export async function getJsonlContent(file: string, project?: string): Promise<JsonlContentResponse> {
@@ -249,8 +318,20 @@ export type YieldPeriod = 'today' | 'week' | 'month' | 'all'
 /** Period selector accepted by `/api/optimize`. */
 export type OptimizePeriod = 'today' | '7days' | '30days' | 'month' | 'all'
 
-export async function getCompare(period: ComparePeriod = 'month'): Promise<CompareResponse> {
-  return fetchJson(`${BASE}/compare?period=${encodeURIComponent(period)}`)
+export async function getCompare(
+  period: ComparePeriod = 'month',
+  filters?: FilterParams,
+): Promise<CompareResponse> {
+  const params = new URLSearchParams({ period })
+  // /api/compare accepts a single `provider` (not list) — pick the first
+  // active filter value. Multi-provider filtering is done client-side on
+  // the resulting rows so the user can still narrow Compare to "claude +
+  // codex" via the filter bar.
+  if (filters?.providers && filters.providers.length === 1) {
+    const first = filters.providers[0]
+    if (first) params.set('provider', first.toLowerCase())
+  }
+  return fetchJson(`${BASE}/compare?${params}`)
 }
 
 /**
@@ -260,20 +341,38 @@ export async function getCompare(period: ComparePeriod = 'month'): Promise<Compa
  */
 export async function getCostByProvider(
   period: ComparePeriod = 'month',
+  filters?: FilterParams,
 ): Promise<CostByProviderResponse> {
-  return fetchJson(`${BASE}/cost-data/by-provider?period=${encodeURIComponent(period)}`)
+  const params = new URLSearchParams({ period })
+  buildFilterParams(params, filters)
+  return fetchJson(`${BASE}/cost-data/by-provider?${params}`)
 }
 
-export async function getYield(period: YieldPeriod = 'week'): Promise<YieldResponse> {
-  return fetchJson(`${BASE}/yield?period=${encodeURIComponent(period)}`)
+export async function getYield(
+  period: YieldPeriod = 'week',
+  filters?: FilterParams,
+): Promise<YieldResponse> {
+  const params = new URLSearchParams({ period })
+  // /api/yield accepts repeated `?project=` — provider isn't on the route
+  // contract, but project filter would be redundant since the dashboard
+  // already scopes to one project. We pass providers via a custom param the
+  // route doesn't read, which is harmless; client-side row filter does the
+  // narrow.
+  buildFilterParams(params, filters)
+  return fetchJson(`${BASE}/yield?${params}`)
 }
 
 export async function getPlan(): Promise<PlanResponse> {
   return fetchJson(`${BASE}/plan`)
 }
 
-export async function getOptimize(period: OptimizePeriod = 'month'): Promise<OptimizeResponse> {
-  return fetchJson(`${BASE}/optimize?period=${encodeURIComponent(period)}`)
+export async function getOptimize(
+  period: OptimizePeriod = 'month',
+  filters?: FilterParams,
+): Promise<OptimizeResponse> {
+  const params = new URLSearchParams({ period })
+  buildFilterParams(params, filters)
+  return fetchJson(`${BASE}/optimize?${params}`)
 }
 
 /**
