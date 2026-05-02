@@ -22,7 +22,7 @@ def test_apply_sets_user_version(tmp_path: Path) -> None:
     try:
         schema.apply(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 3
+        assert version == 4
     finally:
         conn.close()
 
@@ -32,13 +32,13 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
     try:
         schema.apply(conn)
         schema.apply(conn)  # second call must not raise
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     finally:
         conn.close()
 
 
 def test_current_version_constant() -> None:
-    assert schema.CURRENT_VERSION == 3
+    assert schema.CURRENT_VERSION == 4
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:
@@ -76,6 +76,6 @@ def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:
         assert r["storage_kind"] == "file"
         assert r["processed_offset"] == 100
         assert r["last_rowid"] is None
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     finally:
         conn.close()

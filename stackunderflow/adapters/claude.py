@@ -126,7 +126,7 @@ class ClaudeAdapter:
             seq=seq,
             timestamp=str(obj.get("timestamp", "")),
             role=role,
-            model=(msg.get("model") if isinstance(msg, dict) else None) or None,
+            model=_model_from(msg),
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),
             cache_create_tokens=int(usage.get("cache_creation_input_tokens", 0) or 0),
@@ -217,6 +217,27 @@ def _role_from(obj: dict, msg: dict) -> str | None:
         if role in ("user", "assistant"):
             return role
     return None
+
+
+def _model_from(msg: dict) -> str | None:
+    """Extract the model id, dropping Claude Code's ``"<synthetic>"`` sentinel.
+
+    Claude Code itself stamps ``message.model = "<synthetic>"`` on locally
+    generated placeholder records — API errors ("Rate limit reached",
+    "ECONNRESET", "Not logged in"), invalid-request stubs, and the
+    "No response requested." marker. Those rows carry zero tokens and zero
+    cost, so propagating the literal string as the model id only pollutes
+    user-facing surfaces (e.g. ``stackunderflow compare`` showed it as a
+    distinct row alongside real models). Treat it as "no model recorded"
+    so downstream cost/compare paths skip the row the same way they skip
+    any other ``model IS NULL`` record.
+    """
+    if not isinstance(msg, dict):
+        return None
+    raw = msg.get("model")
+    if not raw or raw == "<synthetic>":
+        return None
+    return raw
 
 
 def _text_from(msg: dict) -> str:

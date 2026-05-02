@@ -59,10 +59,12 @@ def test_v003_adds_speed_column(tmp_path: Path) -> None:
 
 
 def test_v003_user_version_bumped_to_3(tmp_path: Path) -> None:
+    """``schema.apply`` runs every pending migration; v004 also bumps the
+    version, so the post-apply value reflects the current head, not 3."""
     conn = db.connect(tmp_path / "store.db")
     try:
         schema.apply(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.CURRENT_VERSION
     finally:
         conn.close()
 
@@ -96,7 +98,7 @@ def test_v003_existing_rows_default_to_standard(tmp_path: Path) -> None:
             "SELECT speed FROM messages WHERE seq = 0"
         ).fetchone()
         assert row["speed"] == "standard"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.CURRENT_VERSION
     finally:
         conn.close()
 
@@ -121,9 +123,10 @@ def test_v003_is_reentrant_when_column_already_exists(tmp_path: Path) -> None:
         # user_version is still 2 — this is the partial-application case.
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
-        # The loader must not raise and must bump the version.
+        # The loader must not raise and must bump the version (through to
+        # whatever the current head is — v004 chains on after v003 here).
         schema.apply(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.CURRENT_VERSION
 
         # And the column is still there with the right default.
         info = _column_info(conn, "messages", "speed")
