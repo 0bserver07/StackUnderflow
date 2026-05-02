@@ -47,7 +47,7 @@ function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-import { formatCost } from '../services/format'
+import { formatCost, formatModelName } from '../services/format'
 import { useCurrency } from '../services/currency'
 
 function formatDuration(firstDate: string | undefined, lastDate: string | undefined): string {
@@ -130,15 +130,10 @@ export default function Overview() {
     return models
   }, [apiModels])
 
-  // Short display name for models
-  const shortModelName = (m: string): string => {
-    return m
-      .replace('claude-', '')
-      .replace(/-\d{8,}$/, '')  // strip date suffix
-      .replace('-20251101', '')
-      .replace('-20250929', '')
-      .replace('-20251001', '')
-  }
+  // Compact display name for models — delegates to the shared
+  // ``formatModelName`` so the chip label matches every other model
+  // surface in the dashboard (Compare, Sessions, Messages, etc.).
+  const shortModelName = formatModelName
 
   const projectDisplayName = (p: Project, index: number): string =>
     formatProjectName(p.dir_name, index, nameMode)
@@ -293,7 +288,8 @@ export default function Overview() {
                 <button
                   key={m}
                   onClick={() => setSelectedModel(m)}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  title={m}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
                     selectedModel === m
                       ? 'bg-emerald-600 text-white'
                       : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
