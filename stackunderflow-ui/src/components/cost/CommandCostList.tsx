@@ -10,6 +10,7 @@ import type { CommandCost } from '../../types/api'
 import Badge from '../common/Badge'
 import EstimatedCostMarker from '../common/EstimatedCostMarker'
 import { openInteraction } from '../../services/navigation'
+import { formatModelName } from '../../services/format'
 
 type SortDir = 'asc' | 'desc'
 type SortKey = 'cost' | 'tokens' | 'tools' | 'steps' | 'when'
@@ -192,7 +193,9 @@ function ExpandedDetail({ row, colSpan }: ExpandedDetailProps) {
               </Badge>
             )}
             {(row.models_used ?? []).map((m) => (
-              <Badge key={m} color="purple">{m}</Badge>
+              <span key={m} title={m}>
+                <Badge color="purple">{formatModelName(m)}</Badge>
+              </span>
             ))}
             {(row.models_used == null || row.models_used.length === 0) && (
               <span className="text-[10px] text-gray-500">no model recorded</span>

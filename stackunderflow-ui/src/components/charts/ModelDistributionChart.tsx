@@ -7,6 +7,7 @@ import {
   Legend,
 } from 'recharts'
 import type { ModelData } from '../../types/api'
+import { formatModelName } from '../../services/format'
 
 interface ModelDistributionChartProps {
   modelStats: Record<string, ModelData>
@@ -18,7 +19,8 @@ export default function ModelDistributionChart({ modelStats }: ModelDistribution
   if (!modelStats || Object.keys(modelStats).length === 0) return null
 
   const data = Object.entries(modelStats).map(([model, stat]) => ({
-    name: model,
+    name: formatModelName(model),
+    fullName: model,
     value: stat.input_tokens + stat.output_tokens + stat.cache_read_tokens + stat.cache_creation_tokens,
   }))
 

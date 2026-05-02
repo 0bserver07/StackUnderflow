@@ -6,7 +6,7 @@ import type { ModelStats } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 import EmptyState from '../common/EmptyState'
 import ProviderChip from '../common/ProviderChip'
-import { formatCost, formatNumber } from '../../services/format'
+import { formatCost, formatNumber, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 
 // ---------------------------------------------------------------------------
@@ -62,8 +62,11 @@ interface CompareRowProps {
 function CompareRow({ row, currency }: CompareRowProps) {
   return (
     <tr className="border-t border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
-      <td className="px-3 py-2 font-mono text-xs text-gray-800 dark:text-gray-200 break-all">
-        {row.model}
+      <td
+        className="px-3 py-2 text-xs text-gray-800 dark:text-gray-200 break-all"
+        title={row.model}
+      >
+        {formatModelName(row.model)}
       </td>
       <td className="px-3 py-2">
         <ProviderChip provider={row.provider} />

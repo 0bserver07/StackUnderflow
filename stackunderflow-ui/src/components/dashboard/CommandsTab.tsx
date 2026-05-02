@@ -4,6 +4,7 @@ import type { DashboardData, Message } from '../../types/api'
 import type { Column } from '../common/DataTable'
 import DataTable from '../common/DataTable'
 import Badge from '../common/Badge'
+import { formatModelName } from '../../services/format'
 
 interface CommandsTabProps {
   data: DashboardData
@@ -134,7 +135,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
       width: '160px',
       render: (row) => (
         row.model
-          ? <span className="text-gray-600 dark:text-gray-400 text-xs font-mono">{row.model}</span>
+          ? <span className="text-gray-600 dark:text-gray-400 text-xs" title={row.model}>{formatModelName(row.model)}</span>
           : <span className="text-gray-500 text-xs">-</span>
       ),
     },
@@ -248,7 +249,7 @@ export default function CommandsTab({ data }: CommandsTabProps) {
             <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
               <span className="text-xs text-gray-500">
                 Session: {row.command.session_id}
-                {row.model && <> | Model: {row.model}</>}
+                {row.model && <> | Model: <span title={row.model}>{formatModelName(row.model)}</span></>}
                 {row.toolsUsed.length > 0 && <> | Tools: {row.toolsUsed.join(', ')}</>}
               </span>
             </div>

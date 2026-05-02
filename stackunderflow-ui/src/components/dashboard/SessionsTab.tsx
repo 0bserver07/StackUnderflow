@@ -23,6 +23,7 @@ import Markdown from '../common/Markdown'
 import ProviderChip from '../common/ProviderChip'
 import EstimatedCostMarker from '../common/EstimatedCostMarker'
 import SessionEfficiencyTable from '../cost/SessionEfficiencyTable'
+import { formatModelName } from '../../services/format'
 import SessionCompareView from '../cost/SessionCompareView'
 import { NAV_EVENT, getParam, clearParam, type NavDetail } from '../../services/navigation'
 
@@ -181,7 +182,7 @@ function fmtCost(amount: number): string {
 
 function fmtModel(m: string | null | undefined): string {
   if (!m) return ''
-  return m.replace('claude-', '').replace(/-\d{8,}$/, '')
+  return formatModelName(m)
 }
 
 function SessionCard({
@@ -305,7 +306,10 @@ function SessionCard({
             </span>
           )}
           {file.model && (
-            <span className="text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded text-[10px]">{fmtModel(file.model)}</span>
+            <span
+              className="text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded text-[10px]"
+              title={file.model}
+            >{fmtModel(file.model)}</span>
           )}
           <span className="text-gray-600 dark:text-gray-400">{fmtBytes(file.size)}</span>
         </div>
@@ -427,7 +431,7 @@ function ConversationMessage({
       <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100/30 dark:border-gray-800/30">
         <Icon size={14} className={style.color} />
         <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
-        {model && <span className="text-[10px] text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded">{model}</span>}
+        {model && <span className="text-[10px] text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded" title={model}>{formatModelName(model)}</span>}
         {tokens && (
           <span className="text-[10px] text-gray-600 dark:text-gray-400">
             {tokens.input.toLocaleString()} in / {tokens.output.toLocaleString()} out
