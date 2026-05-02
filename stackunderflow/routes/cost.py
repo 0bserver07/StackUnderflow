@@ -136,6 +136,132 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
     return payload
 
 
+# ── /api/cost-data/by-provider ──────────────────────────────────────────────
+
+
+# CLI/HTTP-friendly aliases consumed by ``/api/cost-data/by-provider`` —
+# kept in lock-step with ``services/compare.PERIOD_MAP`` so the same
+# strings work across the dashboard's two cost-flavour endpoints.
+_BY_PROVIDER_PERIOD_MAP: dict[str, str] = {
+    "today": "today",
+    "week": "7days",
+    "month": "month",
+    "all": "all",
+}
+
+
+@router.get("/api/cost-data/by-provider")
+async def get_cost_by_provider(period: str = "month"):
+    """Return total cost / message count / session count grouped by provider.
+
+    Powers the Cost tab's `CostByProviderCard` (v0.6.1 multi-provider polish).
+    Mirrors the existing ``/api/cost-data`` endpoint's currency-conversion
+    contract — every cost figure is pre-converted into the active currency
+    so the frontend never multiplies by an FX rate.
+
+    Args:
+        period: One of ``today | week | month | all``. Defaults to ``month``
+            so the card lines up with the Compare tab's default view.
+
+    Returns:
+        ``{"period": ..., "rows": [{provider, cost_usd, message_count,
+        session_count}, ...], "currency": {...}}``. Rows sort by cost
+        descending. Empty rows when the store has no data in window.
+    """
+    from stackunderflow.infra.costs import compute_cost
+    from stackunderflow.reports.scope import parse_period
+
+    spec = _BY_PROVIDER_PERIOD_MAP.get(period)
+    if spec is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown period '{period}'. "
+                f"Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"
+            ),
+        )
+    scope = parse_period(spec)
+
+    conn = db.connect(deps.store_path)
+    try:
+        sql = (
+            "SELECT projects.provider AS provider, "
+            "       sessions.id AS session_id, "
+            "       COALESCE(messages.model, '') AS model, "
+            "       COALESCE(messages.input_tokens, 0) AS input_tokens, "
+            "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
+            "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
+            "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
+            "       COALESCE(messages.speed, 'standard') AS speed, "
+            "       messages.role AS role "
+            "FROM messages "
+            "JOIN sessions ON sessions.id = messages.session_fk "
+            "JOIN projects ON projects.id = sessions.project_id "
+            "WHERE 1=1 "
+        )
+        params: list[Any] = []
+        if scope.since is not None:
+            sql += "AND messages.timestamp >= ? "
+            params.append(scope.since)
+        if scope.until is not None:
+            sql += "AND messages.timestamp <= ? "
+            params.append(scope.until)
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    # ── per-provider rollup ──────────────────────────────────────────────
+    per_provider: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        prov = r["provider"] or "unknown"
+        bucket = per_provider.setdefault(
+            prov,
+            {
+                "provider": prov,
+                "cost_usd": 0.0,
+                "message_count": 0,
+                "_sessions": set(),
+            },
+        )
+        bucket["message_count"] += 1
+        bucket["_sessions"].add(r["session_id"])
+        # Only assistant rows carry token counts that price out — user/tool
+        # messages have zero tokens and would just inflate compute_cost calls.
+        if r["role"] == "assistant" and r["model"]:
+            cost = compute_cost(
+                {
+                    "input": r["input_tokens"],
+                    "output": r["output_tokens"],
+                    "cache_creation": r["cache_create_tokens"],
+                    "cache_read": r["cache_read_tokens"],
+                },
+                r["model"],
+                provider=prov or "anthropic",
+                speed=r["speed"] or "standard",
+            )["total_cost"]
+            bucket["cost_usd"] += cost
+
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    out_rows: list[dict[str, Any]] = []
+    for prov, bucket in per_provider.items():
+        out_rows.append(
+            {
+                "provider": prov,
+                "cost_usd": bucket["cost_usd"] * rate,
+                "message_count": bucket["message_count"],
+                "session_count": len(bucket["_sessions"]),
+            }
+        )
+    out_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+
+    return {
+        "period": period,
+        "rows": out_rows,
+        "currency": currency,
+    }
+
+
 @router.get("/api/interaction/{interaction_id}")
 async def get_interaction(interaction_id: str, log_path: str | None = None):
     """Return one enriched Interaction (command + responses + tool_results).
