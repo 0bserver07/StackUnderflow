@@ -89,20 +89,40 @@ async def _lifespan(_app: FastAPI):
     if failed:
         logger.warning(f"Failed services: {', '.join(failed)}")
 
-    # Initialise the session store and run one ingest pass.
+    # Initialise the session store schema synchronously (cheap), then
+    # run the ingest in a background thread so HTTP starts serving
+    # immediately. Without this, the lifespan blocks the bind for the
+    # full duration of the reindex (~90s on 7 small projects, 30+min
+    # on a cold 188-project store) — and the "live at..." line that
+    # already printed from the CLI wrapper is misleading because the
+    # HTTP server hasn't actually started yet.
+    import threading
     from stackunderflow.adapters import registered
     from stackunderflow.ingest import run_ingest
     from stackunderflow.store import db, schema
 
     try:
-        store_conn = db.connect(deps.store_path)
-        schema.apply(store_conn)
-        counts = run_ingest(store_conn, registered())
-        logger.info("Ingest complete: %s", counts)
-        store_conn.close()
-        _maybe_clean_cold_cache()
+        _schema_conn = db.connect(deps.store_path)
+        schema.apply(_schema_conn)
+        _schema_conn.close()
     except Exception as e:
-        logger.error("Ingest failed at startup: %s", e)
+        logger.error("Schema apply failed at startup: %s", e)
+
+    def _background_ingest() -> None:
+        try:
+            conn = db.connect(deps.store_path)
+            counts = run_ingest(conn, registered())
+            logger.info("Ingest complete: %s", counts)
+            conn.close()
+            _maybe_clean_cold_cache()
+        except Exception as exc:  # noqa: BLE001 — top of background thread
+            logger.error("Background ingest failed: %s", exc)
+
+    threading.Thread(
+        target=_background_ingest,
+        name="stackunderflow-ingest",
+        daemon=True,
+    ).start()
 
     yield
 

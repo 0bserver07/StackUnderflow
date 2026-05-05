@@ -3,8 +3,9 @@
 import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
@@ -155,7 +156,7 @@ async def get_projects(
     sort_by: str = "last_modified",
     limit: int | None = None,
     offset: int = 0,
-    provider: list[str] | None = None,
+    provider: Annotated[list[str] | None, Query()] = None,
 ):
     """
     Get all available Claude projects with metadata.
