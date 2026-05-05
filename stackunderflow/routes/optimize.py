@@ -14,7 +14,9 @@ GET ``/api/optimize?period=30days`` returns:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
 
 import stackunderflow.deps as deps
 from stackunderflow.reports.optimize import find_patterns, find_waste
@@ -30,8 +32,8 @@ _VALID_PERIODS = {"today", "7days", "30days", "month", "all"}
 @router.get("/api/optimize")
 async def get_optimize_report(
     period: str = "30days",
-    project: list[str] | None = None,
-    exclude: list[str] | None = None,
+    project: Annotated[list[str] | None, Query()] = None,
+    exclude: Annotated[list[str] | None, Query()] = None,
 ):
     """Run waste + structural-pattern detection over *period*.
 
