@@ -62,6 +62,15 @@ class CodexAdapter:
     def __init__(self, sessions_root: Path | None = None) -> None:
         self._root = sessions_root or (Path.home() / ".codex" / "sessions")
 
+    def watch_paths(self) -> list[Path]:
+        """Return ``~/.codex/sessions`` (the rollout JSONL root) for the
+        ETL watcher. The ``Wave 2C`` watcher in
+        ``stackunderflow/etl/watcher.py`` filters non-existent roots, so
+        a fresh machine without Codex installed silently contributes
+        nothing.
+        """
+        return [self._root]
+
     # ── enumeration ───────────────────────────────────────────────────
 
     def enumerate(self) -> Iterator[SessionRef]:

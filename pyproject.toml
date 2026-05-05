@@ -32,6 +32,8 @@ dependencies = [
     "orjson>=3.9.0",
     "rich>=13.0.0",
     "mcp>=1.2.0",
+    # Wave 2C ETL filesystem watcher (Rust-backed; sub-100ms latency).
+    "watchfiles>=0.21.0",
 ]
 
 [project.optional-dependencies]

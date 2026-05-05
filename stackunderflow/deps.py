@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from stackunderflow.settings import Settings
 
 if TYPE_CHECKING:
+    from stackunderflow.etl.watcher import WatcherHandle
     from stackunderflow.services.bookmark_service import BookmarkService
     from stackunderflow.services.pricing_service import PricingService
     from stackunderflow.services.qa_service import QAService
@@ -45,3 +46,9 @@ tag_service: TagService | None = None
 qa_service: QAService | None = None
 bookmark_service: BookmarkService | None = None
 pricing_service: PricingService | None = None
+
+# Wave 2C: filesystem watcher handle, populated by ``server._lifespan``
+# unless ``STACKUNDERFLOW_DISABLE_WATCHER=1`` (set by ``start
+# --no-watcher``). Stays ``None`` for CLI subcommands that don't bring
+# up the FastAPI app.
+watcher_handle: WatcherHandle | None = None

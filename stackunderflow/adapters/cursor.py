@@ -104,6 +104,16 @@ class CursorAdapter:
     def __init__(self, vscdb_path: Path | None = None) -> None:
         self._db_path = Path(vscdb_path) if vscdb_path else _default_vscdb_path()
 
+    def watch_paths(self) -> list[Path]:
+        """Return the vscdb file path for the ETL watcher.
+
+        Cursor's storage is a single SQLite file (``state.vscdb``);
+        ``watchfiles`` reports any byte change on it via mtime+size, so
+        watching the file directly is enough. The Wave 2C watcher
+        filters non-existent paths, so this is safe on a fresh machine.
+        """
+        return [self._db_path]
+
     # ── enumeration ───────────────────────────────────────────────────
 
     def enumerate(self) -> Iterator[SessionRef]:

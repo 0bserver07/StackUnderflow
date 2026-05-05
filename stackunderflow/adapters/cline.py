@@ -80,6 +80,19 @@ class _VsCodeClineAdapter:
         # without monkey-patching Path.home().
         self._root = tasks_root or _default_tasks_root(self._extension_id)
 
+    def watch_paths(self) -> list[Path]:
+        """Return the ``tasks/`` root for the ETL watcher.
+
+        All three Cline-family extensions (Cline, KiloCode, Roo Code)
+        share this method by virtue of overriding ``_extension_id`` on
+        ``__init__``, so each adapter contributes its own
+        ``globalStorage/<id>/tasks`` directory without needing its own
+        override. The Wave 2C watcher filters non-existent roots, so a
+        machine without the extension installed silently contributes
+        nothing.
+        """
+        return [self._root]
+
     # ── enumeration ───────────────────────────────────────────────────
 
     def enumerate(self) -> Iterator[SessionRef]:
