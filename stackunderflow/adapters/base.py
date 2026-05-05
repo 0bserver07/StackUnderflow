@@ -73,3 +73,20 @@ class SourceAdapter(Protocol):
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterable[Record]:
         """Yield records from `ref`, starting at `since_offset` bytes in."""
         ...
+
+    def watch_paths(self) -> list[Path]:
+        """Return root paths the Wave 2C ETL watcher should follow.
+
+        Default contract (Wave 2C, ``stackunderflow/etl/watcher.py``):
+        return a list of canonical roots whose changes should trigger
+        an incremental re-ingest. JSONL adapters return their parent
+        directory; vscdb-style adapters return the SQLite file itself
+        (``watchfiles`` fires on byte-level change either way).
+
+        Returning ``[]`` (or omitting the method entirely — the watcher
+        defaults missing methods to ``[]``) means "don't watch this
+        provider; fall back to periodic ingest." This is the chosen
+        path for the dozen beta adapters that haven't been validated
+        for live-watching yet.
+        """
+        ...

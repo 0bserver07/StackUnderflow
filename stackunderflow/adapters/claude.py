@@ -30,6 +30,34 @@ _log = logging.getLogger(__name__)
 class ClaudeAdapter:
     name = "claude"
 
+    # Variants Anthropic ships under separate XDG-style homes — Opus,
+    # Sonnet, Haiku, and the GLM (Anthropic's local-model preview)
+    # build. Empty on a default install; included here so the watcher
+    # picks them up automatically once the user installs one.
+    _VARIANT_HOMES = (
+        ".claude-opus",
+        ".claude-sonnet",
+        ".claude-haiku",
+        ".claude-glm",
+    )
+
+    def watch_paths(self) -> list[Path]:
+        """Return the on-disk roots whose JSONL writes the watcher should
+        pick up.
+
+        Always includes ``~/.claude/projects``; conditionally adds each
+        ``~/.claude-{opus,sonnet,haiku,glm}/projects`` that exists. The
+        watcher filters again on ``Path.exists()`` before handing them
+        to ``watchfiles``, so missing roots here are a clean no-op.
+        """
+        home = Path.home()
+        roots: list[Path] = [home / ".claude" / "projects"]
+        for variant in self._VARIANT_HOMES:
+            candidate = home / variant / "projects"
+            if candidate.is_dir():
+                roots.append(candidate)
+        return roots
+
     def enumerate(self) -> Iterable[SessionRef]:
         root = Path.home() / ".claude" / "projects"
         if not root.is_dir():

@@ -90,8 +90,25 @@ def cli():
 @click.option("-H", "--host", type=str, default=None, help="Bind address")
 @click.option("--headless", is_flag=True, help="Don't open the browser")
 @click.option("--fresh", is_flag=True, help="Clear disk cache first")
-def start_cmd(port: int | None, host: str | None, headless: bool, fresh: bool):
+@click.option(
+    "--no-watcher",
+    is_flag=True,
+    help="Disable the Wave 2C ETL filesystem watcher (headless / debugging).",
+)
+def start_cmd(
+    port: int | None,
+    host: str | None,
+    headless: bool,
+    fresh: bool,
+    no_watcher: bool,
+):
     """Launch the StackUnderflow dashboard."""
+    if no_watcher:
+        # Survives the env into the FastAPI lifespan; the server reads
+        # this in ``_watcher_disabled()``. Setting at process scope (not
+        # ``deps`` directly) is what lets ``uvicorn.run`` reload the app
+        # without losing the flag.
+        os.environ["STACKUNDERFLOW_DISABLE_WATCHER"] = "1"
     if fresh:
         import shutil
         cache = _STATE_DIR / "cache"
