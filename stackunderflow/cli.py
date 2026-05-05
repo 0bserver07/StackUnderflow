@@ -1244,6 +1244,51 @@ def reindex():
     click.echo(f"Done: {counts}")
 
 
+# ── ETL ──────────────────────────────────────────────────────────────────────
+#
+# Wave 1 of the ETL refactor (see ``docs/specs/etl-architecture.md``) ships
+# the schema, ABCs, and orchestrator skeleton. The `etl backfill` command
+# is wired now so Wave 2 (normalizers + mart builders) can ship without a
+# CLI-touching follow-up — until Wave 2 registers, this is a no-op that
+# prints zero counts.
+
+@cli.group("etl")
+def etl_group():
+    """Run the ETL pipeline (raw messages → events → marts)."""
+
+
+@etl_group.command("backfill")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Drop events + marts + watermarks and rebuild from scratch.",
+)
+def etl_backfill_cmd(force: bool):
+    """Convert all existing messages into usage_events, then refresh marts.
+
+    No-op until Wave 2 lands the per-provider normalizers and mart
+    builders. Until then the orchestrator returns zero counts so it's
+    safe to wire into deploy scripts and the CLI test suite.
+    """
+    from stackunderflow.etl import backfill as etl_backfill
+
+    conn = _open_store()
+    try:
+        report = etl_backfill(conn, force=force)
+    finally:
+        conn.close()
+
+    click.echo(f"  events inserted:           {report.events_inserted:,}")
+    click.echo(f"  events skipped (duplicate): {report.events_skipped_duplicate:,}")
+    if report.marts_refreshed:
+        click.echo("  marts refreshed:")
+        for name, count in sorted(report.marts_refreshed.items()):
+            click.echo(f"    {name:<14s}  {count:>8,} events")
+    else:
+        click.echo("  marts refreshed:           (none registered)")
+    click.echo(f"  duration:                  {report.duration_seconds:.3f}s")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
