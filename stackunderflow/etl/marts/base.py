@@ -44,11 +44,12 @@ class MartBuilder(ABC):
         was nothing new to process — the watermark stays put.
         """
 
-    @abstractmethod
     def rebuild_from_scratch(self, conn: sqlite3.Connection) -> None:
-        """Drop + repopulate this mart from scratch.
+        """Drop + repopulate this mart from scratch (concrete default).
 
-        Implemented as ``DELETE FROM <mart>; refresh(conn, since_event_id=0)``
-        so it's idempotent and produces the same final state as a clean
-        incremental run. Used by the ``--rebuild`` CLI path.
+        Default impl: ``DELETE FROM <self.name>_mart; refresh(conn, 0)``.
+        Subclasses override only if their table name differs or extra
+        cleanup is needed.
         """
+        conn.execute(f"DELETE FROM {self.name}_mart")
+        self.refresh(conn, since_event_id=0)
