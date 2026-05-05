@@ -1,58 +1,82 @@
-"""Provider normalizer registry.
+"""Normalize layer — per-provider ``messages → usage_events`` transforms.
 
-Each provider's adapter ships a :class:`Normalizer` subclass that turns a
-``messages`` row into 0..N ``usage_events`` rows. Modules import this
-package and call :func:`register` at import time so the orchestrator can
-discover them via :func:`all`.
-
-Registry is module-level state keyed on ``provider_name``. ``register``
-is **last-wins**: re-registering the same name silently overwrites the
-prior class. That makes hot-reload during development and registry-
-overrides in tests trivial — no "already registered" error to navigate
-around.
+The registry lives in this module per the Wave 1 spec (`__init__.py`).
+Each provider's module imports from here to call ``register()``.
 """
 
 from __future__ import annotations
 
-from .base import Normalizer
+from .base import (
+    COST_SOURCE_ESTIMATED,
+    COST_SOURCE_LIVE,
+    COST_SOURCE_RATE_CARD,
+    COST_SOURCE_UNKNOWN,
+    Normalizer,
+)
+
+# ── registry (single source of truth, per spec) ─────────────────────
 
 _REGISTRY: dict[str, type[Normalizer]] = {}
 
 
 def register(provider: str, normalizer_cls: type[Normalizer]) -> None:
-    """Register *normalizer_cls* for *provider*.
-
-    Last-wins: re-registering the same provider silently overwrites the
-    prior class. Tests and hot-reload depend on this behaviour.
-    """
+    """Register ``normalizer_cls`` for ``provider``. Last-wins."""
     _REGISTRY[provider] = normalizer_cls
 
 
 def get(provider: str) -> type[Normalizer] | None:
-    """Return the registered class for *provider*, or ``None``."""
+    """Return the registered class for ``provider``, or ``None``."""
     return _REGISTRY.get(provider)
 
 
-def all() -> dict[str, type[Normalizer]]:  # noqa: A001 — spec-defined name
-    """Return a snapshot of the registry.
-
-    Returns a *copy* so callers can iterate while other code registers
-    without mutating the live dict mid-loop.
-
-    Shadows the ``all`` builtin by design — the spec
-    (``docs/specs/etl-architecture.md``) names this method ``all()`` to
-    pair with ``register()``/``get()``. Callers either ``from ... import
-    normalize`` then ``normalize.all()``, or never need the builtin.
-    """
+def all() -> dict[str, type[Normalizer]]:  # noqa: A001 — spec name
+    """Return a snapshot copy of the registry."""
     return dict(_REGISTRY)
 
 
 def _clear() -> None:
-    """Test-only: reset the registry between tests.
-
-    Public ``register`` is last-wins, so most tests don't need this. Use
-    only when a test wants to assert the empty-registry path."""
+    """Test-only escape hatch to wipe registry state."""
     _REGISTRY.clear()
 
 
-__all__ = ["Normalizer", "register", "get", "all"]
+# Back-compat aliases for Wave 2A's earlier names.
+def get_normalizer(provider: str) -> Normalizer | None:
+    cls = get(provider)
+    return cls() if cls else None
+
+
+def registered_providers() -> tuple[str, ...]:
+    return tuple(sorted(_REGISTRY))
+
+
+# Default-on providers wire themselves at import time. Importing here
+# (rather than at the top) avoids a circular import: each provider
+# module imports Normalizer from .base, then calls register() above.
+from .claude import ClaudeNormalizer  # noqa: E402
+from .cline import ClineNormalizer  # noqa: E402
+from .codex import CodexNormalizer  # noqa: E402
+from .cursor import CursorNormalizer  # noqa: E402
+
+register("claude", ClaudeNormalizer)
+register("codex", CodexNormalizer)
+register("cursor", CursorNormalizer)
+register("cline", ClineNormalizer)
+
+
+__all__ = [
+    "COST_SOURCE_ESTIMATED",
+    "COST_SOURCE_LIVE",
+    "COST_SOURCE_RATE_CARD",
+    "COST_SOURCE_UNKNOWN",
+    "Normalizer",
+    "all",
+    "get",
+    "get_normalizer",
+    "register",
+    "registered_providers",
+    "_clear",
+    "ClaudeNormalizer",
+    "ClineNormalizer",
+    "CodexNormalizer",
+    "CursorNormalizer",
+]
