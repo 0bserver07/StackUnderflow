@@ -97,6 +97,7 @@ async def _lifespan(_app: FastAPI):
     # already printed from the CLI wrapper is misleading because the
     # HTTP server hasn't actually started yet.
     import threading
+
     from stackunderflow.adapters import registered
     from stackunderflow.ingest import run_ingest
     from stackunderflow.store import db, schema
@@ -123,6 +124,27 @@ async def _lifespan(_app: FastAPI):
         name="stackunderflow-ingest",
         daemon=True,
     ).start()
+
+    # Wave 2C ETL filesystem watcher — keeps the marts current as
+    # JSONL/vscdb files change. Default-on; ``stackunderflow start
+    # --no-watcher`` (or env ``STACKUNDERFLOW_DISABLE_WATCHER=1``) skips
+    # the spawn for headless / debugging modes. Daemon thread, so it
+    # dies with the process — explicit shutdown via the handle is
+    # available if FastAPI ever surfaces a teardown hook.
+    if not _watcher_disabled():
+        try:
+            from stackunderflow.etl.watcher import start_watcher
+
+            def _watcher_conn() -> "object":
+                # Each cycle gets its own short-lived connection so a
+                # crash mid-write can't poison the next refresh.
+                return db.connect(deps.store_path)
+
+            handle = start_watcher(_watcher_conn)
+            deps.watcher_handle = handle
+            logger.info("ETL watcher started (Wave 2C)")
+        except Exception as exc:  # noqa: BLE001 — never block server start on watcher
+            logger.warning("ETL watcher failed to start: %s", exc)
 
     yield
 
@@ -198,6 +220,19 @@ async def spa_settings():
 
 
 from stackunderflow.routes.data import refresh_all_projects, refresh_data  # noqa: E402, F401
+
+
+def _watcher_disabled() -> bool:
+    """Return True when the env opts out of the Wave 2C watcher.
+
+    The CLI's ``stackunderflow start --no-watcher`` sets
+    ``STACKUNDERFLOW_DISABLE_WATCHER=1`` before invoking uvicorn, so the
+    flag survives the spawn into the FastAPI lifespan. Useful for
+    headless / profiling runs that want a deterministic ingest pass
+    without the live-watcher wakeups.
+    """
+    val = os.environ.get("STACKUNDERFLOW_DISABLE_WATCHER", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
 
 
 def _maybe_clean_cold_cache() -> None:

@@ -68,6 +68,7 @@ Usage: stackunderflow start [OPTIONS]
 | `-H, --host` | TEXT | from config | Bind address |
 | `--headless` | flag | false | Don't open the browser |
 | `--fresh` | flag | false | Clear disk cache before starting |
+| `--no-watcher` | flag | false | Disable the Wave 2C ETL filesystem watcher (headless / debugging) |
 
 **Examples:**
 
@@ -84,7 +85,23 @@ $ stackunderflow start --fresh
   cache cleared: /Users/you/.stackunderflow/cache
   StackUnderflow is live at http://127.0.0.1:8081
   Ctrl+C to stop
+
+$ stackunderflow start --no-watcher
+  StackUnderflow is live at http://127.0.0.1:8081
+  # ETL filesystem watcher disabled — dashboard data refreshes only on
+  # manual reindex / restart. Useful for headless profiling runs.
+  Ctrl+C to stop
 ```
+
+> **Filesystem watcher.** By default `start` spawns a daemon thread
+> that watches every registered adapter's source paths
+> (`~/.claude/projects`, `~/.codex/sessions`,
+> `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`,
+> `~/Library/Application Support/Code/User/globalStorage/.../tasks`).
+> On any change → ingest the new bytes → refresh the marts; total
+> latency from source-file write to dashboard data fresh is ~400ms.
+> Pass `--no-watcher` (or set `STACKUNDERFLOW_DISABLE_WATCHER=1`) to
+> skip the spawn and rely on the periodic-ingest path instead.
 
 > **Restart after upgrades.** `stackunderflow start` is a long-lived
 > process that loads the application code into memory once at boot.
