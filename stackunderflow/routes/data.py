@@ -16,7 +16,7 @@ from stackunderflow.api.messages import get_messages_summary, get_paginated_mess
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
 from stackunderflow.routes.cost import COST_KEYS, _convert_in_place
-from stackunderflow.store import db, queries, schema
+from stackunderflow.store import db, mart_queries, queries, schema
 
 router = APIRouter()
 
@@ -203,9 +203,25 @@ async def get_dashboard_data(
             )
             return payload
 
-        messages, stats = queries.get_project_stats(
-            conn, project_id=project_id, tz_offset=timezone_offset
-        )
+        # Wave 3A: when the project is materialised in ``project_mart``,
+        # serve the dashboard payload from mart reads. Other keys
+        # (tools/errors/hourly_pattern/sessions/user_interactions) are
+        # not yet covered by marts — they get shape-stable empties so
+        # the JSON contract holds. The heavy detail blocks already
+        # live behind dedicated endpoints (/api/cost-data,
+        # /api/commands, /api/tool-distribution) that load lazily.
+        if mart_queries.mart_has_project_row(conn, project_id=project_id):
+            stats = _stats_from_marts(
+                conn,
+                project_id=project_id,
+                provider_filter=provider_filter,
+                model_filter=None,  # model filter applied below for parity
+            )
+            messages = []  # dashboard-data only ever exposed first 50 — see §A3
+        else:
+            messages, stats = queries.get_project_stats(
+                conn, project_id=project_id, tz_offset=timezone_offset
+            )
     finally:
         conn.close()
 
@@ -259,6 +275,60 @@ async def get_dashboard_data(
     payload["currency"] = active_currency_payload()
     deps.logger.debug(f"dashboard-data [miss] {(time.time()-t0)*1000:.1f}ms")
     return payload
+
+
+def _stats_from_marts(
+    conn,
+    *,
+    project_id: int,
+    provider_filter: set[str] | None = None,
+    model_filter: set[str] | None = None,
+) -> dict:
+    """Build the dashboard ``statistics`` block from mart reads only.
+
+    Three mart sources combine into the legacy aggregator shape:
+
+    * ``project_mart`` → ``overview`` lifetime totals
+    * ``daily_mart``   → ``daily_stats`` time-series + ``models`` map
+    * cost / token rollups in both → keys consumed by the UI's Overview
+      cards
+
+    Keys that depend on raw-message columns the marts don't carry —
+    ``tools``, ``errors``, ``hourly_pattern``, ``cache``, per-session
+    detail, ``user_interactions`` — are returned with shape-stable
+    empties. The heavy detail blocks already live behind dedicated
+    endpoints (``/api/cost-data``, ``/api/commands``,
+    ``/api/tool-distribution``) that the dashboard fetches lazily;
+    the trade-off here is sub-50ms initial paint vs slightly less
+    rich initial response.
+    """
+    proj_row = mart_queries.get_project_mart_row(conn, project_id=project_id)
+    daily_rows = mart_queries.daily_for_project(
+        conn,
+        project_id=project_id,
+        provider_filter=provider_filter,
+        model_filter=model_filter,
+    )
+
+    overview = mart_queries.daily_mart_to_overview(
+        daily_rows, project_mart_row=proj_row
+    )
+    daily_stats = mart_queries.daily_mart_by_day(daily_rows)
+    models = mart_queries.daily_mart_by_model(daily_rows)
+
+    return {
+        "overview": overview,
+        "tools": {"usage_counts": {}, "error_counts": {}, "error_rates": {}},
+        "sessions": {
+            "count": int(proj_row.get("total_sessions", 0)) if proj_row else 0,
+        },
+        "daily_stats": daily_stats,
+        "hourly_pattern": [],
+        "errors": {"total": 0},
+        "models": models,
+        "user_interactions": {},
+        "cache": {"hit_rate": 0.0},
+    }
 
 
 def _apply_currency_to_stats(stats: dict) -> dict:
