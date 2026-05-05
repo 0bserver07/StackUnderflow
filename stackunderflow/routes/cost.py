@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
-from stackunderflow.store import db, queries
+from stackunderflow.store import db, mart_queries, queries
 
 router = APIRouter()
 
@@ -116,6 +116,19 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
         _, stats = queries.get_project_stats(
             conn, project_id=project_id, tz_offset=timezone_offset
         )
+        # Wave 3A: when the project is materialised, overlay the
+        # token_composition.daily/totals blocks with daily_mart-derived
+        # values. Per-session / per-command / per-tool detail blocks
+        # (session_costs, command_costs, tool_costs, outliers,
+        # retry_signals, session_efficiency, error_cost) stay
+        # aggregator-driven — they need lower-grain marts deferred to
+        # Wave 4. ``trends`` keeps its aggregator-driven shape because
+        # the period split (current vs prior) needs interaction-level
+        # correlations the daily mart can\'t see by itself.
+        if mart_queries.mart_has_project_row(conn, project_id=project_id):
+            stats = _overlay_mart_rollups(
+                conn, project_id=project_id, stats=stats
+            )
     finally:
         conn.close()
 
@@ -134,6 +147,50 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
             _convert_in_place(payload[key], currency["rate_from_usd"])
     payload["currency"] = currency
     return payload
+
+
+def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
+    """Replace the rollup blocks of ``stats`` with mart-derived values.
+
+    Touches only the keys the daily mart can fully reconstruct
+    (``token_composition.daily``, ``token_composition.totals``).
+    Per-session breakdowns stay aggregator-driven — they need the
+    session-level grain we'll get from ``session_mart`` once Wave 4
+    lands. Returns the same dict object (mutated) so the caller's
+    payload assembly stays unchanged.
+    """
+    daily_rows = mart_queries.daily_for_project(conn, project_id=project_id)
+    if not daily_rows:
+        return stats
+
+    daily: dict[str, dict[str, int]] = {}
+    totals = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    for r in daily_rows:
+        day = r.get("day")
+        if not day:
+            continue
+        bucket = daily.setdefault(
+            day,
+            {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+        )
+        bucket["input"] += int(r.get("input_tokens", 0) or 0)
+        bucket["output"] += int(r.get("output_tokens", 0) or 0)
+        bucket["cache_read"] += int(r.get("cache_read", 0) or 0)
+        bucket["cache_creation"] += int(r.get("cache_create", 0) or 0)
+        totals["input"] += int(r.get("input_tokens", 0) or 0)
+        totals["output"] += int(r.get("output_tokens", 0) or 0)
+        totals["cache_read"] += int(r.get("cache_read", 0) or 0)
+        totals["cache_creation"] += int(r.get("cache_create", 0) or 0)
+
+    tc = stats.get("token_composition")
+    if not isinstance(tc, dict):
+        tc = {"daily": {}, "totals": {}, "per_session": {}}
+        stats["token_composition"] = tc
+    tc["daily"] = daily
+    tc["totals"] = totals
+    # ``per_session`` stays whatever the aggregator produced — Wave 4
+    # work item.
+    return stats
 
 
 # ── /api/cost-data/by-provider ──────────────────────────────────────────────
@@ -185,77 +242,35 @@ async def get_cost_by_provider(
         )
     scope = parse_period(spec)
 
+    # Compute the day window for the mart fast-path. ``parse_period``
+    # returns ISO timestamps; the mart's ``day`` column stores
+    # ``YYYY-MM-DD``, so we slice to 10 chars.
+    day_from = scope.since[:10] if scope.since else None
+    day_to = scope.until[:10] if scope.until else None
+
     conn = db.connect(deps.store_path)
     try:
-        sql = (
-            "SELECT projects.provider AS provider, "
-            "       sessions.id AS session_id, "
-            "       COALESCE(messages.model, '') AS model, "
-            "       COALESCE(messages.input_tokens, 0) AS input_tokens, "
-            "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
-            "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
-            "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
-            "       COALESCE(messages.speed, 'standard') AS speed, "
-            "       messages.role AS role "
-            "FROM messages "
-            "JOIN sessions ON sessions.id = messages.session_fk "
-            "JOIN projects ON projects.id = sessions.project_id "
-            "WHERE 1=1 "
+        # Wave 3A: when ``provider_day_mart`` has rows in window, the
+        # rollup is one indexed scan over a tiny pre-aggregated table.
+        # We still fall back to the messages-table sweep when the mart
+        # is empty so a half-finished backfill keeps working.
+        mart_rows_pd = mart_queries.provider_day_rollup(
+            conn, day_from=day_from, day_to=day_to
         )
-        params: list[Any] = []
-        if scope.since is not None:
-            sql += "AND messages.timestamp >= ? "
-            params.append(scope.since)
-        if scope.until is not None:
-            sql += "AND messages.timestamp <= ? "
-            params.append(scope.until)
-        rows = conn.execute(sql, params).fetchall()
+        if mart_rows_pd:
+            out_rows = _build_by_provider_rows_from_mart(mart_rows_pd)
+        else:
+            out_rows = _build_by_provider_rows_from_messages(
+                conn, scope=scope, compute_cost=compute_cost
+            )
     finally:
         conn.close()
 
-    # ── per-provider rollup ──────────────────────────────────────────────
-    per_provider: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        prov = r["provider"] or "unknown"
-        bucket = per_provider.setdefault(
-            prov,
-            {
-                "provider": prov,
-                "cost_usd": 0.0,
-                "message_count": 0,
-                "_sessions": set(),
-            },
-        )
-        bucket["message_count"] += 1
-        bucket["_sessions"].add(r["session_id"])
-        # Only assistant rows carry token counts that price out — user/tool
-        # messages have zero tokens and would just inflate compute_cost calls.
-        if r["role"] == "assistant" and r["model"]:
-            cost = compute_cost(
-                {
-                    "input": r["input_tokens"],
-                    "output": r["output_tokens"],
-                    "cache_creation": r["cache_create_tokens"],
-                    "cache_read": r["cache_read_tokens"],
-                },
-                r["model"],
-                provider=prov or "anthropic",
-                speed=r["speed"] or "standard",
-            )["total_cost"]
-            bucket["cost_usd"] += cost
-
     currency = active_currency_payload()
     rate = currency["rate_from_usd"]
-    out_rows: list[dict[str, Any]] = []
-    for prov, bucket in per_provider.items():
-        out_rows.append(
-            {
-                "provider": prov,
-                "cost_usd": bucket["cost_usd"] * rate,
-                "message_count": bucket["message_count"],
-                "session_count": len(bucket["_sessions"]),
-            }
-        )
+    if rate != 1.0:
+        for r in out_rows:
+            r["cost_usd"] = r["cost_usd"] * rate
     out_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
 
     # Provider filter: empty = all (preserve existing API contract). When
@@ -272,6 +287,100 @@ async def get_cost_by_provider(
         "rows": out_rows,
         "currency": currency,
     }
+
+
+def _build_by_provider_rows_from_mart(
+    mart_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project ``provider_day_mart`` rollup rows into the response shape.
+
+    The mart helper already sums by provider in SQL — this function
+    just renames keys to match the JSON the frontend expects.
+    """
+    return [
+        {
+            "provider": (r.get("provider") or "unknown").lower(),
+            "cost_usd": float(r.get("cost_usd", 0.0) or 0.0),
+            "message_count": int(r.get("message_count", 0) or 0),
+            "session_count": int(r.get("session_count", 0) or 0),
+        }
+        for r in mart_rows
+    ]
+
+
+def _build_by_provider_rows_from_messages(
+    conn,
+    *,
+    scope,
+    compute_cost,
+) -> list[dict[str, Any]]:
+    """Aggregator-path rollup over the raw ``messages`` table.
+
+    Used as the fallback when ``provider_day_mart`` is empty. Mirrors
+    the v0.6.1 implementation byte-for-byte so the JSON contract is
+    stable regardless of which path produced the row.
+    """
+    sql = (
+        "SELECT projects.provider AS provider, "
+        "       sessions.id AS session_id, "
+        "       COALESCE(messages.model, \'\') AS model, "
+        "       COALESCE(messages.input_tokens, 0) AS input_tokens, "
+        "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
+        "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
+        "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
+        "       COALESCE(messages.speed, \'standard\') AS speed, "
+        "       messages.role AS role "
+        "FROM messages "
+        "JOIN sessions ON sessions.id = messages.session_fk "
+        "JOIN projects ON projects.id = sessions.project_id "
+        "WHERE 1=1 "
+    )
+    params: list[Any] = []
+    if scope.since is not None:
+        sql += "AND messages.timestamp >= ? "
+        params.append(scope.since)
+    if scope.until is not None:
+        sql += "AND messages.timestamp <= ? "
+        params.append(scope.until)
+    rows = conn.execute(sql, params).fetchall()
+
+    per_provider: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        prov = r["provider"] or "unknown"
+        bucket = per_provider.setdefault(
+            prov,
+            {
+                "provider": prov,
+                "cost_usd": 0.0,
+                "message_count": 0,
+                "_sessions": set(),
+            },
+        )
+        bucket["message_count"] += 1
+        bucket["_sessions"].add(r["session_id"])
+        if r["role"] == "assistant" and r["model"]:
+            cost = compute_cost(
+                {
+                    "input": r["input_tokens"],
+                    "output": r["output_tokens"],
+                    "cache_creation": r["cache_create_tokens"],
+                    "cache_read": r["cache_read_tokens"],
+                },
+                r["model"],
+                provider=prov or "anthropic",
+                speed=r["speed"] or "standard",
+            )["total_cost"]
+            bucket["cost_usd"] += cost
+
+    return [
+        {
+            "provider": prov,
+            "cost_usd": bucket["cost_usd"],
+            "message_count": bucket["message_count"],
+            "session_count": len(bucket["_sessions"]),
+        }
+        for prov, bucket in per_provider.items()
+    ]
 
 
 @router.get("/api/interaction/{interaction_id}")
