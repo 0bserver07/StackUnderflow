@@ -40,8 +40,8 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_current_version_constant() -> None:
-    # v004 added the cursor workspace redistribute Python migration.
-    assert schema.CURRENT_VERSION == 5
+    # v006 added the ETL foundation (usage_events + 5 marts + watermark).
+    assert schema.CURRENT_VERSION == 6
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:

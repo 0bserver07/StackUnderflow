@@ -1,6 +1,6 @@
 # ETL Architecture — Three-Layer Pipeline with Watcher
 
-**Status:** Spec — Wave 1 implements the foundation, Wave 2 fills it in, Wave 3 migrates routes.
+**Status:** Wave 1 landed — schema + ABCs + backfill orchestrator are in. Wave 2 fills in normalizers + mart builders + watcher. Wave 3 migrates routes.
 **Goal:** Replace ad-hoc per-request aggregation with a real ETL pipeline. Sub-50ms route reads regardless of project size. Sub-second sync from source-file change to dashboard refresh.
 
 ---
@@ -283,9 +283,9 @@ def backfill(conn, *, force: bool = False) -> BackfillReport:
 ## Dependencies between waves
 
 ```
-Wave 1 (foundation, sequential)
+Wave 1 (foundation, sequential)  ✅ landed
   ├── docs/specs/etl-architecture.md     (this file, expanded)
-  ├── migration v004                     (usage_events + 5 marts + watermark)
+  ├── migration v006                     (usage_events + 5 marts + watermark)
   ├── etl/normalize/base.py              (Normalizer ABC + registry)
   ├── etl/marts/base.py                  (MartBuilder ABC + registry)
   ├── etl/watermark.py                   (helpers)
@@ -317,7 +317,9 @@ Wave 3 (parallel, route migrations)
 
 ## Migration / rollback
 
-`v004_etl_layer.sql` is **additive** — it doesn't touch the existing `messages` / `sessions` / `projects` tables. Routes can be migrated one at a time; the old aggregator paths keep working until each route is swapped.
+`v006_etl_layer.sql` is **additive** — it doesn't touch the existing `messages` / `sessions` / `projects` tables. Routes can be migrated one at a time; the old aggregator paths keep working until each route is swapped.
+
+> **Numbering note.** Earlier drafts of this spec called the migration `v004_etl_layer.sql`. Two unrelated migrations (`v004_clean_synthetic_models.sql`, `v005_cursor_workspace_redistribute.py`) shipped between the spec being written and Wave 1 landing, so the actual file is `v006_etl_layer.sql`. `schema.CURRENT_VERSION` bumps to 6.
 
 Rollback: drop `usage_events` + 5 marts + `mart_watermark`. Routes that already migrated would 500 on read — keep the old aggregator code in tree until every route is migrated and a release ships.
 
