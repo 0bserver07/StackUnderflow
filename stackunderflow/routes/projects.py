@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.infra.discovery import locate_logs as find_claude_logs
-from stackunderflow.store import db, queries
+from stackunderflow.store import db, mart_queries, queries
 
 router = APIRouter()
 
@@ -192,12 +192,31 @@ async def get_projects(
                     if (p.provider or "").lower() in provider_filter
                 ]
 
-            # Single bulk-aggregate pass for session counts + per-project
-            # token/date totals + cost; replaces per-project N+1 queries
-            # that took 26s on 188-project / 228K-message stores.
+            # Wave 3A: prefer ``project_mart`` for the stats payload —
+            # one indexed scan over the materialised totals beats the
+            # bulk-aggregate pass (PR #65) which still touches every
+            # message row. The bulk helpers stay as the fallback so
+            # stores that haven't run the ETL pipeline keep working.
             session_counts = queries.bulk_session_counts(conn)
-            lite_stats = queries.bulk_project_lite_stats(conn) if include_stats else {}
-            cost_by_pid = queries.bulk_project_cost(conn) if include_stats else {}
+
+            mart_rows: dict[int, dict] = {}
+            if include_stats:
+                for row in mart_queries.list_project_mart(conn):
+                    mart_rows[int(row["project_id"])] = row
+
+            # Project ids whose mart row is missing fall back to the
+            # bulk SQL helpers — keeps the response shape stable while
+            # an in-flight ETL backfill is still working through the
+            # store.
+            uncovered_ids = {
+                p.id for p in project_rows if p.id not in mart_rows
+            }
+            if include_stats and uncovered_ids:
+                lite_stats = queries.bulk_project_lite_stats(conn)
+                cost_by_pid = queries.bulk_project_cost(conn)
+            else:
+                lite_stats = {}
+                cost_by_pid = {}
 
             # Schema has UNIQUE(provider, slug) — same project used through
             # multiple providers (e.g. claude + codex) yields multiple rows.
@@ -245,8 +264,11 @@ async def get_projects(
 
             if include_stats:
                 for proj in projects:
-                    proj["stats"] = _bulk_lite_merge(
-                        proj["_ids"], lite_stats, cost_by_pid
+                    proj["stats"] = _stats_for_ids(
+                        proj["_ids"],
+                        mart_rows=mart_rows,
+                        lite_stats=lite_stats,
+                        cost_by_pid=cost_by_pid,
                     )
 
             for proj in projects:
@@ -314,6 +336,77 @@ def _dir_size_mb(log_dir: str) -> float:
     return mb
 
 
+def _stats_for_ids(
+    project_ids: list[int],
+    *,
+    mart_rows: dict[int, dict],
+    lite_stats: dict[int, dict],
+    cost_by_pid: dict[int, float],
+) -> dict:
+    """Resolve per-project stats — mart-first, bulk-SQL fallback.
+
+    For each project id we prefer the materialised ``project_mart`` row
+    when present, otherwise fall back to the bulk SQL helpers (PR #65).
+    Provider-duplicates of one slug get summed/min'd/max'd via the
+    same rules ``_bulk_lite_merge`` already applied so the UI shape is
+    independent of the data source.
+    """
+    pre_mart_ids = [pid for pid in project_ids if pid not in mart_rows]
+    mart_present_ids = [pid for pid in project_ids if pid in mart_rows]
+
+    if not mart_present_ids:
+        return _bulk_lite_merge(pre_mart_ids, lite_stats, cost_by_pid)
+
+    # mixed case: combine mart rows + lite-stats fallback rows. Both
+    # produce the same UI shape so we can sum across them safely.
+    parts: list[dict] = []
+    for pid in mart_present_ids:
+        parts.append(_mart_row_to_stats(mart_rows[pid]))
+    if pre_mart_ids:
+        parts.append(_bulk_lite_merge(pre_mart_ids, lite_stats, cost_by_pid))
+
+    if len(parts) == 1:
+        return parts[0]
+    starts = [p["first_message_date"] for p in parts if p["first_message_date"]]
+    ends = [p["last_message_date"] for p in parts if p["last_message_date"]]
+    return {
+        "total_input_tokens": sum(p["total_input_tokens"] for p in parts),
+        "total_output_tokens": sum(p["total_output_tokens"] for p in parts),
+        "total_cache_read": sum(p["total_cache_read"] for p in parts),
+        "total_cache_write": sum(p["total_cache_write"] for p in parts),
+        "total_commands": sum(p["total_commands"] for p in parts),
+        "avg_tokens_per_command": 0,
+        "avg_steps_per_command": 0,
+        "compact_summary_count": 0,
+        "first_message_date": min(starts) if starts else None,
+        "last_message_date": max(ends) if ends else None,
+        "total_cost": sum(p["total_cost"] for p in parts),
+    }
+
+
+def _mart_row_to_stats(row: dict) -> dict:
+    """Project ``project_mart`` row → ProjectStats UI shape.
+
+    Aggregator-only fields (avg_tokens_per_command, etc.) default to
+    zero/None — same as ``bulk_project_lite_stats``. The list view
+    doesn't surface them and the per-project detail view runs the full
+    aggregator separately.
+    """
+    return {
+        "total_input_tokens": int(row.get("total_input_tokens", 0) or 0),
+        "total_output_tokens": int(row.get("total_output_tokens", 0) or 0),
+        "total_cache_read": int(row.get("total_cache_read", 0) or 0),
+        "total_cache_write": int(row.get("total_cache_create", 0) or 0),
+        "total_commands": 0,
+        "avg_tokens_per_command": 0,
+        "avg_steps_per_command": 0,
+        "compact_summary_count": 0,
+        "first_message_date": row.get("first_ts"),
+        "last_message_date": row.get("last_ts"),
+        "total_cost": float(row.get("total_cost_usd", 0.0) or 0.0),
+    }
+
+
 def _bulk_lite_merge(
     project_ids: list[int],
     lite_stats: dict[int, dict],
@@ -321,9 +414,9 @@ def _bulk_lite_merge(
 ) -> dict:
     """Merge bulk-lite per-pid totals across provider-duplicates of one slug.
 
-    Used by the project-list endpoint instead of running the per-project
-    aggregator pipeline, which was N+1 single-pass over the message
-    table and dominated cold-load time on multi-provider stores.
+    Fallback path for stores where ``project_mart`` hasn't been
+    populated yet — mirrors PR #65's contract verbatim so the UI shape
+    is stable regardless of which path produces the row.
     """
     parts = [lite_stats[pid] for pid in project_ids if pid in lite_stats]
     if not parts:
