@@ -16,9 +16,9 @@ Two endpoints live here:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
@@ -153,7 +153,7 @@ _BY_PROVIDER_PERIOD_MAP: dict[str, str] = {
 @router.get("/api/cost-data/by-provider")
 async def get_cost_by_provider(
     period: str = "month",
-    provider: list[str] | None = None,
+    provider: Annotated[list[str] | None, Query()] = None,
 ):
     """Return total cost / message count / session count grouped by provider.
 

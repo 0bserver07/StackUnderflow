@@ -3,8 +3,9 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
@@ -38,7 +39,7 @@ def _duration_minutes(first: str | None, last: str | None) -> float | None:
 @router.get("/api/jsonl-files")
 async def get_jsonl_files(
     project: str | None = None,
-    provider: list[str] | None = None,
+    provider: Annotated[list[str] | None, Query()] = None,
 ):
     """Get list of JSONL files for a project with metadata.
 

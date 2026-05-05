@@ -5,8 +5,9 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
@@ -113,8 +114,8 @@ async def get_stats(timezone_offset: int = 0):
 @router.get("/api/dashboard-data")
 async def get_dashboard_data(
     timezone_offset: int = 0,
-    provider: list[str] | None = None,
-    model: list[str] | None = None,
+    provider: Annotated[list[str] | None, Query()] = None,
+    model: Annotated[list[str] | None, Query()] = None,
 ):
     """Get optimized data for initial dashboard load.
 
@@ -278,8 +279,8 @@ def _apply_currency_to_stats(stats: dict) -> dict:
 async def get_messages(
     limit: int | None = None,
     timezone_offset: int = 0,
-    provider: list[str] | None = None,
-    model: list[str] | None = None,
+    provider: Annotated[list[str] | None, Query()] = None,
+    model: Annotated[list[str] | None, Query()] = None,
 ):
     """Get messages for the current project.
 
