@@ -62,6 +62,41 @@ register("codex", CodexNormalizer)
 register("cursor", CursorNormalizer)
 register("cline", ClineNormalizer)
 
+# Wave 4D — beta provider normalizers. Same import-at-bottom pattern;
+# each module pulls Normalizer from .base, no circular risk. Beta
+# providers stay opt-in via the existing STACKUNDERFLOW_BETA_* flags
+# at the adapter layer — registering here is harmless when those
+# adapters are off because no rows ever land with the matching
+# ``provider`` value.
+from .codeium import CodeiumNormalizer  # noqa: E402
+from .continue_ import ContinueNormalizer  # noqa: E402
+from .copilot import CopilotNormalizer  # noqa: E402
+from .cursor_agent import CursorAgentNormalizer  # noqa: E402
+from .droid import DroidNormalizer  # noqa: E402
+from .gemini import GeminiNormalizer  # noqa: E402
+from .kilocode import KiloCodeNormalizer  # noqa: E402
+from .kiro import KiroNormalizer  # noqa: E402
+from .openclaw import OpenClawNormalizer  # noqa: E402
+from .opencode import OpenCodeNormalizer  # noqa: E402
+from .pi import PiNormalizer  # noqa: E402
+from .qwen import QwenNormalizer  # noqa: E402
+from .roocode import RooCodeNormalizer  # noqa: E402
+
+register("codeium", CodeiumNormalizer)
+register("continue", ContinueNormalizer)
+register("copilot", CopilotNormalizer)
+register("cursor_agent", CursorAgentNormalizer)
+register("droid", DroidNormalizer)
+register("gemini", GeminiNormalizer)
+register("kilocode", KiloCodeNormalizer)
+register("kiro", KiroNormalizer)
+register("openclaw", OpenClawNormalizer)
+register("opencode", OpenCodeNormalizer)
+register("pi", PiNormalizer)
+register("omp", PiNormalizer)  # Pi/OMP share parser logic — same class.
+register("qwen", QwenNormalizer)
+register("roocode", RooCodeNormalizer)
+
 
 __all__ = [
     "COST_SOURCE_ESTIMATED",
@@ -79,4 +114,17 @@ __all__ = [
     "ClineNormalizer",
     "CodexNormalizer",
     "CursorNormalizer",
+    "CodeiumNormalizer",
+    "ContinueNormalizer",
+    "CopilotNormalizer",
+    "CursorAgentNormalizer",
+    "DroidNormalizer",
+    "GeminiNormalizer",
+    "KiloCodeNormalizer",
+    "KiroNormalizer",
+    "OpenClawNormalizer",
+    "OpenCodeNormalizer",
+    "PiNormalizer",
+    "QwenNormalizer",
+    "RooCodeNormalizer",
 ]
