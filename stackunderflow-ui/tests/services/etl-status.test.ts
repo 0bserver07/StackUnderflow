@@ -1,0 +1,272 @@
+// Run with: node --test tests/services/etl-status.test.ts
+// (Node 22+ strips TypeScript types automatically; matches the runner used by
+// tests/services/format.test.ts and tests/services/filters.test.ts.)
+//
+// Wave 4F — coverage for the ETL status fetcher + presentation helpers that
+// power EtlStatusBadge. The component itself isn't render-tested (no DOM
+// runner in this project); we lock the data-shape contract and the
+// health → colour / text-formatter mapping that drives the UI.
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import {
+  EtlPipelineNotReadyError,
+  etlHealthColor,
+  formatEtlBadgeText,
+  formatLagDuration,
+  getEtlStatus,
+  triggerEtlBackfill,
+} from '../../src/services/api.ts'
+import type { EtlHealth, EtlStatusResponse } from '../../src/types/api.ts'
+
+// ---------------------------------------------------------------------------
+// Helpers — minimal `fetch` stub. We swap globalThis.fetch for the duration of
+// each test and restore it afterwards. Matches the pattern used elsewhere in
+// the project (no msw / no jest-fetch-mock dep).
+// ---------------------------------------------------------------------------
+
+interface MockResponse {
+  ok: boolean
+  status: number
+  statusText: string
+  json: () => Promise<unknown>
+  text: () => Promise<string>
+}
+
+function mockResponse(body: unknown, status = 200): MockResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : status === 404 ? 'Not Found' : 'Error',
+    json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  }
+}
+
+function withFetch(impl: (input: string, init?: RequestInit) => Promise<MockResponse>): () => void {
+  const original = (globalThis as { fetch?: unknown }).fetch
+  ;(globalThis as { fetch: unknown }).fetch = impl as unknown as typeof fetch
+  return () => {
+    ;(globalThis as { fetch: unknown }).fetch = original as typeof fetch
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sample payload — every status field populated. Reused across tests.
+// ---------------------------------------------------------------------------
+
+const sampleStatus: EtlStatusResponse = {
+  watcher: {
+    enabled: true,
+    running: true,
+    last_refresh_ts: '2026-05-04T12:00:00Z',
+    seconds_since_refresh: 7,
+    events_in_last_cycle: 0,
+  },
+  marts: {
+    daily_mart: { watermark: 1234, row_count: 100, last_refresh_ts: '2026-05-04T12:00:00Z' },
+    session_mart: { watermark: 1234, row_count: 50, last_refresh_ts: '2026-05-04T12:00:00Z' },
+  },
+  events: {
+    total: 1234,
+    max_id: 1234,
+    by_provider: { claude: 800, codex: 300, cursor: 134 },
+    by_cost_source: { actual: 1100, estimated: 134 },
+  },
+  lag_seconds: 7,
+  health: 'live',
+}
+
+// ---------------------------------------------------------------------------
+// Fetcher: getEtlStatus — happy path parses the contract.
+// ---------------------------------------------------------------------------
+
+test('getEtlStatus parses the response shape', async () => {
+  const restore = withFetch(async (url) => {
+    assert.equal(url, '/api/etl/status')
+    return mockResponse(sampleStatus)
+  })
+  try {
+    const data = await getEtlStatus()
+    assert.equal(data.health, 'live')
+    assert.equal(data.events.total, 1234)
+    assert.equal(data.events.by_provider.claude, 800)
+    assert.equal(data.watcher.running, true)
+    assert.equal(data.marts.daily_mart!.row_count, 100)
+    assert.equal(data.lag_seconds, 7)
+  } finally {
+    restore()
+  }
+})
+
+test('getEtlStatus throws EtlPipelineNotReadyError on 404', async () => {
+  const restore = withFetch(async () => mockResponse({ detail: 'not found' }, 404))
+  try {
+    await assert.rejects(getEtlStatus, EtlPipelineNotReadyError)
+  } finally {
+    restore()
+  }
+})
+
+test('getEtlStatus throws a generic Error on 500', async () => {
+  const restore = withFetch(async () => mockResponse('server explosion', 500))
+  try {
+    await assert.rejects(getEtlStatus, (err) => {
+      assert.ok(err instanceof Error)
+      assert.ok(!(err instanceof EtlPipelineNotReadyError))
+      assert.match(err.message, /500/)
+      return true
+    })
+  } finally {
+    restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fetcher: triggerEtlBackfill — POST + force flag + 404 handling.
+// ---------------------------------------------------------------------------
+
+test('triggerEtlBackfill POSTs to /api/etl/backfill with the force flag', async () => {
+  let captured: { url: string; init: RequestInit | undefined } | null = null
+  const restore = withFetch(async (url, init) => {
+    captured = { url, init }
+    return mockResponse({ ok: true, message: 'queued' })
+  })
+  try {
+    const res = await triggerEtlBackfill(true)
+    assert.equal(res.ok, true)
+    assert.equal(res.message, 'queued')
+    assert.ok(captured, 'fetch should have been called')
+    const cap = captured! as { url: string; init: RequestInit | undefined }
+    assert.equal(cap.url, '/api/etl/backfill')
+    assert.equal(cap.init?.method, 'POST')
+    const body = JSON.parse(cap.init?.body as string)
+    assert.equal(body.force, true)
+  } finally {
+    restore()
+  }
+})
+
+test('triggerEtlBackfill defaults force=false', async () => {
+  const restore = withFetch(async (_url, init) => {
+    const body = JSON.parse(init?.body as string)
+    assert.equal(body.force, false)
+    return mockResponse({ ok: true, message: 'queued' })
+  })
+  try {
+    await triggerEtlBackfill()
+  } finally {
+    restore()
+  }
+})
+
+test('triggerEtlBackfill on 404 raises EtlPipelineNotReadyError with CLI hint', async () => {
+  const restore = withFetch(async () => mockResponse({ detail: 'no such route' }, 404))
+  try {
+    await assert.rejects(triggerEtlBackfill, (err) => {
+      assert.ok(err instanceof EtlPipelineNotReadyError)
+      assert.match(err.message, /stackunderflow etl backfill/)
+      return true
+    })
+  } finally {
+    restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Health → badge colour mapping. Locks the four colours stated in the spec
+// (live=green, syncing=blue, stale=yellow, error=red) plus the pulsing flag
+// (only syncing pulses; the others are static).
+// ---------------------------------------------------------------------------
+
+const colourCases: Array<[EtlHealth, 'green' | 'blue' | 'yellow' | 'red', boolean]> = [
+  ['live', 'green', false],
+  ['syncing', 'blue', true],
+  ['stale', 'yellow', false],
+  ['error', 'red', false],
+]
+
+for (const [health, badge, pulse] of colourCases) {
+  test(`etlHealthColor(${health}) → ${badge} (pulse=${pulse})`, () => {
+    const c = etlHealthColor(health)
+    assert.equal(c.badge, badge)
+    assert.equal(c.pulse, pulse)
+    assert.match(c.dot, new RegExp(`bg-${badge}-500`))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// formatLagDuration — single-unit compact formatter.
+// ---------------------------------------------------------------------------
+
+const lagCases: Array<[number | null | undefined, string]> = [
+  [0, '0s'],
+  [7, '7s'],
+  [59, '59s'],
+  [60, '1m'],
+  [120, '2m'],
+  [3599, '59m'],
+  [3600, '1h'],
+  [3600 * 23, '23h'],
+  [3600 * 24, '1d'],
+  [3600 * 24 * 7, '7d'],
+  [null, '—'],
+  [undefined, '—'],
+  [-1, '—'],
+  [Number.NaN, '—'],
+  [Number.POSITIVE_INFINITY, '—'],
+]
+
+for (const [secs, expected] of lagCases) {
+  test(`formatLagDuration(${secs}) → ${JSON.stringify(expected)}`, () => {
+    assert.equal(formatLagDuration(secs), expected)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// formatEtlBadgeText — sentence-style label per health state.
+// ---------------------------------------------------------------------------
+
+test('formatEtlBadgeText: live shows synced-ago duration', () => {
+  const text = formatEtlBadgeText({ ...sampleStatus, health: 'live' })
+  assert.match(text, /Live \(synced 7s ago\)/)
+})
+
+test('formatEtlBadgeText: syncing shows event backlog (singular)', () => {
+  const text = formatEtlBadgeText({
+    ...sampleStatus,
+    health: 'syncing',
+    watcher: { ...sampleStatus.watcher, events_in_last_cycle: 1 },
+  })
+  assert.equal(text, 'Syncing (1 event behind)')
+})
+
+test('formatEtlBadgeText: syncing shows event backlog (plural)', () => {
+  const text = formatEtlBadgeText({
+    ...sampleStatus,
+    health: 'syncing',
+    watcher: { ...sampleStatus.watcher, events_in_last_cycle: 12 },
+  })
+  assert.equal(text, 'Syncing (12 events behind)')
+})
+
+test('formatEtlBadgeText: stale renders short lag', () => {
+  const text = formatEtlBadgeText({ ...sampleStatus, health: 'stale', lag_seconds: 120 })
+  assert.equal(text, 'Stale by 2m')
+})
+
+test('formatEtlBadgeText: stale renders day-scale lag', () => {
+  const text = formatEtlBadgeText({
+    ...sampleStatus,
+    health: 'stale',
+    lag_seconds: 3600 * 24,
+  })
+  assert.equal(text, 'Stale by 1d')
+})
+
+test('formatEtlBadgeText: error has the canonical pointer to /etl/status', () => {
+  const text = formatEtlBadgeText({ ...sampleStatus, health: 'error' })
+  assert.match(text, /ETL error/)
+  assert.match(text, /\/etl\/status/)
+})

@@ -700,3 +700,55 @@ export interface ContextBudget {
   heuristic: string
 }
 
+// ---------------------------------------------------------------------------
+// Wave 4F — ETL pipeline status (powering the dashboard header badge + the
+// Settings backfill section). Mirrors the response body of `GET /api/etl/status`
+// shipped by Wave 4C.
+//
+// Health states:
+//   - live    → caught up; dashboard data reflects the latest events
+//   - syncing → watcher is actively chewing through a backlog
+//   - stale   → no refresh in a while (likely watcher down or no events)
+//   - error   → ETL is in a failure state; user must investigate
+//
+// The badge polls this endpoint every 10s. When the route is missing (Wave 4C
+// hasn't merged), the fetcher surfaces a 404 and the badge renders a disabled
+// "ETL pipeline not ready" state rather than crashing the dashboard.
+// ---------------------------------------------------------------------------
+
+export type EtlHealth = 'live' | 'syncing' | 'stale' | 'error'
+
+export interface EtlWatcherStatus {
+  enabled: boolean
+  running: boolean
+  last_refresh_ts: string | null
+  seconds_since_refresh: number | null
+  events_in_last_cycle: number
+}
+
+export interface EtlMartStatus {
+  watermark: number
+  row_count: number
+  last_refresh_ts: string | null
+}
+
+export interface EtlEventsStatus {
+  total: number
+  max_id: number
+  by_provider: Record<string, number>
+  by_cost_source: Record<string, number>
+}
+
+export interface EtlStatusResponse {
+  watcher: EtlWatcherStatus
+  marts: Record<string, EtlMartStatus>
+  events: EtlEventsStatus
+  lag_seconds: number
+  health: EtlHealth
+}
+
+export interface EtlBackfillResponse {
+  ok: boolean
+  message: string
+}
+
