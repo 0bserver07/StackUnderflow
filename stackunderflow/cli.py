@@ -95,12 +95,22 @@ def cli():
     is_flag=True,
     help="Disable the Wave 2C ETL filesystem watcher (headless / debugging).",
 )
+@click.option(
+    "--no-lock",
+    is_flag=True,
+    help=(
+        "Skip the singleton watcher lock at ~/.stackunderflow/server.lock. "
+        "Headless / test scenarios only — letting two instances run watchers "
+        "against the same store will race on ingest+marts."
+    ),
+)
 def start_cmd(
     port: int | None,
     host: str | None,
     headless: bool,
     fresh: bool,
     no_watcher: bool,
+    no_lock: bool,
 ):
     """Launch the StackUnderflow dashboard."""
     if no_watcher:
@@ -109,6 +119,11 @@ def start_cmd(
         # ``deps`` directly) is what lets ``uvicorn.run`` reload the app
         # without losing the flag.
         os.environ["STACKUNDERFLOW_DISABLE_WATCHER"] = "1"
+    if no_lock:
+        # Same survives-into-lifespan trick as --no-watcher. The server
+        # reads this in ``_lock_disabled()`` and skips the
+        # ``acquire_watcher_lock`` call so the watcher always starts.
+        os.environ["STACKUNDERFLOW_DISABLE_LOCK"] = "1"
     if fresh:
         import shutil
         cache = _STATE_DIR / "cache"
@@ -1464,6 +1479,9 @@ def _render_etl_status_text(payload: dict) -> None:
         click.echo(
             f"                 last cycle: {events_last:,} events processed"
         )
+    lock_held_by = watcher.get("lock_held_by")
+    if lock_held_by is not None:
+        click.echo(f"                 lock held by PID {lock_held_by}")
 
     # Footer hint about lag for the eager reader — no badge ceremony.
     lag = payload.get("lag_seconds", 0)

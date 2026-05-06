@@ -31,7 +31,8 @@ The shape returned is:
         "watcher": {"enabled": bool, "running": bool|"unknown",
                      "last_refresh_ts": str|None,
                      "seconds_since_refresh": int|None,
-                     "events_in_last_cycle": int|None},
+                     "events_in_last_cycle": int|None,
+                     "lock_held_by": int|None},
         "marts": {<mart_name>: {"watermark": int, "row_count": int,
                                 "last_refresh_ts": str|None}},
         "events": {"total": int, "max_id": int,
@@ -231,6 +232,25 @@ def _marts_summary(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
 # ── watcher ───────────────────────────────────────────────────────────────────
 
 
+def _read_lock_holder_safe() -> int | None:
+    """Read the watcher-lock holder PID. Never raises.
+
+    Imported lazily so the etl.lock module doesn't enter the import
+    graph of pure-status callers (e.g. the CLI ``etl status``
+    subcommand) until it's actually needed. Returns ``None`` on any
+    failure — the lock holder field is informational, not load-bearing.
+    """
+    try:
+        from stackunderflow.etl.lock import read_lock_holder
+    except ImportError:
+        return None
+    try:
+        return read_lock_holder()
+    except Exception as exc:  # noqa: BLE001 — never propagate from a status probe
+        _log.debug("etl.status: read_lock_holder raised: %s", exc)
+        return None
+
+
 def _watcher_state() -> dict[str, Any]:
     """Best-effort snapshot of the Wave 2C watcher's runtime state.
 
@@ -248,6 +268,7 @@ def _watcher_state() -> dict[str, Any]:
     """
     enabled = not _watcher_env_disabled()
     handle = getattr(deps, "watcher_handle", None)
+    lock_held_by = _read_lock_holder_safe()
 
     if handle is None:
         # Either CLI mode (lifespan never ran) or the lifespan started
@@ -259,6 +280,7 @@ def _watcher_state() -> dict[str, Any]:
             "last_refresh_ts": None,
             "seconds_since_refresh": None,
             "events_in_last_cycle": None,
+            "lock_held_by": lock_held_by,
         }
 
     running: bool | str
@@ -284,6 +306,7 @@ def _watcher_state() -> dict[str, Any]:
         "last_refresh_ts": last_ts,
         "seconds_since_refresh": seconds_since,
         "events_in_last_cycle": events_last,
+        "lock_held_by": lock_held_by,
     }
 
 
