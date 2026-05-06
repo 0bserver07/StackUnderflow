@@ -48,6 +48,7 @@ from typing import Literal
 
 from stackunderflow.infra.costs import compute_cost
 from stackunderflow.reports.scope import Scope, parse_period
+from stackunderflow.store import mart_queries
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +214,75 @@ def _query_sessions(
     scope: Scope,
     project_filter: list[str] | None,
 ) -> list[dict]:
-    """Return one row per session inside ``scope`` with ``cwd`` and est. cost.
+    """Return one row per session inside ``scope`` with ``cwd`` and cost.
+
+    Wave 4A — when ``session_mart`` is materialised we read the session
+    list (cwd, started_at, cost_usd, primary_model) from there instead
+    of running a per-session ``compute_cost`` pass. ``cwd`` is still
+    sourced from ``messages.raw_json`` because the v1 ``session_mart``
+    leaves the column ``NULL`` per the builder docstring; the per-row
+    JSON lookup is one indexed scan, dwarfed by the git correlation
+    work that happens later.
+
+    Empty mart → fall back to the legacy aggregator path so users
+    without a populated ETL pipeline keep working.
+    """
+    if mart_queries.mart_has_session_rows(conn):
+        return _query_sessions_from_mart(
+            conn,
+            scope=scope,
+            project_filter=project_filter,
+        )
+    return _query_sessions_from_messages(
+        conn,
+        scope=scope,
+        project_filter=project_filter,
+    )
+
+
+def _query_sessions_from_mart(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope,
+    project_filter: list[str] | None,
+) -> list[dict]:
+    """Mart-backed session enumeration for ``compute_yield``."""
+    rows = mart_queries.session_mart_rows_for_yield(
+        conn,
+        since_iso=scope.since,
+        until_iso=scope.until,
+        project_slugs=project_filter or None,
+    )
+    out: list[dict] = []
+    for sess in rows:
+        # ``session_fk`` may be NULL when the messages table was pruned
+        # but the mart row stuck around (defensive — shouldn't happen
+        # in the normal pipeline). Cwd lookup short-circuits to "" then.
+        session_fk = sess.get("session_fk")
+        cwd = (
+            _first_cwd_for_session(conn, session_fk=int(session_fk))
+            if session_fk is not None
+            else ""
+        )
+        out.append(
+            {
+                "session_id": sess["session_id"],
+                "project_slug": sess["project_slug"],
+                "cwd": cwd,
+                "started_at": sess["first_ts"],
+                "cost_usd": float(sess.get("cost_usd", 0.0) or 0.0),
+            }
+        )
+    return out
+
+
+def _query_sessions_from_messages(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope,
+    project_filter: list[str] | None,
+) -> list[dict]:
+    """Aggregator-path session enumeration — kept as the empty-mart fallback.
 
     ``cwd`` lives in ``messages.raw_json`` (Claude / Codex / Droid / Pi /
     OpenCode all stamp it on the first event). We pull the first non-empty

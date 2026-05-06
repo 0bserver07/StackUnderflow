@@ -72,9 +72,15 @@ async def get_yield(
             ),
         )
 
+    # When the route is invoked directly (tests, not via FastAPI's DI), the
+    # ``Query(None)`` default leaks through as a Query sentinel — coerce
+    # anything that isn't a real list into None so the service sees what
+    # it expects. Same pattern ``routes/compare.py`` already uses.
+    project_filter = list(project) if isinstance(project, list) else None
+
     conn = db.connect(deps.store_path)
     try:
-        entries = compute_yield(conn, period=period, project_filter=project)
+        entries = compute_yield(conn, period=period, project_filter=project_filter)
     finally:
         conn.close()
 

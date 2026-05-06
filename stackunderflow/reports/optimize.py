@@ -35,7 +35,7 @@ from stackunderflow.services.context_budget import (
     estimate_global_budget,
 )
 from stackunderflow.services.qa_service import QAService
-from stackunderflow.store import queries
+from stackunderflow.store import mart_queries, queries
 
 __all__ = [
     "Finding",
@@ -516,7 +516,13 @@ def _detect_low_read_edit_ratio(
     *,
     scope: Scope | None = None,
 ) -> list[Finding]:
-    """Pattern 4 — sessions with many Reads and zero Edit/Write."""
+    """Pattern 4 — sessions with many Reads and zero Edit/Write.
+
+    Stays on the aggregator (raw ``messages``) path: the signal lives in
+    ``tools_json`` per-message arrays, which no mart materialises. Wave
+    4A migrated only ``_detect_cache_overhead`` because its inputs (per-
+    session token sums) already exist on ``session_mart``.
+    """
     grouped = _iter_session_messages(conn, scope=scope)
     bad_sessions: list[dict] = []
     for session_fk, rows in grouped.items():
@@ -582,6 +588,10 @@ def _detect_junk_reads(
     """Pattern 5 — same file Read 5+ times in one session.
 
     Indicates the assistant forgot what it already saw and re-fetched.
+
+    Stays on the aggregator (raw ``messages``) path: the signal requires
+    parsing ``raw_json`` for ``tool_use`` blocks with their ``file_path``
+    inputs, none of which is materialised into any mart.
     """
     grouped = _iter_session_messages(conn, scope=scope)
     hits: list[dict] = []
@@ -656,7 +666,59 @@ def _detect_cache_overhead(
     is being thrashed instead of amortising. Common cause: short
     sessions that pay the cache write cost without ever reading it
     back. We check at the session level.
+
+    Wave 4A — reads pre-aggregated per-session totals from
+    ``session_mart`` when available. The mart's ``input_tokens`` and
+    ``cache_create`` columns are the same SUM-by-session_fk this
+    detector used to compute on every call, so the ratio test is
+    identical and the empty-mart fallback path keeps the GROUP BY
+    over ``messages``. The other detectors in this module remain on
+    the aggregator path because their signals (tool-call shape, raw
+    JSON inspection, per-message payload sizes) aren't materialised
+    into any mart yet.
     """
+    if mart_queries.mart_has_session_rows(conn):
+        return _detect_cache_overhead_from_mart(conn, scope=scope)
+    return _detect_cache_overhead_from_messages(conn, scope=scope)
+
+
+def _detect_cache_overhead_from_mart(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope | None,
+) -> list[Finding]:
+    """Mart-fed cache-overhead detector — reads ``session_mart`` totals."""
+    since_iso = scope.since if scope is not None else None
+    until_iso = scope.until if scope is not None else None
+    bad = mart_queries.session_mart_cache_overhead(
+        conn,
+        since_iso=since_iso,
+        until_iso=until_iso,
+        ratio_threshold=CACHE_OVERHEAD_RATIO,
+    )
+    # Re-key on ``session_fk`` for parity with the aggregator path —
+    # the finding's ``details.sessions`` consumers (tests, CLI table)
+    # expect that field name. ``session_id`` from the mart maps onto
+    # the same logical concept; we surface it as ``session_fk`` so the
+    # JSON contract stays stable across data sources.
+    bad = [
+        {
+            "session_fk": row["session_id"],
+            "cache_create_tokens": row["cache_create_tokens"],
+            "input_tokens": row["input_tokens"],
+            "ratio": row["ratio"],
+        }
+        for row in bad
+    ]
+    return _cache_overhead_finding(bad)
+
+
+def _detect_cache_overhead_from_messages(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope | None,
+) -> list[Finding]:
+    """Aggregator-path cache-overhead detector — empty-mart fallback."""
     sql = (
         "SELECT session_fk, "
         "       SUM(input_tokens) AS inp, "
@@ -690,6 +752,15 @@ def _detect_cache_overhead(
                 "input_tokens": inp,
                 "ratio": round(ratio, 3),
             })
+    return _cache_overhead_finding(bad)
+
+
+def _cache_overhead_finding(bad: list[dict]) -> list[Finding]:
+    """Render the cache-overhead ``Finding`` from the candidate list.
+
+    Shared between the mart path and the aggregator fallback so the
+    finding's severity ladder + waste estimation stay in lockstep.
+    """
 
     if not bad:
         return []
@@ -739,6 +810,11 @@ def _detect_bash_output_limits(
     blocks in user messages whose preceding assistant call was a Bash
     tool. Falls back to checking ``content_text`` length on user
     tool_result rows.
+
+    Stays on the aggregator (raw ``messages``) path: the signal needs
+    per-message ``content_text`` byte counts plus ``raw_json`` tool-call
+    parsing — neither lives in any mart. Wave 4A only migrated detectors
+    whose inputs are pre-summed on the mart layer.
     """
     sql = (
         "SELECT id, session_fk, seq, role, raw_json, content_text "
