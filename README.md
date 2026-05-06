@@ -1,126 +1,246 @@
 # StackUnderflow
 
-**StackUnderflow: the local observability for your coding agents.** Search, replay, and analyse every session, all offline. Starts with [Claude Code](https://claude.ai/code).
+**Local cost dashboard for AI coding agents.** Watches the JSONL / vscdb / SQLite files your coding tools write, parses them in-process, and serves a dashboard that shows what you're spending, where it goes, and which sessions actually shipped code.
 
-[Quickstart](#quickstart) | [Features](#features) | [Configuration](#configuration) | [Architecture](#architecture) | [Contributing](#contributing)
+16 providers supported (4 default-on, 12 opt-in beta). Sub-second sync from source-file write to dashboard data fresh. No telemetry, no upload, no cloud — everything stays in `~/.stackunderflow/`.
+
+[Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [MCP](#mcp-server) · [Configuration](#configuration) · [Privacy](#privacy)
 
 ![StackUnderflow Dashboard](assets/dashboard.png)
 
+---
+
 ## Quickstart
 
-**Requirements:** Python 3.10+ and an existing `~/.claude/` directory from using Claude Code. Adapters for more coding agents are on the way.
+Requires Python 3.11+. The first run picks up whatever local sessions you already have under `~/.claude/`, `~/.codex/`, etc.
 
 ```bash
 pip install stackunderflow
 stackunderflow init
 ```
 
-Your browser opens to `http://localhost:8081` with every project under `~/.claude/projects/` indexed and ready to browse.
+Browser opens to `http://localhost:8081` with every project the local store knows about, indexed and ready. Background ingest + watcher start immediately; the dashboard is interactive while ingest runs.
 
-**Common knobs:**
+If port 8081 is taken: `stackunderflow cfg set port 8090` then re-run.
 
 ```bash
-stackunderflow init --no-browser      # don't auto-open the browser
-stackunderflow cfg set port 8090      # change the port
-stackunderflow backup create          # snapshot ~/.claude/ before risky changes
-stackunderflow --help                 # everything else
+# common knobs
+stackunderflow cfg set port 8090            # change the port
+stackunderflow cfg set currency GBP         # display costs in another currency
+stackunderflow plan set claude-pro          # track against a monthly budget
+stackunderflow init --no-browser            # don't auto-open the browser
+stackunderflow --help                       # full CLI
 ```
 
-If port 8081 is taken: `stackunderflow cfg set port <free-port>` then re-run `init`.
-
-### Nix (reproducible)
-
-A flake is provided for Nix users — no Python or Node setup required:
+### Nix
 
 ```bash
 nix run github:0bserver07/StackUnderflow      # launch the dashboard
 nix build github:0bserver07/StackUnderflow    # build, output at ./result
-nix develop                                   # dev shell with python + node
+nix develop                                   # dev shell
 ```
 
-See [flake.nix](flake.nix) for the full derivation.
-
-### Development setup
-
-If you want to hack on StackUnderflow (or install from source), you'll also need Node 18+ to build the React UI:
+### From source
 
 ```bash
 git clone https://github.com/0bserver07/StackUnderflow.git
 cd StackUnderflow
-
-# 1. Build the React UI (one-time)
 cd stackunderflow-ui && npm install && npm run build && cd ..
-
-# 2. Install the Python package in editable mode
-pip install -e .
-
-# 3. Launch the dashboard
+pip install -e ".[dev]"
 stackunderflow init
 ```
 
-## Features
+---
 
-- **Analytics dashboard** — token usage, cost breakdown, model distribution, error patterns, hourly activity
-- **Cost tab** — token-burn attribution: top sessions by cost, most expensive commands (click → Messages tab), tool-cost ranking, token composition (donut + stacked daily), cache ROI, outliers, retry-loop signals, week-over-week trends, and an error-cost estimate. Filter state (range / session / tool) is URL-encoded so views are shareable. Implementation: `stackunderflow-ui/src/pages/cost/` + `stackunderflow/routes/cost.py` + `stackunderflow/routes/commands.py`.
-- **Session viewer** — browse individual JSONL session files with conversation replay, sub-agent grouping, per-session cost. Deep-linked detail views show a breadcrumb + back button.
-- **Light / dark theme** — toggle in the header (sun/moon). Persists to `localStorage['suf:theme']`.
-- **Full-text search** — across all sessions, with filters for date, model, and role
-- **Q&A pair detection** — heuristic extraction of question-answer pairs based on text patterns and follow-up cues
-- **Auto-tagging** — tags sessions by language, framework, topic, and intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`) using keyword and pattern matching
-- **Resolution status** — flags Q&A pairs as `resolved`, `looped`, or `abandoned` based on follow-up patterns, with loop counts surfaced in the dashboard
-- **Bookmarks** — save and organise important conversations
-- **Incremental backups** — `stackunderflow backup create` snapshots `~/.claude/` with hard-linked `rsync --link-dest` (use `backup auto` on macOS for daily scheduling)
-- **Multi-project** — switch between projects, view cross-project statistics
-- **Legacy project recovery** — pre-January 2026 Claude Code stored prompts in `~/.claude/history.jsonl` instead of per-project JSONL files. StackUnderflow auto-detects these old projects and surfaces them from that file (prompts and timestamps only — token/model data wasn't stored locally in the old format).
+## What it does
 
-## Using as a Library
+### Multi-provider ingest
+16 coding agents have adapters in the registry. Four ship default-on:
 
-StackUnderflow also works as a Python package for scripting and automation. The
-public API reads from the local SQLite store at `~/.stackunderflow/store.db` so
-you get every project from every provider that has been ingested:
+| Provider | Source |
+|---|---|
+| Claude Code | `~/.claude/projects/<slug>/*.jsonl` (+ legacy `~/.claude/history.jsonl`) |
+| Codex | `~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl` |
+| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
+| Cline | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` |
+
+Twelve more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi+OMP) opt in via env var:
+
+```bash
+STACKUNDERFLOW_BETA_GEMINI=1 STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
+```
+
+See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source paths and the cost-source semantics each one uses (rate-card vs estimated).
+
+### Cost analysis
+- **Cost tab** — top sessions by cost, most expensive commands (click → Messages tab), tool-cost ranking, token composition (donut + stacked daily), cache ROI, outliers, retry-loop signals, week-over-week trends, error-cost estimate. Filters (range / session / tool) URL-encoded.
+- **Compare** — side-by-side model metrics over a window: one-shot rate, retry rate, cache hit rate, $/call, $/session. Group by `(provider, model)` (Agent × Model) or just model.
+- **Plan budgets** — set a monthly budget from a preset (Claude Pro $20, Claude Max $200, Cursor Pro/Max) or a custom amount. Shows used / remaining / projected month-end.
+- **Yield analysis** — correlates sessions with `git log` per cwd: productive (commit followed within 24h) / reverted / abandoned / no-repo. Use it to find which sessions actually shipped code.
+- **Optimize** — eight waste detectors: looped Q&A, bloated CLAUDE.md, unused MCP servers, ghost agents, low read-to-edit ratio, junk reads, cache overhead, bash-output limits. Each finding ships with a one-line suggested fix.
+- **Context-budget estimator** — what your system prompt + MCP servers + skills + memory files cost on every turn before you type anything.
+- **Multi-currency** — pick any 3-letter ISO code; FX rates from the public Frankfurter API (24h cached, ECB snapshot fallback when offline).
+- **Model aliases** — for proxied model ids (OpenRouter, Replicate, internal gateways): `cfg model-alias set openrouter/claude-opus claude-opus-4-6` and the cost layer prices it at the canonical rate.
+- **Fast-mode multiplier** — Claude Opus priority tier (`service_tier="priority"`) bills at 6×; detected from the JSONL and threaded through the cost layer end-to-end.
+
+### Search, Q&A, tags
+- **Full-text search** across every ingested message. Filter by date / model / role.
+- **Q&A pair extraction** — heuristic detection of question/answer pairs with resolution status (`resolved` / `looped` / `abandoned`).
+- **Auto-tagging** — sessions get tagged by language, framework, topic, intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`).
+- **Bookmarks** — pin conversations you want to find later.
+
+### Real-time sync
+A `watchfiles`-backed daemon thread watches every registered adapter's source paths. On any change → ingest the new bytes → normalize → refresh marts. Source-file write to dashboard data fresh in ~400ms. Disable with `--no-watcher`.
+
+### Export
+```bash
+stackunderflow export -f csv -o usage.csv -p month
+stackunderflow export -f json -o usage.json   # multi-period rollup (today + 7d + 30d)
+```
+
+The dashboard's "Download" button hits the same `/api/export` endpoint.
+
+### Backup
+```bash
+stackunderflow backup create               # snapshot ~/.claude/ via rsync --link-dest
+stackunderflow backup auto --enable        # daily on macOS via launchd
+stackunderflow backup list
+stackunderflow backup restore <name>
+```
+
+---
+
+## Architecture
+
+The pipeline is three layers tied together by a watermarked refresh loop and a filesystem watcher.
+
+```
+                ┌─ Source files (16 providers) ─┐
+                │  ~/.claude/projects/           │
+                │  ~/.codex/sessions/            │
+                │  state.vscdb (Cursor)          │
+                │  saoudrizwan.claude-dev (Cline)│
+                │  ...                           │
+                └─────────────┬──────────────────┘
+                              │  per-provider adapter
+                              ▼
+               ┌─────────  RAW LAYER  ─────────┐
+               │  messages, sessions, projects │
+               │  one row per source-message    │
+               └─────────────┬──────────────────┘
+                              │  per-provider Normalizer
+                              ▼
+               ┌──── NORMALIZED LAYER ─────────┐
+               │  usage_events                  │
+               │  canonical shape, cost_usd     │
+               │  computed once + stored        │
+               └─────────────┬──────────────────┘
+                              │  watermarked MartBuilders
+                              ▼
+               ┌──────  MARTS LAYER  ──────────┐
+               │  daily_mart                    │
+               │  session_mart                  │
+               │  project_mart                  │
+               │  provider_day_mart             │
+               │  model_day_mart                │
+               └─────────────┬──────────────────┘
+                              ▼
+               REST routes — plain SELECTs
+
+                ↑↑↑ filesystem watcher ties
+                    layers together: 200ms
+                    debounce, ~400ms total
+                    end-to-end latency
+```
+
+Every dashboard route reads from the marts. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
+
+```
+stackunderflow/
+  adapters/         # 16 source-file parsers (4 default-on, 12 beta)
+  etl/              # ETL pipeline (v0.7+)
+    normalize/      #   Normalizer ABC + 16 per-provider transforms
+    marts/          #   MartBuilder ABC + 5 mart builders
+    backfill.py     #   streams messages → events → marts
+    watcher.py      #   watchfiles daemon, debounced 200ms
+    watermark.py    #   per-mart last_event_id tracking
+    status.py       #   shared assembler for /api/etl/status + CLI
+  api/              # public Python API (list_projects/process/list_sessions)
+  ingest/           # writer + per-record normalize hook
+  store/            # SQLite at ~/.stackunderflow/store.db
+    migrations/     #   v001 → v006 (additive)
+    queries.py      #   typed read helpers (raw layer)
+    mart_queries.py #   typed read helpers (marts)
+  infra/
+    costs.py        # compute_cost(tokens, model, provider, *, speed)
+    currency.py     # Frankfurter + 24h cache + ECB snapshot fallback
+    cursor_cache.py # fingerprint cache for vscdb (3-8x cold-start speedup)
+    providers/      # per-provider Pricers (one file per provider)
+  mcp/              # FastMCP server (3 tools, multi-provider)
+  reports/          # CLI report renderers + 8 optimize patterns
+  routes/           # FastAPI route modules (one per concern)
+  services/         # compare, plans, yield_tracker, search, qa, tags, ...
+  cli.py            # click CLI (24 commands incl. etl status / etl backfill)
+  server.py         # thin shell — app + lifespan + watcher + bg ingest
+  settings.py       # env → file → default resolution (descriptor pattern)
+
+stackunderflow-ui/  # React + TypeScript + Tailwind + Recharts
+```
+
+For the deeper design rationale see `docs/specs/etl-architecture.md`. For the state-of-the-codebase walkthrough (recent history, gotchas, real-data state, what's left) see [docs/HANDOFF.md](docs/HANDOFF.md).
+
+---
+
+## Library API
 
 ```python
 import stackunderflow
 
-# Every project the local store knows about — provider-tagged.
+# Every project the local store knows about, provider-tagged.
 projects = stackunderflow.list_projects()
-# [{"slug": ..., "provider": "claude" | "codex" | ...,
-#   "display_name": ..., "path": ..., "first_seen": ..., "last_modified": ...}, ...]
+# [{"slug": ..., "provider": "claude" | "codex" | "cursor" | ...,
+#   "display_name": ..., "path": ..., "first_seen": ..., "last_modified": ...}]
 
 # Filter to one provider:
 codex_only = stackunderflow.list_projects(provider="codex")
 
+# Sessions for a project:
+sessions = stackunderflow.list_sessions("project-slug")
+# [{"session_id": ..., "first_ts": ..., "last_ts": ..., "message_count": ...}]
+
 # Pipeline-formatted messages + statistics for one project:
 messages, stats = stackunderflow.process(projects[0]["slug"])
-
-tokens = stats["overview"]["total_tokens"]
 print(f"Sessions: {stats['overview']['sessions']}")
-print(f"Tokens: {tokens['input']:,} in / {tokens['output']:,} out")
-print(f"Total cost: ${stats['overview']['total_cost']:.2f}")
+print(f"Cost: ${stats['overview']['total_cost']:.2f}")
 ```
 
-If the store doesn't exist yet (fresh install, no `stackunderflow init` run),
-`list_projects()` returns an empty list rather than raising. `process()` raises
-`KeyError` when a slug isn't found.
+`list_projects()` returns `[]` rather than raising when the store doesn't exist yet. `process()` raises `KeyError` when the slug isn't found.
 
-For lower-level access, the store helpers are still importable:
+For lower-level access:
 
 ```python
-from stackunderflow.store import db, queries
-from stackunderflow.stats import classifier, enricher, aggregator, formatter
+from stackunderflow.store import db, queries, mart_queries
+from stackunderflow.etl import backfill, watermark
+from stackunderflow.etl.normalize import get as get_normalizer
 from stackunderflow.infra.discovery import locate_logs
 ```
 
+---
+
 ## MCP server
 
-StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that exposes your local Claude Code session logs as a tool any MCP client can call. With it wired up, your AI can answer "what tools did I run in the last hour" or "find the last error I hit" by reading your real on-disk session files.
+StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that reads the local store. Three tools across all 16 providers (no longer Claude-only):
+
+- `session_query(session_id, kind="all"|"tool_calls"|"errors")` — pull messages from a specific session
+- `list_sessions(provider=None, limit=50, since=None)` — recent sessions across providers
+- `list_projects(provider=None)` — provider-tagged project catalogue
 
 ```bash
 stackunderflow-mcp     # console script
 stackunderflow mcp     # equivalent CLI subcommand
 ```
 
-To wire it into Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Wire into Claude Desktop via `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -132,174 +252,114 @@ To wire it into Claude Desktop, add to `~/Library/Application Support/Claude/cla
 }
 ```
 
-Restart Claude Desktop and the `session_query` tool becomes callable. See [`docs/mcp.md`](docs/mcp.md) for the full tool reference, Cursor / Claude Code wiring, supported agent roots, and the architectural rationale (stateless, adapter-imported, schema-evolution insulated).
+See [docs/mcp.md](docs/mcp.md) for the full tool reference + Cursor / Claude Code wiring.
+
+---
+
+## ETL operations
+
+The pipeline is incremental + idempotent. Most users never need to think about it. For when you do:
+
+```bash
+# Health check — watcher status, mart watermarks vs max event id, lag
+stackunderflow etl status
+
+# Populate marts from existing messages (one-time on first install or after a crash)
+stackunderflow etl backfill          # incremental — skips converted msgs
+stackunderflow etl backfill --force  # drop + rebuild from scratch
+
+# Disable the watcher (headless / debugging)
+stackunderflow start --no-watcher
+# or via env var:
+STACKUNDERFLOW_DISABLE_WATCHER=1 stackunderflow start
+```
+
+Watcher state, watermarks, and per-provider event counts are also at `GET /api/etl/status` and visible as a badge in the dashboard header.
+
+---
 
 ## Configuration
 
 ```bash
-# Change port (default: 8081)
+stackunderflow cfg ls                   # show current settings
 stackunderflow cfg set port 8090
-
-# Disable auto-opening browser
-stackunderflow cfg set auto_browser false
-
-# Show current settings
-stackunderflow cfg ls
-
-# Reset a setting to default
-stackunderflow cfg rm port
-
-# Sync the session store with the latest JSONL files (incremental)
-stackunderflow reindex
+stackunderflow cfg rm port              # reset to default
 ```
+
+Selected keys (full list in [docs/cli-reference.md](docs/cli-reference.md)):
 
 | Key | Default | Description |
-|-----|---------|-------------|
-| `port` | 8081 | Server port |
-| `host` | 127.0.0.1 | Server host |
-| `auto_browser` | true | Auto-open browser on start |
-| `max_date_range_days` | 30 | Default date range for analytics |
+|---|---|---|
+| `port` | `8081` | Server port |
+| `host` | `127.0.0.1` | Bind address |
+| `auto_browser` | `true` | Open browser on start |
+| `currency` | `USD` | Display currency (any 3-letter ISO) |
+| `model_aliases` | `{}` | Proxy id → canonical (manage via `cfg model-alias`) |
+| `plan_name` | unset | Active plan preset (`claude-pro`, `claude-max`, `cursor-pro`, `cursor-max`, `custom`) |
+| `plan_monthly_usd` | `0.0` | Monthly budget (USD) |
+| `plan_reset_day` | `1` | Day of month the budget resets |
+| `auto_reindex_on_ingest` | `true` | Refresh search/qa/tags after each ingest |
 
-See [CLI reference](docs/cli-reference.md) for all commands.
+Env vars override the persisted file. The Python descriptor in `stackunderflow/settings.py` resolves env → file → default lazily on every read.
 
-## Architecture
-
-```
-stackunderflow/
-  adapters/       # source-adapter layer (one adapter per AI tool)
-    base.py       #   LogAdapter ABC — discover() + stream_messages() protocol
-    claude.py     #   Claude Code adapter — reads ~/.claude/projects/ + history.jsonl
-  ingest/         # mtime-gated incremental import into the store
-    enumerate.py  #   fan all adapters' SessionRefs into one iterable
-    writer.py     #   transactional writer — one file → one transaction → one ingest_log row
-  store/          # SQLite session store (~/.stackunderflow/store.db)
-    db.py         #   connection factory (WAL mode, row_factory)
-    schema.py     #   CREATE TABLE migrations
-    queries.py    #   typed read helpers (list_projects, get_project_stats, …)
-    types.py      #   frozen dataclasses returned by query helpers
-  stats/          # message classification + analytics (no I/O — pure transforms)
-    classifier.py #   tag message types and error patterns
-    enricher.py   #   build dataset with interaction chains
-    aggregator.py #   compute statistics (one pass, collector-based)
-    formatter.py  #   shape messages for the REST API
-  infra/
-    discovery.py  # find and enumerate Claude log directories
-    costs.py      # per-model cost estimation
-  routes/         # FastAPI route modules
-    projects.py   #   project selection and listing
-    data.py       #   stats, dashboard-data, messages, refresh (store-backed)
-    sessions.py   #   session browsing (store-backed)
-    search.py     #   full-text search
-    qa.py         #   Q&A pair browsing
-    tags.py       #   auto-tags and manual tagging
-    bookmarks.py  #   bookmark CRUD + session metadata enrichment
-    misc.py       #   pricing, health, static
-  services/       # search, Q&A, tags, bookmarks, pricing
-  deps.py         # shared state (config, services, store_path)
-  server.py       # thin shell — app creation, middleware, lifespan
-  settings.py     # env → file → default config resolution (descriptor-based)
-  cli.py          # click CLI (init, start, cfg, backup, clear-cache, reindex)
-
-stackunderflow-ui/  # React + TypeScript + Tailwind frontend
-```
-
-### Data flow
-
-```
-~/.claude/projects/<slug>/*.jsonl
-         │
-         ▼
-  ClaudeAdapter.enumerate() + read()
-         │  (incremental: skip unchanged mtime/offset)
-         ▼
-  ingest/writer.py  →  SQLite store (~/.stackunderflow/store.db)
-         │
-         ▼
-  queries.get_project_stats(conn, project_id)
-         │  (reconstructs messages, feeds stats/ chain)
-         ▼
-  stats/{classifier → enricher → aggregator → formatter}
-         │
-         ▼
-  /api/stats, /api/dashboard-data, /api/messages
-```
-
-### How refresh works
-
-`stackunderflow reindex` (or `/api/refresh`) fans every registered adapter's discovered files through `ingest/enumerate.py`. For each file the runner compares the stored `last_mtime` and `last_offset` and only reads newly-appended bytes. New messages are written transactionally to the store. The store is then the source of truth for all API endpoints — session browsing, cross-project aggregation (`reports/aggregate.py`), and the waste-finding heuristic (`reports/optimize.py`).
-
-On first successful ingest the legacy `~/.stackunderflow/cache/` directory is removed if present.
-
-### Source adapters
-
-StackUnderflow ingests sessions from more than one coding agent. Four adapters are default-on; twelve more are opt-in beta.
-
-| Provider | Status | Source | Default state |
-|----------|--------|--------|---------------|
-| Claude Code | stable | `~/.claude/projects/<slug>/*.jsonl` (+ legacy `~/.claude/history.jsonl`) | on |
-| Codex | stable | `~/.codex/` rollout JSONL | on |
-| Cursor | stable | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | on |
-| Cline | stable | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | on |
-| KiloCode | beta | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks/` | off |
-| Roo Code | beta | `…/rooveterinaryinc.roo-cline/tasks/` | off |
-| OpenCode | beta | SQLite under `$XDG_DATA_HOME/opencode/` | off |
-| Cursor Agent | beta | `~/.cursor/projects/{p}/agent-transcripts/` (+ ai-tracking.db) | off |
-| Qwen | beta | `~/.qwen/projects/{p}/chats/*.jsonl` | off |
-| Gemini | beta | `~/.gemini/tmp/{p}/chats/session-*.{json,jsonl}` | off |
-| Copilot | beta | `~/.copilot/session-state/` + VS Code transcripts | off |
-| Codeium | beta | `~/.codeium/` (discovery stub — protobuf decoding deferred) | off |
-| Continue | beta | `~/.continue/*.{db,sqlite,sqlite3}` | off |
-| Droid | beta | `$FACTORY_DIR` (or `~/.factory/sessions/`) | off |
-| Kiro | beta | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/` | off |
-| OpenClaw | beta | `~/.openclaw/`, `~/.clawdbot/`, `~/.moltbot/`, `~/.moldbot/` | off |
-| Pi + OMP | beta | `~/.pi/agent/sessions/` and `~/.omp/agent/sessions/` | off |
-
-Cursor and Cline shipped behind beta flags from v0.4.0 through v0.6.0. They've been promoted to default-on in v0.7.0 — both have full test coverage, fingerprint-based caching for the Cursor vscdb, and have been stable against real local data for several releases.
-
-#### Beta adapters
-
-The remaining beta adapters are off by default. Opt in with an env var when starting the server:
-
-```bash
-STACKUNDERFLOW_BETA_KILOCODE=1 stackunderflow start
-STACKUNDERFLOW_BETA_QWEN=1 STACKUNDERFLOW_BETA_GEMINI=1 stackunderflow start
-```
-
-The flag parser accepts `1`, `true`, `yes`, `on` (case-insensitive). Most beta adapters are macOS-only in v1. See [docs/multi-provider.md](docs/multi-provider.md) for the full feature reference and [docs/adapters.md](docs/adapters.md) for how to write a new adapter.
+---
 
 ## Privacy
 
-StackUnderflow processes all your Claude Code logs locally.
+Everything runs locally. Nothing about your sessions, prompts, or code leaves the machine.
 
-**What it reads on your machine:**
-- `~/.claude/projects/<slug>/*.jsonl` — per-project conversation logs (new format)
-- `~/.claude/history.jsonl` — centralized prompt history (legacy format, pre-January 2026)
-- `~/.claude/settings*.json` — only via the `backup` command, for snapshots
+**What StackUnderflow reads on disk** — only the source paths the registered adapters point at. The 4 default-on roots:
+- `~/.claude/projects/`, `~/.claude/history.jsonl` (legacy)
+- `~/.codex/sessions/`
+- `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+- `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`
 
-**What it does with that data:**
-- Parsing, search indexing, and analytics run locally — nothing is uploaded
-- The session store is written to `~/.stackunderflow/store.db` (SQLite, WAL mode)
-- Backups (opt-in) are written to `~/.stackunderflow/backups/` unencrypted — protect this directory like you would your `~/.claude/`
+Beta adapters add up to 12 more roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
 
-**What leaves your machine (only if you enable it):**
-- **Pricing** — fetches model cost data from a public GitHub source (no user data sent)
+**What it writes** — `~/.stackunderflow/` only.
+- `store.db` — SQLite, WAL mode, the source of truth
+- `cache/` — currency rates (24h), Cursor vscdb fingerprint cache
+- `backups/` — only when you run `backup create`. Plain copy of `~/.claude/` snapshots — protect this directory.
 
-No telemetry, no tracking, no crash reports. No sharing.
+**What leaves your machine** — only when explicitly enabled:
+- Pricing snapshot from `github.com/BerriAI/litellm` (no user data sent; hardcoded fallback in `infra/costs.py`)
+- FX rates from `api.frankfurter.app` when `currency != USD` (no user data sent; ECB snapshot fallback embedded in `infra/currency.py`)
 
-## Contributing
+No telemetry. No tracking. No crash reports. No analytics. The app is a single binary that talks to your filesystem and your browser.
+
+---
+
+## Development
 
 ```bash
-# Install with dev dependencies
+git clone https://github.com/0bserver07/StackUnderflow.git
+cd StackUnderflow
 pip install -e ".[dev]"
+cd stackunderflow-ui && npm install && npm run build && cd ..
 
-# Run tests
-python -m pytest tests/stackunderflow/ -v
+# Backend tests (1598 fast tests; default invocation skips slow integration suite)
+pytest tests/ -q
+
+# Slow integration + perf-regression suite (~10 tests, ~30s)
+pytest -m slow tests/stackunderflow/integration -q
 
 # Lint
-bash lint.sh
+ruff check stackunderflow/
+
+# Frontend
+cd stackunderflow-ui
+npm run typecheck
+npm run build                          # outputs to ../stackunderflow/static/react/
+node --test tests/services/*.test.ts   # unit tests via Node 22+ built-in runner
 ```
 
-See [docs/README-DEV.md](docs/README-DEV.md) for architecture details.
+For an architecture walkthrough oriented at a new contributor or agent: [docs/HANDOFF.md](docs/HANDOFF.md).
+
+For per-component design specs: [docs/specs/](docs/specs/).
+
+For adapters: [docs/adapters.md](docs/adapters.md) walks through writing one.
+
+---
 
 ## License
 
