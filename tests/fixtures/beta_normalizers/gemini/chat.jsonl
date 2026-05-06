@@ -1,0 +1,5 @@
+{"sessionId": "gemini-sess-001", "startTime": "2026-04-25T13:00:00Z", "kind": "metadata"}
+{"id": "gem-msg-001", "timestamp": "2026-04-25T13:00:01Z", "type": "user", "content": [{"text": "Explain dependency injection in Python"}]}
+{"id": "gem-msg-002", "timestamp": "2026-04-25T13:00:02Z", "type": "gemini", "model": "gemini-1.5-pro", "content": [{"text": "Dependency injection is a design pattern..."}], "tokens": {"input": 1200, "output": 600, "cached": 400, "thoughts": 150, "tool": 0, "total": 2350}, "toolCalls": []}
+{"id": "gem-msg-003", "timestamp": "2026-04-25T13:00:03Z", "type": "user", "content": [{"text": "Show me a code example."}]}
+{"id": "gem-msg-004", "timestamp": "2026-04-25T13:00:04Z", "type": "gemini", "model": "gemini-1.5-pro", "content": [{"text": "Here's a complete example with constructor injection..."}], "tokens": {"input": 1800, "output": 800, "cached": 1000, "thoughts": 200, "tool": 0, "total": 3800}, "toolCalls": [{"id": "call-1", "name": "write_file", "args": {"path": "demo.py"}}]}

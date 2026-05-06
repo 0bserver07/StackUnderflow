@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from stackunderflow.settings import Settings
 
 if TYPE_CHECKING:
+    from stackunderflow.etl.lock import LockHandle
     from stackunderflow.etl.watcher import WatcherHandle
     from stackunderflow.services.bookmark_service import BookmarkService
     from stackunderflow.services.pricing_service import PricingService
@@ -52,3 +53,10 @@ pricing_service: PricingService | None = None
 # --no-watcher``). Stays ``None`` for CLI subcommands that don't bring
 # up the FastAPI app.
 watcher_handle: WatcherHandle | None = None
+
+# Single-watcher invariant lock handle (Wave 5 follow-up). Populated by
+# ``server._lifespan`` when the current process owns the watcher lock at
+# ``~/.stackunderflow/server.lock``. ``None`` means either (a) we're
+# running with ``--no-lock`` / no FastAPI lifespan, or (b) another live
+# instance already holds the lock and this process is HTTP-only.
+watcher_lock_handle: LockHandle | None = None
