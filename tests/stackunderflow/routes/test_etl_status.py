@@ -147,6 +147,7 @@ class TestResponseShape:
         assert set(body["watcher"].keys()) == {
             "enabled", "running", "last_refresh_ts",
             "seconds_since_refresh", "events_in_last_cycle",
+            "lock_held_by",
         }
 
         # All five mart names present, even on a fresh store

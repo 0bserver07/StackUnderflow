@@ -1,0 +1,6 @@
+[
+  {"role": "user", "content": [{"type": "text", "text": "<model>claude-sonnet-4-5-20250929</model>\nAdd dark mode to the settings panel."}]},
+  {"role": "assistant", "content": [{"type": "text", "text": "Added a `useDarkMode` hook with toggle UI."}]},
+  {"role": "user", "content": [{"type": "text", "text": "Persist the choice in localStorage."}]},
+  {"role": "assistant", "content": [{"type": "text", "text": "Done — wired into useEffect with key `darkMode`."}]}
+]

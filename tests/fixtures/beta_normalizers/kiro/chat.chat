@@ -1,0 +1,17 @@
+{
+  "executionId": "exec-001",
+  "actionId": "action-001",
+  "chat": [
+    {"role": "human", "content": "Implement a binary search tree."},
+    {"role": "bot", "content": "I'll create a BST class with insert/search/delete operations.\n<tool_use><name>Edit</name></tool_use>"},
+    {"role": "tool", "content": "ok"},
+    {"role": "human", "content": "Add traversal methods."},
+    {"role": "bot", "content": "Added inorder, preorder, and postorder traversals.\n<tool_use><name>Edit</name></tool_use>"}
+  ],
+  "metadata": {
+    "modelId": "claude.3.5.sonnet",
+    "startTime": "2026-04-25T16:00:00Z",
+    "endTime": "2026-04-25T16:05:00Z",
+    "workflowId": "kiro-workflow-001"
+  }
+}

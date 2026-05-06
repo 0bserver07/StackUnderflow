@@ -1,0 +1,5 @@
+{"type": "session_start", "id": "droid-sess-001", "timestamp": "2026-04-25T15:00:00Z", "cwd": "/Users/yad/myproj"}
+{"type": "message", "id": "droid-msg-001", "timestamp": "2026-04-25T15:00:01Z", "message": {"role": "user", "content": [{"type": "text", "text": "Implement the cache layer"}]}}
+{"type": "message", "id": "droid-msg-002", "timestamp": "2026-04-25T15:00:02Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "I'll add a TieredCache class with LRU + disk fallback."}, {"type": "tool_use", "name": "Edit", "input": {"path": "cache.py"}}]}}
+{"type": "message", "id": "droid-msg-003", "timestamp": "2026-04-25T15:00:03Z", "message": {"role": "user", "content": [{"type": "text", "text": "Add tests."}]}}
+{"type": "message", "id": "droid-msg-004", "timestamp": "2026-04-25T15:00:04Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Tests added covering all four cache paths."}, {"type": "tool_use", "name": "Edit", "input": {"path": "test_cache.py"}}]}}

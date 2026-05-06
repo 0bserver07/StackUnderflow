@@ -1,0 +1,5 @@
+{"type": "session", "id": "pi-sess-001", "timestamp": "2026-04-25T18:00:00Z", "cwd": "/Users/yad/myproj"}
+{"type": "message", "id": "pi-msg-001", "timestamp": "2026-04-25T18:00:01Z", "message": {"role": "user", "content": [{"type": "text", "text": "Generate boilerplate for a CLI."}]}}
+{"type": "message", "id": "pi-msg-002", "timestamp": "2026-04-25T18:00:02Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Here's a Click-based CLI scaffold."}, {"type": "toolCall", "name": "write_file"}], "model": "gpt-5", "responseId": "resp-001", "usage": {"input": 800, "output": 250, "cacheRead": 400, "cacheWrite": 100}}}
+{"type": "message", "id": "pi-msg-003", "timestamp": "2026-04-25T18:00:03Z", "message": {"role": "user", "content": [{"type": "text", "text": "Add subcommand for status."}]}}
+{"type": "message", "id": "pi-msg-004", "timestamp": "2026-04-25T18:00:04Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Status subcommand added."}], "model": "gpt-5", "responseId": "resp-002", "usage": {"input": 1100, "output": 180, "cacheRead": 700, "cacheWrite": 50}}}

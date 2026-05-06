@@ -308,10 +308,29 @@ class CopilotAdapter:
                 data_envelope = event.get("data")
                 if isinstance(data_envelope, dict):
                     tool_calls_field = data_envelope.get("toolCalls")
+            # Priority order:
+            #   1. ``model`` field explicitly on this event (most specific).
+            #   2. Rolling ``current_model`` from a previous
+            #      ``session.model_change`` / ``session.start`` — this is
+            #      the session's *declared* model, which is more reliable
+            #      than a tool-call-id heuristic.
+            #   3. Tool-call-id prefix inference (``toolu_...`` →
+            #      Anthropic family, ``call_...`` → OpenAI). Last-resort
+            #      heuristic; only kicks in when the session never
+            #      declared a model at all.
+            #   4. ``copilot-auto`` literal as a final default.
+            #
+            # Earlier code put tool-call-id inference *above* current_model.
+            # That dropped a fully-qualified id like
+            # ``claude-sonnet-4-5-20250929`` (declared in model_change)
+            # back to the family-only ``claude-auto`` whenever the next
+            # turn happened to call a tool, losing model granularity in
+            # the marts. The drift was caught by Wave 5's beta-normalizer
+            # validation — see ``docs/beta-normalizer-drift.md``.
             model = (
                 _extract_model(event)
-                or _infer_model_from_tool_calls(tool_calls_field)
                 or current_model
+                or _infer_model_from_tool_calls(tool_calls_field)
                 or "copilot-auto"
             )
             # Bind the inference into rolling state so subsequent
