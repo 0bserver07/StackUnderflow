@@ -402,15 +402,37 @@ async def get_messages(
 
 @router.get("/api/messages/summary")
 async def get_messages_summary_endpoint():
-    """Get summary statistics about messages without loading all data."""
+    """Get summary statistics about messages without loading all data.
+
+    Wave 4A — when ``project_mart`` carries a row for the active
+    project, the top-level ``total`` (and bonus ``total_sessions``)
+    come from a single mart read. The detail blocks (``by_type``,
+    ``by_model``, ``total_tokens``) still need the full message list
+    because those columns aren't materialised into any mart yet, so
+    we fall back to the legacy ``get_project_messages`` pass for the
+    breakdown — and unconditionally when the mart is empty.
+    """
     log_path = _require_project()
     conn = db.connect(deps.store_path)
     try:
         project_id = _get_project_id(conn, log_path)
+        mart_totals = mart_queries.project_mart_messages_summary_totals(
+            conn, project_id=project_id
+        )
         messages = queries.get_project_messages(conn, project_id=project_id)
     finally:
         conn.close()
-    return get_messages_summary(messages)
+    summary = get_messages_summary(messages)
+    if mart_totals is not None:
+        # Mart row wins on the top-level total — it's the project's
+        # lifetime message count from ``project_mart``, identical in
+        # value but cheaper than counting the materialised messages
+        # list. The breakdown blocks (``by_type`` / ``by_model``) still
+        # come from the messages pass because those dimensions aren't
+        # in any mart today.
+        summary["total"] = mart_totals["total"]
+        summary["total_sessions"] = mart_totals["total_sessions"]
+    return summary
 
 
 @router.post("/api/refresh")

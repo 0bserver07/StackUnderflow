@@ -359,3 +359,272 @@ def daily_mart_by_model(
         bucket["cache_read"] += int(r.get("cache_read", 0) or 0)
         bucket["cache_creation"] += int(r.get("cache_create", 0) or 0)
     return out
+
+
+# ── Wave 4A — additional mart reads (compare/yield/optimize/messages-summary) ─
+
+
+def mart_has_session_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``session_mart`` has at least one row.
+
+    Used by the global-scope route migrations (compare, optimize) where
+    the mart populated/empty distinction is not project-scoped: if the
+    ETL pipeline has ever run, every project's sessions are in the mart;
+    if it hasn't, the table is empty and we fall back.
+    """
+    if not _table_exists(conn, "session_mart"):
+        return False
+    row = conn.execute("SELECT 1 FROM session_mart LIMIT 1").fetchone()
+    return row is not None
+
+
+def mart_has_model_day_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``model_day_mart`` has at least one row.
+
+    Used by ``services.compare`` to gate the model-rollup mart read. Pairs
+    with ``mart_has_session_rows`` because compare needs both marts to be
+    materialised to produce a full response.
+    """
+    if not _table_exists(conn, "model_day_mart"):
+        return False
+    row = conn.execute("SELECT 1 FROM model_day_mart LIMIT 1").fetchone()
+    return row is not None
+
+
+def _iso_to_day(iso_ts: str | None) -> str | None:
+    """Extract ``YYYY-MM-DD`` from an ISO-8601 timestamp.
+
+    Returns ``None`` on empty/invalid input so callers can pass through
+    optional scope bounds without an extra guard. ``model_day_mart``
+    keys on day strings, so we slice the leading 10 characters of the
+    ISO timestamp — equivalent to ``date()`` in SQL but done host-side
+    so the mart filter pushes a parametric ``BETWEEN`` rather than a
+    function expression.
+    """
+    if not iso_ts or len(iso_ts) < 10:
+        return None
+    return iso_ts[:10]
+
+
+# ── model_day_mart reads ────────────────────────────────────────────────────
+
+
+def model_day_totals(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Aggregate ``model_day_mart`` rows into per-model totals.
+
+    Sums across (day, speed) so the result is keyed by ``model`` only —
+    the shape ``services.compare`` consumes for its per-model totals
+    (``calls``, tokens, ``total_cost``). ``since_iso`` / ``until_iso``
+    are ISO-8601 strings; we slice ``YYYY-MM-DD`` and push it down as
+    a ``day BETWEEN ?`` filter so the index on ``model_day_mart`` does
+    the work.
+    """
+    if not _table_exists(conn, "model_day_mart"):
+        return {}
+    sql = (
+        "SELECT model, "
+        "       SUM(cost_usd) AS cost_usd, "
+        "       SUM(input_tokens) AS input_tokens, "
+        "       SUM(output_tokens) AS output_tokens, "
+        "       SUM(cache_read) AS cache_read, "
+        "       SUM(cache_create) AS cache_create, "
+        "       SUM(message_count) AS message_count "
+        "FROM model_day_mart WHERE 1=1"
+    )
+    params: list[Any] = []
+    day_from = _iso_to_day(since_iso)
+    day_to = _iso_to_day(until_iso)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY model"
+    out: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(sql, params).fetchall():
+        model = row["model"] or ""
+        if not model:
+            continue
+        out[model] = {
+            "cost_usd": float(row["cost_usd"] or 0.0),
+            "input_tokens": int(row["input_tokens"] or 0),
+            "output_tokens": int(row["output_tokens"] or 0),
+            "cache_read": int(row["cache_read"] or 0),
+            "cache_create": int(row["cache_create"] or 0),
+            "message_count": int(row["message_count"] or 0),
+        }
+    return out
+
+
+# ── session_mart reads ──────────────────────────────────────────────────────
+
+
+def session_mart_rows_for_compare(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    provider_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-session rows ``services.compare`` needs.
+
+    Each row carries ``primary_model``, ``provider``, ``is_one_shot``,
+    and ``assistant_message_count`` — enough to compute one-shot %,
+    retry rate, and per-session cost attribution. Filter is keyed on
+    ``first_ts`` (mart's session start time, ISO-8601) and on the
+    optional single-string ``provider_filter`` (matches the existing
+    ``compare_models`` argument shape).
+    """
+    if not _table_exists(conn, "session_mart"):
+        return []
+    sql = (
+        "SELECT session_id, project_id, provider, primary_model, "
+        "       first_ts, last_ts, "
+        "       message_count, user_message_count, assistant_message_count, "
+        "       input_tokens, output_tokens, cache_read, cache_create, "
+        "       cost_usd, is_one_shot, cwd "
+        "FROM session_mart WHERE 1=1"
+    )
+    params: list[Any] = []
+    if since_iso:
+        sql += " AND first_ts >= ?"
+        params.append(since_iso)
+    if until_iso:
+        sql += " AND first_ts <= ?"
+        params.append(until_iso)
+    if provider_filter:
+        sql += " AND LOWER(provider) = ?"
+        params.append(provider_filter.lower())
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def session_mart_rows_for_yield(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    project_slugs: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-session rows ``services.yield_tracker`` needs.
+
+    Joins ``session_mart`` with ``projects`` to surface the project slug
+    (yield's project filter speaks slugs, mart speaks ``project_id``).
+    Sessions are ordered by ``first_ts`` so the caller's chronological
+    iteration over the result is preserved.
+    """
+    if not _table_exists(conn, "session_mart"):
+        return []
+    # Join the raw ``sessions`` row in too — yield's cwd lookup needs
+    # the integer ``session_fk`` to query ``messages.raw_json`` (cwd is
+    # not yet materialised on ``session_mart`` per the v1 spec note).
+    sql = (
+        "SELECT m.session_id AS session_id, "
+        "       p.slug AS project_slug, "
+        "       p.provider AS provider, "
+        "       m.project_id AS project_id, "
+        "       m.first_ts AS first_ts, "
+        "       m.primary_model AS primary_model, "
+        "       m.cost_usd AS cost_usd, "
+        "       sess.id AS session_fk "
+        "FROM session_mart m "
+        "JOIN projects p ON p.id = m.project_id "
+        "LEFT JOIN sessions sess "
+        "       ON sess.project_id = m.project_id "
+        "      AND sess.session_id = m.session_id "
+        "WHERE m.first_ts IS NOT NULL"
+    )
+    params: list[Any] = []
+    if since_iso:
+        sql += " AND m.first_ts >= ?"
+        params.append(since_iso)
+    if until_iso:
+        sql += " AND m.first_ts <= ?"
+        params.append(until_iso)
+    if project_slugs:
+        placeholders = ",".join("?" for _ in project_slugs)
+        sql += f" AND p.slug IN ({placeholders})"
+        params.extend(project_slugs)
+    sql += " ORDER BY m.first_ts"
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def session_mart_cache_overhead(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    ratio_threshold: float,
+) -> list[dict[str, Any]]:
+    """Return per-session cache-overhead candidates from ``session_mart``.
+
+    Mirrors the legacy ``GROUP BY session_fk`` pass in
+    ``reports/optimize._detect_cache_overhead`` but reads from the
+    materialised ``session_mart`` rows: ``input_tokens`` and
+    ``cache_create`` are pre-summed so the only work left is the ratio
+    test. Returns rows shaped to feed straight into the detector's
+    finding payload.
+    """
+    if not _table_exists(conn, "session_mart"):
+        return []
+    sql = (
+        "SELECT session_id, project_id, "
+        "       input_tokens AS inp, cache_create AS cache_create "
+        "FROM session_mart WHERE 1=1"
+    )
+    params: list[Any] = []
+    if since_iso:
+        sql += " AND first_ts >= ?"
+        params.append(since_iso)
+    if until_iso:
+        sql += " AND first_ts <= ?"
+        params.append(until_iso)
+    bad: list[dict[str, Any]] = []
+    for row in conn.execute(sql, params).fetchall():
+        inp = int(row["inp"] or 0)
+        cache = int(row["cache_create"] or 0)
+        if inp == 0 or cache == 0:
+            continue
+        total_input = inp + cache
+        if total_input == 0:
+            continue
+        ratio = cache / total_input
+        if ratio > ratio_threshold:
+            bad.append(
+                {
+                    "session_id": row["session_id"],
+                    "project_id": row["project_id"],
+                    "cache_create_tokens": cache,
+                    "input_tokens": inp,
+                    "ratio": round(ratio, 3),
+                }
+            )
+    return bad
+
+
+# ── messages-summary helpers ────────────────────────────────────────────────
+
+
+def project_mart_messages_summary_totals(
+    conn: sqlite3.Connection, *, project_id: int
+) -> dict[str, int] | None:
+    """Return ``{total, total_sessions}`` from ``project_mart`` for one project.
+
+    Feeds ``/api/messages/summary``'s top-level ``total`` field straight
+    from the mart row. Returns ``None`` when no row exists so the caller
+    can decide whether to fall back to a full ``get_project_messages``
+    pass — the only safe answer when the ETL pipeline hasn't materialised
+    the project yet.
+    """
+    row = get_project_mart_row(conn, project_id=project_id)
+    if row is None:
+        return None
+    return {
+        "total": int(row.get("total_messages", 0) or 0),
+        "total_sessions": int(row.get("total_sessions", 0) or 0),
+    }

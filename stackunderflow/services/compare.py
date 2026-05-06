@@ -41,6 +41,7 @@ from typing import Any
 
 from stackunderflow.infra.costs import compute_cost
 from stackunderflow.reports.scope import Scope, parse_period
+from stackunderflow.store import mart_queries
 
 __all__ = [
     "ModelStats",
@@ -174,8 +175,49 @@ def compare_models(
     Returns:
         Models sorted by ``total_cost`` desc. Empty list when no
         assistant messages match the filters.
+
+    Wave 4A — when both ``model_day_mart`` and ``session_mart`` are
+    materialised AND no ``project_filter`` is set, the per-model totals
+    come from a single SUM over ``model_day_mart`` and the per-session
+    attribution (one-shot %, retry rate, $/session, sessions count)
+    comes from ``session_mart``. The ``project_filter`` codepath stays
+    on the aggregator because ``model_day_mart`` does not carry
+    ``project_id`` — applying a slug filter requires the raw join. An
+    empty mart (Wave 4B backfill not run) also falls back so users on
+    un-materialised stores keep working.
     """
     scope = _resolve_scope(period)
+
+    # Wave 4A mart fast-path. The fallback path reads the raw messages
+    # table — kept intact so an un-materialised store, or a project-slug
+    # filter that the marts can't satisfy, still answers correctly.
+    if (
+        project_filter is None
+        and mart_queries.mart_has_session_rows(conn)
+        and mart_queries.mart_has_model_day_rows(conn)
+    ):
+        return _compare_models_from_marts(
+            conn,
+            scope=scope,
+            provider_filter=provider_filter,
+        )
+
+    return _compare_models_from_messages(
+        conn,
+        scope=scope,
+        project_filter=project_filter,
+        provider_filter=provider_filter,
+    )
+
+
+def _compare_models_from_messages(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope,
+    project_filter: list[str] | None,
+    provider_filter: str | None,
+) -> list[ModelStats]:
+    """Aggregator-path compare — kept verbatim as the empty-mart fallback."""
     rows = _fetch_messages(
         conn,
         scope=scope,
@@ -289,6 +331,126 @@ def compare_models(
                 cost_per_call=cost_per_call,
                 cost_per_session=cost_per_session,
                 total_cost=acc.total_cost,
+                total_tokens=total_tokens,
+            )
+        )
+
+    out.sort(key=lambda r: r.total_cost, reverse=True)
+    return out
+
+
+# ── Wave 4A — mart-fed compare ──────────────────────────────────────────────
+
+
+def _compare_models_from_marts(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope,
+    provider_filter: str | None,
+) -> list[ModelStats]:
+    """Build ``ModelStats`` rows from ``model_day_mart`` + ``session_mart``.
+
+    Per-model totals (calls, tokens, cache, cost) come from a single
+    GROUP BY over ``model_day_mart`` filtered to ``scope``. Per-session
+    attribution (sessions, one-shot %, retry rate, $/session) comes
+    from ``session_mart`` keyed on ``primary_model`` — same definition
+    the aggregator path uses, just pre-materialised.
+
+    Provider attribution is derived from ``session_mart``'s
+    ``primary_model → provider`` mapping. A model that exists in
+    ``model_day_mart`` but has no surviving session row (e.g. its only
+    sessions were in a different scope window) inherits the provider
+    string the legacy path defaults to (``"anthropic"``) so the JSON
+    contract is preserved.
+    """
+    model_totals = mart_queries.model_day_totals(
+        conn,
+        since_iso=scope.since,
+        until_iso=scope.until,
+    )
+    sessions = mart_queries.session_mart_rows_for_compare(
+        conn,
+        since_iso=scope.since,
+        until_iso=scope.until,
+        provider_filter=provider_filter,
+    )
+
+    # Per-model session attribution from session_mart.
+    sessions_by_model: dict[str, int] = {}
+    one_shot_by_model: dict[str, int] = {}
+    assistant_msgs_by_model: dict[str, int] = {}
+    cost_by_model: dict[str, float] = {}
+    provider_by_model: dict[str, str] = {}
+    for s in sessions:
+        mdl = s.get("primary_model") or ""
+        if not mdl:
+            continue
+        sessions_by_model[mdl] = sessions_by_model.get(mdl, 0) + 1
+        if int(s.get("is_one_shot", 0) or 0) == 1:
+            one_shot_by_model[mdl] = one_shot_by_model.get(mdl, 0) + 1
+        assistant_msgs_by_model[mdl] = (
+            assistant_msgs_by_model.get(mdl, 0)
+            + int(s.get("assistant_message_count", 0) or 0)
+        )
+        cost_by_model[mdl] = cost_by_model.get(mdl, 0.0) + float(
+            s.get("cost_usd", 0.0) or 0.0
+        )
+        # First-seen provider wins — sessions for a given primary_model
+        # share a provider in practice (model ids map 1:1 to providers).
+        provider_by_model.setdefault(mdl, str(s.get("provider") or ""))
+
+    # When a provider filter is active, we restrict per-model totals to
+    # the models whose primary_model survived the filter — model_day_mart
+    # itself doesn't carry provider so the session-side filter is the
+    # source of truth for provider attribution.
+    if provider_filter is not None:
+        model_totals = {m: v for m, v in model_totals.items() if m in sessions_by_model}
+
+    out: list[ModelStats] = []
+    for mdl, totals in model_totals.items():
+        calls = int(totals.get("message_count", 0) or 0)
+        if calls == 0:
+            # Skip models with no events in window — matches the
+            # aggregator path which skips models that never had an
+            # assistant message recorded.
+            continue
+        cache_read = int(totals.get("cache_read", 0) or 0)
+        cache_create = int(totals.get("cache_create", 0) or 0)
+        cacheable = cache_read + cache_create
+        cache_hit = (cache_read / cacheable) if cacheable else 0.0
+        # ``total_cost`` for compare lives in model_day_mart (rolls in
+        # every event regardless of which session's primary model was X).
+        # ``cost_per_session`` divides that by the count of sessions
+        # whose primary_model is X — same convention the aggregator
+        # path uses, kept here for parity.
+        total_cost = float(totals.get("cost_usd", 0.0) or 0.0)
+        sessions_count = sessions_by_model.get(mdl, 0)
+        one_shot = one_shot_by_model.get(mdl, 0)
+        assistant_msgs = assistant_msgs_by_model.get(mdl, 0)
+        cost_per_call = (total_cost / calls) if calls else 0.0
+        cost_per_session = (total_cost / sessions_count) if sessions_count else 0.0
+        one_shot_pct = (one_shot / sessions_count) if sessions_count else 0.0
+        retry_rate = (
+            (assistant_msgs / sessions_count - 1.0) if sessions_count else 0.0
+        )
+        total_tokens = (
+            int(totals.get("input_tokens", 0) or 0)
+            + int(totals.get("output_tokens", 0) or 0)
+            + cache_read
+            + cache_create
+        )
+        out.append(
+            ModelStats(
+                model=mdl,
+                provider=provider_by_model.get(mdl) or "anthropic",
+                sessions=sessions_count,
+                calls=calls,
+                one_shot_pct=one_shot_pct,
+                retry_rate=retry_rate,
+                cache_hit_rate=cache_hit,
+                cost_per_call=cost_per_call,
+                cost_per_session=cost_per_session,
+                total_cost=total_cost,
                 total_tokens=total_tokens,
             )
         )
