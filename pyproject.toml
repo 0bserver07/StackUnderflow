@@ -117,6 +117,17 @@ ignore = [
 "stackunderflow/infra/discovery.py" = ["UP038"]
 
 
+[tool.pytest.ini_options]
+# Custom markers. ``slow`` is opt-in: the default ``pytest tests/ -q`` run skips
+# anything marked ``slow`` (see the ``-m "not slow"`` filter below) so CI keeps
+# the fast feedback loop. The Wave 4E real-data integration + per-route
+# regression suite under ``tests/stackunderflow/integration/`` is gated on this
+# marker — run those explicitly with ``pytest -m slow``.
+markers = [
+    "slow: long-running real-data integration / latency regression tests (skipped by default; run with `pytest -m slow`)",
+]
+addopts = "-m 'not slow'"
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
