@@ -1,0 +1,5 @@
+{"type": "session", "id": "claw-sess-001", "timestamp": "2026-04-25T17:00:00Z"}
+{"type": "model_change", "data": {"model": "claude-sonnet-4-5-20250929"}, "timestamp": "2026-04-25T17:00:00Z"}
+{"type": "message", "id": "claw-msg-001", "timestamp": "2026-04-25T17:00:01Z", "message": {"role": "user", "content": [{"type": "text", "text": "Refactor the API client."}]}}
+{"type": "message", "id": "claw-msg-002", "timestamp": "2026-04-25T17:00:02Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Refactored to use httpx.AsyncClient with connection pooling."}, {"type": "tool_use", "name": "edit_file"}], "model": "claude-sonnet-4-5-20250929", "provider": "anthropic", "usage": {"input": 1500, "output": 450, "cacheRead": 800, "cacheWrite": 200, "cost": {"total": 0.012}}}}
+{"type": "message", "id": "claw-msg-003", "timestamp": "2026-04-25T17:00:03Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Added retry logic with exponential backoff."}], "model": "claude-sonnet-4-5-20250929", "provider": "anthropic", "usage": {"input": 1700, "output": 320, "cacheRead": 1100, "cacheWrite": 100, "cost": {"total": 0.009}}}}

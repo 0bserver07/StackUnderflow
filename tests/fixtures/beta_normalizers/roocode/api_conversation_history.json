@@ -1,0 +1,6 @@
+[
+  {"role": "user", "content": [{"type": "text", "text": "<model>claude-sonnet-4-5-20250929</model>\nMigrate the test suite to pytest."}]},
+  {"role": "assistant", "content": [{"type": "text", "text": "Converted unittest.TestCase classes to plain pytest functions with fixtures."}]},
+  {"role": "user", "content": [{"type": "text", "text": "Drop unittest imports."}]},
+  {"role": "assistant", "content": [{"type": "text", "text": "All unittest imports removed."}]}
+]

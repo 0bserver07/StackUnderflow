@@ -1,0 +1,5 @@
+{"type": "session.model_change", "model": "claude-sonnet-4-5-20250929", "timestamp": "2026-04-25T14:00:00Z"}
+{"type": "user.message", "content": "Help me debug this error", "timestamp": "2026-04-25T14:00:01Z"}
+{"type": "assistant.message", "content": "Looking at your stack trace, the issue is in the loop counter.", "inputTokens": 250, "outputTokens": 80, "timestamp": "2026-04-25T14:00:02Z"}
+{"type": "user.message", "content": "Can you fix it?", "timestamp": "2026-04-25T14:00:03Z"}
+{"type": "assistant.message", "content": "Here's the corrected version.", "inputTokens": 320, "outputTokens": 50, "toolCalls": [{"id": "toolu_01abc", "name": "edit_file"}], "timestamp": "2026-04-25T14:00:04Z"}

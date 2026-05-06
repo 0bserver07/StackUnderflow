@@ -1,0 +1,6 @@
+[
+  {"type": "say", "say": "user_feedback", "text": "Add dark mode to the settings panel.", "ts": 1745596800000},
+  {"type": "say", "say": "api_req_started", "text": "{\"tokensIn\": 1200, \"tokensOut\": 350, \"cacheWrites\": 200, \"cacheReads\": 600, \"cost\": 0.0085}", "ts": 1745596802000},
+  {"type": "say", "say": "user_feedback", "text": "Persist the choice in localStorage.", "ts": 1745596820000},
+  {"type": "say", "say": "api_req_started", "text": "{\"tokensIn\": 1500, \"tokensOut\": 240, \"cacheWrites\": 100, \"cacheReads\": 1100, \"cost\": 0.0061}", "ts": 1745596823000}
+]

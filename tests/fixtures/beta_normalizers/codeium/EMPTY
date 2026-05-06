@@ -1,0 +1,4 @@
+# Codeium adapter is a discovery-only stub — no parsable on-disk format
+# is documented for the Codeium chat blobs. The fixture is intentionally
+# empty; the test verifies that adapter.enumerate() and the normalizer
+# both yield zero events without raising.
