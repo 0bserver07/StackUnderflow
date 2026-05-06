@@ -1263,11 +1263,11 @@ def reindex():
 
 # ── ETL ──────────────────────────────────────────────────────────────────────
 #
-# Wave 1 of the ETL refactor (see ``docs/specs/etl-architecture.md``) ships
-# the schema, ABCs, and orchestrator skeleton. The `etl backfill` command
-# is wired now so Wave 2 (normalizers + mart builders) can ship without a
-# CLI-touching follow-up — until Wave 2 registers, this is a no-op that
-# prints zero counts.
+# The ETL refactor (see ``docs/specs/etl-architecture.md``) ships in
+# multiple waves. Wave 1 laid the schema + orchestrator skeleton; Wave
+# 2 registered normalizers + mart builders + the watcher; Wave 4B
+# (this PR) wires the orchestrator body so ``etl backfill`` actually
+# populates ``usage_events`` against real data.
 
 @cli.group("etl")
 def etl_group():
@@ -1283,27 +1283,65 @@ def etl_group():
 def etl_backfill_cmd(force: bool):
     """Convert all existing messages into usage_events, then refresh marts.
 
-    No-op until Wave 2 lands the per-provider normalizers and mart
-    builders. Until then the orchestrator returns zero counts so it's
-    safe to wire into deploy scripts and the CLI test suite.
+    Default mode is incremental: messages already converted on a prior
+    run are skipped via the ``uniq_events_msg`` UNIQUE index.
+
+    ``--force`` first wipes ``usage_events`` + ``mart_watermark``,
+    rebuilds every mart from scratch, and then runs the normalize
+    pass fresh — useful after a normalizer change or a model rate
+    update.
     """
     from stackunderflow.etl import backfill as etl_backfill
 
+    # Optional progress bar — falls back to periodic log lines from the
+    # orchestrator (one every 10K events) when tqdm isn't installed.
+    progress_cb = _build_backfill_progress_callback()
+
     conn = _open_store()
     try:
-        report = etl_backfill(conn, force=force)
+        report = etl_backfill(conn, force=force, progress_callback=progress_cb)
     finally:
         conn.close()
+        if progress_cb is not None and hasattr(progress_cb, "close"):
+            progress_cb.close()
 
-    click.echo(f"  events inserted:           {report.events_inserted:,}")
+    click.echo("\nBackfill complete.")
+    click.echo(f"  events inserted:            {report.events_inserted:,}")
     click.echo(f"  events skipped (duplicate): {report.events_skipped_duplicate:,}")
     if report.marts_refreshed:
         click.echo("  marts refreshed:")
         for name, count in sorted(report.marts_refreshed.items()):
             click.echo(f"    {name:<14s}  {count:>8,} events")
     else:
-        click.echo("  marts refreshed:           (none registered)")
-    click.echo(f"  duration:                  {report.duration_seconds:.3f}s")
+        click.echo("  marts refreshed:            (none registered)")
+    click.echo(f"  duration:                   {report.duration_seconds:.3f}s")
+
+
+def _build_backfill_progress_callback():
+    """Return a tqdm-backed progress callback, or None if tqdm is absent.
+
+    The returned callable matches the ``backfill()`` orchestrator's
+    ``progress_callback`` signature (``cb(events_so_far, messages_seen)``)
+    and exposes a ``.close()`` method the CLI calls in the ``finally``
+    block so the bar gets rendered out cleanly even on Ctrl+C.
+    """
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        return None
+
+    bar = tqdm(unit="msg", desc="backfill", dynamic_ncols=True, leave=True)
+    last_messages = [0]
+
+    def _cb(events_so_far: int, messages_seen: int) -> None:
+        delta = messages_seen - last_messages[0]
+        if delta > 0:
+            bar.update(delta)
+            last_messages[0] = messages_seen
+        bar.set_postfix(events=f"{events_so_far:,}")
+
+    _cb.close = bar.close  # type: ignore[attr-defined]
+    return _cb
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
