@@ -23,6 +23,7 @@ import {
   getEtlStatus,
   triggerEtlBackfill,
   EtlPipelineNotReadyError,
+  EtlBackfillInProgressError,
 } from '../services/api'
 import BetaBadge from '../components/common/BetaBadge'
 import ContextBudgetCard from '../components/settings/ContextBudgetCard'
@@ -339,10 +340,28 @@ function EtlPipelineSection() {
   const backfillMutation = useMutation({
     mutationFn: () => triggerEtlBackfill(false),
     onSuccess: (res) => {
-      setFeedback({ kind: res.ok ? 'ok' : 'warn', message: res.message })
+      // 202 Accepted: the orchestrator is running on the server. The
+      // dashboard polls /api/etl/status every 10s; the badge + this
+      // section will reflect the in-progress state on the next tick.
+      setFeedback({
+        kind: 'ok',
+        message: `Backfill started (job ${res.job_id.slice(0, 8)}…). The dashboard will refresh as it progresses.`,
+      })
       queryClient.invalidateQueries({ queryKey: ['etl-status'] })
     },
     onError: (err: unknown) => {
+      if (err instanceof EtlBackfillInProgressError) {
+        // 409 Conflict — surface the running job_id so the user can
+        // tell whether this is "their" backfill from a prior session.
+        setFeedback({
+          kind: 'warn',
+          message: `A backfill is already running (job ${err.jobId.slice(0, 8)}…). Wait for it to finish before triggering another.`,
+        })
+        // Refresh the status query so the in-progress state surfaces
+        // in the table + badge without waiting for the next 10s tick.
+        queryClient.invalidateQueries({ queryKey: ['etl-status'] })
+        return
+      }
       if (err instanceof EtlPipelineNotReadyError) {
         setFeedback({
           kind: 'warn',
@@ -357,6 +376,12 @@ function EtlPipelineSection() {
       })
     },
   })
+
+  // The status payload tells us whether a job is in flight regardless
+  // of whether *this* tab kicked it off. Reflect that in the button so
+  // a second tab doesn't lie about the system state.
+  const isJobRunning =
+    backfillMutation.isPending || (!!data?.current_job && data.current_job.status === 'running')
 
   const handleConfirm = () => {
     setConfirming(false)
@@ -444,6 +469,20 @@ function EtlPipelineSection() {
         </div>
       )}
 
+      {/* In-progress banner — surfaces a job started by another tab / curl
+          / the CLI as well as one we kicked off ourselves. */}
+      {data?.current_job && data.current_job.status === 'running' && (
+        <div className="mt-4 px-3 py-2 rounded border border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-xs text-blue-800 dark:text-blue-300 flex items-center gap-2">
+          <IconRefresh size={12} className="animate-spin" />
+          <span>
+            Backfill <span className="font-mono">{data.current_job.job_id.slice(0, 8)}…</span> is
+            running
+            {data.current_job.force ? ' (force rebuild)' : ''}. Started{' '}
+            {data.current_job.started_at}.
+          </span>
+        </div>
+      )}
+
       {/* Backfill action */}
       <div className="mt-4 flex items-center justify-between gap-3">
         <div className="text-xs text-gray-500">
@@ -453,11 +492,11 @@ function EtlPipelineSection() {
         <button
           type="button"
           onClick={() => setConfirming(true)}
-          disabled={backfillMutation.isPending}
+          disabled={isJobRunning}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50 shrink-0"
         >
-          <IconRefresh size={12} className={backfillMutation.isPending ? 'animate-spin' : ''} />
-          {backfillMutation.isPending ? 'Backfilling…' : 'Backfill now'}
+          <IconRefresh size={12} className={isJobRunning ? 'animate-spin' : ''} />
+          {isJobRunning ? 'Backfilling…' : 'Backfill now'}
         </button>
       </div>
 

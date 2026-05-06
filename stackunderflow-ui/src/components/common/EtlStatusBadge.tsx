@@ -23,8 +23,10 @@ import {
   formatLagDuration,
   getEtlStatus,
 } from '../../services/api'
+import type { EtlStatusResponse } from '../../types/api'
 
 const REFRESH_MS = 10_000
+const REFRESH_MS_ACTIVE = 2_000   // Tighten polling while a job is in flight
 const STALE_MS = 5_000
 
 export default function EtlStatusBadge() {
@@ -36,7 +38,13 @@ export default function EtlStatusBadge() {
   const { data, error, isLoading } = useQuery({
     queryKey: ['etl-status'],
     queryFn: getEtlStatus,
-    refetchInterval: REFRESH_MS,
+    // While a backfill is running we want sub-second feedback in the
+    // header — drop the poll cadence to 2s. Otherwise the standard 10s
+    // tick is fine.
+    refetchInterval: (query) => {
+      const d = query.state.data as EtlStatusResponse | undefined
+      return d?.current_job?.status === 'running' ? REFRESH_MS_ACTIVE : REFRESH_MS
+    },
     staleTime: STALE_MS,
     // Don't retry on 404 (route not deployed yet) — keeps the console clean.
     retry: (failureCount, err) => {

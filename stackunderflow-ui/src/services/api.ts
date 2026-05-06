@@ -408,6 +408,18 @@ export class EtlPipelineNotReadyError extends Error {
   }
 }
 
+// Raised when POST /api/etl/backfill returns 409 because another job
+// is already running. Carries the existing job's id so callers can
+// surface "Backfill abc123 already running" without re-fetching status.
+export class EtlBackfillInProgressError extends Error {
+  jobId: string
+  constructor(jobId: string) {
+    super(`A backfill is already running (job ${jobId.slice(0, 8)}…)`)
+    this.name = 'EtlBackfillInProgressError'
+    this.jobId = jobId
+  }
+}
+
 export async function getEtlStatus(): Promise<EtlStatusResponse> {
   const res = await fetch(`${BASE}/etl/status`)
   if (res.status === 404) {
@@ -431,10 +443,27 @@ export async function triggerEtlBackfill(force = false): Promise<EtlBackfillResp
       'Backfill route not available — run `stackunderflow etl backfill` from the CLI instead.',
     )
   }
+  if (res.status === 409) {
+    // Backfill already running. Pull the existing job_id out of the
+    // body so the UI can mention it; default to a placeholder if the
+    // body is malformed.
+    let jobId = 'unknown'
+    try {
+      const body = (await res.json()) as { job_id?: string }
+      if (typeof body?.job_id === 'string' && body.job_id.length > 0) {
+        jobId = body.job_id
+      }
+    } catch {
+      // Malformed JSON — keep the placeholder; the toast will still
+      // tell the user a backfill is in progress.
+    }
+    throw new EtlBackfillInProgressError(jobId)
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
   }
+  // 202 Accepted — body is `{job_id, started_at}`.
   return res.json()
 }
 

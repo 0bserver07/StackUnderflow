@@ -135,7 +135,9 @@ class TestJsonFormat:
         r = _invoke(runner, ["etl", "status", "--format", "json"], store_db, monkeypatch)
         assert r.exit_code == 0, r.output
         body = json.loads(r.output)
-        assert set(body.keys()) == {"watcher", "marts", "events", "lag_seconds", "health"}
+        assert set(body.keys()) == {
+            "watcher", "marts", "events", "lag_seconds", "health", "current_job",
+        }
         assert body["events"]["total"] == 2
         assert body["events"]["by_provider"] == {"claude": 2}
         assert set(body["marts"].keys()) == {
