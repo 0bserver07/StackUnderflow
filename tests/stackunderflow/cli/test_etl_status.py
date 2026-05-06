@@ -44,7 +44,12 @@ def _seed_with_events(store_db: Path, n_events: int = 3) -> int:
     sfk = int(cur.lastrowid)
     last_eid = 0
     for i in range(n_events):
-        cur = conn.execute(
+        # v008: ``messages`` is a UNION-ALL view; INSERT routes through
+        # an INSTEAD OF trigger that allocates ids from
+        # ``_messages_id_seq``. ``cur.lastrowid`` does not propagate
+        # the trigger's nested INSERT id, so we query the sequence
+        # directly. ``next_id - 1`` is the id the trigger just assigned.
+        conn.execute(
             "INSERT INTO messages "
             "(session_fk, seq, timestamp, role, model, "
             " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
@@ -53,7 +58,9 @@ def _seed_with_events(store_db: Path, n_events: int = 3) -> int:
             " 0, 0, 0, 0, '', '[]', '{}', 0)",
             (sfk, i),
         )
-        mid = int(cur.lastrowid)
+        mid = int(conn.execute(
+            "SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1"
+        ).fetchone()[0])
         cur = conn.execute(
             "INSERT INTO usage_events "
             "(source_message_fk, provider, account, project_id, session_id, ts, day, "

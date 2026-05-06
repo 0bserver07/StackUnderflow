@@ -48,7 +48,13 @@ def test_v003_adds_speed_column(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "store.db")
     try:
         schema.apply(conn)
-        info = _column_info(conn, "messages", "speed")
+        # v008 turned ``messages`` into a UNION-ALL view over
+        # ``messages_YYYYMM`` partition tables; constraint metadata
+        # ``PRAGMA table_info`` reports for a view drops the NOT NULL
+        # / DEFAULT flags. Check the underlying partition instead —
+        # the migration creates ``messages_unknown`` as the trigger
+        # fallback, so it always exists post-apply.
+        info = _column_info(conn, "messages_unknown", "speed")
         assert info is not None
         assert info["type"].upper() == "TEXT"
         assert info["notnull"] == 1
