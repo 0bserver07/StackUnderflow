@@ -25,6 +25,7 @@ from stackunderflow.routes import (
     context_budget,
     cost,
     data,
+    etl,
     misc,
     optimize,
     plan,
@@ -197,6 +198,7 @@ app.include_router(compare.router)
 app.include_router(yield_route.router)
 app.include_router(context_budget.router)
 app.include_router(cfg.router)
+app.include_router(etl.router)
 
 
 
