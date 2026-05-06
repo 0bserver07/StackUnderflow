@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import stackunderflow.deps as deps
+import stackunderflow.etl.backfill_jobs as backfill_jobs
 from stackunderflow.routes.etl import router as etl_router
 from stackunderflow.store import db, schema
 
@@ -39,6 +40,8 @@ def app_client(tmp_path, monkeypatch):
     # Reset the per-session seq counter so tests across the module don't
     # collide on the shared dict.
     _SEQ_COUNTERS.clear()
+    # Clear any leftover backfill slot from a sibling test module.
+    backfill_jobs._reset_for_tests()
 
     app = FastAPI()
     app.include_router(etl_router)
@@ -141,7 +144,11 @@ class TestResponseShape:
         body = r.json()
 
         # Top-level keys
-        assert set(body.keys()) == {"watcher", "marts", "events", "lag_seconds", "health"}
+        assert set(body.keys()) == {
+            "watcher", "marts", "events", "lag_seconds", "health", "current_job",
+        }
+        # Idle store: no backfill in flight.
+        assert body["current_job"] is None
 
         # Watcher subshape
         assert set(body["watcher"].keys()) == {
