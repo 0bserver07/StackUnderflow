@@ -4,7 +4,12 @@ from stackunderflow.store import db, schema
 
 
 def _tables(conn) -> set[str]:
-    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    # v008 turns ``messages`` into a UNION-ALL view over ``messages_YYYYMM``
+    # partition tables; cover both kinds so existing checks against
+    # ``"messages"`` keep working.
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+    ).fetchall()
     return {r["name"] for r in rows}
 
 
@@ -40,8 +45,8 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_current_version_constant() -> None:
-    # v006 added the ETL foundation (usage_events + 5 marts + watermark).
-    assert schema.CURRENT_VERSION == 6
+    # v008 partitioned messages into messages_YYYYMM tables behind a view.
+    assert schema.CURRENT_VERSION == 8
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:
