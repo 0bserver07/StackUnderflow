@@ -9,6 +9,8 @@ import {
   IconArrowRight,
   IconTrash,
   IconPlus,
+  IconRefresh,
+  IconAlertTriangle,
 } from '@tabler/icons-react'
 import { useTheme } from '../hooks/useTheme'
 import { useBetaFeatures, type TabVisibility } from '../hooks/useBetaFeatures'
@@ -18,6 +20,9 @@ import {
   getModelAliases,
   setModelAlias,
   deleteModelAlias,
+  getEtlStatus,
+  triggerEtlBackfill,
+  EtlPipelineNotReadyError,
 } from '../services/api'
 import BetaBadge from '../components/common/BetaBadge'
 import ContextBudgetCard from '../components/settings/ContextBudgetCard'
@@ -306,6 +311,228 @@ function ModelAliasSection() {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Wave 4F — ETL pipeline section.
+//
+// Read-only summary (event counts + per-mart row counts) plus a "Backfill now"
+// button that POSTs `/api/etl/backfill`. If the route is missing (Wave 4B has
+// not exposed it yet) the button surfaces the equivalent CLI command. A
+// confirmation dialog warns about the runtime before triggering.
+// ---------------------------------------------------------------------------
+
+function EtlPipelineSection() {
+  const queryClient = useQueryClient()
+  const { data, error, isLoading } = useQuery({
+    queryKey: ['etl-status'],
+    queryFn: getEtlStatus,
+    // Match the badge's 10s refresh — they share a key so the popover and
+    // settings stay consistent.
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+    retry: (count, err) => (err instanceof EtlPipelineNotReadyError ? false : count < 2),
+  })
+  const [confirming, setConfirming] = useState(false)
+  const [feedback, setFeedback] = useState<{ kind: 'ok' | 'warn' | 'error'; message: string } | null>(
+    null,
+  )
+
+  const backfillMutation = useMutation({
+    mutationFn: () => triggerEtlBackfill(false),
+    onSuccess: (res) => {
+      setFeedback({ kind: res.ok ? 'ok' : 'warn', message: res.message })
+      queryClient.invalidateQueries({ queryKey: ['etl-status'] })
+    },
+    onError: (err: unknown) => {
+      if (err instanceof EtlPipelineNotReadyError) {
+        setFeedback({
+          kind: 'warn',
+          message:
+            'Backfill API not available on this build. Run `stackunderflow etl backfill` from the CLI to refresh manually.',
+        })
+        return
+      }
+      setFeedback({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Backfill failed.',
+      })
+    },
+  })
+
+  const handleConfirm = () => {
+    setConfirming(false)
+    setFeedback(null)
+    backfillMutation.mutate()
+  }
+
+  const notReady = error instanceof EtlPipelineNotReadyError
+
+  return (
+    <section className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-5">
+      <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">ETL pipeline</h2>
+      <p className="text-xs text-gray-500 mt-1">
+        Watcher status + mart watermarks + a manual backfill trigger. The watcher refreshes
+        marts incrementally as new messages land; the backfill rebuilds them from scratch
+        (can take minutes on large stores).
+      </p>
+
+      {/* Status summary */}
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <StatusTile
+          label="Health"
+          value={notReady ? '—' : data?.health ?? (isLoading ? '…' : 'unknown')}
+          mono
+        />
+        <StatusTile
+          label="Events"
+          value={notReady ? '—' : data ? data.events.total.toLocaleString() : isLoading ? '…' : '—'}
+        />
+        <StatusTile
+          label="Watcher"
+          value={
+            notReady
+              ? '—'
+              : data
+                ? data.watcher.enabled
+                  ? data.watcher.running
+                    ? 'running'
+                    : 'idle'
+                  : 'disabled'
+                : isLoading
+                  ? '…'
+                  : '—'
+          }
+        />
+      </div>
+
+      {/* Per-mart breakdown */}
+      {!notReady && data && Object.keys(data.marts).length > 0 && (
+        <div className="mt-4 overflow-hidden rounded border border-gray-200 dark:border-gray-800">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-800/60 text-[10px] uppercase tracking-wider text-gray-500">
+              <tr>
+                <th className="text-left px-3 py-2">Mart</th>
+                <th className="text-right px-3 py-2">Watermark</th>
+                <th className="text-right px-3 py-2">Rows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(data.marts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([name, mart]) => (
+                  <tr key={name} className="border-t border-gray-200 dark:border-gray-800">
+                    <td className="px-3 py-2 font-mono text-xs text-gray-800 dark:text-gray-200">{name}</td>
+                    <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-gray-700 dark:text-gray-300">
+                      {mart.watermark.toLocaleString()} / {data.events.max_id.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-gray-700 dark:text-gray-300">
+                      {mart.row_count.toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {notReady && (
+        <div className="mt-4 px-3 py-2 rounded border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 text-xs text-gray-600 dark:text-gray-400">
+          The <span className="font-mono">/api/etl/status</span> route is not available on this build.
+          Run the CLI to manage the ETL pipeline:
+          <pre className="mt-1.5 px-2 py-1.5 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 font-mono text-[11px] text-gray-800 dark:text-gray-200">
+            stackunderflow etl backfill
+          </pre>
+        </div>
+      )}
+
+      {/* Backfill action */}
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="text-xs text-gray-500">
+          Force a full rebuild of every mart from <span className="font-mono">usage_events</span>.
+          Use this if the dashboard looks out of sync.
+        </div>
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          disabled={backfillMutation.isPending}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50 shrink-0"
+        >
+          <IconRefresh size={12} className={backfillMutation.isPending ? 'animate-spin' : ''} />
+          {backfillMutation.isPending ? 'Backfilling…' : 'Backfill now'}
+        </button>
+      </div>
+
+      {/* Confirmation dialog */}
+      {confirming && (
+        <div className="mt-3 rounded border border-yellow-300 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 p-3 text-xs">
+          <div className="flex items-start gap-2">
+            <IconAlertTriangle size={14} className="text-yellow-700 dark:text-yellow-400 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div className="font-medium text-yellow-800 dark:text-yellow-300">
+                Run a full backfill?
+              </div>
+              <div className="text-yellow-700 dark:text-yellow-400 mt-1">
+                Rebuilds every mart from scratch. On large stores this can take minutes
+                while the watcher is paused. Existing dashboard queries continue to work
+                throughout.
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  className="px-2.5 py-1 rounded border border-yellow-500 dark:border-yellow-700 bg-yellow-500 dark:bg-yellow-700 text-white text-xs hover:bg-yellow-600 dark:hover:bg-yellow-600"
+                >
+                  Yes, backfill
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  className="px-2.5 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-xs hover:border-gray-400 dark:hover:border-gray-600"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feedback banner */}
+      {feedback && (
+        <div
+          className={`mt-3 px-3 py-2 rounded border text-xs ${
+            feedback.kind === 'ok'
+              ? 'border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+              : feedback.kind === 'warn'
+                ? 'border-yellow-300 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300'
+                : 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
+          }`}
+        >
+          {feedback.message}
+        </div>
+      )}
+    </section>
+  )
+}
+
+interface StatusTileProps {
+  label: string
+  value: string
+  mono?: boolean
+}
+
+function StatusTile({ label, value, mono = false }: StatusTileProps) {
+  return (
+    <div className="rounded border border-gray-200 dark:border-gray-800 px-3 py-2 bg-gray-50 dark:bg-gray-800/40">
+      <div className="text-[10px] uppercase tracking-wider text-gray-500">{label}</div>
+      <div
+        className={`text-sm text-gray-900 dark:text-gray-100 ${mono ? 'font-mono' : ''}`}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
 export default function Settings() {
   const { theme, toggle: toggleTheme } = useTheme()
   const {
@@ -443,7 +670,10 @@ export default function Settings() {
       {/* 6. Context budget (v0.6.0) ------------------------------------- */}
       <ContextBudgetCard />
 
-      {/* 7. Danger zone / reset ------------------------------------------ */}
+      {/* 7. ETL pipeline (Wave 4F) -------------------------------------- */}
+      <EtlPipelineSection />
+
+      {/* 8. Danger zone / reset ------------------------------------------ */}
       <section className="bg-white dark:bg-gray-900 rounded-lg border border-red-200 dark:border-red-900/50 p-5">
         <h2 className="text-base font-semibold text-red-700 dark:text-red-400">Danger zone</h2>
         <p className="text-xs text-gray-500 mt-1">
