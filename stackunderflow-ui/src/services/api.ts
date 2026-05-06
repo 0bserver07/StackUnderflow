@@ -19,6 +19,9 @@ import type {
   PlanResponse,
   OptimizeResponse,
   ContextBudget,
+  EtlStatusResponse,
+  EtlBackfillResponse,
+  EtlHealth,
 } from '../types/api'
 
 const BASE = '/api'
@@ -382,4 +385,122 @@ export async function getOptimize(
  */
 export async function getContextBudget(): Promise<ContextBudget> {
   return fetchJson(`${BASE}/context-budget`)
+}
+
+// ---------------------------------------------------------------------------
+// Wave 4F — ETL pipeline status + manual backfill.
+//
+// The Wave 4C `/api/etl/status` route may not be merged yet; the badge calls
+// this fetcher and gracefully degrades to a "not ready" state on 404. The
+// backfill POST may also 404 (Wave 4B exposes the orchestrator as a CLI
+// command first); in that case the UI surfaces the equivalent CLI command
+// rather than the route error.
+//
+// `EtlPipelineNotReadyError` is the sentinel the UI uses to distinguish a
+// missing route from a real network/parse error. Tested in
+// `tests/services/etl-status.test.ts`.
+// ---------------------------------------------------------------------------
+
+export class EtlPipelineNotReadyError extends Error {
+  constructor(message = 'ETL pipeline route not available') {
+    super(message)
+    this.name = 'EtlPipelineNotReadyError'
+  }
+}
+
+export async function getEtlStatus(): Promise<EtlStatusResponse> {
+  const res = await fetch(`${BASE}/etl/status`)
+  if (res.status === 404) {
+    throw new EtlPipelineNotReadyError()
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
+  }
+  return res.json()
+}
+
+export async function triggerEtlBackfill(force = false): Promise<EtlBackfillResponse> {
+  const res = await fetch(`${BASE}/etl/backfill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  })
+  if (res.status === 404) {
+    throw new EtlPipelineNotReadyError(
+      'Backfill route not available — run `stackunderflow etl backfill` from the CLI instead.',
+    )
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
+  }
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// ETL helpers — pure functions used by EtlStatusBadge + tests. Kept here so
+// the fetcher and its presentation helpers stay together; the badge imports
+// `formatEtlBadgeText` and `etlHealthColor` directly.
+// ---------------------------------------------------------------------------
+
+/**
+ * Compact human-readable duration: `7s`, `2m`, `1h`, `1d`.
+ * Single-unit (no minutes:seconds), rounded down to the largest unit so the
+ * badge stays narrow.
+ */
+export function formatLagDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
+  const s = Math.floor(seconds)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  const d = Math.floor(h / 24)
+  return `${d}d`
+}
+
+/** Maps a health state to the chip's tailwind colour token + dot shade. */
+export function etlHealthColor(health: EtlHealth): {
+  badge: 'green' | 'blue' | 'yellow' | 'red'
+  dot: string
+  pulse: boolean
+} {
+  switch (health) {
+    case 'live':
+      return { badge: 'green', dot: 'bg-green-500', pulse: false }
+    case 'syncing':
+      return { badge: 'blue', dot: 'bg-blue-500', pulse: true }
+    case 'stale':
+      return { badge: 'yellow', dot: 'bg-yellow-500', pulse: false }
+    case 'error':
+      return { badge: 'red', dot: 'bg-red-500', pulse: false }
+  }
+}
+
+/**
+ * Compact secondary text for the badge — hidden under 600px (CSS); always
+ * rendered for screen readers via aria-label.
+ */
+export function formatEtlBadgeText(status: EtlStatusResponse): string {
+  const { health, lag_seconds, watcher, events } = status
+  switch (health) {
+    case 'live':
+      return `Live (synced ${formatLagDuration(watcher.seconds_since_refresh ?? lag_seconds)} ago)`
+    case 'syncing': {
+      // backlog estimate: events in last cycle + max_id - sum of watermarks?
+      // The route ships `events_in_last_cycle` directly; that's the friendliest
+      // number to surface.
+      const behind = watcher.events_in_last_cycle
+      return `Syncing (${behind} event${behind === 1 ? '' : 's'} behind)`
+    }
+    case 'stale':
+      return `Stale by ${formatLagDuration(lag_seconds)}`
+    case 'error':
+      return 'ETL error — see /etl/status'
+  }
+  // Defensive — TS exhaustiveness already catches missing branches above, but
+  // an unexpected runtime value should not crash the badge.
+  return `Unknown (${events.total} events)`
 }

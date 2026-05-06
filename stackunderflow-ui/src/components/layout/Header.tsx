@@ -15,6 +15,7 @@ import { useFilters } from '../../services/filters'
 import type { Project } from '../../types/api'
 import ThemeToggle from '../common/ThemeToggle'
 import Badge from '../common/Badge'
+import EtlStatusBadge from '../common/EtlStatusBadge'
 
 // Persisted UI toggle: group-by-provider mode in the project picker. Stored
 // in localStorage so the user's preference survives across sessions.
@@ -184,6 +185,11 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
           />
         </div>
       </form>
+
+      {/* ETL status (Wave 4F) — sits to the left of the icon row, hides
+          its secondary text under the sm: breakpoint to keep narrow
+          screens uncluttered. */}
+      <EtlStatusBadge />
 
       {/* Settings */}
       <Link
