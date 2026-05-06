@@ -607,6 +607,197 @@ def session_mart_cache_overhead(
     return bad
 
 
+# ── tool_mart reads (Wave 5) ────────────────────────────────────────────────
+
+
+def mart_has_tool_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``tool_mart`` has at least one row.
+
+    Same gate pattern as ``mart_has_session_rows`` — used by the
+    optimize-pattern detectors to decide whether they can short-circuit
+    on empty ``tool_mart`` (no rows ≡ no events, so no findings) or
+    must fall through to the aggregator path.
+    """
+    if not _table_exists(conn, "tool_mart"):
+        return False
+    row = conn.execute("SELECT 1 FROM tool_mart LIMIT 1").fetchone()
+    return row is not None
+
+
+def tool_call_count_in_window(
+    conn: sqlite3.Connection,
+    *,
+    tool_names: Sequence[str],
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    project_filter: Sequence[str] | None = None,
+) -> int:
+    """SUM of ``tool_mart.event_count`` for the named tools in a day window.
+
+    ``tool_names`` is a non-empty sequence (we always pass at least one
+    name); empty would match nothing. ``since_iso`` / ``until_iso`` are
+    ISO-8601 timestamps — we slice to ``YYYY-MM-DD`` so the index on
+    ``tool_mart(tool_name, day)`` does the work.
+
+    Returns ``0`` when the mart is empty or no rows match. Used by the
+    optimize detectors as a pre-flight check: "did anyone use this tool
+    in window?". When the answer is 0, the detector emits no findings
+    and skips the expensive raw-messages scan.
+
+    ``project_filter`` accepts a list of project slugs the route layer
+    has narrowed to. When provided, we JOIN ``projects`` so the count
+    only spans the requested projects.
+    """
+    if not tool_names:
+        return 0
+    if not _table_exists(conn, "tool_mart"):
+        return 0
+    # ``placeholders`` is a fixed-length string of ``?`` separators;
+    # values are bound parametrically below. No user input lands in
+    # the SQL skeleton.
+    placeholders = ",".join("?" * len(tool_names))
+    sql = (
+        f"SELECT COALESCE(SUM(event_count), 0) AS c "  # noqa: S608
+        f"FROM tool_mart WHERE tool_name IN ({placeholders})"
+    )
+    params: list[Any] = list(tool_names)
+    day_from = _iso_to_day(since_iso)
+    day_to = _iso_to_day(until_iso)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    if project_filter:
+        slugs = [s for s in project_filter if s]
+        if slugs:
+            sql = (
+                f"SELECT COALESCE(SUM(t.event_count), 0) AS c "  # noqa: S608
+                f"FROM tool_mart t "
+                f"JOIN projects p ON p.id = t.project_id "
+                f"WHERE t.tool_name IN ({placeholders}) "
+                f"AND p.slug IN ({','.join('?' * len(slugs))})"
+            )
+            params = list(tool_names) + slugs
+            if day_from:
+                sql += " AND t.day >= ?"
+                params.append(day_from)
+            if day_to:
+                sql += " AND t.day <= ?"
+                params.append(day_to)
+    row = conn.execute(sql, params).fetchone()
+    if row is None:
+        return 0
+    val = row["c"] if hasattr(row, "keys") else row[0]
+    return int(val or 0)
+
+
+def tool_mart_for_project(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    day_from: str | None = None,
+    day_to: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return ``{tool_name: {calls, cost, tokens_in, tokens_out, sessions}}``.
+
+    Powers the ``/api/cost-data`` ``tool_costs`` block when the mart is
+    populated. Aggregates across all (day, provider) combos within the
+    window for the requested project, since the legacy aggregator
+    output keys only on tool_name.
+    """
+    if not _table_exists(conn, "tool_mart"):
+        return {}
+    sql = (
+        "SELECT tool_name, "
+        "       SUM(event_count) AS calls, "
+        "       SUM(cost_usd) AS cost, "
+        "       SUM(tokens_in) AS tokens_in, "
+        "       SUM(tokens_out) AS tokens_out, "
+        "       MAX(session_count) AS sessions "
+        "FROM tool_mart WHERE project_id = ?"
+    )
+    params: list[Any] = [project_id]
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY tool_name"
+    out: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(sql, params).fetchall():
+        name = row["tool_name"] or ""
+        if not name:
+            continue
+        out[name] = {
+            "calls": int(row["calls"] or 0),
+            "cost": float(row["cost"] or 0.0),
+            "tokens_in": int(row["tokens_in"] or 0),
+            "tokens_out": int(row["tokens_out"] or 0),
+            "sessions": int(row["sessions"] or 0),
+        }
+    return out
+
+
+# ── command_mart reads (Wave 5) ─────────────────────────────────────────────
+
+
+def mart_has_command_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``command_mart`` has at least one row."""
+    if not _table_exists(conn, "command_mart"):
+        return False
+    row = conn.execute("SELECT 1 FROM command_mart LIMIT 1").fetchone()
+    return row is not None
+
+
+def command_mart_for_project(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    day_from: str | None = None,
+    day_to: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-command rollup rows for one project, sorted cost desc.
+
+    Each row: ``{command_name, event_count, cost_usd, tokens_in,
+    tokens_out, session_count}``. Powers the per-command rollup
+    consumed by ``/api/cost-data`` and the optimize-pattern early-exit
+    checks.
+    """
+    if not _table_exists(conn, "command_mart"):
+        return []
+    sql = (
+        "SELECT command_name, "
+        "       SUM(event_count) AS event_count, "
+        "       SUM(cost_usd) AS cost_usd, "
+        "       SUM(tokens_in) AS tokens_in, "
+        "       SUM(tokens_out) AS tokens_out, "
+        "       MAX(session_count) AS session_count "
+        "FROM command_mart WHERE project_id = ?"
+    )
+    params: list[Any] = [project_id]
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY command_name ORDER BY SUM(cost_usd) DESC"
+    return [
+        {
+            "command_name": r["command_name"] or "",
+            "event_count": int(r["event_count"] or 0),
+            "cost_usd": float(r["cost_usd"] or 0.0),
+            "tokens_in": int(r["tokens_in"] or 0),
+            "tokens_out": int(r["tokens_out"] or 0),
+            "session_count": int(r["session_count"] or 0),
+        }
+        for r in conn.execute(sql, params).fetchall()
+    ]
+
+
 # ── messages-summary helpers ────────────────────────────────────────────────
 
 

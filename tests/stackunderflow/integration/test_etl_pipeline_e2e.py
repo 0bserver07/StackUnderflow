@@ -423,14 +423,26 @@ def test_etl_full_pipeline_against_synthetic_store(populated_store):
 
         # ── refresh every mart ────────────────────────────────────────
         marts_processed = refresh_all_marts(conn)
+        # Wave 5 added tool_mart + command_mart on top of the original
+        # five Wave 2B marts; both watermarks advance the same as the
+        # rest, but the synthetic fixture has no tools_json or user
+        # prompts so these two marts may report 0 events processed.
         assert set(marts_processed) == {
             "daily", "session", "project", "provider_day", "model_day",
+            "tool", "command",
         }
-        # Every mart must have consumed at least one event.
-        for name, n in marts_processed.items():
-            assert n > 0, f"mart {name!r} consumed zero events"
+        # Every Wave 2B mart must have consumed at least one event;
+        # Wave 5 marts are content-dependent so we don't assert > 0.
+        for name in ("daily", "session", "project", "provider_day", "model_day"):
+            assert marts_processed[name] > 0, (
+                f"mart {name!r} consumed zero events"
+            )
 
         # ── row-count sanity ──────────────────────────────────────────
+        # Wave 5 marts (tool, command) intentionally excluded — the e2e
+        # synthetic fixture doesn't include tools_json or user-prompt
+        # fixtures, so those marts stay empty here. Their own unit tests
+        # cover row population.
         for tbl in (
             "daily_mart", "session_mart", "project_mart",
             "provider_day_mart", "model_day_mart",
