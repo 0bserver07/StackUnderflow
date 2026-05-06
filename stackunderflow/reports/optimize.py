@@ -403,6 +403,20 @@ def _detect_ghost_agents(
         from datetime import UTC, datetime, timedelta
         since_iso = (datetime.now(UTC) - timedelta(days=UNUSED_TOOL_LOOKBACK_DAYS)).isoformat()
 
+    # Wave 5: short-circuit on populated tool_mart with zero Task calls.
+    # The detector identifies "ghost" agents — registered but never
+    # spawned via Task. If Task itself wasn't called in the lookback
+    # window, every registered agent is a ghost and the detector finds
+    # them all without scanning raw_json. Empty-mart fallback: full
+    # aggregator pass.
+    if mart_queries.mart_has_tool_rows(conn):
+        task_calls = mart_queries.tool_call_count_in_window(
+            conn, tool_names=("Task",),
+            since_iso=since_iso, until_iso=None,
+        )
+        if task_calls == 0:
+            return _ghost_agents_finding(agents, agents)
+
     sql = "SELECT raw_json FROM messages WHERE 1=1"
     params: list[Any] = []
     if since_iso:
@@ -424,14 +438,28 @@ def _detect_ghost_agents(
                 invoked.add(name)
 
     ghost = [(name, p) for name, p in agents if name not in invoked]
+    return _ghost_agents_finding(agents, ghost)
+
+
+def _ghost_agents_finding(
+    agents: list[tuple[str, Path]],
+    ghost: list[tuple[str, Path]],
+) -> list[Finding]:
+    """Render the ghost-agents ``Finding`` from a candidate list.
+
+    Shared between the mart short-circuit (Wave 5: when ``Task`` was
+    never called, every registered agent is a ghost) and the
+    aggregator path that builds ``ghost`` by inspecting raw_json. Keeps
+    the severity ladder + suggested fix + details payload identical
+    across both paths so the JSON contract is stable.
+    """
+    del agents  # currently unused — kept for forward compat / readability
     if not ghost:
         return []
-
     if len(ghost) >= 5:
         sev = "medium"
     else:
         sev = "low"
-
     return [
         Finding(
             pattern_id="ghost_agents",
@@ -515,14 +543,30 @@ def _detect_low_read_edit_ratio(
     conn: sqlite3.Connection,
     *,
     scope: Scope | None = None,
+    project_filter: list[str] | None = None,
 ) -> list[Finding]:
     """Pattern 4 — sessions with many Reads and zero Edit/Write.
 
-    Stays on the aggregator (raw ``messages``) path: the signal lives in
-    ``tools_json`` per-message arrays, which no mart materialises. Wave
-    4A migrated only ``_detect_cache_overhead`` because its inputs (per-
-    session token sums) already exist on ``session_mart``.
+    Wave 5: short-circuit when ``tool_mart`` is populated AND no Read
+    tool calls exist in the window — the per-session Read+Edit signal
+    requires a session-keyed parse of ``tools_json``, which no mart
+    materialises (``tool_mart`` is keyed at the day/project grain), so
+    we still walk ``messages`` for the actual ratio test. The mart
+    just lets us skip the scan when there can't possibly be a finding.
+    Empty mart → fall through to the full aggregator pass so freshly
+    installed stores still emit findings.
     """
+    if mart_queries.mart_has_tool_rows(conn):
+        since = scope.since if scope is not None else None
+        until = scope.until if scope is not None else None
+        reads = mart_queries.tool_call_count_in_window(
+            conn, tool_names=("Read",),
+            since_iso=since, until_iso=until,
+            project_filter=project_filter,
+        )
+        if reads < LOW_READ_EDIT_READ_FLOOR:
+            return []
+
     grouped = _iter_session_messages(conn, scope=scope)
     bad_sessions: list[dict] = []
     for session_fk, rows in grouped.items():
@@ -584,15 +628,30 @@ def _detect_junk_reads(
     conn: sqlite3.Connection,
     *,
     scope: Scope | None = None,
+    project_filter: list[str] | None = None,
 ) -> list[Finding]:
     """Pattern 5 — same file Read 5+ times in one session.
 
     Indicates the assistant forgot what it already saw and re-fetched.
 
-    Stays on the aggregator (raw ``messages``) path: the signal requires
-    parsing ``raw_json`` for ``tool_use`` blocks with their ``file_path``
-    inputs, none of which is materialised into any mart.
+    Wave 5: short-circuit when ``tool_mart`` confirms zero Read calls
+    in window. The full detector still parses ``raw_json`` for the
+    file-path-level signal (per-file repeat counts can't be derived
+    from any mart), but skipping the parse when no Read happened is a
+    free win for project-scoped windows that didn't read anything.
+    Empty-mart fallback: full aggregator pass.
     """
+    if mart_queries.mart_has_tool_rows(conn):
+        since = scope.since if scope is not None else None
+        until = scope.until if scope is not None else None
+        reads = mart_queries.tool_call_count_in_window(
+            conn, tool_names=("Read",),
+            since_iso=since, until_iso=until,
+            project_filter=project_filter,
+        )
+        if reads == 0:
+            return []
+
     grouped = _iter_session_messages(conn, scope=scope)
     hits: list[dict] = []
     for session_fk, rows in grouped.items():
@@ -802,6 +861,7 @@ def _detect_bash_output_limits(
     conn: sqlite3.Connection,
     *,
     scope: Scope | None = None,
+    project_filter: list[str] | None = None,
 ) -> list[Finding]:
     """Pattern 7 — bash tool calls returning ≥ 50 KB output.
 
@@ -811,11 +871,22 @@ def _detect_bash_output_limits(
     tool. Falls back to checking ``content_text`` length on user
     tool_result rows.
 
-    Stays on the aggregator (raw ``messages``) path: the signal needs
-    per-message ``content_text`` byte counts plus ``raw_json`` tool-call
-    parsing — neither lives in any mart. Wave 4A only migrated detectors
-    whose inputs are pre-summed on the mart layer.
+    Wave 5: short-circuit when ``tool_mart`` confirms zero Bash calls
+    in window. The detector still needs the raw-message scan to size
+    each output, but skipping the scan when no Bash ran is the cheap
+    early-exit. Empty-mart fallback: full aggregator pass.
     """
+    if mart_queries.mart_has_tool_rows(conn):
+        since = scope.since if scope is not None else None
+        until = scope.until if scope is not None else None
+        bash_calls = mart_queries.tool_call_count_in_window(
+            conn, tool_names=("Bash",),
+            since_iso=since, until_iso=until,
+            project_filter=project_filter,
+        )
+        if bash_calls == 0:
+            return []
+
     sql = (
         "SELECT id, session_fk, seq, role, raw_json, content_text "
         "FROM messages WHERE 1=1"
@@ -929,10 +1000,16 @@ def find_patterns(
     findings.extend(_detect_ghost_agents(conn, scope=scope))
 
     # Message-based detectors
-    findings.extend(_detect_low_read_edit_ratio(conn, scope=scope))
-    findings.extend(_detect_junk_reads(conn, scope=scope))
+    findings.extend(_detect_low_read_edit_ratio(
+        conn, scope=scope, project_filter=project_filter,
+    ))
+    findings.extend(_detect_junk_reads(
+        conn, scope=scope, project_filter=project_filter,
+    ))
     findings.extend(_detect_cache_overhead(conn, scope=scope))
-    findings.extend(_detect_bash_output_limits(conn, scope=scope))
+    findings.extend(_detect_bash_output_limits(
+        conn, scope=scope, project_filter=project_filter,
+    ))
 
     findings.sort(
         key=lambda f: (
