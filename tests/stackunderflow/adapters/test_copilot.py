@@ -226,6 +226,62 @@ def test_read_infers_openai_from_call_prefix(tmp_path: Path) -> None:
     assert records[0].model == "gpt-auto"
 
 
+def test_read_session_model_change_beats_tool_call_id_inference(
+    tmp_path: Path,
+) -> None:
+    """``session.model_change`` is authoritative over tool-call-id heuristics.
+
+    Regression for the beta-normalizer drift report: a fully-qualified
+    model id declared in ``session.model_change`` must persist across
+    subsequent assistant turns, even when a turn carries a ``toolu_*``
+    tool-call id that would otherwise downgrade to the family-only
+    ``claude-auto`` literal. Losing model granularity in marts hurts
+    cost reporting and per-model FilterBar selection.
+    """
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    _legacy_session(
+        legacy,
+        "sess-priority",
+        events=[
+            {
+                "type": "session.model_change",
+                "model": "claude-sonnet-4-5-20250929",
+            },
+            {"type": "user.message", "content": "fix the bug"},
+            {
+                "type": "assistant.message",
+                "content": "Done.",
+                "inputTokens": 100,
+                "outputTokens": 50,
+            },
+            {"type": "user.message", "content": "now refactor"},
+            {
+                "type": "assistant.message",
+                "content": "Refactored.",
+                "inputTokens": 200,
+                "outputTokens": 60,
+                # toolu_* tool-call id used to override current_model →
+                # forced ``claude-auto`` and dropped the explicit model id.
+                "toolCalls": [{"id": "toolu_01abc", "name": "edit_file"}],
+            },
+        ],
+        workspace_cwd=None,
+    )
+    adapter = CopilotAdapter(
+        legacy_root=legacy,
+        vscode_workspace_storage=tmp_path / "ws-missing",
+    )
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 2
+    # Both events must keep the explicit declared model. Before the
+    # priority swap, the second one fell back to ``claude-auto``.
+    assert all(rec.model == "claude-sonnet-4-5-20250929" for rec in records), (
+        f"models drifted: {[r.model for r in records]}"
+    )
+
+
 def test_read_estimates_output_tokens_when_missing(tmp_path: Path) -> None:
     legacy = tmp_path / "legacy"
     legacy.mkdir()

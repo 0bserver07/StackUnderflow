@@ -1,0 +1,39 @@
+{
+  "_doc": "Spec for the continue SQLite fixture. The test materialises a sessions+messages schema (sniffed by the adapter via _sniff_schema) into tmp_path/continue/state.db.",
+  "sessions": [
+    {
+      "id": "continue-sess-001",
+      "title": "Add prompt template loader",
+      "createdAt": 1745596800000
+    }
+  ],
+  "messages": [
+    {
+      "session_id": "continue-sess-001",
+      "role": "user",
+      "content": "Wire up a YAML prompt-template loader.",
+      "model": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "createdAt": 1745596801000
+    },
+    {
+      "session_id": "continue-sess-001",
+      "role": "assistant",
+      "content": "Added a PromptLoader class that resolves $HOME/.continue/templates/*.yaml at startup.",
+      "model": "claude-sonnet-4-5-20250929",
+      "input_tokens": 1100,
+      "output_tokens": 420,
+      "createdAt": 1745596802000
+    },
+    {
+      "session_id": "continue-sess-001",
+      "role": "assistant",
+      "content": "Documented the file format with three example templates.",
+      "model": "claude-sonnet-4-5-20250929",
+      "input_tokens": 1500,
+      "output_tokens": 350,
+      "createdAt": 1745596803000
+    }
+  ]
+}
