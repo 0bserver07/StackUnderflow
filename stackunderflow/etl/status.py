@@ -39,6 +39,8 @@ The shape returned is:
                     "by_cost_source": {source: count}},
         "lag_seconds": int,           # spec-misnomer: actually "lag_events"
         "health": "live"|"syncing"|"stale"|"error",
+        "current_job": {"job_id": str, "started_at": str,
+                          "force": bool, "status": str} | None,
     }
 
 The ``lag_seconds`` field is the worst-case difference between the
@@ -46,6 +48,13 @@ The ``lag_seconds`` field is the worst-case difference between the
 ``lag_seconds`` but it's really a count of lagging events — the rename
 would break the route contract before any consumer exists, so we keep
 the spec-defined key name and document the reality here.
+
+The ``current_job`` field reflects the per-process backfill slot from
+:mod:`stackunderflow.etl.backfill_jobs` — non-null while a
+``POST /api/etl/backfill`` request is being serviced, ``None``
+otherwise. The dashboard polls this surface every 10s and uses the
+field to drive the badge's "backfilling" state without having to call
+the backfill route again.
 """
 
 from __future__ import annotations
@@ -57,6 +66,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import stackunderflow.deps as deps
+from stackunderflow.etl.backfill_jobs import get_current_job
 
 _log = logging.getLogger(__name__)
 
@@ -131,6 +141,10 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         "events": events,
         "lag_seconds": lag,
         "health": health,
+        # ``current_job`` is the only field that can change between two
+        # back-to-back assembler calls without any DB activity — it
+        # reflects the in-process backfill slot, not store state.
+        "current_job": get_current_job(),
     }
 
 

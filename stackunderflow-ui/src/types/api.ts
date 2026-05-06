@@ -739,16 +739,30 @@ export interface EtlEventsStatus {
   by_cost_source: Record<string, number>
 }
 
+// Live backfill job — populated by the route module's process-local
+// slot from `stackunderflow.etl.backfill_jobs` while a POST /api/etl/backfill
+// run is in flight, and `null` otherwise.
+export interface EtlBackfillJob {
+  job_id: string
+  started_at: string
+  force: boolean
+  status: string
+}
+
 export interface EtlStatusResponse {
   watcher: EtlWatcherStatus
   marts: Record<string, EtlMartStatus>
   events: EtlEventsStatus
   lag_seconds: number
   health: EtlHealth
+  current_job: EtlBackfillJob | null
 }
 
+// 202 Accepted body returned by POST /api/etl/backfill once the
+// background task has been queued. Poll /api/etl/status to track
+// progress via `current_job`.
 export interface EtlBackfillResponse {
-  ok: boolean
-  message: string
+  job_id: string
+  started_at: string
 }
 

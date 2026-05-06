@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  EtlBackfillInProgressError,
   EtlPipelineNotReadyError,
   etlHealthColor,
   formatEtlBadgeText,
@@ -76,6 +77,7 @@ const sampleStatus: EtlStatusResponse = {
   },
   lag_seconds: 7,
   health: 'live',
+  current_job: null,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,16 +129,22 @@ test('getEtlStatus throws a generic Error on 500', async () => {
 // Fetcher: triggerEtlBackfill — POST + force flag + 404 handling.
 // ---------------------------------------------------------------------------
 
+// 202 success body — populated by the route's process-local job slot.
+const sampleAcceptedBody = {
+  job_id: 'd41d8cd98f00b204e9800998ecf8427e',
+  started_at: '2026-05-06T12:34:56+00:00',
+}
+
 test('triggerEtlBackfill POSTs to /api/etl/backfill with the force flag', async () => {
   let captured: { url: string; init: RequestInit | undefined } | null = null
   const restore = withFetch(async (url, init) => {
     captured = { url, init }
-    return mockResponse({ ok: true, message: 'queued' })
+    return mockResponse(sampleAcceptedBody, 202)
   })
   try {
     const res = await triggerEtlBackfill(true)
-    assert.equal(res.ok, true)
-    assert.equal(res.message, 'queued')
+    assert.equal(res.job_id, sampleAcceptedBody.job_id)
+    assert.equal(res.started_at, sampleAcceptedBody.started_at)
     assert.ok(captured, 'fetch should have been called')
     const cap = captured! as { url: string; init: RequestInit | undefined }
     assert.equal(cap.url, '/api/etl/backfill')
@@ -152,7 +160,7 @@ test('triggerEtlBackfill defaults force=false', async () => {
   const restore = withFetch(async (_url, init) => {
     const body = JSON.parse(init?.body as string)
     assert.equal(body.force, false)
-    return mockResponse({ ok: true, message: 'queued' })
+    return mockResponse(sampleAcceptedBody, 202)
   })
   try {
     await triggerEtlBackfill()
@@ -167,6 +175,46 @@ test('triggerEtlBackfill on 404 raises EtlPipelineNotReadyError with CLI hint', 
     await assert.rejects(triggerEtlBackfill, (err) => {
       assert.ok(err instanceof EtlPipelineNotReadyError)
       assert.match(err.message, /stackunderflow etl backfill/)
+      return true
+    })
+  } finally {
+    restore()
+  }
+})
+
+test('triggerEtlBackfill on 409 raises EtlBackfillInProgressError with the job id', async () => {
+  const otherJob = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const restore = withFetch(async () =>
+    mockResponse({ error: 'backfill_in_progress', job_id: otherJob }, 409),
+  )
+  try {
+    await assert.rejects(triggerEtlBackfill, (err) => {
+      assert.ok(err instanceof EtlBackfillInProgressError)
+      assert.equal((err as EtlBackfillInProgressError).jobId, otherJob)
+      return true
+    })
+  } finally {
+    restore()
+  }
+})
+
+test('triggerEtlBackfill on 409 with malformed body still raises EtlBackfillInProgressError', async () => {
+  // The route is supposed to send {job_id}; if it doesn't, the fetcher
+  // should still raise the conflict signal with a placeholder rather
+  // than a generic Error so the UI can show the right message.
+  const restore = withFetch(async () => ({
+    ok: false,
+    status: 409,
+    statusText: 'Conflict',
+    json: async () => {
+      throw new Error('not json')
+    },
+    text: async () => '',
+  }))
+  try {
+    await assert.rejects(triggerEtlBackfill, (err) => {
+      assert.ok(err instanceof EtlBackfillInProgressError)
+      assert.equal((err as EtlBackfillInProgressError).jobId, 'unknown')
       return true
     })
   } finally {
