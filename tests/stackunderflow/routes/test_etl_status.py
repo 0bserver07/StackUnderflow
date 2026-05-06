@@ -69,10 +69,15 @@ _SEQ_COUNTERS: dict[int, int] = {}
 def _insert_message(conn, *, session_fk: int) -> int:
     """Insert a message; auto-increment ``seq`` per session so the
     ``UNIQUE(session_fk, seq)`` index is respected in the multi-event tests.
+
+    v008: ``messages`` is a UNION-ALL view with an INSTEAD OF trigger.
+    ``cur.lastrowid`` doesn't propagate the trigger's nested INSERT id,
+    so we read the freshly-allocated id from ``_messages_id_seq``
+    (``next_id - 1``).
     """
     seq = _SEQ_COUNTERS.get(session_fk, 0)
     _SEQ_COUNTERS[session_fk] = seq + 1
-    cur = conn.execute(
+    conn.execute(
         "INSERT INTO messages "
         "(session_fk, seq, timestamp, role, model, "
         " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
@@ -81,7 +86,9 @@ def _insert_message(conn, *, session_fk: int) -> int:
         " 0, 0, 0, 0, '', '[]', '{}', 0)",
         (session_fk, seq),
     )
-    return int(cur.lastrowid)
+    return int(conn.execute(
+        "SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1"
+    ).fetchone()[0])
 
 
 def _insert_event(
