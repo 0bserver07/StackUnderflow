@@ -43,6 +43,10 @@ stackunderflow plan show [--format text|json]
 stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]
 stackunderflow plan reset
 
+# ETL pipeline
+stackunderflow etl backfill [--force]
+stackunderflow etl status [--format text|json]
+
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
 stackunderflow backup list
@@ -947,6 +951,122 @@ Usage: stackunderflow plan reset
 $ stackunderflow plan reset
   plan cleared
 ```
+
+---
+
+## ETL Commands
+
+The ETL pipeline turns raw `messages` rows into a `usage_events` fact table and
+five indexed marts (`daily_mart`, `session_mart`, `project_mart`,
+`provider_day_mart`, `model_day_mart`). The watcher keeps everything fresh in
+the background; these commands let you do a one-shot backfill and check
+pipeline health from the command line.
+
+### `stackunderflow etl backfill`
+
+Convert all existing `messages` rows into `usage_events`, then refresh every
+mart from the new watermark. Idempotent — already-converted messages are
+skipped via the `UNIQUE(source_message_fk)` index.
+
+```
+Usage: stackunderflow etl backfill [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--force` | flag | false | Drop events + marts + watermarks and rebuild from scratch |
+
+**Example:**
+
+```
+$ stackunderflow etl backfill
+  events inserted:           247,278
+  events skipped (duplicate): 0
+  marts refreshed:
+    daily            247,278 events
+    model_day        247,278 events
+    project          247,278 events
+    provider_day     247,278 events
+    session          247,278 events
+  duration:                  4.812s
+```
+
+### `stackunderflow etl status`
+
+One-line health check for the ETL pipeline: watcher state, mart watermarks vs
+the max event id, per-provider event counts, and an overall `health` enum
+(`live` / `syncing` / `stale` / `error`). Same payload as `GET /api/etl/status`.
+Reads the store directly, so it works without a running server.
+
+```
+Usage: stackunderflow etl status [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--format` | `text\|json` | text | Output format |
+
+**Health rules:**
+
+- `error` — at least one mart is more than 100 events behind the max event id **and** the watcher reports `running=false` (we know we're behind, and nothing is going to catch us up).
+- `stale` — any mart is more than 100 events behind, but the watcher is still alive (catch-up may still happen).
+- `syncing` — any mart is behind but a refresh ran in the last 10 seconds (pipeline is actively catching up).
+- `live` — zero lag, or no events at all.
+
+**Example:**
+
+```
+$ stackunderflow etl status
+ETL pipeline — live (last refresh 7s ago)
+
+  Events:        228,311 total (228,311 max id)
+                 by provider: claude=225,245 codex=1,171 cursor=1,035 cline=860
+                 by cost source: rate_card=226,000 estimated=2,311
+
+  Marts:
+                 daily=4,521 rows         (watermark 228,311, fresh)
+                 session=1,106 rows       (watermark 228,311, fresh)
+                 project=188 rows         (watermark 228,311, fresh)
+                 provider_day=312 rows    (watermark 228,311, fresh)
+                 model_day=482 rows       (watermark 228,311, fresh)
+
+  Watcher:       running
+                 last cycle: 12 events processed
+```
+
+**JSON output:**
+
+```
+$ stackunderflow etl status --format json
+{
+  "watcher": {
+    "enabled": true,
+    "running": true,
+    "last_refresh_ts": "2026-05-06T08:24:11+00:00",
+    "seconds_since_refresh": 7,
+    "events_in_last_cycle": 12
+  },
+  "marts": {
+    "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
+    "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
+    "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
+    "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
+    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
+  },
+  "events": {
+    "total": 228311,
+    "max_id": 228311,
+    "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
+    "by_cost_source": {"rate_card": 226000, "estimated": 2311}
+  },
+  "lag_seconds": 0,
+  "health": "live"
+}
+```
+
+When the CLI is run with no live server (the typical case for `etl status`),
+`watcher.running` reports `"unknown"` — the assembler has no way to introspect
+a daemon thread that lives in another process.
 
 ---
 

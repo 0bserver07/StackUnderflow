@@ -60,6 +60,7 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/plan` | Plan |
 | GET | `/api/optimize` | Optimize |
 | GET | `/api/context-budget` | Context Budget |
+| GET | `/api/etl/status` | ETL pipeline |
 | GET | `/api/tool-distribution` | Cost analytics |
 | GET | `/api/cfg` | Settings |
 | GET | `/api/cfg/currencies` | Settings |
@@ -1722,6 +1723,77 @@ fallback (the project-CLAUDE.md slice silently contributes zero).
 
 **Status codes:** `200` success; `404` unknown project slug
 (`{"detail": "Unknown project slug: <slug>"}`).
+
+---
+
+## ETL Pipeline
+
+### GET /api/etl/status
+
+Live snapshot of the ETL pipeline — watcher state, mart watermarks vs
+the max event id, per-provider event counts, and a coarse `health` enum
+so the dashboard can render a status badge with one fetch.
+
+Designed to be cheap (<50ms against a 200K-event store): every count
+is a `SELECT COUNT(*)` on an indexed column, every per-mart watermark
+is a primary-key lookup. Safe to poll from a UI status pill.
+
+**Query parameters**
+
+None.
+
+**Response**
+
+```json
+{
+  "watcher": {
+    "enabled": true,
+    "running": true,
+    "last_refresh_ts": "2026-05-06T08:24:11+00:00",
+    "seconds_since_refresh": 7,
+    "events_in_last_cycle": 12
+  },
+  "marts": {
+    "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
+    "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
+    "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
+    "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
+    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
+  },
+  "events": {
+    "total": 228311,
+    "max_id": 228311,
+    "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
+    "by_cost_source": {"rate_card": 226000, "estimated": 2311}
+  },
+  "lag_seconds": 0,
+  "health": "live"
+}
+```
+
+**Field reference**
+
+| Field | Type | Description |
+|---|---|---|
+| `watcher.enabled` | bool | False iff `STACKUNDERFLOW_DISABLE_WATCHER=1` is set in the environment |
+| `watcher.running` | bool \| `"unknown"` | True iff the watcher's daemon thread is alive. `"unknown"` when the route is called outside the live FastAPI process (e.g. the CLI) — there's no way to introspect a thread that lives elsewhere |
+| `watcher.last_refresh_ts` | string \| null | ISO 8601 UTC timestamp of the most recent watcher cycle; null until the watcher publishes a refresh stamp |
+| `watcher.seconds_since_refresh` | int \| null | Seconds elapsed since `last_refresh_ts`. Drives the `health=syncing` rule |
+| `watcher.events_in_last_cycle` | int \| null | Number of events written in the most recent watcher cycle |
+| `marts.<name>.watermark` | int | The `last_event_id` the mart has caught up to. `0` until the mart has refreshed once |
+| `marts.<name>.row_count` | int | `SELECT COUNT(*)` against the underlying mart table |
+| `marts.<name>.last_refresh_ts` | string \| null | ISO 8601 UTC timestamp of the most recent mart refresh; null until the mart has refreshed once |
+| `events.total` | int | `COUNT(*) FROM usage_events` |
+| `events.max_id` | int | `MAX(id) FROM usage_events`; `0` on an empty store |
+| `events.by_provider` | object | `{provider: count}` over every row in `usage_events` |
+| `events.by_cost_source` | object | `{cost_source: count}` over every row in `usage_events`. The two values today are `rate_card` (priced from a published rate table) and `estimated` (priced from a heuristic when source data lacks per-token counts) |
+| `lag_seconds` | int | `max(0, max_event_id - min(mart watermarks))`. Spec name is `lag_seconds`; the unit is actually "events behind", not seconds — kept under the spec key to match the wave-4C contract |
+| `health` | enum | `"live"` (zero lag or empty store) / `"syncing"` (lag > 0 and refresh in last 10s) / `"stale"` (any mart > 100 events behind, watcher alive) / `"error"` (any mart > 100 events behind **and** watcher reports `running=false`) |
+
+**Status codes:** `200` success on every call (the route never 4xx/5xxs
+on a missing watcher or empty store — the response degrades gracefully
+to `running="unknown"` and zero counts so a status pill in the UI is
+never blocked by an in-flight bring-up).
 
 ---
 

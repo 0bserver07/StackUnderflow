@@ -1344,6 +1344,134 @@ def _build_backfill_progress_callback():
     return _cb
 
 
+@etl_group.command("status")
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(_VALID_FORMATS),
+    default="text",
+    help="Output format (text or json).",
+)
+def etl_status_cmd(fmt: str):
+    """Show ETL pipeline health: watcher, marts, events, lag.
+
+    Reads the live store and renders a one-screen snapshot — the same
+    payload ``GET /api/etl/status`` returns. Works without a running
+    server (the CLI opens its own connection to ``~/.stackunderflow/store.db``).
+    """
+    from stackunderflow.etl.status import assemble_status
+
+    conn = _open_store()
+    try:
+        payload = assemble_status(conn)
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    _render_etl_status_text(payload)
+
+
+def _render_etl_status_text(payload: dict) -> None:
+    """Render the ETL status payload as the human-readable text block.
+
+    The shape mirrors the spec example: a single-line health summary
+    followed by indented sections for events, marts, and the watcher.
+    Numbers use thousands separators throughout for readability against
+    a real 200K-event store.
+    """
+    health = payload.get("health", "unknown")
+    color = {
+        "live": "green",
+        "syncing": "yellow",
+        "stale": "yellow",
+        "error": "red",
+    }.get(health, "white")
+
+    watcher = payload.get("watcher") or {}
+    last_refresh = watcher.get("seconds_since_refresh")
+    refresh_phrase = (
+        f"last refresh {last_refresh}s ago"
+        if last_refresh is not None
+        else "no refresh observed"
+    )
+
+    header = f"ETL pipeline — {health} ({refresh_phrase})"
+    click.secho(header, fg=color, bold=True)
+    click.echo("")
+
+    # Events block.
+    events = payload.get("events") or {}
+    total = events.get("total", 0)
+    max_id = events.get("max_id", 0)
+    click.echo(
+        f"  Events:        {total:,} total ({max_id:,} max id)"
+    )
+    by_provider = events.get("by_provider") or {}
+    if by_provider:
+        # Stable sort by descending count so the heaviest provider is
+        # first, like the spec example shows.
+        provider_pairs = sorted(
+            by_provider.items(), key=lambda kv: (-kv[1], kv[0])
+        )
+        provider_str = " ".join(f"{k}={v:,}" for k, v in provider_pairs)
+        click.echo(f"                 by provider: {provider_str}")
+    by_cost_source = events.get("by_cost_source") or {}
+    if by_cost_source:
+        cost_pairs = sorted(
+            by_cost_source.items(), key=lambda kv: (-kv[1], kv[0])
+        )
+        cost_str = " ".join(f"{k}={v:,}" for k, v in cost_pairs)
+        click.echo(f"                 by cost source: {cost_str}")
+    click.echo("")
+
+    # Marts block. Render one line per mart in the spec's order.
+    marts = payload.get("marts") or {}
+    click.echo("  Marts:")
+    if marts:
+        max_event_id = max_id
+        for name in ("daily", "session", "project", "provider_day", "model_day"):
+            row = marts.get(name)
+            if not row:
+                continue
+            wm = int(row.get("watermark", 0))
+            rc = int(row.get("row_count", 0))
+            lag = max(0, max_event_id - wm) if max_event_id else 0
+            tag = "fresh" if lag == 0 else f"{lag:,} behind"
+            row_label = f"{name}={rc:,} rows"
+            click.echo(
+                f"                 {row_label:<24s}  (watermark {wm:,}, {tag})"
+            )
+    else:
+        click.echo("                 (no marts registered)")
+    click.echo("")
+
+    # Watcher block.
+    enabled = watcher.get("enabled", False)
+    running = watcher.get("running", "unknown")
+    if not enabled:
+        watcher_state = "disabled (STACKUNDERFLOW_DISABLE_WATCHER=1)"
+    elif running == "unknown":
+        watcher_state = "state unknown (no live handle — server not running?)"
+    elif running:
+        watcher_state = "running"
+    else:
+        watcher_state = "stopped"
+    click.echo(f"  Watcher:       {watcher_state}")
+    events_last = watcher.get("events_in_last_cycle")
+    if events_last is not None:
+        click.echo(
+            f"                 last cycle: {events_last:,} events processed"
+        )
+
+    # Footer hint about lag for the eager reader — no badge ceremony.
+    lag = payload.get("lag_seconds", 0)
+    if lag:
+        click.echo("")
+        click.echo(f"  Lag (events behind marts): {lag:,}")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
