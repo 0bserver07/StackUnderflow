@@ -1276,6 +1276,175 @@ def reindex():
     click.echo(f"Done: {counts}")
 
 
+# ── discovery (self-referential queries for coding agents) ─────────────────
+#
+# Three commands let an agent ask the local store about its current
+# project / file / past decisions. Each accepts ``--format text|json``;
+# the JSON shape is stable so MCP tools and shell consumers can rely on
+# it without parsing the human-readable text.
+
+
+def _emit_sessions(
+    matches: list,
+    *,
+    fmt: str,
+    title: str,
+    show_snippet: bool = False,
+) -> None:
+    """Render a list of ``SessionMatch`` rows in either format.
+
+    Lifted out of the three command bodies so they stay one screen
+    each. The JSON branch wraps the dataclass list as ``{"sessions":
+    [...]}`` so empty results round-trip as an explicit empty list
+    rather than a bare ``[]`` (matches the contract the MCP + skills
+    callers depend on).
+    """
+    if fmt == "json":
+        payload = {"sessions": [m.to_dict() for m in matches]}
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    if not matches:
+        click.echo(f"{title}: no matching sessions.")
+        return
+
+    click.echo(f"{title}  ({len(matches)} session(s))")
+    click.echo("")
+    for m in matches:
+        head = (
+            f"  [{m.provider}] {m.session_id[:12]}…  "
+            f"{m.last_ts[:19] if m.last_ts else '(no ts)'}  "
+            f"msgs={m.message_count}  ${m.cost_usd:.4f}"
+        )
+        click.echo(head)
+        sub = f"      {m.project_slug}  {m.project_path}"
+        click.echo(sub)
+        if show_snippet and m.snippet:
+            snippet_line = m.snippet
+            if len(snippet_line) > 200:
+                snippet_line = snippet_line[:197] + "…"
+            click.echo(f"      … {snippet_line}")
+        click.echo("")
+
+
+@cli.command("find-sessions-in-path")
+@click.argument("path", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--since", default=None,
+              help="Only sessions whose last activity is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--provider", default=None,
+              help="Filter by provider slug (e.g. claude, codex, cursor).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_in_path_cmd(
+    path: str,
+    since: str | None,
+    limit: int,
+    provider: str | None,
+    fmt: str,
+):
+    """List sessions whose project root is PATH or any ancestor of PATH.
+
+    Useful when an agent is working in /a/b/c and wants to know what
+    has happened in the project rooted at /a/b. The match is
+    ancestor-only — projects rooted *below* PATH do not match.
+    """
+    from stackunderflow.services.discovery import find_sessions_in_path
+
+    conn = _open_store()
+    try:
+        try:
+            matches = find_sessions_in_path(
+                conn, path, since=since, limit=limit, provider=provider,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Sessions in path {path}",
+    )
+
+
+@cli.command("find-sessions-touching-file")
+@click.argument("file", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--mode", type=click.Choice(("read", "write", "any")),
+              default="any", show_default=True,
+              help="Match against Read tool args, Edit/Write tool args, "
+                   "or any mention (tools or freeform).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_touching_file_cmd(
+    file: str,
+    limit: int,
+    mode: str,
+    fmt: str,
+):
+    """List sessions where FILE shows up in tool calls or message text."""
+    from stackunderflow.services.discovery import find_sessions_touching_file
+
+    conn = _open_store()
+    try:
+        matches = find_sessions_touching_file(
+            conn, file, limit=limit, mode=mode,
+        )
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Sessions touching {file}  (mode={mode})",
+    )
+
+
+@cli.command("search-past-decisions")
+@click.argument("query")
+@click.option("--project", default=None,
+              help="Filter by project slug (e.g. -Users-yad-dev-foo).")
+@click.option("--since", default=None,
+              help="Filter to messages newer than this. Accepts '7d', "
+                   "'1w', '1m', '24h', or ISO.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def search_past_decisions_cmd(
+    query: str,
+    project: str | None,
+    since: str | None,
+    limit: int,
+    fmt: str,
+):
+    """Substring-search QUERY across past message content; return matching sessions."""
+    from stackunderflow.services.discovery import search_past_decisions
+
+    conn = _open_store()
+    try:
+        try:
+            matches = search_past_decisions(
+                conn, query, project=project, since=since, limit=limit,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Past decisions matching {query!r}",
+        show_snippet=True,
+    )
+
+
 # ── ETL ──────────────────────────────────────────────────────────────────────
 #
 # The ETL refactor (see ``docs/specs/etl-architecture.md``) ships in
