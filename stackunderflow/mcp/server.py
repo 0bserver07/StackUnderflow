@@ -29,6 +29,7 @@ from mcp.server.fastmcp import FastMCP
 from stackunderflow.adapters.base import Record, SessionRef
 from stackunderflow.adapters.claude import ClaudeAdapter
 from stackunderflow.mcp import store_reader
+from stackunderflow.services import discovery as _discovery
 
 _log = logging.getLogger(__name__)
 
@@ -367,6 +368,116 @@ def list_projects_impl(
     ]
 
 
+# ── discovery helpers ───────────────────────────────────────────────────────
+
+
+def _resolve_user_path(raw: str) -> str:
+    """Expand ``~`` and resolve to an absolute path string (no strict check).
+
+    Discovery is path-prefix based and should also work for paths that
+    don't exist on disk (e.g. a checkout the user has since deleted but
+    whose past sessions are still in the store).
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("path must be a non-empty string")
+    return str(Path(raw).expanduser().resolve(strict=False))
+
+
+def _match_to_dict(m: _discovery.SessionMatch) -> dict:
+    """Render a SessionMatch as the JSON dict the MCP/CLI surface emits."""
+    return {
+        "session_id": m.session_id,
+        "project_slug": m.project_slug,
+        "project_path": m.project_path,
+        "provider": m.provider,
+        "first_ts": m.first_ts,
+        "last_ts": m.last_ts,
+        "message_count": int(m.message_count),
+        "cost_usd": round(float(m.cost_usd), 6),
+        "snippet": m.snippet,
+    }
+
+
+def _validate_limit(limit: int) -> int:
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+    return limit
+
+
+def _validate_mode(mode: str) -> str:
+    if mode not in ("any", "edited", "read"):
+        raise ValueError(
+            f"mode must be one of 'any', 'edited', 'read'; got {mode!r}",
+        )
+    return mode
+
+
+def find_sessions_in_path_impl(
+    path: str,
+    since: str | None = None,
+    limit: int = 20,
+    provider: str | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_in_path`` MCP tool.
+
+    Validates inputs, opens the store (or reuses ``conn``), delegates
+    to ``services.discovery.find_sessions_in_path`` and formats the
+    response.
+    """
+    _validate_limit(limit)
+    resolved = _resolve_user_path(path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_sessions_in_path(
+            c, resolved, since=since, limit=limit, provider=provider,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
+def find_sessions_touching_file_impl(
+    file_path: str,
+    limit: int = 20,
+    mode: str = "any",
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_touching_file`` MCP tool."""
+    _validate_limit(limit)
+    _validate_mode(mode)
+    resolved = _resolve_user_path(file_path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_sessions_touching_file(
+            c, resolved, limit=limit, mode=mode,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
+def search_past_decisions_impl(
+    query: str,
+    project: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``search_past_decisions`` MCP tool."""
+    _validate_limit(limit)
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.search_past_decisions(
+            c, query, project=project, since=since, limit=limit,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
 mcp = FastMCP("stackunderflow")
 
 
@@ -442,6 +553,139 @@ def list_projects(provider: str | None = None) -> list[dict]:
         last_modified, path.
     """
     return list_projects_impl(provider=provider)
+
+
+@mcp.tool()
+def find_sessions_in_path(
+    path: str,
+    since: str | None = None,
+    limit: int = 20,
+    provider: str | None = None,
+) -> dict:
+    """Discover prior sessions that worked in a given project path.
+
+    Use this BEFORE starting non-trivial work in a directory: it
+    surfaces past sessions in the same project so you can avoid
+    re-deriving context, re-debating decisions, or duplicating work
+    a sibling agent already did. Pair with ``session_query`` once a
+    promising ``session_id`` is identified.
+
+    Path matching is ancestor-based: passing ``/Users/x/dev/proj/src``
+    returns sessions for projects rooted at ``/Users/x/dev/proj`` or
+    any ancestor of it. ``~`` is expanded and the path is resolved to
+    absolute form before matching, so a relative path or a tilde-form
+    both work.
+
+    Use ``find_sessions_touching_file`` instead when you care about a
+    specific file rather than a directory tree, and ``search_past_decisions``
+    when you want to grep for a phrase across past transcripts.
+
+    Args:
+        path: Absolute or working-directory-relative path. Will be
+            ``~``-expanded and resolved.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
+            ``None`` (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+        provider: Restrict to one provider (``"claude"``, ``"codex"``,
+            ``"cursor"``, ``"cline"``, ``"droid"``, ``"copilot"``, …).
+            ``None`` (default) = all providers.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` where each match has keys:
+        ``session_id``, ``project_slug``, ``project_path``,
+        ``provider``, ``first_ts``, ``last_ts``, ``message_count``,
+        ``cost_usd``, ``snippet``. Empty list if the store is missing
+        or no sessions match.
+    """
+    return find_sessions_in_path_impl(
+        path=path, since=since, limit=limit, provider=provider,
+    )
+
+
+@mcp.tool()
+def find_sessions_touching_file(
+    file_path: str,
+    limit: int = 20,
+    mode: str = "any",
+) -> dict:
+    """Discover prior sessions whose tool calls referenced a specific file.
+
+    Use this BEFORE editing or refactoring a file with non-obvious
+    history: it surfaces every past session that read, wrote, or
+    edited it across every coding agent that's been ingested. Helps
+    you find the rationale a previous session left behind without
+    grepping through commit messages.
+
+    Match is on the file path appearing in tool-call arguments (Read,
+    Edit, Write, Bash with redirects, etc.). The path is ``~``-expanded
+    and resolved to absolute form before matching.
+
+    Use ``find_sessions_in_path`` instead when you want a directory-wide
+    sweep, and ``search_past_decisions`` when you're searching transcript
+    content rather than file references.
+
+    Args:
+        file_path: Absolute or working-directory-relative file path.
+            Will be ``~``-expanded and resolved.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+        mode: ``"any"`` (default) — match any tool call referencing
+            the file. ``"edited"`` — only Edit/Write-style mutations.
+            ``"read"`` — only Read-style accesses.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` with the same keys as
+        ``find_sessions_in_path``. Empty list if the store is missing
+        or no sessions reference the file.
+    """
+    return find_sessions_touching_file_impl(
+        file_path=file_path, limit=limit, mode=mode,
+    )
+
+
+@mcp.tool()
+def search_past_decisions(
+    query: str,
+    project: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Free-text search across past session transcripts.
+
+    Use this when you remember a decision, design discussion, or bug
+    diagnosis happened in a prior session but don't remember which
+    one. Returns sessions whose message content matches ``query``,
+    each with a short snippet for context — pivot into
+    ``session_query`` with the ``session_id`` to read the full thread.
+
+    Do NOT use for structured questions answerable from session
+    metadata (use ``list_sessions`` / ``find_sessions_in_path``) or for
+    finding which sessions touched a file (use
+    ``find_sessions_touching_file`` — its tool-call match is more
+    precise than text search).
+
+    Args:
+        query: Free-text search string. Matched against message content
+            and tool-call arguments. Must be non-empty.
+        project: Restrict to one project slug (e.g. ``"-Users-x-app"``).
+            ``None`` (default) = all projects.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
+            ``None`` (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` with the same keys as
+        ``find_sessions_in_path``. The ``snippet`` field is populated
+        with a short excerpt around the match where available. Empty
+        list if the store is missing or no matches are found.
+    """
+    return search_past_decisions_impl(
+        query=query, project=project, since=since, limit=limit,
+    )
 
 
 def main() -> None:
