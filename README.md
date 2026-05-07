@@ -258,6 +258,12 @@ See [docs/mcp.md](docs/mcp.md) for the full tool reference + Cursor / Claude Cod
 
 ---
 
+## Claude Code skills
+
+StackUnderflow ships a set of [Claude Code skills](https://code.claude.com/docs/en/skills) that turn the local store into a reflex: Claude Code automatically surfaces prior session context when you start work in a project, mention a specific file, or reference a past decision. Install with `cp -r stackunderflow/skills/* ~/.claude/skills/` — see [docs/skills.md](docs/skills.md) for trigger semantics and example transcripts.
+
+---
+
 ## ETL operations
 
 The pipeline is incremental + idempotent. Most users never need to think about it. For when you do:
