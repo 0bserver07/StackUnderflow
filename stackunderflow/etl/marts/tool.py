@@ -27,7 +27,9 @@ contribution onto existing rows.
 HANDOFF §"`session_count` correctness across windows": a session that
 uses ``Read`` on the same day in two refresh windows would naively
 count as 2. After the additive upsert we recompute ``session_count``
-for the affected keys.
+for the affected keys. The recompute scans the **full day** for any
+touched ``(day, project, provider)`` triple — see
+``_recompute_session_counts`` for the cost shape.
 
 Sourcing
 ========
@@ -36,8 +38,9 @@ We JOIN ``usage_events`` to ``messages`` on ``source_message_fk`` and
 parse ``tools_json`` host-side (Python). Pure-SQL with ``json_each``
 would be tighter but ``messages.tools_json`` is sometimes the literal
 string ``'[]'`` and we want the same defensive parse the aggregator
-uses. Window size is bounded by the watermark, so the host-side parse
-is always over a small chunk.
+uses. The watermark-window scan in ``refresh()`` is always over a
+small chunk; the ``session_count`` recompute scan is **not** —
+see ``_recompute_session_counts`` for its real cost shape.
 """
 
 from __future__ import annotations
@@ -48,6 +51,19 @@ from collections import Counter
 from typing import Any
 
 from .base import MartBuilder
+
+# ── instrumentation ────────────────────────────────────────────────────
+#
+# Process-local counter: incremented once per
+# ``(day, project_id, provider)`` group scanned inside
+# ``_recompute_session_counts``. Tests reset it before a refresh and
+# assert the post-refresh value to confirm the per-group dedup is
+# intact — i.e., a watermark window touching K events all in one
+# group costs exactly **one** group-scan, not K.
+#
+# Not part of the public API. Don't read it from app code; if the
+# value is interesting outside tests, promote it to a real metric.
+_session_count_recompute_calls = 0
 
 
 class ToolMartBuilder(MartBuilder):
@@ -115,8 +131,9 @@ class ToolMartBuilder(MartBuilder):
         # ── recompute session_count for affected keys ──────────────────
         # COUNT(DISTINCT session_id) is not additive across refresh
         # windows. Recompute from the full join for the (day, project,
-        # provider, tool_name) buckets touched by this refresh — bounded
-        # by the number of distinct keys in the window, so cheap.
+        # provider, tool_name) buckets touched by this refresh. The
+        # cost is **not** bounded by the watermark window — see
+        # ``_recompute_session_counts`` for the real cost shape.
         if buckets:
             _recompute_session_counts(conn, list(buckets.keys()))
 
@@ -202,20 +219,77 @@ def _recompute_session_counts(
 ) -> None:
     """Set ``tool_mart.session_count`` for the given keys to the true DISTINCT.
 
-    Bounded by ``len(keys)`` — typically O(1)..O(few dozen) per refresh
-    window. Each lookup re-derives the per-tool session set by joining
-    ``usage_events`` to ``messages`` and parsing ``tools_json`` for
-    that key's ``(day, project_id, provider)``. Cheap because the key
-    set is tiny and the index ``(project_id, day)`` does the heavy
-    lifting on the events side.
+    Cost shape — read this carefully
+    --------------------------------
+
+    The keys are first deduped down to their distinct
+    ``(day, project_id, provider)`` groups. For each group we run one
+    SQL scan over **every** ``usage_events`` row matching that
+    ``(day, project_id, provider)`` triple — *not* just the rows in
+    this refresh's watermark window — because
+    ``COUNT(DISTINCT session_id)`` cannot be reconstructed from the
+    window alone (a session that touched the tool in an earlier
+    window would be invisible).
+
+    Concrete cost::
+
+        O(distinct (day, project, provider) groups touched
+          ×  events-per-day-of-touched-groups)
+
+    On the maintainer's real store, a busy day with 10K+ events for
+    a single ``(day, project, provider)`` triple forces a full 10K-row
+    re-scan + ``tools_json`` reparse on every refresh cycle that
+    touches that triple. ``len(keys)`` (the per-tool key fanout) does
+    *not* bound the work; only the underlying group fanout does.
+
+    Practical bounds:
+
+    * Distinct ``(day, project, provider)`` groups touched in a
+      refresh window are typically 1..10 — the watermark advances
+      often enough that one window only covers a handful of
+      project-days. The watcher's 200 ms debounce keeps it small.
+    * Per-group event count tracks how busy the day was. The
+      ``idx_events_project ON usage_events(project_id, day)`` index
+      covers the predicate so SQLite reads only the relevant slice
+      of the events table — no full-table scan — but it still walks
+      every row in that slice and parses each ``tools_json``.
+
+    Why this design (option (d) from the design discussion)
+    -------------------------------------------------------
+
+    Alternatives considered and rejected:
+
+    (a) Add per-window distinct counts to a stored running total —
+        wrong; ``COUNT(DISTINCT)`` does not compose that way.
+    (b) Scan only the watermark window per group — undercounts; a
+        session that touched the tool in a previous window vanishes.
+    (c) Maintain a per-(day, project, provider, tool, session)
+        presence table — would make the recompute O(touched-keys)
+        but adds a table whose row count is potentially larger than
+        ``tool_mart`` itself, plus an extra write on every refresh.
+        Not worth the storage today.
+    (d) **Current approach** — accept the full-day-per-touched-group
+        scan and document its real cost honestly.
+
+    Tests inspect the module-level
+    ``_session_count_recompute_calls`` counter (incremented once per
+    group below) to verify the per-group dedup is intact — i.e., we
+    never fan out worse than O(distinct groups touched).
     """
     # Group by (day, project_id, provider) so we parse each event's
     # tools_json once per group rather than once per tool_name × group.
-    groups: set[tuple[str, int, str]] = {(k[0], k[1], k[2]) for k in keys}
+    # Also collect the wanted tool_names per group so we don't bother
+    # building session sets for tools we won't be updating.
+    group_tools: dict[tuple[str, int, str], set[str]] = {}
+    for k in keys:
+        group_tools.setdefault((k[0], k[1], k[2]), set()).add(k[3])
+
+    global _session_count_recompute_calls
 
     # For each group, fetch every event in scope + its tools_json; build
-    # a tool_name → set(session_id) map.
-    for day, project_id, provider in groups:
+    # a tool_name → set(session_id) map for the wanted tools only.
+    for (day, project_id, provider), wanted_tools in group_tools.items():
+        _session_count_recompute_calls += 1
         rows = conn.execute(
             """
             SELECT e.session_id, m.tools_json
@@ -232,7 +306,8 @@ def _recompute_session_counts(
                 continue
             sid = str(row["session_id"] or "")
             for t in tools:
-                per_tool_sessions.setdefault(t, set()).add(sid)
+                if t in wanted_tools:
+                    per_tool_sessions.setdefault(t, set()).add(sid)
 
         # Update the matching tool_mart rows for this group.
         for tool_name, session_ids in per_tool_sessions.items():
