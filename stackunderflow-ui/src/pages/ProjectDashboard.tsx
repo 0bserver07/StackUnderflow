@@ -14,6 +14,7 @@ import {
   IconTag,
   IconScale,
   IconGitBranch,
+  IconHierarchy3,
 } from '@tabler/icons-react'
 import { setProjectByDir, getDashboardData, refreshData } from '../services/api'
 import { formatProjectName, getNameMode } from '../services/nameMode'
@@ -38,6 +39,7 @@ import QATab from '../components/dashboard/QATab'
 import BookmarksTab from '../components/dashboard/BookmarksTab'
 import TagsTab from '../components/dashboard/TagsTab'
 import SessionsTab from '../components/dashboard/SessionsTab'
+import AgentsTab from '../components/dashboard/AgentsTab'
 import CostTab from '../components/dashboard/CostTab'
 import CompareTab from '../components/dashboard/CompareTab'
 import YieldTab from '../components/dashboard/YieldTab'
@@ -54,6 +56,7 @@ type Tab = {
 const TABS: readonly Tab[] = [
   { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
   { id: 'sessions', label: 'Sessions', icon: IconFolders },
+  { id: 'agents', label: 'Agents', icon: IconHierarchy3, beta: true },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
   // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
   // and Commands. Both call dedicated /api/compare and /api/yield routes.
@@ -332,6 +335,7 @@ export default function ProjectDashboard() {
         {activeTab === 'bookmarks' && <BookmarksTab />}
         {activeTab === 'tags' && <TagsTab />}
         {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
+        {activeTab === 'agents' && <AgentsTab />}
       </div>
     </div>
   )

@@ -766,3 +766,66 @@ export interface EtlBackfillResponse {
   started_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Agent-teams — Claude Code parallel-agent topology surface.
+// Mirrors the response bodies of /api/agent-teams/*. See
+// docs/specs/agent-teams.md for the design rationale.
+// ---------------------------------------------------------------------------
+
+export interface AgentTeamSummary {
+  session_id: string
+  project_slug: string
+  project_display_name: string
+  team_name: string | null
+  first_ts: string | null
+  last_ts: string | null
+  agent_count: number
+  sub_agent_message_count: number
+  lead_message_count: number
+}
+
+export interface AgentTeamMember {
+  session_id: string
+  agent_id: string | null
+  agent_name: string | null
+  is_lead: boolean
+  parent_session_id: string | null
+  message_count: number
+  first_ts: string | null
+  last_ts: string | null
+  first_user_prompt: string | null
+  model: string | null
+  cost_usd: number
+}
+
+export interface AgentTeamGraph {
+  session_id: string
+  team_name: string | null
+  project_slug: string
+  project_display_name: string
+  lead: AgentTeamMember
+  agents: AgentTeamMember[]
+}
+
+export interface AgentTeamListResponse {
+  teams: AgentTeamSummary[]
+}
+
+export interface AgentTeamTranscriptResponse {
+  session_id: string
+  agent_session_id: string
+  message_count: number
+  messages: Array<{
+    id: number
+    seq: number
+    timestamp: string
+    role: string
+    model: string | null
+    content_text: string
+    is_sidechain: boolean
+    uuid: string | null
+    parent_uuid: string | null
+    [k: string]: unknown
+  }>
+}
+
