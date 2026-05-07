@@ -513,7 +513,7 @@ export function etlHealthColor(health: EtlHealth): {
  * rendered for screen readers via aria-label.
  */
 export function formatEtlBadgeText(status: EtlStatusResponse): string {
-  const { health, lag_seconds, watcher, events } = status
+  const { health, lag_seconds, watcher, events, last_job } = status
   switch (health) {
     case 'live':
       return `Live (synced ${formatLagDuration(watcher.seconds_since_refresh ?? lag_seconds)} ago)`
@@ -527,6 +527,14 @@ export function formatEtlBadgeText(status: EtlStatusResponse): string {
     case 'stale':
       return `Stale by ${formatLagDuration(lag_seconds)}`
     case 'error':
+      // A recent backfill failure is a more specific (and more
+      // actionable) message than the generic ETL error. The assembler
+      // escalates ``health`` to ``error`` while the failed last_job
+      // is inside its TTL window, so this branch handles both the
+      // dead-watcher case and the failed-backfill case.
+      if (last_job?.status === 'failed') {
+        return `Backfill failed (job ${last_job.job_id.slice(0, 8)}…)`
+      }
       return 'ETL error — see /etl/status'
   }
   // Defensive — TS exhaustiveness already catches missing branches above, but

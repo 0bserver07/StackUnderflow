@@ -53,11 +53,15 @@ export default function EtlStatusBadge() {
     },
   })
 
-  // Toast on transition to live ("ETL caught up").
+  // Toast on transition to live ("ETL caught up"). Suppressed while a
+  // backfill failure is still inside its TTL window — the assembler
+  // has escalated health to "error" for that case, so the live →
+  // live transition we'd normally celebrate isn't actually a recovery.
   useEffect(() => {
     if (!data) return
     const prev = previousHealth.current
-    if (prev && prev !== 'live' && data.health === 'live') {
+    const recentlyFailed = data.last_job?.status === 'failed'
+    if (prev && prev !== 'live' && data.health === 'live' && !recentlyFailed) {
       setToast('ETL caught up')
       const t = window.setTimeout(() => setToast(null), 3500)
       return () => window.clearTimeout(t)

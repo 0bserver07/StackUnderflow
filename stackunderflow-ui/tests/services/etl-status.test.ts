@@ -78,6 +78,7 @@ const sampleStatus: EtlStatusResponse = {
   lag_seconds: 7,
   health: 'live',
   current_job: null,
+  last_job: null,
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +315,118 @@ test('formatEtlBadgeText: stale renders day-scale lag', () => {
 })
 
 test('formatEtlBadgeText: error has the canonical pointer to /etl/status', () => {
+  // Generic error path — no recently failed last_job. The badge falls
+  // back to the canonical pointer so the user knows where to look.
   const text = formatEtlBadgeText({ ...sampleStatus, health: 'error' })
+  assert.match(text, /ETL error/)
+  assert.match(text, /\/etl\/status/)
+})
+
+// ---------------------------------------------------------------------------
+// last_job — surfacing recent backfill outcomes. The assembler escalates
+// `health` to "error" while a failed last_job is inside its TTL window, and
+// the badge text reflects that more specific failure rather than the generic
+// "ETL error" message so the user gets one click closer to the cause.
+// ---------------------------------------------------------------------------
+
+test('EtlStatusResponse round-trips a failed last_job block', async () => {
+  const failed: EtlStatusResponse = {
+    ...sampleStatus,
+    health: 'error',
+    last_job: {
+      job_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      started_at: '2026-05-06T12:00:00+00:00',
+      completed_at: '2026-05-06T12:00:42+00:00',
+      force: true,
+      status: 'failed',
+      error: 'connection refused: 5/5',
+    },
+  }
+  const restore = withFetch(async () => mockResponse(failed))
+  try {
+    const data = await getEtlStatus()
+    assert.equal(data.last_job?.status, 'failed')
+    assert.equal(data.last_job?.error, 'connection refused: 5/5')
+    assert.equal(data.last_job?.force, true)
+    assert.equal(data.health, 'error')
+  } finally {
+    restore()
+  }
+})
+
+test('EtlStatusResponse round-trips a complete last_job with no error key', async () => {
+  const complete: EtlStatusResponse = {
+    ...sampleStatus,
+    last_job: {
+      job_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      started_at: '2026-05-06T12:00:00+00:00',
+      completed_at: '2026-05-06T12:00:42+00:00',
+      force: false,
+      status: 'complete',
+    },
+  }
+  const restore = withFetch(async () => mockResponse(complete))
+  try {
+    const data = await getEtlStatus()
+    assert.equal(data.last_job?.status, 'complete')
+    // `error` is optional on the wire — successful completions omit it
+    // and consumers branch on `status === 'failed'`, never on the
+    // presence of the `error` key alone.
+    assert.equal(data.last_job?.error ?? null, null)
+  } finally {
+    restore()
+  }
+})
+
+test('formatEtlBadgeText: failed last_job surfaces the job id', () => {
+  const failed: EtlStatusResponse = {
+    ...sampleStatus,
+    health: 'error',
+    last_job: {
+      job_id: 'd41d8cd98f00b204e9800998ecf8427e',
+      started_at: '2026-05-06T12:00:00+00:00',
+      completed_at: '2026-05-06T12:00:42+00:00',
+      force: false,
+      status: 'failed',
+      error: 'connection refused',
+    },
+  }
+  const text = formatEtlBadgeText(failed)
+  assert.match(text, /Backfill failed/)
+  // First 8 hex chars of the job id should appear so the operator can
+  // correlate with the server log line.
+  assert.match(text, /d41d8cd9/)
+  // The generic "/etl/status" hint must NOT appear when we have a more
+  // specific message — that's the whole point of this branch.
+  assert.doesNotMatch(text, /\/etl\/status/)
+})
+
+test('formatEtlBadgeText: error without last_job falls back to generic message', () => {
+  // health=error can also come from a dead-watcher + lag combination.
+  // When last_job isn't a recently failed run we keep the canonical
+  // generic message so the user is pointed at the route for context.
+  const dead: EtlStatusResponse = { ...sampleStatus, health: 'error', last_job: null }
+  const text = formatEtlBadgeText(dead)
+  assert.match(text, /ETL error/)
+  assert.match(text, /\/etl\/status/)
+})
+
+test('formatEtlBadgeText: error with a last_job that is *complete* still uses generic msg', () => {
+  // A successful last_job alongside health=error means the failure
+  // came from somewhere else (watcher/lag) — don't claim a backfill
+  // failed when it didn't.
+  const generic: EtlStatusResponse = {
+    ...sampleStatus,
+    health: 'error',
+    last_job: {
+      job_id: 'cccccccccccccccccccccccccccccccc',
+      started_at: '2026-05-06T12:00:00+00:00',
+      completed_at: '2026-05-06T12:00:42+00:00',
+      force: false,
+      status: 'complete',
+    },
+  }
+  const text = formatEtlBadgeText(generic)
   assert.match(text, /ETL error/)
   assert.match(text, /\/etl\/status/)
 })

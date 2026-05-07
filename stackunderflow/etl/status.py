@@ -42,6 +42,10 @@ The shape returned is:
         "health": "live"|"syncing"|"stale"|"error",
         "current_job": {"job_id": str, "started_at": str,
                           "force": bool, "status": str} | None,
+        "last_job": {"job_id": str, "started_at": str,
+                      "completed_at": str, "force": bool,
+                      "status": "complete"|"failed",
+                      "error": str | None} | None,
     }
 
 The ``lag_seconds`` field is the worst-case difference between the
@@ -56,6 +60,15 @@ The ``current_job`` field reflects the per-process backfill slot from
 otherwise. The dashboard polls this surface every 10s and uses the
 field to drive the badge's "backfilling" state without having to call
 the backfill route again.
+
+The ``last_job`` field carries the most recently completed backfill
+within :data:`stackunderflow.etl.backfill_jobs.LAST_JOB_TTL_SECONDS`
+(30s by default). It surfaces failures the route can't otherwise
+report — POST returns 202 the moment the job is queued, so an
+orchestrator exception leaves no trace on the wire. The dashboard
+banners off ``last_job.status == "failed"`` to show the operator what
+broke, and ``health`` is escalated to ``"error"`` for the same window
+so the badge mirrors the failure without a parallel signal path.
 """
 
 from __future__ import annotations
@@ -67,7 +80,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import stackunderflow.deps as deps
-from stackunderflow.etl.backfill_jobs import get_current_job
+from stackunderflow.etl.backfill_jobs import get_current_job, get_last_job
 
 _log = logging.getLogger(__name__)
 
@@ -135,6 +148,20 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         watcher=watcher,
         lag_events=lag,
     )
+    # ``current_job`` and ``last_job`` reflect the in-process backfill
+    # slots — both can change between back-to-back assembler calls
+    # without any DB activity.
+    current = get_current_job()
+    last = get_last_job()
+
+    # Escalate health to ``error`` while a recently failed backfill is
+    # still inside the TTL window. The pipeline itself may be live
+    # (events flowing, marts caught up), but a fresh failure is the
+    # operator's most actionable signal — the badge should reflect it
+    # for the 30s the slot is retained, then return to whatever the
+    # mart-lag-based health says.
+    if last is not None and last.get("status") == "failed":
+        health = "error"
 
     return {
         "watcher": watcher,
@@ -142,10 +169,8 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         "events": events,
         "lag_seconds": lag,
         "health": health,
-        # ``current_job`` is the only field that can change between two
-        # back-to-back assembler calls without any DB activity — it
-        # reflects the in-process backfill slot, not store state.
-        "current_job": get_current_job(),
+        "current_job": current,
+        "last_job": last,
     }
 
 

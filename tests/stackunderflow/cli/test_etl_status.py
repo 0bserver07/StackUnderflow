@@ -143,7 +143,8 @@ class TestJsonFormat:
         assert r.exit_code == 0, r.output
         body = json.loads(r.output)
         assert set(body.keys()) == {
-            "watcher", "marts", "events", "lag_seconds", "health", "current_job",
+            "watcher", "marts", "events", "lag_seconds", "health",
+            "current_job", "last_job",
         }
         assert body["events"]["total"] == 2
         assert body["events"]["by_provider"] == {"claude": 2}

@@ -152,10 +152,12 @@ class TestResponseShape:
 
         # Top-level keys
         assert set(body.keys()) == {
-            "watcher", "marts", "events", "lag_seconds", "health", "current_job",
+            "watcher", "marts", "events", "lag_seconds", "health",
+            "current_job", "last_job",
         }
-        # Idle store: no backfill in flight.
+        # Idle store: no backfill in flight, none recently completed.
         assert body["current_job"] is None
+        assert body["last_job"] is None
 
         # Watcher subshape
         assert set(body["watcher"].keys()) == {
@@ -417,3 +419,75 @@ class TestWatcherDegrade:
 
         body = client.get("/api/etl/status").json()
         assert body["watcher"]["running"] == "unknown"
+
+
+# ── last_job block ───────────────────────────────────────────────────────────
+
+
+class TestLastJob:
+    """The ``last_job`` block carries the most recent backfill outcome
+    so the dashboard banner can render success / failure for the
+    duration of the slot's TTL.
+    """
+
+    def test_completion_surfaces_in_last_job_block(self, app_client):
+        client, _ = app_client
+        # Run a full start → complete cycle through the public surface.
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="complete")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["current_job"] is None
+            last = body["last_job"]
+            assert last is not None
+            assert last["job_id"] == job["job_id"]
+            assert last["status"] == "complete"
+            assert last["force"] is False
+            assert isinstance(last["completed_at"], str) and "T" in last["completed_at"]
+            # Successful completions have no error key on the slot.
+            assert "error" not in last or last.get("error") is None
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_failure_surfaces_error_in_last_job_block(self, app_client):
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=True)
+        backfill_jobs.complete_job(
+            job["job_id"], status="failed", error="connection refused: 5/5",
+        )
+        try:
+            body = client.get("/api/etl/status").json()
+            last = body["last_job"]
+            assert last is not None
+            assert last["job_id"] == job["job_id"]
+            assert last["status"] == "failed"
+            assert last["error"] == "connection refused: 5/5"
+            assert last["force"] is True
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_failed_last_job_escalates_health_to_error(self, app_client):
+        """A recent failure surfaces as ``health="error"`` so the badge
+        turns red even when the marts themselves are caught up."""
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="failed", error="boom")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["health"] == "error"
+            assert body["last_job"]["status"] == "failed"
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_complete_last_job_does_not_escalate_health(self, app_client):
+        """A successful completion leaves the lag-derived health alone
+        — empty store stays ``live``."""
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="complete")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["last_job"]["status"] == "complete"
+            assert body["health"] == "live"
+        finally:
+            backfill_jobs._reset_for_tests()

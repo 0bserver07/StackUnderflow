@@ -60,7 +60,11 @@ async def get_etl_status() -> dict[str, Any]:
           "lag_seconds": int,
           "health": "live"|"syncing"|"stale"|"error",
           "current_job": {"job_id": str, "started_at": str,
-                            "force": bool, "status": str} | None
+                            "force": bool, "status": str} | None,
+          "last_job": {"job_id": str, "started_at": str,
+                        "completed_at": str, "force": bool,
+                        "status": "complete"|"failed",
+                        "error": str | None} | None
         }
     """
     conn = db.connect(deps.store_path)
@@ -151,8 +155,14 @@ def _run_backfill_in_background(job_id: str, force: bool) -> None:
         try:
             conn.close()
         finally:
+            # Use the canonical ``failed`` status so consumers (status
+            # assembler, dashboard banner) have a single string to
+            # branch on. ``error`` (the previous value) wasn't read by
+            # anything but stayed inconsistent with the spec; the slot
+            # had no ``last_job`` retention before this change so the
+            # value never reached a consumer.
             complete_job(
                 job_id,
-                status="error" if err else "complete",
+                status="failed" if err else "complete",
                 error=str(err) if err else None,
             )
