@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -11,6 +11,8 @@ import {
   IconPlus,
   IconRefresh,
   IconAlertTriangle,
+  IconCircleCheck,
+  IconCircleX,
 } from '@tabler/icons-react'
 import { useTheme } from '../hooks/useTheme'
 import { useBetaFeatures, type TabVisibility } from '../hooks/useBetaFeatures'
@@ -337,6 +339,41 @@ function EtlPipelineSection() {
     null,
   )
 
+  // ── last_job surfacing ────────────────────────────────────────────────
+  // The status payload retains the most recently completed backfill
+  // for ~30s after it finishes (process-local TTL, see backfill_jobs.py).
+  // We mirror that here as two surfaces:
+  //
+  //   - failed → a persistent red banner with the error + job id
+  //   - complete → a transient green toast that auto-dismisses
+  //
+  // Each is keyed on the job_id so a *new* finished job (different id)
+  // re-shows the banner / toast even if the prior outcome had the same
+  // status. Without this, a back-to-back fail → fail would silently
+  // leave the same banner up while the second failure went unnoticed.
+  const seenJobIdRef = useRef<string | null>(null)
+  const [completionToast, setCompletionToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    const lastJob = data?.last_job
+    if (!lastJob) {
+      // Slot has expired or there's no recent job — clear our memo
+      // so the next finished job is treated as fresh.
+      seenJobIdRef.current = null
+      return
+    }
+    if (seenJobIdRef.current === lastJob.job_id) return
+    seenJobIdRef.current = lastJob.job_id
+    if (lastJob.status === 'complete') {
+      setCompletionToast(
+        `✓ Backfill complete (job ${lastJob.job_id.slice(0, 8)}…)`,
+      )
+      const t = window.setTimeout(() => setCompletionToast(null), 4000)
+      return () => window.clearTimeout(t)
+    }
+    // Failure path renders a persistent banner (no toast) — see JSX below.
+  }, [data?.last_job])
+
   const backfillMutation = useMutation({
     mutationFn: () => triggerEtlBackfill(false),
     onSuccess: (res) => {
@@ -480,6 +517,49 @@ function EtlPipelineSection() {
             {data.current_job.force ? ' (force rebuild)' : ''}. Started{' '}
             {data.current_job.started_at}.
           </span>
+        </div>
+      )}
+
+      {/* Failed-backfill banner — persistent (until the slot's TTL
+          expires on the server) so the operator can read the error
+          message even if they switched tabs while the run was in
+          flight. The route returns 202 the moment a backfill is
+          queued, so without this surface a failure inside the
+          background task would be invisible to the dashboard. */}
+      {data?.last_job && data.last_job.status === 'failed' && (
+        <div
+          role="alert"
+          className="mt-4 px-3 py-2 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-xs text-red-700 dark:text-red-400 flex items-start gap-2"
+        >
+          <IconCircleX size={14} className="mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-red-800 dark:text-red-300">
+              Backfill failed (job{' '}
+              <span className="font-mono">{data.last_job.job_id.slice(0, 8)}…</span>)
+            </div>
+            {data.last_job.error && (
+              <div className="mt-1 font-mono text-[11px] text-red-700 dark:text-red-400 break-words">
+                {data.last_job.error}
+              </div>
+            )}
+            <div className="mt-1 text-[11px] text-red-600 dark:text-red-400/80">
+              Check the server log for the full traceback. This banner
+              clears automatically after ~30s.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Successful-backfill toast — transient, dismisses itself on a
+          timer. Only fires once per (new) job_id so a static slot
+          doesn't keep retoasting on every poll. */}
+      {completionToast && (
+        <div
+          role="status"
+          className="mt-4 px-3 py-2 rounded border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-900/20 text-xs text-green-700 dark:text-green-300 flex items-center gap-2"
+        >
+          <IconCircleCheck size={14} className="shrink-0" />
+          <span>{completionToast}</span>
         </div>
       )}
 

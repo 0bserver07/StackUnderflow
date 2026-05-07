@@ -749,6 +749,22 @@ export interface EtlBackfillJob {
   status: string
 }
 
+// Most-recently completed backfill — populated by the same module's
+// last-job slot. Retained for `LAST_JOB_TTL_SECONDS` (30s) so the
+// dashboard has a chance to render the outcome before the slot
+// garbage-collects on read. ``error`` is populated only when
+// ``status === "failed"``; success completions omit it.
+export type EtlBackfillFinalStatus = 'complete' | 'failed'
+
+export interface EtlCompletedJob {
+  job_id: string
+  started_at: string
+  completed_at: string
+  force: boolean
+  status: EtlBackfillFinalStatus
+  error?: string | null
+}
+
 export interface EtlStatusResponse {
   watcher: EtlWatcherStatus
   marts: Record<string, EtlMartStatus>
@@ -756,6 +772,7 @@ export interface EtlStatusResponse {
   lag_seconds: number
   health: EtlHealth
   current_job: EtlBackfillJob | null
+  last_job: EtlCompletedJob | null
 }
 
 // 202 Accepted body returned by POST /api/etl/backfill once the
