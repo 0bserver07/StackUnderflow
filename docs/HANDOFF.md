@@ -1,10 +1,10 @@
 # StackUnderflow — Handoff doc
 
-**Date:** 2026-05-06 (post v0.7.0 release)
+**Date:** 2026-05-06 (last tagged release: v0.7.0; Wave 5 follow-ups merged on `main`, unreleased)
 **Maintainer:** yad.konrad@quantumrise.com / 0bserver07
-**Branch:** `main` (clean), tag `v0.7.0`
-**Tests:** 1598 passing, 2 skipped, 11 deselected (`pytest -m slow` runs the 11)
-**Frontend:** typecheck + build clean, `stackunderflow-ui@0.6.1`
+**Branch:** `main` (clean, ahead of `origin/main` by Wave 5 merges + this docs commit), tag `v0.7.0`
+**Tests:** 1747 passing, 2 skipped, 11 deselected (`pytest -m slow` runs the 11)
+**Frontend:** typecheck + build clean, `stackunderflow-ui@0.7.0`
 
 This doc gets a fresh agent oriented in 10 minutes. Read it before reading code.
 
@@ -56,6 +56,8 @@ Source-of-truth state lives at `~/.stackunderflow/store.db` (SQLite). The dashbo
 │  project_mart      (project_id, lifetime totals)                             │
 │  provider_day_mart (day, provider)                                           │
 │  model_day_mart    (day, model, speed)                                       │
+│  tool_mart         (day, project_id, provider, tool_name)        ← Wave 5    │
+│  command_mart      (day, project_id, command_name)               ← Wave 5    │
 │  mart_watermark    (mart_name → last_event_id, last_refresh_ts)              │
 └─────────────────────────────────────────────────────────────────────────────┘
                           │
@@ -86,11 +88,14 @@ stackunderflow/
       __init__.py    # last-wins registry: register/get/all + 16 normalizers wire here
       claude.py codex.py cursor.py cline.py                     # default-on
       <12 beta normalizers>
-    marts/           # MartBuilder ABC + 5 builders (daily, session, project, provider_day, model_day)
+    marts/           # MartBuilder ABC + 7 builders (daily, session, project, provider_day, model_day, tool, command)
       base.py        # ABC; concrete rebuild_from_scratch default
-      __init__.py    # last-wins registry; 5 builders wire here
+      __init__.py    # last-wins registry; 7 builders wire here
       daily.py session.py project.py provider_day.py model_day.py
+      tool.py command.py                                                      # Wave 5
     backfill.py      # Streams messages → events → marts; idempotent; --force rebuild
+    backfill_jobs.py # Process-local lock + single-slot job state for POST /api/etl/backfill   # Wave 5
+    lock.py          # fcntl/msvcrt watcher single-instance lock + stale-PID detection         # Wave 5
     watcher.py       # watchfiles daemon; debounced 200 ms; per-adapter dispatch
     watermark.py     # get/set/refresh_all_marts; persists last_event_id + last_refresh_ts
     status.py        # Shared assembler for /api/etl/status + `stackunderflow etl status`
@@ -114,11 +119,11 @@ stackunderflow/
     bookmarks.py commands.py misc.py qa.py search.py tags.py
   services/          # compare, plans, yield_tracker, pricing, search, qa, tags, bookmarks
   store/
-    schema.py        # CURRENT_VERSION = 6; applies SQL + .py migrations idempotently
+    schema.py        # CURRENT_VERSION = 8; applies SQL + .py migrations idempotently
     queries.py       # Typed query helpers (one place for all SQL)
-    mart_queries.py  # Read helpers used by route migrations (Wave 3A/4A)
+    mart_queries.py  # Read helpers used by route migrations (Wave 3A/4A/5A)
     db.py types.py
-    migrations/      # v001 → v006 (v005 is .py, rest are .sql)
+    migrations/      # v001 → v008 (v005 + v008 are .py, rest are .sql)
   cli.py server.py deps.py settings.py __version__.py
 
 stackunderflow-ui/    # React dashboard (Vite)
@@ -149,7 +154,41 @@ docs/
 | v0.6.0 | 2026-05-01 | Currency, export, model aliases, plan budgets, compare, yield, optimize patterns, context budget, fast-mode SQLite, streaming reader, cursor cache. Multi-provider Python API + MCP. Cursor v3 conversationId fix. UI surfaces wired |
 | v0.6.1 | 2026-05-01 | Currency snapshot fallback, cursor pricing for `composer-*`, per-workspace cursor slugs, `<synthetic>` cleanup, defensive adapter coverage |
 | v0.6.x patches | 2026-05-04 to 2026-05-05 | Provider/model FilterBar URL-synced, `formatModelName` normalizer, `Annotated[..., Query()]` filter binding fix, non-blocking startup ingest, `bulk_*` SQL helpers replacing N+1 in `/api/projects` |
-| **v0.7.0** | **2026-05-06** | **ETL pipeline (Waves 1–4): usage_events + 5 marts + watermarked refresh + filesystem watcher + every dashboard route migrated to mart reads + status surface + UI badge** |
+| v0.7.0 | 2026-05-06 | ETL pipeline (Waves 1–4): usage_events + 5 marts + watermarked refresh + filesystem watcher + every dashboard route migrated to mart reads + status surface + UI badge |
+| **Wave 5 (unreleased)** | **2026-05-06** | **tool_mart + command_mart (v007) + POST /api/etl/backfill route + watcher single-instance lock + messages_YYYYMM partitioning behind UNION view (v008, NOT auto-applied) + 13 beta normalizers validated against real-shape fixtures + 1 copilot drift fix** |
+
+---
+
+## What changed in Wave 5 follow-ups (merged on `main`, unreleased)
+
+The five HANDOFF follow-ups deferred from v0.7.0 all landed together. See `CHANGELOG.md` for the deep dive.
+
+### New tables (migrations v007 + v008)
+- `v007_lower_grain_marts.sql` — `tool_mart` (per-tool, additive) + `command_mart` (per-command, additive)
+- `v008_messages_partitioning.py` — `messages` becomes a VIEW over `messages_YYYYMM` partitions (+ `messages_unknown` fallback) backed by `_messages_id_seq` and an INSTEAD OF INSERT trigger; FK on `usage_events.source_message_fk` dropped (SQLite can't FK to a view; UNIQUE dedup index preserved)
+
+### New abstractions / modules
+- `etl/lock.py` — POSIX `fcntl.flock` + Windows `msvcrt.locking` watcher single-instance lock with stale-PID detection
+- `etl/backfill_jobs.py` — process-local lock + single-slot job state for the new POST route
+- 2 new `MartBuilder` subclasses (`tool.py`, `command.py`) wired into the existing last-wins registry
+
+### New surfaces
+- `POST /api/etl/backfill` returning `202 {job_id, started_at}` or `409 {error, job_id}` if a job is already in-flight
+- `current_job` block on `/api/etl/status`
+- `watcher.lock_held_by` PID on `/api/etl/status` + CLI text output
+- `stackunderflow start --no-lock` flag (sets `STACKUNDERFLOW_DISABLE_LOCK=1`)
+- Settings page "Backfill now" button now hits the real route (replaces the v0.7.0 CLI-fallback display)
+- `EtlStatusBadge` poll cadence drops to 2 s while a backfill is running
+
+### Routes migrated to mart reads (continuing from Wave 4)
+- `/api/cost-data` `tool_costs` block now overlays from `tool_mart` (empty-mart fallback preserved)
+- `/api/optimize` detectors `bash_output_limits`, `junk_reads`, `low_read_edit_ratio`, `ghost_agents` gain a `tool_mart` fast-path filter — instant return on project-scoped windows that didn't use the implicated tool
+
+### Beta normalizer validation
+All 13 beta normalizers (registry has 13, not 12 — `omp` aliases `pi`) graded against real-shape fixtures matching the codeburn catalog spec. Result: 12 ✅ matching, 1 ⚠️ drift fixed (copilot model-priority bug — see drift report), 0 ❌ broken. Drift report at `docs/beta-normalizer-drift.md`.
+
+### v008 NOT auto-applied
+The maintainer's real `~/.stackunderflow/store.db` (1.9 GB, 150K+ events) is still on `user_version = 6`. Apply v008 manually per the documented rollout in `docs/specs/messages-partitioning.md`: backup → apply on `/tmp/store.test.db` copy → verify counts (`view total == sum(partition counts)`) → spot-check dashboard against the copy → swap.
 
 ---
 
@@ -253,9 +292,11 @@ node --test tests/services/*.test.ts      # frontend unit tests (Node built-in r
 
 ```
 ~/.stackunderflow/store.db (1.9 GB):
+  user_version: 6 (v007 + v008 ship on `main`; both unapplied here pending manual rollout)
   150,337 usage_events
   Marts: daily=940, session=841, project=151, provider_day=146, model_day=184
-  Watermarks all at 150,337 (in sync)
+         tool=0, command=0  ← Wave 5 marts populate after v007 applies + backfill
+  Watermarks all at 150,337 (in sync) for the v0.7.0 marts
   Per-provider events: claude 150,014, cursor 220, cline 103
 ```
 
@@ -263,30 +304,37 @@ node --test tests/services/*.test.ts      # frontend unit tests (Node built-in r
 
 ## What's left / known follow-ups
 
+Items #1-#8 from the v0.7.0 HANDOFF mostly closed by the Wave 5 follow-ups now on `main`. The remaining live items:
+
 | # | Item | Severity |
 |---|---|---|
-| 1 | `optimize` patterns that stay on aggregator path (bash_output_limits, junk_reads, low_read_edit_ratio, ghost_agents, etc.) need lower-grain marts (`tool_mart`, `command_mart`) — those marts are not built. They run against `messages` table directly, but only on the optimize endpoint, so it's slow but bounded. | low (fast enough) |
-| 2 | The `/api/etl/backfill` POST route doesn't exist yet — Wave 4F's backfill button shows the equivalent CLI command on 404. Ship a thin route that wraps `etl.backfill.backfill(conn)` in a background task. | medium (UX) |
-| 3 | Beta normalizers (12 of them) are wired but most haven't been validated against real local data on the maintainer's machine — only claude / codex / cursor / cline / gemini / droid / qwen have actual data. The Cursor v3 bug from v0.6.0 (`#52`) is the kind of latent failure to expect. The defensive empty-source/malformed-data tests added in v0.6.1 cover the failure modes but not full real-data parity. | medium (correctness on enabled betas) |
-| 4 | Per-route latency target on `/api/optimize` is 100 ms warm, 200 ms budget. Currently passes but tight. As the 7 patterns grow, this will need either lower-grain marts (#1 above) or pattern-specific caching. | medium |
-| 5 | `messages_YYYYMM` partitioning was designed for in the spec but not implemented — `messages` table stays unpartitioned. On long-lived stores (years of data) this will eventually need to ship. | low (future) |
-| 6 | The `tool_mart` / `command_mart` lower-grain marts (deferred from Wave 3A/4A) — needed to migrate the per-session/per-command/per-tool detail blocks of `/api/cost-data`. Currently those blocks read raw messages. | low (current path works, just slower) |
-| 7 | Wave 2C watcher is macOS-only verified. `watchfiles` claims cross-platform parity. Linux/Windows haven't been smoke-tested on real data. | low (most users on macOS) |
-| 8 | The watcher restarts on every `stackunderflow start` — there's no cross-process coordination. If two `start` invocations run, both will spin up watchers. The lifespan binds to a single process so this is theoretical, but worth a lock file someday. | low |
+| 1 | **Apply v008 to the real `~/.stackunderflow/store.db`.** The migration ships on `main` but is not auto-applied (1.9 GB store, manual review preferred). Follow the rollout in `docs/specs/messages-partitioning.md`: backup → apply on `/tmp/store.test.db` copy → verify counts → spot-check dashboard → swap. Until then, the maintainer's store stays on `user_version = 6` and the partition path is dormant. | medium (not blocking; do when comfortable) |
+| 2 | `optimize` per-message detectors still need raw `messages` for the per-file/per-byte signals their core logic depends on. The Wave 5 `tool_mart` fast-path filter short-circuits on project-scoped windows that didn't use the implicated tool, but on populated stores the full scan still happens. To fully migrate would need per-message-grain marts (`message_tool_mart`?) — significant new design work, low payoff today. | low (fast enough) |
+| 3 | Beta normalizer pricing-table coverage gap: `qwen-coder-plus` and `gemini-1.5-pro` (and probably others in the long tail) aren't in the canonical RATE_CARD, so they emit `cost_source=unknown`. Adapter/normalizer code is correct — it's a pricing-table population question. Track the missing models per provider and fold them in. | low (correctness for enabled betas) |
+| 4 | Watcher cross-platform coverage. POSIX `fcntl.flock` is smoke-tested on macOS. Windows `msvcrt.locking()` code path is written but **not verified on a real Windows box**. Linux watcher (watchfiles cross-platform) also untested on real data. Most users are on macOS so low urgency, but worth a CI matrix run before claiming Windows support. | low |
+| 5 | `current_job` slot on `/api/etl/status` clears on completion but doesn't retain `last_job_status` history — if the orchestrator raises, the slot just goes empty. The `complete_job(status, error)` signature already accepts the failure context; consumers don't read it yet. Small extension if you want failed-backfill visibility in the UI. | low (UX nicety) |
+| 6 | `tool_mart.event_count` semantics: distinct `(event, tool)` pair, not the aggregator's non-distinct call count. The reshim returns the distinct-pair count under the `calls` key. If a chart consumer needs total-call count (e.g., Read called 3× = 3, not 1), the mart needs a `calls_total` column alongside `event_count`. | low (no consumer broken today) |
+| 7 | `command_costs` per-Interaction block in `/api/cost-data` stays on the aggregator path — its shape doesn't fit `(day, project, command_name)` aggregation. `command_mart_for_project` is wired and ready; if you want a per-command-NAME rollup surfaced, route it. | low (current path works) |
+| 8 | Beta normalizer fixtures (`tests/fixtures/beta_normalizers/`) are synthetic-but-spec-accurate per the codeburn catalog. They don't replace real-world parity — that requires actual session data per provider on the maintainer's machine, which most beta providers don't have. The defensive empty/malformed coverage from v0.6.1 + the new spec-shape coverage from Wave 5 catch the structural failure modes; the next "Cursor v3 conversationId-in-the-key" still needs real local data. | low (no concrete bug today) |
 
 ---
 
 ## Files an incoming agent should read first
 
 1. `docs/specs/etl-architecture.md` — design contract for the pipeline
-2. `stackunderflow/etl/normalize/base.py` — `Normalizer` ABC + helpers
-3. `stackunderflow/etl/marts/base.py` — `MartBuilder` ABC
-4. `stackunderflow/etl/backfill.py` — orchestrator + writer hook
-5. `stackunderflow/etl/watcher.py` — watchfiles + per-adapter dispatch
-6. `stackunderflow/store/migrations/v006_etl_layer.sql` — schema
-7. `stackunderflow/store/mart_queries.py` — every read helper used by routes
-8. Any `routes/*.py` for the JSON contracts the dashboard depends on
-9. `tests/stackunderflow/integration/` — e2e + perf regression — most useful single file to understand the whole pipeline at once
+2. `docs/specs/messages-partitioning.md` — v008 design + rollback + ops rollout (Wave 5)
+3. `docs/beta-normalizer-drift.md` — per-provider verdicts from the Wave 5 audit (Wave 5)
+4. `stackunderflow/etl/normalize/base.py` — `Normalizer` ABC + helpers
+5. `stackunderflow/etl/marts/base.py` — `MartBuilder` ABC
+6. `stackunderflow/etl/backfill.py` — orchestrator + writer hook
+7. `stackunderflow/etl/backfill_jobs.py` — process-local backfill job slot (Wave 5)
+8. `stackunderflow/etl/lock.py` — watcher single-instance lock (Wave 5)
+9. `stackunderflow/etl/watcher.py` — watchfiles + per-adapter dispatch
+10. `stackunderflow/store/migrations/v006_etl_layer.sql` + `v007_lower_grain_marts.sql` + `v008_messages_partitioning.py` — schema progression
+11. `stackunderflow/store/mart_queries.py` — every read helper used by routes
+12. `stackunderflow/ingest/writer.py` — partition routing helpers (Wave 5)
+13. Any `routes/*.py` for the JSON contracts the dashboard depends on
+14. `tests/stackunderflow/integration/` — e2e + perf regression — most useful single file to understand the whole pipeline at once
 
 ---
 
@@ -320,11 +368,11 @@ node --test tests/services/*.test.ts      # frontend unit tests (Node built-in r
 
 ## What I'd do next if I had a week
 
-1. **Wave 5: lower-grain marts.** `tool_mart` (per-tool aggregates) + `command_mart` (per-command). Unblocks the deferred `/api/cost-data` per-session/per-tool blocks and lets `optimize.py`'s remaining 6 detectors move off the aggregator path.
-2. **Real-data validation of the 12 beta normalizers.** For each, generate a synthetic but spec-accurate fixture; assert event shape matches the codeburn catalog spec; flag any drift. Most useful: catch the next "Cursor v3 conversationId-in-the-key" before it ships.
-3. **Real `/api/etl/backfill` route.** Wraps the existing CLI orchestrator in a FastAPI BackgroundTask. Wave 4F's UI button hits 404 today.
-4. **Lock file / single-watcher invariant.** Prevent two `stackunderflow start` instances from racing. `flock` on `~/.stackunderflow/server.lock`.
-5. **Streaming-safe `messages` partitioning.** `messages_YYYYMM` partitions, `litestream`-friendly. Future-proofs the store at multi-year scale.
+1. **Apply v008 to the maintainer's real store + verify on the dashboard.** Walk the documented rollout end-to-end against the 1.9 GB store, measure read fanout cost on the live dashboard.
+2. **Pricing-table population sweep for the long-tail betas.** Audit which models the 12 beta providers emit in real-world fixtures and add the missing entries to the canonical RATE_CARD. Closes the `cost_source=unknown` cosmetic gap on `qwen-coder-plus`, `gemini-1.5-pro`, and friends. Probably 30-50 model entries across the 12 providers.
+3. **Cross-platform CI matrix for the watcher + lock.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
+4. **Failed-backfill UX.** Extend the `current_job` slot on `/api/etl/status` to retain `last_job_status` + `error` for N seconds after completion. Surface in the Settings backfill banner (red instead of green on failure). Small UX win that closes a real visibility gap (today, the slot just empties on orchestrator failure).
+5. **`tool_mart.calls_total` column.** Add the non-distinct call count alongside the distinct-pair `event_count`. Lets the `tool_costs` chart consumer choose either semantics. Migration v009.
 
 ---
 
