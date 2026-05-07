@@ -12,7 +12,7 @@ data export, config management, and session backups. All persistent state lives 
 ```
 # Dashboard
 stackunderflow init [--port N] [--host H] [--no-browser] [--clear-cache]
-stackunderflow start [-p N] [-H H] [--headless] [--fresh]
+stackunderflow start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-lock]
 stackunderflow reindex
 stackunderflow clear-cache [PROJECT]
 
@@ -73,6 +73,7 @@ Usage: stackunderflow start [OPTIONS]
 | `--headless` | flag | false | Don't open the browser |
 | `--fresh` | flag | false | Clear disk cache before starting |
 | `--no-watcher` | flag | false | Disable the Wave 2C ETL filesystem watcher (headless / debugging) |
+| `--no-lock` | flag | false | Skip the watcher single-instance lock (sets `STACKUNDERFLOW_DISABLE_LOCK=1`). Useful for running multiple servers against the same store, or when a stale lock file is blocking startup |
 
 **Examples:**
 
@@ -94,6 +95,13 @@ $ stackunderflow start --no-watcher
   StackUnderflow is live at http://127.0.0.1:8081
   # ETL filesystem watcher disabled — dashboard data refreshes only on
   # manual reindex / restart. Useful for headless profiling runs.
+  Ctrl+C to stop
+
+$ stackunderflow start --no-lock
+  StackUnderflow is live at http://127.0.0.1:8081
+  # Watcher single-instance lock skipped (STACKUNDERFLOW_DISABLE_LOCK=1).
+  # Useful for running multiple servers against the same store, or when
+  # a stale lock file from a crashed prior run is blocking startup.
   Ctrl+C to stop
 ```
 
@@ -957,10 +965,10 @@ $ stackunderflow plan reset
 ## ETL Commands
 
 The ETL pipeline turns raw `messages` rows into a `usage_events` fact table and
-five indexed marts (`daily_mart`, `session_mart`, `project_mart`,
-`provider_day_mart`, `model_day_mart`). The watcher keeps everything fresh in
-the background; these commands let you do a one-shot backfill and check
-pipeline health from the command line.
+seven indexed marts (`daily_mart`, `session_mart`, `project_mart`,
+`provider_day_mart`, `model_day_mart`, `tool_mart`, `command_mart`). The watcher
+keeps everything fresh in the background; these commands let you do a one-shot
+backfill and check pipeline health from the command line.
 
 ### `stackunderflow etl backfill`
 
@@ -983,11 +991,13 @@ $ stackunderflow etl backfill
   events inserted:           247,278
   events skipped (duplicate): 0
   marts refreshed:
+    command          247,278 events
     daily            247,278 events
     model_day        247,278 events
     project          247,278 events
     provider_day     247,278 events
     session          247,278 events
+    tool             247,278 events
   duration:                  4.812s
 ```
 
@@ -1030,9 +1040,13 @@ ETL pipeline — live (last refresh 7s ago)
                  provider_day=312 rows    (watermark 228,311, fresh)
                  model_day=482 rows       (watermark 228,311, fresh)
 
-  Watcher:       running
+  Watcher:       running (lock held by PID 48213)
                  last cycle: 12 events processed
 ```
+
+The `lock held by PID N` suffix only appears when a watcher lock file is
+present and readable. When no process holds the lock the suffix is
+omitted (the line just reads `running`).
 
 **JSON output:**
 
@@ -1044,14 +1058,17 @@ $ stackunderflow etl status --format json
     "running": true,
     "last_refresh_ts": "2026-05-06T08:24:11+00:00",
     "seconds_since_refresh": 7,
-    "events_in_last_cycle": 12
+    "events_in_last_cycle": 12,
+    "lock_held_by": 48213
   },
   "marts": {
     "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
     "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
     "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
     "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
-    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
+    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."},
+    "tool":         {"watermark": 228311, "row_count": 47,   "last_refresh_ts": "..."},
+    "command":      {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
   },
   "events": {
     "total": 228311,
@@ -1059,6 +1076,7 @@ $ stackunderflow etl status --format json
     "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
     "by_cost_source": {"rate_card": 226000, "estimated": 2311}
   },
+  "current_job": null,
   "lag_seconds": 0,
   "health": "live"
 }
