@@ -22,6 +22,9 @@ import type {
   EtlStatusResponse,
   EtlBackfillResponse,
   EtlHealth,
+  AgentTeamListResponse,
+  AgentTeamGraph,
+  AgentTeamTranscriptResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -532,4 +535,78 @@ export function formatEtlBadgeText(status: EtlStatusResponse): string {
   // Defensive — TS exhaustiveness already catches missing branches above, but
   // an unexpected runtime value should not crash the badge.
   return `Unknown (${events.total} events)`
+}
+
+// ---------------------------------------------------------------------------
+// Agent-teams — Claude Code parallel-agent topology surface.
+//
+// Three read-only endpoints:
+//   * GET /api/agent-teams                                — list view
+//   * GET /api/agent-teams/{session}                      — full graph
+//   * GET /api/agent-teams/{session}/agent/{agent_session} — drill-in
+//
+// Empty stores return {teams: []} cleanly; the route layer never raises 500
+// when no sidechain messages are present. See docs/specs/agent-teams.md.
+// ---------------------------------------------------------------------------
+
+export async function listAgentTeams(limit = 50): Promise<AgentTeamListResponse> {
+  return fetchJson(`${BASE}/agent-teams?limit=${limit}`)
+}
+
+export async function getAgentTeam(sessionId: string): Promise<AgentTeamGraph> {
+  return fetchJson(`${BASE}/agent-teams/${encodeURIComponent(sessionId)}`)
+}
+
+export async function getAgentTeamTranscript(
+  sessionId: string,
+  agentSessionId: string,
+): Promise<AgentTeamTranscriptResponse> {
+  return fetchJson(
+    `${BASE}/agent-teams/${encodeURIComponent(sessionId)}` +
+      `/agent/${encodeURIComponent(agentSessionId)}`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// URL-state helpers for the Agents tab — keeps the AgentsTab component thin
+// and gives the test suite a pure surface to round-trip the encoding.
+//
+// Contract: ?session=<lead> selects the lead session in the left rail;
+// ?agent=<sub> selects one of its sub-agents in the right pane. Either may
+// be absent (no selection) or non-string (defensive: URL params always come
+// back as `string | null` from the URLSearchParams API).
+// ---------------------------------------------------------------------------
+
+export interface AgentTeamSelection {
+  session: string | null
+  agent: string | null
+}
+
+export function readAgentTeamSelection(search: string): AgentTeamSelection {
+  const params = new URLSearchParams(search)
+  const session = params.get('session')
+  const agent = params.get('agent')
+  return {
+    session: session && session.length > 0 ? session : null,
+    agent: agent && agent.length > 0 ? agent : null,
+  }
+}
+
+export function writeAgentTeamSelection(
+  search: string,
+  selection: AgentTeamSelection,
+): string {
+  const params = new URLSearchParams(search)
+  if (selection.session) {
+    params.set('session', selection.session)
+  } else {
+    params.delete('session')
+  }
+  if (selection.agent) {
+    params.set('agent', selection.agent)
+  } else {
+    params.delete('agent')
+  }
+  const out = params.toString()
+  return out.length > 0 ? `?${out}` : ''
 }
