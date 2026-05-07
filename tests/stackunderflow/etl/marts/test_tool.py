@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 
+from stackunderflow.etl.marts import tool as tool_mod
 from stackunderflow.etl.marts.tool import ToolMartBuilder
 
 from .conftest import insert_event
@@ -212,3 +213,80 @@ def test_separate_keys_create_separate_rows(conn) -> None:
     ToolMartBuilder().refresh(conn, since_event_id=0)
     n = conn.execute("SELECT COUNT(*) AS n FROM tool_mart").fetchone()["n"]
     assert n == 3
+
+
+def test_recompute_bounded_by_distinct_groups_not_window_events(conn) -> None:
+    """Regression: the per-group recompute scan must dedup tool keys.
+
+    A watermark window that touches K tool-keys all in the same
+    ``(day, project_id, provider)`` group must run exactly **one**
+    per-group SQL scan, not K. Documents the real cost shape called
+    out in ``_recompute_session_counts``: bounded by distinct
+    *groups* touched, not by ``len(keys)`` (which is what the prior
+    docstring misleadingly claimed).
+    """
+    # Seed 1000 events on day 2024-01-01 / project 1 / provider claude,
+    # cycling through 10 distinct tool names. All in the SAME
+    # (day, project, provider) group — so 10 distinct tool-keys but
+    # one underlying group.
+    tool_names = [f"Tool{i}" for i in range(10)]
+    for event_id in range(1, 1001):
+        insert_event(
+            conn,
+            event_id=event_id,
+            session_id="sess-1",
+            cost_usd=0.001,
+            input_tokens=1, output_tokens=1,
+            tools_json=json.dumps([tool_names[event_id % 10]]),
+        )
+    b = ToolMartBuilder()
+    w1 = b.refresh(conn, since_event_id=0)
+    assert w1 == 1000
+
+    # Insert a small new window of events on the same group — touches
+    # all 10 tool keys but still only one (day, project, provider) group.
+    for event_id in range(1001, 1011):
+        insert_event(
+            conn,
+            event_id=event_id,
+            session_id="sess-1",
+            cost_usd=0.001,
+            input_tokens=1, output_tokens=1,
+            tools_json=json.dumps([tool_names[event_id % 10]]),
+        )
+
+    # Reset counter and run the incremental refresh.
+    tool_mod._session_count_recompute_calls = 0
+    w2 = b.refresh(conn, since_event_id=w1)
+    assert w2 == 1010
+
+    # Window touched 10 distinct tool keys, but they all share one
+    # (day, project_id, provider) group → exactly one group scan.
+    assert tool_mod._session_count_recompute_calls == 1, (
+        f"Expected 1 per-group recompute call, got "
+        f"{tool_mod._session_count_recompute_calls}. The recompute "
+        f"must dedup tool keys to their (day, project, provider) "
+        f"group, not run once per touched tool key."
+    )
+
+
+def test_recompute_call_count_matches_distinct_groups(conn) -> None:
+    """Two distinct groups touched in one window → exactly two calls."""
+    # Group A: (2024-01-01, project=1, provider=claude)
+    insert_event(
+        conn, event_id=1, project_id=1, provider="claude",
+        day="2024-01-01", session_id="sess-1",
+        tools_json=json.dumps(["Read", "Edit"]),
+    )
+    # Group B: (2024-01-02, project=1, provider=claude) — different day
+    insert_event(
+        conn, event_id=2, project_id=1, provider="claude",
+        day="2024-01-02", session_id="sess-1",
+        tools_json=json.dumps(["Bash"]),
+    )
+
+    tool_mod._session_count_recompute_calls = 0
+    ToolMartBuilder().refresh(conn, since_event_id=0)
+
+    # Window touched 3 distinct tool keys across 2 groups → 2 scans.
+    assert tool_mod._session_count_recompute_calls == 2
