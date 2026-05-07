@@ -157,6 +157,14 @@ The dashboard's hot routes already read from marts (`daily_mart`,
 partition fan-out. The slow path is `optimize.py` and the per-session
 detail views which still hit `messages` — those run rarely.
 
+> ⚠️ **Reality check (Wave 5 follow-up):** real-data smoke against a
+> 247,278-row / 14-partition store contradicted the optimism above.
+> Predicate pushdown through the UNION-ALL view is **partial at best**
+> — non-`timestamp`-keyed scans fan out to every partition and pay
+> ~50× the cost of a single-partition read. See
+> [Measured performance on real data](#measured-performance-on-real-data-wave-5-follow-up)
+> below.
+
 ### Writes
 
 Per-record overhead: one `SELECT FROM sqlite_master` (cheap — schema
@@ -169,6 +177,188 @@ unchanged from v007 (`SELECT m.* FROM messages m JOIN sessions s ...
 ORDER BY m.id LIMIT ?`). Partition fan-out adds a constant factor but
 backfill is already O(N) over the message table, so the overhead
 is amortised.
+
+---
+
+## Measured performance on real data (Wave 5 follow-up)
+
+The "Performance expectations" section above was written before v008
+was applied to a populated store. A real-data smoke against the
+maintainer's 1.9 GB store (copied to `/tmp/store.smoke.db` for
+safety) — **247,278 messages spread across 14 partitions** — showed
+that SQLite's predicate pushdown through `UNION ALL` is weaker in
+practice than the design assumed. Reads that filter on anything
+other than the partition key (or that JOIN through `messages`) fan
+out to **every** partition.
+
+### Numbers
+
+Measured on `/tmp/store.smoke.db` (247,278 rows, 14 partitions
+spanning `messages_202412..messages_202605`, plus
+`messages_unknown`):
+
+| Query | View (UNION ALL) | Direct partition | Slowdown |
+|---|---|---|---|
+| `messages WHERE role='assistant' AND length(content_text) > 1000` | 2,527 ms | 47 ms (single partition `messages_202601`) | **54×** |
+| `messages JOIN sessions WHERE project_id = ?` (returns 331 rows) | 2,793 ms | n/a — was effectively instant pre-v008 | regression |
+| `messages JOIN usage_events ON e.source_message_fk = m.id` (full, 150K events) | 3,556 ms | n/a | new cost |
+
+For comparison, mart-driven dashboard reads on the same store stay
+fast because they don't touch the view at all:
+
+| Query | Latency |
+|---|---|
+| `daily_mart` aggregate (whole-store roll-up) | 0.3 ms |
+| Lower-grain mart incremental refresh window (1k events) | 4.8 ms |
+
+Take-away: the dashboard hot path is unaffected (mart reads bypass
+the view entirely), but **anything that still hits `messages`
+directly takes a 50× hit** on a populated store. This is consistent
+with SQLite's known optimizer limits — the planner pushes simple
+`WHERE` predicates that match a per-partition index down through the
+UNION (which is why a `timestamp` range can prune partitions), but
+predicates on un-indexed columns (`role`, `length(content_text)`,
+`tools_json`) and JOINs through the view force a full scan of every
+partition with a per-partition merge on top.
+
+### Affected paths and why each pays the cost
+
+The fan-out cost only appears on code that reads `messages`
+directly. Marts insulate the dashboard, but the following call
+sites still go through the view:
+
+- **`etl/backfill.py` chronological iteration.** The orchestrator
+  walks `SELECT m.* FROM messages m JOIN sessions s ON ... ORDER BY
+  m.id LIMIT ?` in batches. **Incremental** backfill is bounded by
+  `since_message_id` (the watermark), so it scans a small tail and
+  the fan-out is a constant factor on a small N. **`--force` full
+  rebuild** scans every row through the view, paying the JOIN cost
+  on the full 247K-row set; on this store that's the 3,556 ms
+  baseline.
+
+- **Lower-grain mart refresh** (`tool_mart`, `command_mart` in
+  `stackunderflow/etl/marts/`). Both JOIN `usage_events` to
+  `messages` to read `tools_json` (tool_mart) or `content_text`
+  (command_mart), because the canonical event row doesn't carry the
+  raw tool list or the slash-command text. Watermark-bounded
+  incremental refreshes only see a small event window and stay fast
+  (~5 ms for 1k events). A **full rebuild** (`backfill --force` or
+  manual `tool_mart.rebuild_from_scratch`) scans every event and
+  pays the full-store JOIN — see the 3,556 ms row above.
+
+- **`reports/optimize.py` raw-message scans.** Several detectors
+  still read `messages.content_text` and `messages.tools_json`
+  directly (e.g. `_recent_tool_names` aggregating `tools_json` for
+  the unused-MCP detector; the `raw_json`/`content_text` scans
+  inside `_detect_*` patterns at lines 420, 496, 785, 892). The
+  Wave 5 `tool_mart` fast-path filter short-circuits some of these
+  on project-scoped windows that didn't use the implicated tool
+  (returning empty without scanning), but on populated stores
+  whose project DID use the tool, the detector still scans the
+  view and pays the fan-out.
+
+- **`services/yield_tracker.py`, `services/compare.py`,
+  `services/search_service.py`, `mcp/store_reader.py`,
+  `routes/sessions.py`, `routes/cost.py`, `reports/export.py`,
+  `reports/aggregate.py`.** Each has at least one `FROM messages`
+  or `JOIN messages` that reads raw text/tools/tokens at the
+  message grain. Most are session- or project-scoped (a
+  `WHERE session_fk = ?` or `WHERE project_id = ?` after a JOIN
+  through `sessions`), so the partition merge is the cost — not
+  the per-partition scan — but the 2,793 ms number above shows
+  the merge alone is expensive on a multi-partition store.
+
+- **MCP server / Public Python API.** Any caller using
+  `stackunderflow.process(slug)` or the MCP `session_query` tool
+  that reads message text (`mcp/store_reader.py`) goes through
+  the view. A single-session lookup is cheap (the
+  `idx_<partition>_session_seq` index covers it per-partition),
+  but the merge is paid every time.
+
+### Workaround: query partitions directly when scope allows
+
+When a caller can scope to a known month range (e.g. "events from
+the last 30 days"), it should bypass the view and query the
+partition tables directly. SQLite plans each per-partition `SELECT`
+independently and skips the merge entirely:
+
+```python
+from datetime import UTC, datetime, timedelta
+
+# Compose a 2-month UNION over only the partitions we actually need.
+# (30-day windows usually span 1-2 months. Round up.)
+now = datetime.now(UTC)
+months = [
+    (now - timedelta(days=30 * i)).strftime("messages_%Y%m")
+    for i in range(2)
+]
+
+cols = "id, session_fk, seq, timestamp, role, content_text, tools_json"
+sql = " UNION ALL ".join(
+    f"SELECT {cols} FROM {p} "
+    f"WHERE role = 'assistant' AND length(content_text) > 1000"
+    for p in months
+)
+rows = conn.execute(sql).fetchall()
+```
+
+Trade-offs the caller has to accept:
+
+- **Partition list management.** The caller has to enumerate the
+  partition tables explicitly. New partitions appear at month
+  boundaries, so any code that hard-codes a static list will go
+  stale. Prefer computing the list from the timestamp range at
+  call time, OR `SELECT name FROM sqlite_master WHERE name GLOB
+  'messages_[0-9][0-9][0-9][0-9][0-9][0-9]'` to discover live
+  partitions.
+
+- **`messages_unknown` may need inclusion.** Rows with empty or
+  malformed timestamps land in `messages_unknown`. If the caller
+  cares about completeness (audit, export, "give me all
+  assistant messages"), include `messages_unknown` in the UNION.
+  If the caller is windowing on a date range and is OK ignoring
+  un-dated rows, skip it.
+
+- **SQL injection surface.** Partition names interpolate into the
+  query. They must be validated against the regex
+  `^messages_(\d{6}|unknown)$` (same regex
+  `v008_messages_partitioning.py` uses). Never accept partition
+  names from untrusted input.
+
+- **No automatic schema rebuild.** If `_PARTITION_COLUMNS` ever
+  grows (a future migration adds a column), every direct-partition
+  caller has to update its column list. The view abstracts this;
+  the workaround does not.
+
+Helper to compute the partition list from a timestamp range
+(suggested — not yet implemented in the writer module, see follow-up
+below):
+
+```python
+def partitions_for_range(start_ts: str, end_ts: str) -> list[str]:
+    """Return the messages_YYYYMM partitions covering [start_ts, end_ts]."""
+    # Walk month-by-month; cheaper than discovering via sqlite_master
+    # because we already know the bounds.
+    ...
+```
+
+The existing private `stackunderflow.ingest.writer._partition_for(ts)`
+maps a single timestamp → partition name and is the obvious building
+block. If multiple call sites adopt this pattern it should graduate
+out of `writer.py` and become a public store helper.
+
+### When NOT to use the workaround
+
+- **Mart-driven dashboard reads.** Already fast (sub-ms). Don't
+  rewrite working code.
+- **Single-session lookups by `session_fk`.** The per-partition
+  `idx_<partition>_session_seq` covers the predicate; the merge
+  cost is the only overhead and is small for a 2-3-partition
+  session lifetime. Stay on the view.
+- **Whole-store sweeps with no time bound** (e.g.
+  `optimize --all-time`). The workaround degenerates to scanning
+  every partition anyway. Accept the view cost or move the logic
+  behind a mart.
 
 ---
 
