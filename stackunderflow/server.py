@@ -18,6 +18,7 @@ import stackunderflow.deps as deps
 
 # Route modules
 from stackunderflow.routes import (
+    agent_teams,
     bookmarks,
     cfg,
     commands,
@@ -240,6 +241,7 @@ app.include_router(yield_route.router)
 app.include_router(context_budget.router)
 app.include_router(cfg.router)
 app.include_router(etl.router)
+app.include_router(agent_teams.router)
 
 
 
