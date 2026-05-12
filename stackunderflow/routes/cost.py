@@ -224,6 +224,14 @@ def _tool_mart_to_aggregator_shape(
     the column keys to the aggregator's field names so the JSON
     consumer doesn't notice the swap.
 
+    ``calls`` is the distinct ``(message, tool)`` pair count (the mart's
+    ``event_count`` — the 1/N-attribution unit). ``calls_total`` (added
+    in v012) surfaces the non-distinct occurrence count alongside it:
+    a turn that called Read 3× contributes ``calls += 1`` but
+    ``calls_total += 3``. Pre-v012 ``tool_mart`` rows carry
+    ``calls_total = 0`` until a ``--force`` rebuild — consumers should
+    treat that as "not yet rebuilt", not "zero calls".
+
     Cache token columns are not materialised in ``tool_mart`` (the v1
     mart shape per the spec only carries tokens_in/tokens_out) — we
     surface zeroes for them. The downstream chart only consumes
@@ -232,6 +240,7 @@ def _tool_mart_to_aggregator_shape(
     return {
         name: {
             "calls": v["calls"],
+            "calls_total": v.get("calls_total", 0),
             "input_tokens": v["tokens_in"],
             "output_tokens": v["tokens_out"],
             "cache_read_tokens": 0,

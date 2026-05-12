@@ -67,10 +67,11 @@ def _insert_tool_mart(conn, *, project_id, day, provider, tool_name, **kw):
     conn.execute(
         "INSERT INTO tool_mart "
         "(day, project_id, provider, tool_name, "
-        " event_count, cost_usd, tokens_in, tokens_out, session_count) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " event_count, calls_total, cost_usd, tokens_in, tokens_out, session_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (day, project_id, provider, tool_name,
-         kw.get("event_count", 0), kw.get("cost_usd", 0.0),
+         kw.get("event_count", 0), kw.get("calls_total", 0),
+         kw.get("cost_usd", 0.0),
          kw.get("tokens_in", 0), kw.get("tokens_out", 0),
          kw.get("session_count", 0)),
     )
@@ -86,18 +87,19 @@ async def test_cost_data_overlays_tool_costs_from_tool_mart(tmp_path, monkeypatc
     _insert_project_mart(conn, project_id=pid, provider="claude", slug=slug)
     _insert_daily_mart(conn, project_id=pid, day="2026-04-01", cost_usd=0.10)
     # Two tool rows for the same project — the route should sum them
-    # and surface a {tool_name: {...}} shape.
+    # and surface a {tool_name: {...}} shape. ``calls_total`` is the
+    # non-distinct occurrence count (v012); it can exceed ``event_count``.
     _insert_tool_mart(
         conn, project_id=pid, day="2026-04-01", provider="claude",
         tool_name="Read",
-        event_count=10, cost_usd=0.05, tokens_in=1000, tokens_out=500,
-        session_count=2,
+        event_count=10, calls_total=27, cost_usd=0.05,
+        tokens_in=1000, tokens_out=500, session_count=2,
     )
     _insert_tool_mart(
         conn, project_id=pid, day="2026-04-01", provider="claude",
         tool_name="Edit",
-        event_count=4, cost_usd=0.02, tokens_in=400, tokens_out=200,
-        session_count=1,
+        event_count=4, calls_total=4, cost_usd=0.02,
+        tokens_in=400, tokens_out=200, session_count=1,
     )
     conn.commit()
     conn.close()
@@ -120,10 +122,12 @@ async def test_cost_data_overlays_tool_costs_from_tool_mart(tmp_path, monkeypatc
     assert "BOGUS_TOOL" not in tc
     assert set(tc) == {"Read", "Edit"}
     assert tc["Read"]["calls"] == 10
+    assert tc["Read"]["calls_total"] == 27
     assert tc["Read"]["cost"] == 0.05
     assert tc["Read"]["input_tokens"] == 1000
     assert tc["Read"]["output_tokens"] == 500
     assert tc["Edit"]["calls"] == 4
+    assert tc["Edit"]["calls_total"] == 4
     assert tc["Edit"]["cost"] == 0.02
 
 

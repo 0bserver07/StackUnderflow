@@ -624,6 +624,12 @@ def mart_has_tool_rows(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+# Columns ``tool_call_count_in_window`` is allowed to sum. Whitelisted so
+# the column name can be interpolated into the SQL skeleton without
+# becoming an injection vector.
+_TOOL_COUNT_COLUMNS = frozenset({"event_count", "calls_total"})
+
+
 def tool_call_count_in_window(
     conn: sqlite3.Connection,
     *,
@@ -631,8 +637,20 @@ def tool_call_count_in_window(
     since_iso: str | None = None,
     until_iso: str | None = None,
     project_filter: Sequence[str] | None = None,
+    count_column: str = "event_count",
 ) -> int:
-    """SUM of ``tool_mart.event_count`` for the named tools in a day window.
+    """SUM of a ``tool_mart`` count column for the named tools in a day window.
+
+    ``count_column`` selects which measure to sum:
+
+    * ``event_count`` (default) — distinct ``(message, tool)`` pairs;
+      the "did anyone use this tool" signal.
+    * ``calls_total`` — total tool occurrences (a turn that called Read
+      3× counts 3); matches the legacy aggregator's ``calls`` semantics.
+      Note: on a ``tool_mart`` that predates v012 this column is
+      all-zero until a ``--force`` rebuild — callers using it as a
+      ``== 0`` short-circuit accept that transient (a stale-zero just
+      means "fall through to the full scan", a conservative miss).
 
     ``tool_names`` is a non-empty sequence (we always pass at least one
     name); empty would match nothing. ``since_iso`` / ``until_iso`` are
@@ -652,12 +670,18 @@ def tool_call_count_in_window(
         return 0
     if not _table_exists(conn, "tool_mart"):
         return 0
+    if count_column not in _TOOL_COUNT_COLUMNS:
+        raise ValueError(
+            f"count_column must be one of {sorted(_TOOL_COUNT_COLUMNS)}, "
+            f"got {count_column!r}"
+        )
     # ``placeholders`` is a fixed-length string of ``?`` separators;
-    # values are bound parametrically below. No user input lands in
-    # the SQL skeleton.
+    # values are bound parametrically below. ``count_column`` is checked
+    # against the whitelist above — no user input lands in the SQL
+    # skeleton.
     placeholders = ",".join("?" * len(tool_names))
     sql = (
-        f"SELECT COALESCE(SUM(event_count), 0) AS c "  # noqa: S608
+        f"SELECT COALESCE(SUM({count_column}), 0) AS c "  # noqa: S608
         f"FROM tool_mart WHERE tool_name IN ({placeholders})"
     )
     params: list[Any] = list(tool_names)
@@ -673,7 +697,7 @@ def tool_call_count_in_window(
         slugs = [s for s in project_filter if s]
         if slugs:
             sql = (
-                f"SELECT COALESCE(SUM(t.event_count), 0) AS c "  # noqa: S608
+                f"SELECT COALESCE(SUM(t.{count_column}), 0) AS c "  # noqa: S608
                 f"FROM tool_mart t "
                 f"JOIN projects p ON p.id = t.project_id "
                 f"WHERE t.tool_name IN ({placeholders}) "
@@ -700,18 +724,28 @@ def tool_mart_for_project(
     day_from: str | None = None,
     day_to: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return ``{tool_name: {calls, cost, tokens_in, tokens_out, sessions}}``.
+    """Return ``{tool_name: {calls, calls_total, cost, tokens_in, tokens_out, sessions}}``.
 
     Powers the ``/api/cost-data`` ``tool_costs`` block when the mart is
     populated. Aggregates across all (day, provider) combos within the
     window for the requested project, since the legacy aggregator
     output keys only on tool_name.
+
+    ``calls`` is the distinct ``(message, tool)`` pair count
+    (``SUM(event_count)`` — the 1/N attribution unit); ``calls_total``
+    is the non-distinct occurrence count (``SUM(calls_total)``, added in
+    v012). On a store whose ``tool_mart`` predates v012 the ``calls_total``
+    column is all-zero until a ``--force`` rebuild — the value just
+    mirrors ``calls`` as a floor in that transient state would be nicer
+    but isn't worth a CASE; consumers that care should treat ``0`` as
+    "not yet rebuilt".
     """
     if not _table_exists(conn, "tool_mart"):
         return {}
     sql = (
         "SELECT tool_name, "
         "       SUM(event_count) AS calls, "
+        "       SUM(calls_total) AS calls_total, "
         "       SUM(cost_usd) AS cost, "
         "       SUM(tokens_in) AS tokens_in, "
         "       SUM(tokens_out) AS tokens_out, "
@@ -733,11 +767,64 @@ def tool_mart_for_project(
             continue
         out[name] = {
             "calls": int(row["calls"] or 0),
+            "calls_total": int(row["calls_total"] or 0),
             "cost": float(row["cost"] or 0.0),
             "tokens_in": int(row["tokens_in"] or 0),
             "tokens_out": int(row["tokens_out"] or 0),
             "sessions": int(row["sessions"] or 0),
         }
+    return out
+
+
+def tool_mart_calls_distribution(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    since: str | None = None,
+) -> list[dict[str, Any]]:
+    """Per-tool-name distribution for one project, sorted by total calls desc.
+
+    Each row: ``{tool_name, distinct_messages, total_calls, cost_usd}``
+    where
+
+    * ``distinct_messages`` — ``SUM(event_count)``: how many assistant
+      turns invoked this tool (the 1/N-attribution unit).
+    * ``total_calls``       — ``SUM(calls_total)``: how many times the
+      tool was actually invoked (a turn that called Read 3× counts 3).
+    * ``cost_usd``          — ``SUM(cost_usd)``: the 1/N-attributed cost.
+
+    ``since`` is an inclusive ``YYYY-MM-DD`` lower bound on the mart's
+    ``day`` column (the caller slices any timezone offset before
+    passing). Returns ``[]`` when ``tool_mart`` doesn't exist or has no
+    matching rows.
+    """
+    if not _table_exists(conn, "tool_mart"):
+        return []
+    sql = (
+        "SELECT tool_name, "
+        "       SUM(event_count) AS distinct_messages, "
+        "       SUM(calls_total) AS total_calls, "
+        "       SUM(cost_usd) AS cost_usd "
+        "FROM tool_mart WHERE project_id = ?"
+    )
+    params: list[Any] = [project_id]
+    if since:
+        sql += " AND day >= ?"
+        params.append(since)
+    sql += " GROUP BY tool_name ORDER BY SUM(calls_total) DESC, tool_name"
+    out: list[dict[str, Any]] = []
+    for row in conn.execute(sql, params).fetchall():
+        name = row["tool_name"] or ""
+        if not name:
+            continue
+        out.append(
+            {
+                "tool_name": name,
+                "distinct_messages": int(row["distinct_messages"] or 0),
+                "total_calls": int(row["total_calls"] or 0),
+                "cost_usd": float(row["cost_usd"] or 0.0),
+            }
+        )
     return out
 
 
