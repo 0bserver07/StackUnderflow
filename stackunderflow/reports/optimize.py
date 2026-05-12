@@ -688,7 +688,10 @@ def _detect_junk_reads(
     blocks), so the per-file repeat counts agree.
 
     Empty-mart fallback: the Wave 5 ``tool_mart`` short-circuit (skip
-    when zero Read calls in window) then the per-session raw scan.
+    when ``calls_total`` confirms zero Read calls in window — ``calls_total``
+    is the non-distinct count, matching the legacy aggregator's ``calls``
+    semantics; on a pre-v012 ``tool_mart`` it reads 0 and we fall
+    through), then the per-session raw scan.
     """
     if mart_queries.mart_has_message_tool_rows(conn):
         return _junk_reads_from_mart(conn, scope=scope, project_filter=project_filter)
@@ -700,6 +703,7 @@ def _detect_junk_reads(
             conn, tool_names=("Read",),
             since_iso=since, until_iso=until,
             project_filter=project_filter,
+            count_column="calls_total",
         )
         if reads == 0:
             return []
