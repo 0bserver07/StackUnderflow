@@ -528,7 +528,9 @@ class TestEmptyStore:
         runner = CliRunner()
         r = _invoke(runner, args, store_db, monkeypatch)
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        # The 3 budget-aware commands also emit `_budget_*` keys; the 2
+        # outcome commands don't. Either way, `sessions` is the empty list.
+        assert json.loads(r.output)["sessions"] == []
 
 
 # ── outcome-aware discovery commands ────────────────────────────────────────
@@ -695,8 +697,6 @@ class TestFindFailureModesForFile:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
+        # find-failure-modes-for-file has no --context-budget flag, so its
+        # JSON output carries no budget-accounting keys.
         assert json.loads(r.output) == {"sessions": []}
-        body = json.loads(r.output)
-        assert body["sessions"] == []
-        assert "_truncated" not in body
-        _budget_keys(body)
