@@ -2104,6 +2104,182 @@ def _render_etl_status_text(payload: dict) -> None:
         click.echo(f"  Lag (events behind marts): {lag:,}")
 
 
+# ── hybrid-capture hooks ─────────────────────────────────────────────────────
+#
+# Opt-in Claude Code lifecycle hooks (see ``.notes/specs/05-hybrid-capture-hooks.md``
+# and ``docs/hooks.md``). Everything here is user-invoked — nothing installs
+# hooks behind your back. ``hooks run`` is the one command Claude Code itself
+# calls; the rest are for you.
+
+@cli.group("hooks")
+def hooks_group():
+    """Manage opt-in Claude Code lifecycle hooks (hybrid capture)."""
+
+
+_HOOK_SCOPES = ("project", "user")
+
+
+@hooks_group.command("install")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="project = .claude/settings.json in cwd's git root; user = ~/.claude/settings.json")
+@click.option("--dry-run", is_flag=True, help="Show what would change; write nothing.")
+@click.option("--capture-content", is_flag=True,
+              help="Store full hook payloads (prompt text, tool output) instead of sanitised "
+                   "metadata. Off by default — the conservative choice.")
+def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool):
+    """Register the StackUnderflow hooks in a settings.json (idempotent, backs up first)."""
+    from stackunderflow.hooks import install as _install
+    from stackunderflow.hooks import templates as _templates
+
+    try:
+        report = _install(scope, dry_run=dry_run, capture_content=capture_content)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    verb = "Would install" if dry_run else ("Installed" if report.changed else "Already installed")
+    click.echo(f"{verb} StackUnderflow hooks ({scope} scope)")
+    click.echo(f"  settings file:   {report.settings_path}")
+    if dry_run:
+        if report.changed:
+            click.echo("  would write the 'hooks' block:")
+            block = _templates.canonical_hooks_block(capture_content=capture_content)
+            for line in json.dumps({"hooks": block}, indent=2).splitlines():
+                click.echo(f"    {line}")
+            if report.stale_entries_replaced:
+                click.echo(f"  would replace stale entries: {', '.join(sorted(set(report.stale_entries_replaced)))}")
+            click.echo(f"  would preserve {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+        else:
+            click.echo("  no change — already up to date.")
+        return
+    if report.backup_path:
+        click.echo(f"  backup written:  {report.backup_path}")
+    if report.created_file:
+        click.echo("  (created a new settings.json)")
+    click.echo(f"  hooks active:    {', '.join(report.hooks_installed)}")
+    if report.stale_entries_replaced:
+        click.echo(f"  replaced stale:  {', '.join(sorted(set(report.stale_entries_replaced)))}")
+    click.echo(f"  preserved:       {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+    if report.capture_content:
+        click.secho("  ⚠  --capture-content: full payloads (incl. prompt text & tool output) will be stored.",
+                    fg="yellow")
+    if not report.captured_events_table_ready:
+        click.secho("  note: couldn't pre-create the captured_events table; it'll be created on first hook fire.",
+                    fg="yellow")
+    import shutil as _shutil
+    if _shutil.which("stackunderflow") is None:
+        click.secho("  note: 'stackunderflow' isn't on your PATH — Claude Code may not be able to run the "
+                    "hook command. Make sure it resolves in your shell.", fg="yellow")
+
+
+@hooks_group.command("uninstall")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="Which settings.json to clean.")
+def hooks_uninstall_cmd(scope: str):
+    """Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks)."""
+    from stackunderflow.hooks import uninstall as _uninstall
+
+    try:
+        report = _uninstall(scope)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not report.file_existed:
+        click.echo(f"No settings.json at {report.settings_path} — nothing to uninstall.")
+        return
+    if not report.changed:
+        click.echo(f"No StackUnderflow hooks in {report.settings_path} — nothing to remove.")
+        return
+    click.echo(f"Removed StackUnderflow hooks ({scope} scope)")
+    click.echo(f"  settings file:  {report.settings_path}")
+    click.echo(f"  backup written: {report.backup_path}")
+    click.echo(f"  removed:        {', '.join(sorted(set(report.hooks_removed)))}")
+    click.echo(f"  preserved:      {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+
+
+@hooks_group.command("status")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default=None,
+              help="Limit to one scope (default: show both project and user).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text", show_default=True)
+def hooks_status_cmd(scope: str | None, fmt: str):
+    """Show which StackUnderflow hooks are installed, where, and whether any are stale."""
+    from stackunderflow.hooks import status as _status
+
+    payload = _status(scope)
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for sc, info in payload.items():
+        click.echo(f"[{sc}]  {info['settings_path']}")
+        if not info["exists"]:
+            click.echo("  (no settings.json)")
+            continue
+        if not info.get("valid_json", True):
+            click.secho("  ⚠  not valid JSON — fix or remove it before installing.", fg="yellow")
+            continue
+        hooks_map = info.get("hooks", {})
+        if not hooks_map:
+            click.echo("  no StackUnderflow hooks installed.")
+        else:
+            for hid in sorted(hooks_map):
+                tags = []
+                if hooks_map[hid]:
+                    tags.append("capture-content")
+                if hid in info.get("stale", []):
+                    tags.append("STALE — run `stackunderflow hooks repair`")
+                suffix = f"  ({', '.join(tags)})" if tags else ""
+                click.echo(f"  ✓ {hid}{suffix}")
+        click.echo(f"  ({info.get('other_hook_count', 0)} non-StackUnderflow hook entry(ies) in this file)")
+
+
+@hooks_group.command("repair")
+@click.option("--scope", type=click.Choice(("project", "user", "all")), default="project", show_default=True,
+              help="project = cwd's git root; user = ~/.claude; all = walk $HOME for every .claude/settings.json")
+@click.option("--dry-run", is_flag=True, help="Report stale entries; rewrite nothing.")
+def hooks_repair_cmd(scope: str, dry_run: bool):
+    """Rewrite stale StackUnderflow hook commands to the portable form (changes nothing else)."""
+    from stackunderflow.hooks import repair as _repair
+
+    report = _repair(scope, dry_run=dry_run)
+    n = len(report.repaired)
+    if scope == "all":
+        click.echo(f"Scanned {len(report.scanned_files)} settings.json file(s) under $HOME "
+                   f"({report.pruned_dirs} dir(s) pruned).")
+    else:
+        click.echo(f"Scanned: {report.scanned_files[0] if report.scanned_files else '(none)'}")
+    if n == 0:
+        click.echo("No stale StackUnderflow hook commands found.")
+        return
+    verb = "Would rewrite" if dry_run else "Rewrote"
+    click.echo(f"{verb} {n} stale command(s) across {report.files_changed} file(s):")
+    for entry in report.repaired:
+        click.echo(f"  {entry['file']}")
+        click.echo(f"    {entry['hook_id']}: {entry['old']}")
+        click.echo(f"      → {entry['new']}")
+    if not dry_run and report.backups:
+        click.echo(f"  backups written: {len(report.backups)}")
+
+
+@hooks_group.command("run")
+@click.argument("hook_id")
+@click.option("--capture-content", is_flag=True,
+              help="Store the full payload (set by `hooks install --capture-content`).")
+def hooks_run_cmd(hook_id: str, capture_content: bool):
+    """Internal — invoked by Claude Code. Reads the hook payload as JSON on stdin."""
+    from stackunderflow.hooks import run as _run
+
+    raw = ""
+    try:
+        if not sys.stdin.isatty():
+            raw = sys.stdin.read()
+    except (OSError, ValueError):
+        raw = ""
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    sys.exit(_run(hook_id, payload, capture_content=capture_content))
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
