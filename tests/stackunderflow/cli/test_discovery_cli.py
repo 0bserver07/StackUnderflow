@@ -100,6 +100,35 @@ def _invoke(runner: CliRunner, args: list[str], store_db: Path, monkeypatch):
     return runner.invoke(cli, args)
 
 
+def _seed_many(store_db: Path, n: int = 8) -> None:
+    """Seed one project under /Users/yad/dev/foo with ``n`` sessions."""
+    conn = db.connect(store_db)
+    schema.apply(conn)
+    cur = conn.execute(
+        "INSERT INTO projects (provider, slug, path, display_name, "
+        " first_seen, last_modified) VALUES "
+        "('claude', '-Users-yad-dev-foo', NULL, 'foo', 0.0, 0.0)"
+    )
+    pid = int(cur.lastrowid)
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, "
+            " message_count) VALUES (?, ?, ?, ?, ?)",
+            (pid, f"s-{i:02d}", f"2026-04-{i + 1:02d}T00:00:00+00:00",
+             f"2026-04-{i + 1:02d}T00:00:00+00:00", i + 1),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _budget_keys(body: dict) -> None:
+    """Every budgeted JSON output carries the budget accounting keys."""
+    assert "_budget_used_tokens" in body
+    assert "_budget_max_tokens" in body
+    assert isinstance(body["_budget_used_tokens"], int)
+    assert isinstance(body["_budget_max_tokens"], int)
+
+
 # ── find-sessions-in-path ───────────────────────────────────────────────────
 
 
@@ -152,7 +181,11 @@ class TestFindSessionsInPath:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        assert "_truncated" not in body
+        _budget_keys(body)
+        assert body["_budget_used_tokens"] == 0
 
     def test_provider_filter(self, tmp_path, monkeypatch):
         store_db = tmp_path / "store.db"
@@ -165,7 +198,7 @@ class TestFindSessionsInPath:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        assert json.loads(r.output)["sessions"] == []
 
     def test_invalid_since_is_a_user_error(self, tmp_path, monkeypatch):
         store_db = tmp_path / "store.db"
@@ -237,7 +270,10 @@ class TestFindSessionsTouchingFile:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        assert "_truncated" not in body
+        _budget_keys(body)
 
     def test_invalid_mode_rejected_by_click(self, tmp_path, monkeypatch):
         store_db = tmp_path / "store.db"
@@ -295,7 +331,9 @@ class TestSearchPastDecisions:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        _budget_keys(body)
 
     def test_project_filter(self, tmp_path, monkeypatch):
         store_db = tmp_path / "store.db"
@@ -308,7 +346,7 @@ class TestSearchPastDecisions:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        assert json.loads(r.output)["sessions"] == []
 
     def test_empty_query_argument_rejected_by_click(
         self, tmp_path, monkeypatch,
@@ -324,7 +362,146 @@ class TestSearchPastDecisions:
             store_db, monkeypatch,
         )
         assert r.exit_code == 0, r.output
-        assert json.loads(r.output) == {"sessions": []}
+        assert json.loads(r.output)["sessions"] == []
+
+
+# ── token budget (--context-budget) ─────────────────────────────────────────
+
+
+class TestContextBudget:
+    def test_budget_keys_present_when_nothing_dropped(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert len(body["sessions"]) == 2
+        assert "_truncated" not in body
+        assert "_more_available" not in body
+        _budget_keys(body)
+        assert body["_budget_max_tokens"] == 2000  # configured default
+        assert 0 < body["_budget_used_tokens"] <= 2000
+
+    def test_tiny_budget_truncates_everything_json(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo",
+             "--context-budget", "1", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        assert body["_truncated"] is True
+        assert body["_more_available"] == 8
+        assert body["_budget_max_tokens"] == 1
+        assert body["_budget_used_tokens"] == 0
+
+    def test_tiny_budget_truncates_text_footer(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo",
+             "--context-budget", "1"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        assert "8 more sessions matched but truncated" in r.output
+        assert "--context-budget" in r.output
+
+    def test_partial_budget_keeps_top_subset(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo",
+             "--context-budget", "150", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        kept = len(body["sessions"])
+        assert 0 < kept < 8
+        assert body["_truncated"] is True
+        assert kept + body["_more_available"] == 8
+        # Greedy pack respects the budget.
+        assert body["_budget_used_tokens"] <= 150
+        # Rank order: recency dominates, so the most-recent sessions win.
+        # _seed_many gives later indices later last_ts → "s-07" is newest.
+        sids = [s["session_id"] for s in body["sessions"]]
+        assert sids[0] == "s-07"
+
+    def test_zero_budget_disables_enforcement(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo",
+             "--context-budget", "0", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert len(body["sessions"]) == 8
+        assert "_truncated" not in body
+        assert body["_budget_max_tokens"] == 0
+
+    def test_limit_still_a_hard_cap_under_budget(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo",
+             "--limit", "3", "--context-budget", "99999", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        # 8 sessions matched but --limit 3 caps; budget 99999 drops nothing.
+        assert len(body["sessions"]) == 3
+        assert "_truncated" not in body
+
+    def test_env_var_sets_default_budget(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_many(store_db, n=8)
+        monkeypatch.setenv("STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS", "1")
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-in-path", "/Users/yad/dev/foo", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        assert body["_truncated"] is True
+        assert body["_budget_max_tokens"] == 1
+
+    def test_search_decisions_budget_text_footer(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)  # 's-new' has "we decided to use sqlite"
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["search-past-decisions", "decided", "--context-budget", "1"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        # 's-new' matched but the budget can't fit it.
+        assert "1 more session matched but truncated" in r.output
 
 
 # ── empty store ────────────────────────────────────────────────────────────
@@ -519,3 +696,7 @@ class TestFindFailureModesForFile:
         )
         assert r.exit_code == 0, r.output
         assert json.loads(r.output) == {"sessions": []}
+        body = json.loads(r.output)
+        assert body["sessions"] == []
+        assert "_truncated" not in body
+        _budget_keys(body)
