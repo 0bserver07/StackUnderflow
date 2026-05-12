@@ -497,37 +497,6 @@ Side-by-side per-model comparison over a time window — answers "is it worth us
 
 ```
 Usage: stackunderflow compare [OPTIONS]
-### `stackunderflow yield`
-
-Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
-
-For each session in the window, the command resolves the session's `cwd` to a
-git repo, runs `git log` over the 24h after the session started, and
-classifies the result:
-
-| Class        | Meaning                                                                 |
-|--------------|-------------------------------------------------------------------------|
-| `productive` | A commit landed within 24h and is still reachable from `HEAD`.          |
-| `reverted`   | A commit landed but was later reverted (by `git revert` or by being wiped from `HEAD` via reset / force push). |
-| `abandoned`  | No commit landed within the window.                                     |
-| `no_repo`    | The session's `cwd` is missing or isn't a git repository.               |
-
-> **Heuristic warning.** This correlates by **time**, not by content. A commit
-> inside the 24h window is credited to the session even if it was about
-> something else. Treat the breakdown as a smoke signal, not a verdict.
-> Sessions and commits don't have to share a topic to get matched up.
-
-```
-Usage: stackunderflow yield [OPTIONS]
-### `stackunderflow context-budget`
-
-Estimate the per-session "context tax" — the tokens every Claude Code
-turn pays before the user types: system prompt + registered MCP servers
-+ available skills + agent definitions + memory files (project
-`CLAUDE.md`, global `~/.claude/CLAUDE.md`).
-
-```
-Usage: stackunderflow context-budget [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -545,28 +514,6 @@ Usage: stackunderflow context-budget [OPTIONS]
 - **$/call** — `total_cost / calls` (per assistant message).
 - **$/session** — `total_cost / sessions` (sessions are attributed to whichever model dominated the session — most assistant messages wins, ties broken alphabetically).
 - **Total $** — sum of `compute_cost` over every assistant message in the window.
-| `--project` | PATH | cwd | Project directory to inspect |
-| `--global` | flag | false | Estimate the global budget only (`~/.claude`); ignore project files |
-| `--format` | `text\|json` | text | Output format |
-
-**Estimation heuristic — explicit and approximate.**
-
-| Source | Cost |
-|---|---|
-| System prompt | Fixed `DEFAULT_SYSTEM_PROMPT_TOKENS=3000` (Claude Code default, public scratch count) |
-| `CLAUDE.md` files | `len(content) // 4` — 1 token ≈ 4 characters of English |
-| MCP server | `MCP_BASE_TOKENS=200` + `MCP_PER_TOOL_TOKENS=50` × declared tools, **or** `MCP_UNKNOWN_TOOLS_FALLBACK=200` flat when tool counts aren't statically known (the common case) |
-| Skill (`SKILL.md`) | `len(content) // 4` |
-| Subagent (`*.md`) | `len(content) // 4` |
-| Cost projection | Total tokens × `$3/M` (current Sonnet input rate) per session, × 100 sessions/month |
-
-**Underestimates code-heavy or non-Latin content; the full heuristic
-string is echoed in every output payload (`heuristic` field in JSON).
-Useful for spotting bloat — not for billing.**
-
-A budget over 20k tokens triggers a yellow warning in the text output
-and a `context_budget_bloat` finding (severity: medium) when consumed
-by the optimize report.
 
 **Examples:**
 
@@ -604,6 +551,35 @@ $ stackunderflow compare --period week --provider claude --format json
 ```
 
 The same data is available via `GET /api/compare` — see `docs/api-reference.md`.
+
+---
+
+### `stackunderflow yield`
+
+Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
+
+For each session in the window, the command resolves the session's `cwd` to a
+git repo, runs `git log` over the 24h after the session started, and
+classifies the result:
+
+| Class        | Meaning                                                                 |
+|--------------|-------------------------------------------------------------------------|
+| `productive` | A commit landed within 24h and is still reachable from `HEAD`.          |
+| `reverted`   | A commit landed but was later reverted (by `git revert` or by being wiped from `HEAD` via reset / force push). |
+| `abandoned`  | No commit landed within the window.                                     |
+| `no_repo`    | The session's `cwd` is missing or isn't a git repository.               |
+
+> **Heuristic warning.** This correlates by **time**, not by content. A commit
+> inside the 24h window is credited to the session even if it was about
+> something else. Treat the breakdown as a smoke signal, not a verdict.
+> Sessions and commits don't have to share a topic to get matched up.
+
+```
+Usage: stackunderflow yield [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
 | `-p, --period` | TEXT | `month` | Period: `today`, `week`, `month`, `all`, `7days`, `30days` |
 | `--project` | TEXT | (all) | Filter by project slug (repeatable) |
 | `--format` | `text\|json` | text | Output format |
@@ -641,6 +617,48 @@ query parameters (`period`, `project`).
   the same follow-up commit attribution across every session that ran first.
 - Each git invocation has a 5-second timeout; a hung repo (e.g. NFS lock)
   falls through to `no_repo` rather than stalling the report.
+
+---
+
+### `stackunderflow context-budget`
+
+Estimate the per-session "context tax" — the tokens every Claude Code
+turn pays before the user types: system prompt + registered MCP servers
++ available skills + agent definitions + memory files (project
+`CLAUDE.md`, global `~/.claude/CLAUDE.md`).
+
+```
+Usage: stackunderflow context-budget [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | PATH | cwd | Project directory to inspect |
+| `--global` | flag | false | Estimate the global budget only (`~/.claude`); ignore project files |
+| `--format` | `text\|json` | text | Output format |
+
+**Estimation heuristic — explicit and approximate.**
+
+| Source | Cost |
+|---|---|
+| System prompt | Fixed `DEFAULT_SYSTEM_PROMPT_TOKENS=3000` (Claude Code default, public scratch count) |
+| `CLAUDE.md` files | `len(content) // 4` — 1 token ≈ 4 characters of English |
+| MCP server | `MCP_BASE_TOKENS=200` + `MCP_PER_TOOL_TOKENS=50` × declared tools, **or** `MCP_UNKNOWN_TOOLS_FALLBACK=200` flat when tool counts aren't statically known (the common case) |
+| Skill (`SKILL.md`) | `len(content) // 4` |
+| Subagent (`*.md`) | `len(content) // 4` |
+| Cost projection | Total tokens × `$3/M` (current Sonnet input rate) per session, × 100 sessions/month |
+
+**Underestimates code-heavy or non-Latin content; the full heuristic
+string is echoed in every output payload (`heuristic` field in JSON).
+Useful for spotting bloat — not for billing.**
+
+A budget over 20k tokens triggers a yellow warning in the text output
+and a `context_budget_bloat` finding (severity: medium) when consumed
+by the optimize report.
+
+**Examples:**
+
+```
 $ stackunderflow context-budget
 Context budget (per-session estimate)
   heuristic: len(text) // 4; per-MCP-server 200 + 50/tool
