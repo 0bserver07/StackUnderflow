@@ -3,7 +3,7 @@
 **Date:** 2026-05-12 (last tagged release: v0.7.0; Wave 5 follow-ups + the spec-01…10 round, all merged on `feat/post-0.7.0`, unreleased)
 **Maintainer:** yad.konrad@quantumrise.com / 0bserver07
 **Branch:** `feat/post-0.7.0` (this is the live branch — base new work here, **not** `main`, which is stale relative to it); last tag `v0.7.0`
-**Tests:** ~1747 passing at the start of the post-v0.7 round, +~200 from the new specs; `pytest tests/ -q` runs the fast suite, `pytest -m slow tests/stackunderflow/integration` the slow e2e + perf set. (Don't trust the exact number in this header — re-count if you need a precise figure.)
+**Tests:** 2272 fast (`pytest tests/ -q`) / 2 skipped / 12 deselected, 10 slow (`pytest -m slow tests/stackunderflow/integration`) / 1 skipped, 110 frontend (`node --test stackunderflow-ui/tests/services/*.test.ts`). Was ~1747 at the start of the post-v0.7 round — +525 fast tests across the spec-01…10 work.
 **Frontend:** typecheck + build clean; the dashboard build output lands in `stackunderflow/static/react/`
 
 This doc gets a fresh agent oriented in 10 minutes. Read it before reading code.
