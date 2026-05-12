@@ -35,6 +35,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from stackunderflow.services import discovery_telemetry as _telemetry
+
 __all__ = [
     "SessionMatch",
     "OutcomeMatch",
@@ -264,6 +266,24 @@ def _ensure_row_factory(conn: sqlite3.Connection) -> None:
 # ── public API ──────────────────────────────────────────────────────────────
 
 
+def _record_loaded(
+    conn: sqlite3.Connection,
+    command: str,
+    matches: list[SessionMatch],
+) -> None:
+    """Citation-feedback telemetry hook — bump ``loaded_count`` for the
+    sessions this discovery call surfaced.
+
+    Gated behind ``STACKUNDERFLOW_DISCOVERY_TELEMETRY`` (default on) and
+    best-effort inside ``discovery_telemetry.record_loaded`` — a write
+    failure never propagates out of the discovery query. Lifted to a
+    one-liner so the three ``find_*`` bodies stay readable.
+    """
+    if not matches:
+        return
+    _telemetry.record_loaded(conn, command, [m.session_id for m in matches])
+
+
 def find_sessions_in_path(
     conn: sqlite3.Connection,
     path: str | Path,
@@ -345,7 +365,9 @@ def find_sessions_in_path(
         params.append(int(limit))
 
     rows = conn.execute(sql, params).fetchall()
-    return [_row_to_match(r) for r in rows]
+    result = [_row_to_match(r) for r in rows]
+    _record_loaded(conn, "find_sessions_in_path", result)
+    return result
 
 
 # ── tools-json filtering ────────────────────────────────────────────────────
@@ -501,7 +523,9 @@ def find_sessions_touching_file(
         sql += " LIMIT ?"
         params.append(int(limit))
     rows2 = conn.execute(sql, params).fetchall()
-    return [_row_to_match(r) for r in rows2]
+    result = [_row_to_match(r) for r in rows2]
+    _record_loaded(conn, "find_sessions_touching_file", result)
+    return result
 
 
 # ── search past decisions ───────────────────────────────────────────────────
@@ -623,6 +647,7 @@ def search_past_decisions(
         out.append(_row_to_match(r, snippet=snippet_by_sfk.get(int(r["session_fk"]))))
         if limit and limit > 0 and len(out) >= limit:
             break
+    _record_loaded(conn, "search_past_decisions", out)
     return out
 
 

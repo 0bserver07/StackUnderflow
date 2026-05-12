@@ -1748,6 +1748,148 @@ def skills_clean_cmd(scope, out_path, older_than, dry_run, assume_yes):
         click.echo("(preview — re-run with --yes to delete)")
 
 
+# ── discovery citation-feedback telemetry ──────────────────────────────────
+#
+# The three discovery commands above passively record which sessions they
+# surface (``loaded_count``) and the ``session_query`` MCP tool records
+# which surfaced sessions get looked up (``cited_count``). These two
+# subcommands let you introspect that table and run the periodic
+# "demote sessions nobody ever cites" sweep. Telemetry is local-only
+# (session ids + counters, no content) and the passive recording is
+# gated behind ``STACKUNDERFLOW_DISCOVERY_TELEMETRY`` (default on).
+
+@cli.group("discovery")
+def discovery_group():
+    """Inspect / maintain the discovery citation-feedback telemetry."""
+
+
+@discovery_group.command("telemetry")
+@click.option("--command", "command_filter", default=None,
+              help="Filter to one discovery command "
+                   "(find_sessions_in_path | find_sessions_touching_file | "
+                   "search_past_decisions).")
+@click.option("--session", "session_filter", default=None,
+              help="Filter to one session id.")
+@click.option("--limit", type=int, default=50, show_default=True,
+              help="Max rows to show. <= 0 means no limit.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def discovery_telemetry_cmd(
+    command_filter: str | None,
+    session_filter: str | None,
+    limit: int,
+    fmt: str,
+):
+    """Show discovery telemetry: loaded/cited counters + cite-rate per session.
+
+    ``cite_rate`` = cited_count / loaded_count (0.0 if never loaded).
+    Rows sorted by most-recently-surfaced first.
+    """
+    from stackunderflow.services import discovery_telemetry as telemetry
+
+    conn = _open_store()
+    try:
+        rows = telemetry.iter_telemetry(
+            conn,
+            command=command_filter,
+            session_id=session_filter,
+            limit=limit,
+        )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({"rows": rows}, indent=2))
+        return
+
+    if not rows:
+        click.echo("Discovery telemetry: no rows.")
+        return
+
+    click.echo(f"Discovery telemetry  ({len(rows)} row(s))")
+    click.echo("")
+    for r in rows:
+        flag = "  [demoted]" if r.get("demoted") else ""
+        click.echo(
+            f"  {r['command']:<28s} {str(r['session_id'])[:12]}…  "
+            f"loaded={r['loaded_count']:<4d} cited={r['cited_count']:<4d} "
+            f"cite_rate={r['cite_rate']:.3f}{flag}"
+        )
+        last_loaded = r.get("last_loaded_ts") or "(never)"
+        last_cited = r.get("last_cited_ts") or "(never)"
+        click.echo(
+            f"      first_loaded={r.get('first_loaded_ts') or '(never)'}  "
+            f"last_loaded={last_loaded}  last_cited={last_cited}"
+        )
+    click.echo("")
+
+
+@discovery_group.command("demote-uncited")
+@click.option("--dry-run", is_flag=True,
+              help="List candidates without flagging them.")
+@click.option("--min-loads", type=int, default=20, show_default=True,
+              help="Minimum times surfaced.")
+@click.option("--min-age-days", type=int, default=7, show_default=True,
+              help="Minimum age (days since first surfaced).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def discovery_demote_uncited_cmd(
+    dry_run: bool,
+    min_loads: int,
+    min_age_days: int,
+    fmt: str,
+):
+    """Flag sessions surfaced N+ times over M+ days that were never cited.
+
+    Demoted sessions drop out of default discovery ranking (their
+    cite-rate ranking term is zeroed) but stay reachable via direct
+    lookup. ``--dry-run`` reports the candidates without touching them.
+    """
+    from stackunderflow.services import discovery_telemetry as telemetry
+
+    conn = _open_store()
+    try:
+        candidates = telemetry.demote_candidates(
+            conn, min_loads=min_loads, min_age_days=min_age_days,
+        )
+        demoted_n = 0
+        if candidates and not dry_run:
+            demoted_n = telemetry.mark_demoted(
+                conn, [(c, s) for c, s, _ in candidates],
+            )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "candidates": [
+                {"command": c, "session_id": s, "loaded_count": n}
+                for c, s, n in candidates
+            ],
+            "dry_run": dry_run,
+            "demoted": demoted_n,
+        }, indent=2))
+        return
+
+    if not candidates:
+        click.echo(
+            f"demote-uncited: no candidates "
+            f"(min_loads={min_loads}, min_age_days={min_age_days})."
+        )
+        return
+
+    verb = "Would demote" if dry_run else "Demoted"
+    click.echo(f"{verb} {len(candidates)} uncited session(s):")
+    click.echo("")
+    for c, s, n in candidates:
+        click.echo(f"  {c:<28s} {str(s)[:12]}…  loaded={n}")
+    click.echo("")
+    if dry_run:
+        click.echo("(dry run — nothing changed; re-run without --dry-run to apply)")
+    else:
+        click.echo(f"({demoted_n} row(s) flagged demoted)")
+
+
 # ── ETL ──────────────────────────────────────────────────────────────────────
 #
 # The ETL refactor (see ``docs/specs/etl-architecture.md``) ships in
