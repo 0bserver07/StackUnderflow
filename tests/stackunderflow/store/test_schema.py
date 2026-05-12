@@ -49,7 +49,11 @@ def test_current_version_constant() -> None:
     # v007 added Wave 5 lower-grain marts (tool_mart + command_mart).
     # v008 partitioned messages into messages_YYYYMM tables behind a view.
     # v009 added discovery_telemetry (citation-feedback loop).
-    assert schema.CURRENT_VERSION == 9
+    # v010 added captured_events (opt-in hybrid-capture hook sink).
+    # (>= rather than == so a later migration wave doesn't have to touch this;
+    #  the strong invariant — apply() lands on CURRENT_VERSION — is checked by
+    #  test_apply_sets_user_version.)
+    assert schema.CURRENT_VERSION >= 10
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:
