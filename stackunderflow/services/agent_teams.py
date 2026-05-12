@@ -1,22 +1,24 @@
 """Agent-teams service — surfaces Claude Code parallel-agent topology.
 
-Builds, on demand, a tree of (lead session → spawned sub-agents) for the
-"Agents" dashboard tab. The signal we use is already in the ``messages``
-table:
+Builds the tree of (lead session → spawned sub-agents) for the "Agents"
+dashboard tab.
 
-* ``messages.is_sidechain``  — true for any message belonging to a
-  spawned sub-agent rather than the main session.
-* ``messages.uuid`` / ``parent_uuid`` — chain back to the spawning
-  message in the parent transcript.
-* ``messages.raw_json`` — carries the optional ``teamName`` and
-  ``agentId`` fields written by Claude Code 2.1.x+.
+Since migration ``v013_multi_agent_session_metadata`` the team graph is
+**materialised at ingest time** (see
+``stackunderflow/adapters/claude_teams.py``): every team gets an
+``agent_teams`` row, and each member session carries its ``team_id`` /
+``spawned_by_session_id`` / ``spawn_prompt`` / ``agent_role``. When that
+metadata is present this module just JOINs — no ``raw_json`` parsing on
+the hot path.
 
-We deliberately do **not** add a schema migration. The maintainer's
-dashboard reads small windows of agent-rich sessions on demand, and the
-on-disk agent-team artefacts under ``~/.claude/teams/`` and
-``~/.claude/tasks/`` add no information that isn't already in the JSONL
-(and thus already in the ``messages`` table). See
-``docs/specs/agent-teams.md`` for the full design rationale.
+When it is *not* present (a store ingested before v013, or one whose
+``~/.claude/teams/`` artefacts were never on disk), the service falls
+back to the original heuristic: scan ``messages.is_sidechain`` + parse
+``raw_json`` for ``teamName`` / ``agentId`` and chain ``parent_uuid``.
+The two paths are observationally equivalent for the dashboard; the
+indexed one is just faster, and additionally surfaces the richer
+``spawn_prompt`` (the verbatim prompt the sub-agent was launched with,
+not just the first user message of its transcript).
 
 Public API
 ----------
@@ -26,11 +28,11 @@ Public API
 * :func:`build_team_graph` — full tree for one lead session
   (lead + every spawned agent, with cost + previews).
 * :func:`get_agent_transcript` — drill into one agent's full message
-  list (thin wrapper over :func:`store.queries.get_session_messages`).
+  list.
 
-Empty-store behaviour: if the store has no sidechain messages,
-``list_team_sessions`` returns ``[]`` and the route surfaces
-``{"teams": []}`` cleanly.
+Empty-store behaviour: a store with neither materialised teams nor
+sidechain messages → ``list_team_sessions`` returns ``[]`` and the route
+surfaces ``{"teams": []}`` cleanly.
 """
 
 from __future__ import annotations
@@ -51,6 +53,9 @@ __all__ = [
     "get_agent_transcript",
 ]
 
+_ROLE_LEAD = "lead"
+_ROLE_SUBAGENT = "subagent"
+
 
 # ── dataclasses ──────────────────────────────────────────────────────────────
 
@@ -68,6 +73,7 @@ class TeamSummary:
     agent_count: int
     sub_agent_message_count: int
     lead_message_count: int
+    description: str | None = None  # team description (materialised teams only)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +91,11 @@ class AgentSummary:
     first_user_prompt: str | None
     model: str | None
     cost_usd: float
+    # v013: the verbatim prompt the agent was spawned with (from
+    # ~/.claude/teams config or ~/.claude/tasks), and its team role. Both
+    # NULL when team metadata hasn't been materialised for this session.
+    spawn_prompt: str | None = None
+    agent_role: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +108,7 @@ class TeamGraph:
     project_display_name: str
     lead: AgentSummary
     agents: tuple[AgentSummary, ...]
+    description: str | None = None  # team description (materialised teams only)
 
 
 # ── helpers (private) ────────────────────────────────────────────────────────
@@ -123,7 +135,7 @@ def _extract_agent_id(raw_json: str | None, *, fallback_session_id: str | None =
     """
     candidate = _safe_json_loads(raw_json).get("agentId")
     if candidate:
-        return str(candidate)
+        return str(candidate).split("@", 1)[0]
     if fallback_session_id and fallback_session_id.startswith("agent-"):
         # Older path: ``agent-XXXX.jsonl`` — the session id IS the agent id.
         return fallback_session_id.removeprefix("agent-")
@@ -131,11 +143,7 @@ def _extract_agent_id(raw_json: str | None, *, fallback_session_id: str | None =
 
 
 def _session_first_message_raw(conn: sqlite3.Connection, *, session_fk: int) -> str | None:
-    """Return the first ``raw_json`` blob in the session, in seq order.
-
-    Used to derive ``team_name`` / ``agent_id`` for sessions where the
-    lead message carries those metadata fields.
-    """
+    """Return the first ``raw_json`` blob in the session, in seq order."""
     row = conn.execute(
         "SELECT raw_json FROM messages WHERE session_fk = ? ORDER BY seq LIMIT 1",
         (session_fk,),
@@ -213,41 +221,144 @@ def _session_cost_usd(conn: sqlite3.Connection, *, session_fk: int) -> float:
     return round(total, 4)
 
 
-# ── public API ───────────────────────────────────────────────────────────────
+def _session_message_count(conn: sqlite3.Connection, *, session_fk: int) -> int:
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM messages WHERE session_fk = ?",
+            (session_fk,),
+        ).fetchone()["c"]
+    )
+
+
+def _indexed_teams_available(conn: sqlite3.Connection) -> bool:
+    """True when migration v013 ran *and* at least one session is materialised.
+
+    We check ``sessions.team_id`` (the column the indexed queries JOIN
+    on) rather than just the existence of ``agent_teams`` rows: an
+    ``agent_teams`` row whose lead transcript hasn't been ingested yet is
+    an orphan with nothing to JOIN, so for that store we keep the
+    heuristic path (which is identical there). Uses the partial
+    ``idx_sessions_team`` index, so it's a cheap probe even on a large
+    store. A pre-v013 schema (no such column) → ``False``.
+    """
+    try:
+        return conn.execute(
+            "SELECT 1 FROM sessions WHERE team_id IS NOT NULL LIMIT 1"
+        ).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
+def _agent_summary_for_session(
+    conn: sqlite3.Connection,
+    *,
+    session_fk: int,
+    session_id: str,
+    first_ts: str | None,
+    last_ts: str | None,
+    is_lead: bool,
+    parent_session_id: str | None,
+    agent_id: str | None,
+    agent_name: str | None,
+    spawn_prompt: str | None,
+    agent_role: str | None,
+) -> AgentSummary:
+    return AgentSummary(
+        session_id=session_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        is_lead=is_lead,
+        parent_session_id=parent_session_id,
+        message_count=_session_message_count(conn, session_fk=session_fk),
+        first_ts=first_ts,
+        last_ts=last_ts,
+        first_user_prompt=_session_first_user_prompt(conn, session_fk=session_fk),
+        model=_session_dominant_model(conn, session_fk=session_fk),
+        cost_usd=_session_cost_usd(conn, session_fk=session_fk),
+        spawn_prompt=spawn_prompt,
+        agent_role=agent_role,
+    )
+
+
+# ── public API: list_team_sessions ──────────────────────────────────────────
 
 
 def list_team_sessions(
     conn: sqlite3.Connection, *, limit: int = 50
 ) -> list[TeamSummary]:
-    """List recent sessions that spawned at least one sub-agent.
+    """List recent teams (one row per lead session that spawned sub-agents).
+
+    Uses the materialised ``agent_teams`` table when populated (a single
+    indexed JOIN), otherwise falls back to the ``messages.is_sidechain``
+    heuristic. Returns at most ``limit`` rows ordered by most recent
+    activity. Empty store → empty list.
+    """
+    if _indexed_teams_available(conn):
+        return _list_team_sessions_indexed(conn, limit=limit)
+    return _list_team_sessions_scan(conn, limit=limit)
+
+
+def _list_team_sessions_indexed(
+    conn: sqlite3.Connection, *, limit: int
+) -> list[TeamSummary]:
+    rows = conn.execute(
+        """
+        SELECT
+          t.team_id,
+          t.description,
+          t.lead_session_id,
+          p.slug          AS project_slug,
+          p.display_name  AS project_display_name,
+          MIN(s.first_ts) AS first_ts,
+          MAX(s.last_ts)  AS last_ts,
+          SUM(CASE WHEN COALESCE(s.agent_role, '') = 'subagent' THEN 1 ELSE 0 END) AS agent_count,
+          SUM(CASE WHEN COALESCE(s.agent_role, '') = 'subagent' THEN s.message_count ELSE 0 END) AS sub_msgs,
+          SUM(CASE WHEN s.session_id = t.lead_session_id THEN s.message_count ELSE 0 END) AS lead_msgs
+        FROM agent_teams t
+        JOIN projects p ON p.id = t.project_id
+        JOIN sessions s ON s.team_id = t.team_id
+        GROUP BY t.team_id, t.description, t.lead_session_id, p.slug, p.display_name
+        ORDER BY MAX(s.last_ts) DESC, t.team_id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        TeamSummary(
+            session_id=r["lead_session_id"] or r["team_id"],
+            project_slug=r["project_slug"],
+            project_display_name=r["project_display_name"],
+            team_name=r["team_id"],
+            first_ts=r["first_ts"],
+            last_ts=r["last_ts"],
+            agent_count=int(r["agent_count"] or 0),
+            sub_agent_message_count=int(r["sub_msgs"] or 0),
+            lead_message_count=int(r["lead_msgs"] or 0),
+            description=r["description"],
+        )
+        for r in rows
+    ]
+
+
+def _list_team_sessions_scan(
+    conn: sqlite3.Connection, *, limit: int
+) -> list[TeamSummary]:
+    """Heuristic list view (pre-v013, or stores without materialised teams).
 
     Strategy: for every project that has *any* sidechain message, group
     the sidechain rows by ``(project_id, session_id)`` and treat each
-    distinct ``session_id`` as one team-lead candidate. We then
-    aggregate counts + timestamps + a team_name peek (from the first
-    row of the lead session that carries ``teamName``).
-
-    Returns at most ``limit`` rows ordered by most recent activity.
-    Empty input → empty list.
+    distinct ``session_id`` as one team-lead candidate. We then aggregate
+    counts + timestamps + a ``teamName`` peek from the lead session's
+    first row.
     """
-    # Fast bail-out: if the store has zero sidechain rows, return [] without
-    # the more expensive aggregate query. This is the common case on a
-    # fresh install / non-team project.
+    # Fast bail-out: zero sidechain rows → no teams. Common on a fresh
+    # install / non-team project.
     has_sidechain = conn.execute(
         "SELECT 1 FROM messages WHERE is_sidechain = 1 LIMIT 1"
     ).fetchone()
     if not has_sidechain:
         return []
 
-    # Lead-candidate definition: a session whose own message stream is
-    # primarily non-sidechain AND lives in a project where some OTHER
-    # session contributes sidechain messages. The lead's own messages
-    # are not sidechain (it's the parent transcript); the sub-agents
-    # land in distinct ``sessions`` rows that are predominantly
-    # sidechain.
-    #
-    # We rank lead candidates by ``last_ts DESC`` so the dashboard
-    # surfaces the most recently active team first.
     rows = conn.execute(
         """
         SELECT
@@ -276,10 +387,6 @@ def list_team_sessions(
         """
     ).fetchall()
 
-    # Pre-compute per-(project_id) sub-agent sessions so we don't
-    # re-query inside the loop. ``sub_sessions_by_project[pid]`` is the
-    # list of (session_fk, message_count_sidechain) for every session in
-    # the project that contains sidechain rows.
     sub_session_rows = conn.execute(
         """
         SELECT s.project_id,
@@ -303,11 +410,6 @@ def list_team_sessions(
     for r in rows:
         if len(out) >= limit:
             break
-        # A lead session must have OTHER sessions in its project with
-        # sidechain rows. Sessions whose only sidechain content is their
-        # own (e.g. a sub-agent transcript that contains both sidechain
-        # and non-sidechain rows) are skipped here so they don't appear
-        # as a "team-lead".
         pid = int(r["project_id"])
         own_fk = int(r["session_fk"])
         other_subs = [
@@ -325,10 +427,6 @@ def list_team_sessions(
             _session_first_message_raw(conn, session_fk=own_fk)
         )
 
-        # agent_count: distinct ``agentId`` values in the project's
-        # other-session sidechain rows. The fallback (when no agentId
-        # is recorded) is the number of distinct sub-agent sessions —
-        # a strict lower bound that's correct for older transcripts.
         agent_ids: set[str] = set()
         for sfk, _ in other_subs:
             for ar in conn.execute(
@@ -358,22 +456,140 @@ def list_team_sessions(
     return out
 
 
+# ── public API: build_team_graph ────────────────────────────────────────────
+
+
 def build_team_graph(
     conn: sqlite3.Connection, *, lead_session_id: str
 ) -> TeamGraph | None:
     """Return the full lead → agents tree for one team.
 
-    ``None`` if the lead session can't be found.
+    ``None`` when the session can't be found / isn't part of a team.
 
-    Algorithm:
+    Uses the materialised ``sessions.team_id`` JOIN when available
+    (deterministic membership, includes ``spawn_prompt``), and falls back
+    to the ``parent_uuid`` / ``teamName`` heuristic otherwise. Passing a
+    *sub-agent's* session id resolves up to its team's lead.
+    """
+    if _indexed_teams_available(conn):
+        graph = _build_team_graph_indexed(conn, lead_session_id=lead_session_id)
+        if graph is not None:
+            return graph
+        # Fall through: the session may belong to a team that hasn't been
+        # materialised yet (ingested before v013). Try the heuristic.
+    return _build_team_graph_scan(conn, lead_session_id=lead_session_id)
+
+
+def _build_team_graph_indexed(
+    conn: sqlite3.Connection, *, lead_session_id: str
+) -> TeamGraph | None:
+    # Resolve the team: either the given id IS a known lead, or it's a
+    # member session carrying a ``team_id``.
+    team_row = conn.execute(
+        "SELECT t.team_id, t.description, t.lead_session_id, t.project_id, "
+        "       p.slug, p.display_name "
+        "FROM agent_teams t JOIN projects p ON p.id = t.project_id "
+        "WHERE t.lead_session_id = ?",
+        (lead_session_id,),
+    ).fetchone()
+    if team_row is None:
+        member = conn.execute(
+            "SELECT team_id FROM sessions WHERE session_id = ? AND team_id IS NOT NULL LIMIT 1",
+            (lead_session_id,),
+        ).fetchone()
+        if member is None:
+            return None
+        team_row = conn.execute(
+            "SELECT t.team_id, t.description, t.lead_session_id, t.project_id, "
+            "       p.slug, p.display_name "
+            "FROM agent_teams t JOIN projects p ON p.id = t.project_id "
+            "WHERE t.team_id = ?",
+            (member["team_id"],),
+        ).fetchone()
+        if team_row is None:
+            return None
+
+    team_id = team_row["team_id"]
+    lead_session = team_row["lead_session_id"]
+
+    member_rows = conn.execute(
+        "SELECT s.id, s.session_id, s.first_ts, s.last_ts, "
+        "       s.spawn_prompt, s.agent_role, s.spawned_by_session_id "
+        "FROM sessions s WHERE s.team_id = ? "
+        "ORDER BY (CASE WHEN s.agent_role = 'lead' THEN 0 ELSE 1 END), s.first_ts ASC, s.session_id ASC",
+        (team_id,),
+    ).fetchall()
+    if not member_rows:
+        return None
+
+    lead_summary: AgentSummary | None = None
+    agents: list[AgentSummary] = []
+    for row in member_rows:
+        sfk = int(row["id"])
+        sid = row["session_id"]
+        is_lead = (row["agent_role"] == _ROLE_LEAD) or (sid == lead_session)
+        first_raw = _session_first_message_raw(conn, session_fk=sfk)
+        agent_id = None if is_lead else _extract_agent_id(first_raw, fallback_session_id=sid)
+        agent_name = "team-lead" if is_lead else (agent_id or sid)
+        parent_sid = None if is_lead else (row["spawned_by_session_id"] or lead_session)
+        summary = _agent_summary_for_session(
+            conn,
+            session_fk=sfk,
+            session_id=sid,
+            first_ts=row["first_ts"],
+            last_ts=row["last_ts"],
+            is_lead=is_lead,
+            parent_session_id=parent_sid,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            spawn_prompt=row["spawn_prompt"],
+            agent_role=row["agent_role"] or (_ROLE_LEAD if is_lead else _ROLE_SUBAGENT),
+        )
+        if is_lead and lead_summary is None:
+            lead_summary = summary
+        else:
+            agents.append(summary)
+
+    if lead_summary is None:
+        # Lead transcript not ingested yet — synthesise a placeholder so the
+        # graph still renders the sub-agents.
+        lead_summary = AgentSummary(
+            session_id=lead_session or team_id,
+            agent_id=None,
+            agent_name="team-lead",
+            is_lead=True,
+            parent_session_id=None,
+            message_count=0,
+            first_ts=None,
+            last_ts=None,
+            first_user_prompt=None,
+            model=None,
+            cost_usd=0.0,
+            spawn_prompt=None,
+            agent_role=_ROLE_LEAD,
+        )
+
+    return TeamGraph(
+        session_id=lead_summary.session_id,
+        team_name=team_id,
+        project_slug=team_row["slug"],
+        project_display_name=team_row["display_name"],
+        lead=lead_summary,
+        agents=tuple(agents),
+        description=team_row["description"],
+    )
+
+
+def _build_team_graph_scan(
+    conn: sqlite3.Connection, *, lead_session_id: str
+) -> TeamGraph | None:
+    """Heuristic graph builder (pre-v013, or un-materialised sessions).
+
     1. Locate the lead session row + its project.
-    2. Lead's ``team_name`` (if any) comes from the first message's
-       ``raw_json``. Used as an additional discriminator when grouping
-       sub-agent sessions.
-    3. Sub-agents are sessions in the same project whose sidechain
-       messages share the lead's ``team_name`` OR whose first message's
-       ``parent_uuid`` resolves to a uuid in the lead session (older
-       fallback path).
+    2. The lead's ``teamName`` (if any) discriminates sub-agents when a
+       project hosted several teams over time.
+    3. Sub-agents are sessions in the same project with sidechain rows
+       whose ``teamName`` agrees with (or is absent on) the lead's.
     """
     lead_row = conn.execute(
         "SELECT s.id, s.session_id, s.first_ts, s.last_ts, "
@@ -391,27 +607,20 @@ def build_team_graph(
         _session_first_message_raw(conn, session_fk=lead_fk)
     )
 
-    lead_summary = AgentSummary(
+    lead_summary = _agent_summary_for_session(
+        conn,
+        session_fk=lead_fk,
         session_id=lead_row["session_id"],
-        agent_id=None,
-        agent_name="team-lead",
-        is_lead=True,
-        parent_session_id=None,
-        message_count=conn.execute(
-            "SELECT COUNT(*) AS c FROM messages WHERE session_fk = ?",
-            (lead_fk,),
-        ).fetchone()["c"],
         first_ts=lead_row["first_ts"],
         last_ts=lead_row["last_ts"],
-        first_user_prompt=_session_first_user_prompt(conn, session_fk=lead_fk),
-        model=_session_dominant_model(conn, session_fk=lead_fk),
-        cost_usd=_session_cost_usd(conn, session_fk=lead_fk),
+        is_lead=True,
+        parent_session_id=None,
+        agent_id=None,
+        agent_name="team-lead",
+        spawn_prompt=None,
+        agent_role=_ROLE_LEAD,
     )
 
-    # Candidate sub-agent sessions: every other session in the same
-    # project that has sidechain rows. We then filter to those whose
-    # team_name matches the lead's team_name (when present) — this keeps
-    # the graph tight when one project hosts multiple teams over time.
     candidate_rows = conn.execute(
         "SELECT DISTINCT s.id, s.session_id, s.first_ts, s.last_ts "
         "FROM sessions s "
@@ -426,33 +635,22 @@ def build_team_graph(
         sub_fk = int(row["id"])
         first_raw = _session_first_message_raw(conn, session_fk=sub_fk)
         sub_team_name = _extract_team_name(first_raw)
-        # team_name discriminator: only filter out when both sides
-        # have a name AND they disagree. When the sub-agent doesn't
-        # carry teamName (older transcript), include it — the
-        # project-scoped sidechain heuristic is good enough.
-        if (
-            lead_team_name
-            and sub_team_name
-            and lead_team_name != sub_team_name
-        ):
+        if lead_team_name and sub_team_name and lead_team_name != sub_team_name:
             continue
         agent_id = _extract_agent_id(first_raw, fallback_session_id=row["session_id"])
         agents.append(
-            AgentSummary(
+            _agent_summary_for_session(
+                conn,
+                session_fk=sub_fk,
                 session_id=row["session_id"],
-                agent_id=agent_id,
-                agent_name=agent_id or row["session_id"],
-                is_lead=False,
-                parent_session_id=lead_row["session_id"],
-                message_count=conn.execute(
-                    "SELECT COUNT(*) AS c FROM messages WHERE session_fk = ?",
-                    (sub_fk,),
-                ).fetchone()["c"],
                 first_ts=row["first_ts"],
                 last_ts=row["last_ts"],
-                first_user_prompt=_session_first_user_prompt(conn, session_fk=sub_fk),
-                model=_session_dominant_model(conn, session_fk=sub_fk),
-                cost_usd=_session_cost_usd(conn, session_fk=sub_fk),
+                is_lead=False,
+                parent_session_id=lead_row["session_id"],
+                agent_id=agent_id,
+                agent_name=agent_id or row["session_id"],
+                spawn_prompt=None,
+                agent_role=_ROLE_SUBAGENT,
             )
         )
 
@@ -466,6 +664,9 @@ def build_team_graph(
     )
 
 
+# ── public API: get_agent_transcript ────────────────────────────────────────
+
+
 def get_agent_transcript(
     conn: sqlite3.Connection,
     *,
@@ -474,11 +675,10 @@ def get_agent_transcript(
 ) -> list[dict[str, Any]] | None:
     """Return raw message rows for one agent in a team.
 
-    The ``lead_session_id`` parameter is currently used to validate the
-    agent belongs to the same project as the lead (cheap sanity check
-    so the URL ``/api/agent-teams/{lead}/agent/{sub}`` can't be used to
-    surface arbitrary cross-project sessions). Returns ``None`` when
-    either session can't be found in the same project.
+    ``lead_session_id`` is used as a cheap same-project fence so the URL
+    ``/api/agent-teams/{lead}/agent/{sub}`` can't surface arbitrary
+    cross-project sessions. ``None`` when either session can't be found
+    in the same project.
     """
     pair = conn.execute(
         "SELECT s1.id AS lead_fk, s2.id AS agent_fk, s1.project_id "
@@ -520,6 +720,7 @@ def team_graph_to_dict(g: TeamGraph) -> dict[str, Any]:
     return {
         "session_id": g.session_id,
         "team_name": g.team_name,
+        "description": g.description,
         "project_slug": g.project_slug,
         "project_display_name": g.project_display_name,
         "lead": agent_summary_to_dict(g.lead),

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from collections.abc import Iterable
 from datetime import UTC
 from pathlib import Path
@@ -78,6 +79,21 @@ class ClaudeAdapter:
             yield from self._read_history(ref)
             return
         yield from self._read_jsonl(ref, since_offset=since_offset)
+
+    def materialize_metadata(self, conn: sqlite3.Connection) -> None:
+        """Post-ingest hook: index Claude Code agent-team metadata.
+
+        Scans ``~/.claude/teams/`` + ``~/.claude/tasks/`` and writes the
+        team graph into the schema (``agent_teams`` rows + the ``sessions``
+        team columns) so the dashboard's Agents tab can JOIN instead of
+        re-parsing ``raw_json`` on every render. Idempotent and cheap; a
+        machine with no agent-teams activity is a no-op. ``run_ingest``
+        calls this after the per-file ingest sweep — wrapped in its own
+        try/except there so a hiccup here can never break ingest.
+        """
+        from .claude_teams import materialize_team_metadata
+
+        materialize_team_metadata(conn, provider=self.name)
 
     # ── internals ─────────────────────────────────────────────────────
 
