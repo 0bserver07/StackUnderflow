@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from stackunderflow.store import db, schema
@@ -50,10 +51,56 @@ def test_current_version_constant() -> None:
     # v008 partitioned messages into messages_YYYYMM tables behind a view.
     # v009 added discovery_telemetry (citation-feedback loop).
     # v010 added captured_events (opt-in hybrid-capture hook sink).
+    # v011 added the per-message-grain message_tool_mart.
     # (>= rather than == so a later migration wave doesn't have to touch this;
     #  the strong invariant — apply() lands on CURRENT_VERSION — is checked by
     #  test_apply_sets_user_version.)
-    assert schema.CURRENT_VERSION >= 10
+    assert schema.CURRENT_VERSION >= 11
+
+
+def test_v011_creates_message_tool_mart(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "store.db")
+    try:
+        schema.apply(conn)
+        assert "message_tool_mart" in _tables(conn)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(message_tool_mart)").fetchall()}
+        assert cols == {
+            "id", "message_id", "project_id", "session_id", "ts", "day",
+            "tool_name", "file_path", "byte_count", "call_index",
+        }
+        # The lookup indexes the spec calls for.
+        idx = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND tbl_name='message_tool_mart'"
+        ).fetchall()}
+        assert {
+            "idx_message_tool_mart_session",
+            "idx_message_tool_mart_project",
+            "idx_message_tool_mart_file",
+            "idx_message_tool_mart_tool_day",
+        }.issubset(idx)
+        # UNIQUE(message_id, tool_name, call_index) is the dedup key the
+        # builder's INSERT OR IGNORE relies on.
+        conn.execute(
+            "INSERT INTO projects (id, provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (1, 'claude', 'p', 'p', 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO message_tool_mart "
+            "(message_id, project_id, session_id, ts, day, tool_name, file_path, byte_count, call_index) "
+            "VALUES (1, 1, 's', 't', 'd', 'Read', '/a', NULL, 0)"
+        )
+        try:
+            conn.execute(
+                "INSERT INTO message_tool_mart "
+                "(message_id, project_id, session_id, ts, day, tool_name, file_path, byte_count, call_index) "
+                "VALUES (1, 1, 's', 't', 'd', 'Read', '/b', NULL, 0)"
+            )
+            raise AssertionError("expected UNIQUE violation on (message_id, tool_name, call_index)")
+        except sqlite3.IntegrityError:
+            pass
+    finally:
+        conn.close()
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:

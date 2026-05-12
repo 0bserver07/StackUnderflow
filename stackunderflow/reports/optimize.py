@@ -386,11 +386,14 @@ def _detect_ghost_agents(
     """Pattern 3 — agents defined but never spawned in 30 days.
 
     Subagents show up in tool calls as ``Task`` (or as MCP-style
-    ``subagent_type=…`` payloads inside the raw record). Without a
-    structured subagent-history field on every provider, we count any
-    appearance of the agent's stem in ``content_text`` over the lookback
-    window — best effort, but a defensible "is this name ever mentioned
-    as a tool target?" check.
+    ``subagent_type=…`` payloads inside the raw record). When
+    ``message_tool_mart`` is populated we read the invoked-agent set
+    straight off it — the mart stores each ``Task`` call's
+    ``subagent_type`` in ``file_path``, so "which agents ran" is one
+    ``SELECT DISTINCT``. Empty-mart fallback: the Wave 5 ``tool_mart``
+    short-circuit plus a ``subagent_type=…`` substring scan over
+    ``messages.raw_json`` — best effort, but a defensible "is this name
+    ever mentioned as a tool target?" check.
     """
     agents = _registered_agents()
     if not agents:
@@ -402,6 +405,15 @@ def _detect_ghost_agents(
     else:
         from datetime import UTC, datetime, timedelta
         since_iso = (datetime.now(UTC) - timedelta(days=UNUSED_TOOL_LOOKBACK_DAYS)).isoformat()
+
+    # Per-message mart fast path: ``message_tool_mart`` carries each
+    # ``Task`` call's ``subagent_type`` in ``file_path``, so the invoked
+    # set is exact (no substring match against raw_json) and the detector
+    # is deterministic. Empty mart → fall through.
+    if mart_queries.mart_has_message_tool_rows(conn):
+        invoked = mart_queries.message_tool_invoked_agents(conn, since_iso=since_iso)
+        ghost = [(name, p) for name, p in agents if name not in invoked]
+        return _ghost_agents_finding(agents, ghost)
 
     # Wave 5: short-circuit on populated tool_mart with zero Task calls.
     # The detector identifies "ghost" agents — registered but never
@@ -547,15 +559,19 @@ def _detect_low_read_edit_ratio(
 ) -> list[Finding]:
     """Pattern 4 — sessions with many Reads and zero Edit/Write.
 
-    Wave 5: short-circuit when ``tool_mart`` is populated AND no Read
-    tool calls exist in the window — the per-session Read+Edit signal
-    requires a session-keyed parse of ``tools_json``, which no mart
-    materialises (``tool_mart`` is keyed at the day/project grain), so
-    we still walk ``messages`` for the actual ratio test. The mart
-    just lets us skip the scan when there can't possibly be a finding.
-    Empty mart → fall through to the full aggregator pass so freshly
-    installed stores still emit findings.
+    When ``message_tool_mart`` is populated the per-session (Read, Edit)
+    counts are one indexed ``GROUP BY`` — note this counts Read *calls*
+    (a message with three Reads counts as 3), which is the right
+    semantic for "explored N files" and slightly more precise than the
+    ``tools_json``-name count the fallback uses.
+
+    Empty-mart fallback: the Wave 5 ``tool_mart`` short-circuit (skip
+    when total Read calls in window can't reach a single-session floor),
+    then a per-session walk of ``messages.tools_json``.
     """
+    if mart_queries.mart_has_message_tool_rows(conn):
+        return _low_read_edit_from_mart(conn, scope=scope, project_filter=project_filter)
+
     if mart_queries.mart_has_tool_rows(conn):
         since = scope.since if scope is not None else None
         until = scope.until if scope is not None else None
@@ -587,6 +603,37 @@ def _detect_low_read_edit_ratio(
         if reads >= LOW_READ_EDIT_READ_FLOOR and edits == 0:
             bad_sessions.append({"session_fk": session_fk, "reads": reads})
 
+    return _low_read_edit_finding(bad_sessions)
+
+
+def _low_read_edit_from_mart(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope | None,
+    project_filter: list[str] | None,
+) -> list[Finding]:
+    """``message_tool_mart``-fed low-read:edit detector — per-session counts."""
+    since = scope.since if scope is not None else None
+    until = scope.until if scope is not None else None
+    rows = mart_queries.message_tool_read_edit_per_session(
+        conn, since_iso=since, until_iso=until, project_slugs=project_filter,
+    )
+    bad_sessions = [
+        {"session_fk": r["session_id"], "reads": int(r["reads"])}
+        for r in rows
+        if int(r["reads"]) >= LOW_READ_EDIT_READ_FLOOR and int(r["edits"]) == 0
+    ]
+    return _low_read_edit_finding(bad_sessions)
+
+
+def _low_read_edit_finding(bad_sessions: list[dict]) -> list[Finding]:
+    """Render the ``low_read_edit_ratio`` Finding from the candidate list.
+
+    Shared between the ``message_tool_mart`` path (``session_fk`` is the
+    session_id string) and the raw-scan fallback (``session_fk`` is the
+    int ``messages.session_fk``) so the JSON contract — severity ladder,
+    waste estimate, details payload — stays identical across sources.
+    """
     if not bad_sessions:
         return []
 
@@ -634,13 +681,18 @@ def _detect_junk_reads(
 
     Indicates the assistant forgot what it already saw and re-fetched.
 
-    Wave 5: short-circuit when ``tool_mart`` confirms zero Read calls
-    in window. The full detector still parses ``raw_json`` for the
-    file-path-level signal (per-file repeat counts can't be derived
-    from any mart), but skipping the parse when no Read happened is a
-    free win for project-scoped windows that didn't read anything.
-    Empty-mart fallback: full aggregator pass.
+    When ``message_tool_mart`` is populated the per-(session, file) Read
+    counts are one indexed ``GROUP BY ... HAVING`` — no per-message
+    ``raw_json`` parse. Both paths count Read *calls* (``message_tool_mart``
+    has one row per call, the fallback parses ``raw_json`` tool_use
+    blocks), so the per-file repeat counts agree.
+
+    Empty-mart fallback: the Wave 5 ``tool_mart`` short-circuit (skip
+    when zero Read calls in window) then the per-session raw scan.
     """
+    if mart_queries.mart_has_message_tool_rows(conn):
+        return _junk_reads_from_mart(conn, scope=scope, project_filter=project_filter)
+
     if mart_queries.mart_has_tool_rows(conn):
         since = scope.since if scope is not None else None
         until = scope.until if scope is not None else None
@@ -673,6 +725,46 @@ def _detect_junk_reads(
                 ],
             })
 
+    return _junk_reads_finding(hits)
+
+
+def _junk_reads_from_mart(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope | None,
+    project_filter: list[str] | None,
+) -> list[Finding]:
+    """``message_tool_mart``-fed junk-reads detector — per-(session, file) counts."""
+    since = scope.since if scope is not None else None
+    until = scope.until if scope is not None else None
+    rows = mart_queries.message_tool_junk_reads(
+        conn, repeat_threshold=JUNK_READ_REPEAT_THRESHOLD,
+        since_iso=since, until_iso=until, project_slugs=project_filter,
+    )
+    by_session: dict[str, list[dict]] = {}
+    for r in rows:
+        by_session.setdefault(r["session_id"], []).append(
+            {"path": r["file_path"], "reads": int(r["reads"])}
+        )
+    hits = [
+        {
+            "session_fk": sid,
+            "files": sorted(files, key=lambda f: f["reads"], reverse=True),
+        }
+        for sid, files in by_session.items()
+    ]
+    return _junk_reads_finding(hits)
+
+
+def _junk_reads_finding(hits: list[dict]) -> list[Finding]:
+    """Render the ``junk_reads`` Finding from a list of per-session hit dicts.
+
+    Each hit: ``{session_fk, files: [{path, reads}, ...]}``. Shared
+    between the ``message_tool_mart`` path (``session_fk`` is the
+    session_id string) and the raw-scan fallback (``session_fk`` is the
+    int ``messages.session_fk``) so the JSON contract is stable across
+    sources.
+    """
     if not hits:
         return []
 
@@ -866,16 +958,21 @@ def _detect_bash_output_limits(
     """Pattern 7 — bash tool calls returning ≥ 50 KB output.
 
     Indicates the assistant should be using ``head`` / ``tail`` / ``grep``
-    or ``--limit`` flags. We measure output by inspecting tool_result
-    blocks in user messages whose preceding assistant call was a Bash
-    tool. Falls back to checking ``content_text`` length on user
-    tool_result rows.
+    or ``--limit`` flags.
 
-    Wave 5: short-circuit when ``tool_mart`` confirms zero Bash calls
-    in window. The detector still needs the raw-message scan to size
-    each output, but skipping the scan when no Bash ran is the cheap
-    early-exit. Empty-mart fallback: full aggregator pass.
+    When ``message_tool_mart`` is populated each ``Bash`` call already
+    carries its tool-result size (paired off the following
+    ``tool_result`` block by ``tool_use_id``) in ``byte_count``, so the
+    detector is one indexed lookup — and more precise than the fallback,
+    which sizes the whole ``content_text`` of the following user message
+    (over-counting when that turn carried more than one tool result).
+
+    Empty-mart fallback: the Wave 5 ``tool_mart`` short-circuit (skip
+    when zero Bash calls in window) then the two-pass raw scan.
     """
+    if mart_queries.mart_has_message_tool_rows(conn):
+        return _bash_output_from_mart(conn, scope=scope, project_filter=project_filter)
+
     if mart_queries.mart_has_tool_rows(conn):
         since = scope.since if scope is not None else None
         until = scope.until if scope is not None else None
@@ -940,6 +1037,34 @@ def _detect_bash_output_limits(
             "bytes": size,
         })
 
+    return _bash_output_finding(big)
+
+
+def _bash_output_from_mart(
+    conn: sqlite3.Connection,
+    *,
+    scope: Scope | None,
+    project_filter: list[str] | None,
+) -> list[Finding]:
+    """``message_tool_mart``-fed bash-output detector — Bash rows over threshold."""
+    since = scope.since if scope is not None else None
+    until = scope.until if scope is not None else None
+    rows = mart_queries.message_tool_oversized(
+        conn, tool_name="Bash", threshold_bytes=BASH_OUTPUT_BYTES_THRESHOLD,
+        since_iso=since, until_iso=until, project_slugs=project_filter,
+    )
+    # ``seq`` here is the source message id (the mart is per-message, not
+    # per-seq) — the field name is kept for parity with the fallback's
+    # ``details.samples`` shape.
+    big = [
+        {"session_fk": r["session_id"], "seq": r["message_id"], "bytes": int(r["byte_count"])}
+        for r in rows
+    ]
+    return _bash_output_finding(big)
+
+
+def _bash_output_finding(big: list[dict]) -> list[Finding]:
+    """Render the ``bash_output_limits`` Finding. Shared mart + fallback path."""
     if not big:
         return []
 

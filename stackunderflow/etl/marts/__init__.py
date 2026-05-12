@@ -46,12 +46,13 @@ def _clear() -> None:
 __all__ = ["MartBuilder", "register", "get", "all"]
 
 
-# ── Wave 2B + Wave 5 default registrations ──────────────────────────────────
+# ── Wave 2B + Wave 5 + per-message-mart default registrations ───────────────
 #
 # Imported at the bottom to avoid circular-import gymnastics: each builder
 # module imports ``MartBuilder`` from ``.base`` (already defined above).
 from .command import CommandMartBuilder  # noqa: E402
 from .daily import DailyMartBuilder  # noqa: E402
+from .message_tool import MessageToolMartBuilder  # noqa: E402
 from .model_day import ModelDayMartBuilder  # noqa: E402
 from .project import ProjectMartBuilder  # noqa: E402
 from .provider_day import ProviderDayMartBuilder  # noqa: E402
@@ -65,3 +66,4 @@ register("provider_day", ProviderDayMartBuilder)
 register("model_day", ModelDayMartBuilder)
 register("tool", ToolMartBuilder)
 register("command", CommandMartBuilder)
+register("message_tool", MessageToolMartBuilder)

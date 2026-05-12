@@ -65,10 +65,11 @@ def _seed_100_events(conn: sqlite3.Connection) -> float:
 
 def test_registry_lists_all_marts(conn) -> None:
     """marts.all() must expose every registered builder by spec name."""
-    # Wave 2B = the 5 foundational marts; Wave 5 added tool + command.
+    # Wave 2B = the 5 foundational marts; Wave 5 added tool + command;
+    # v011 added the per-message-grain message_tool mart.
     assert set(marts_pkg.all().keys()) == {
         "daily", "session", "project", "provider_day", "model_day",
-        "tool", "command",
+        "tool", "command", "message_tool",
     }
 
 
@@ -134,7 +135,7 @@ def test_full_pipeline_consistency(conn) -> None:
 
 _ALL_MART_NAMES = (
     "daily", "session", "project", "provider_day", "model_day",
-    "tool", "command",
+    "tool", "command", "message_tool",
 )
 
 
@@ -145,11 +146,11 @@ def test_watermark_contract_persisted_per_mart(conn) -> None:
     # / backfill orchestrator will do in production.
     processed = refresh_all_marts(conn)
     assert set(processed) == set(_ALL_MART_NAMES)
-    # Every mart consumed all 100 events on the first run. ``tool`` and
-    # ``command`` may report fewer events processed because they only
-    # count events whose source message had tools / a preceding user
-    # prompt — but the watermark itself still advances to max_id for
-    # every mart.
+    # Every mart consumed all 100 events on the first run. ``tool``,
+    # ``command`` and ``message_tool`` may report fewer events processed
+    # because they only count events whose source message had tools /
+    # tool_use blocks / a preceding user prompt — but the watermark
+    # itself still advances to max_id for every mart.
     daily_processed = processed["daily"]
     assert daily_processed == 100
 
@@ -237,17 +238,18 @@ def test_two_window_incremental_matches_full(conn) -> None:
 
     incremental = _snapshot_marts(conn)
 
-    # Now rebuild from scratch and compare. Wave 5 marts (tool, command)
-    # have no rows in this fixture — events here have no tools_json
-    # populated and no preceding user prompts in messages — so the
-    # rebuild is a no-op for them. We still walk the registry so the
-    # comparison stays exhaustive when the fixture grows.
+    # Now rebuild from scratch and compare. The content-dependent marts
+    # (tool, command, message_tool) have no rows in this fixture — events
+    # here have no tools_json / raw_json tool_use blocks / preceding user
+    # prompts in messages — so the rebuild is a no-op for them. We still
+    # walk the registry so the comparison stays exhaustive when the
+    # fixture grows.
     for cls in (
         DailyMartBuilder, SessionMartBuilder, ProjectMartBuilder,
         ProviderDayMartBuilder, ModelDayMartBuilder,
     ):
         cls().rebuild_from_scratch(conn)
-    for name in ("tool", "command"):
+    for name in ("tool", "command", "message_tool"):
         cls_t = marts_pkg.get(name)
         assert cls_t is not None
         cls_t().rebuild_from_scratch(conn)
