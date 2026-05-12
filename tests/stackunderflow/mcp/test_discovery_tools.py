@@ -83,6 +83,30 @@ def _match(
     )
 
 
+def _outcome_match(
+    *,
+    session_id: str = "s-x",
+    outcome: str = "worked",
+    outcome_evidence: str = "user wrote: 'thanks, that worked'",
+    outcome_msg_id: int = 42,
+    cost_usd: float = 0.123456789,
+) -> discovery.OutcomeMatch:
+    return discovery.OutcomeMatch(
+        session_id=session_id,
+        project_slug="-Users-x-app",
+        project_path="/Users/x/app",
+        provider="claude",
+        first_ts="2026-04-29T10:00:00Z",
+        last_ts="2026-04-29T11:00:00Z",
+        message_count=4,
+        cost_usd=cost_usd,
+        snippet=None,
+        outcome=outcome,
+        outcome_evidence=outcome_evidence,
+        outcome_msg_id=outcome_msg_id,
+    )
+
+
 class _RecordingDiscovery:
     """Records the kwargs passed to each discovery function.
 
@@ -95,6 +119,8 @@ class _RecordingDiscovery:
         self.find_sessions_in_path_calls: list[dict[str, Any]] = []
         self.find_sessions_touching_file_calls: list[dict[str, Any]] = []
         self.search_past_decisions_calls: list[dict[str, Any]] = []
+        self.find_sessions_where_action_worked_calls: list[dict[str, Any]] = []
+        self.find_failure_modes_for_file_calls: list[dict[str, Any]] = []
         self.returns: list[discovery.SessionMatch] = []
         self.raise_with: BaseException | None = None
 
@@ -113,6 +139,16 @@ class _RecordingDiscovery:
             mcp_server._discovery,
             "search_past_decisions",
             self._search_past_decisions,
+        )
+        monkeypatch.setattr(
+            mcp_server._discovery,
+            "find_sessions_where_action_worked",
+            self._find_sessions_where_action_worked,
+        )
+        monkeypatch.setattr(
+            mcp_server._discovery,
+            "find_failure_modes_for_file",
+            self._find_failure_modes_for_file,
         )
 
     def _maybe_raise(self) -> None:
@@ -143,6 +179,25 @@ class _RecordingDiscovery:
         self.search_past_decisions_calls.append(
             {"conn": conn, "query": query, "project": project, "since": since, "limit": limit},
         )
+        self._maybe_raise()
+        return list(self.returns)
+
+    def _find_sessions_where_action_worked(
+        self, conn, *, action, project=None, file_path=None, since=None, limit=20,
+    ) -> list[discovery.SessionMatch]:
+        self.find_sessions_where_action_worked_calls.append({
+            "conn": conn, "action": action, "project": project,
+            "file_path": file_path, "since": since, "limit": limit,
+        })
+        self._maybe_raise()
+        return list(self.returns)
+
+    def _find_failure_modes_for_file(
+        self, conn, file_path, *, since=None, limit=20,
+    ) -> list[discovery.SessionMatch]:
+        self.find_failure_modes_for_file_calls.append({
+            "conn": conn, "file_path": file_path, "since": since, "limit": limit,
+        })
         self._maybe_raise()
         return list(self.returns)
 
@@ -378,11 +433,109 @@ def test_unknown_provider_passes_through_for_service_decision(
     assert discovery_stub.find_sessions_in_path_calls[0]["provider"] == "bogus"
 
 
+# ── outcome-aware tools ─────────────────────────────────────────────────────
+
+
+def test_outcome_tools_skip_service_when_store_missing(
+    missing_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    assert mcp_server.find_sessions_where_action_worked_impl(action="Edit") == {
+        "sessions": [],
+    }
+    assert mcp_server.find_failure_modes_for_file_impl(file_path="/x/y.py") == {
+        "sessions": [],
+    }
+    assert discovery_stub.find_sessions_where_action_worked_calls == []
+    assert discovery_stub.find_failure_modes_for_file_calls == []
+
+
+def test_find_sessions_where_action_worked_plumbs_args(
+    empty_store: Path, discovery_stub: _RecordingDiscovery, tmp_path: Path,
+) -> None:
+    discovery_stub.returns = [_outcome_match()]
+    target = tmp_path / "cost.py"
+    out = mcp_server.find_sessions_where_action_worked_impl(
+        action="add caching", project="-Users-x-app",
+        file_path=str(target), since="7d", limit=5,
+    )
+    assert len(out["sessions"]) == 1
+    call = discovery_stub.find_sessions_where_action_worked_calls[0]
+    assert call["action"] == "add caching"
+    assert call["project"] == "-Users-x-app"
+    assert call["file_path"] == str(target.resolve())  # ~-expanded + resolved
+    assert call["since"] == "7d"
+    assert call["limit"] == 5
+    assert call["conn"] is not None
+
+
+def test_find_sessions_where_action_worked_optional_file_path(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    discovery_stub.returns = []
+    mcp_server.find_sessions_where_action_worked_impl(action="Edit")
+    assert discovery_stub.find_sessions_where_action_worked_calls[0]["file_path"] is None
+
+
+def test_find_failure_modes_for_file_plumbs_args(
+    empty_store: Path, discovery_stub: _RecordingDiscovery, tmp_path: Path,
+) -> None:
+    discovery_stub.returns = [_outcome_match(outcome="failed")]
+    target = tmp_path / "cost.py"
+    out = mcp_server.find_failure_modes_for_file_impl(
+        file_path=str(target), since="1w", limit=3,
+    )
+    assert len(out["sessions"]) == 1
+    call = discovery_stub.find_failure_modes_for_file_calls[0]
+    assert call["file_path"] == str(target.resolve())
+    assert call["since"] == "1w"
+    assert call["limit"] == 3
+
+
+def test_outcome_match_rendered_with_outcome_keys(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    discovery_stub.returns = [
+        _outcome_match(
+            session_id="s-A", outcome="worked",
+            outcome_evidence="user wrote: 'perfect'", outcome_msg_id=99,
+            cost_usd=0.123456789,
+        ),
+    ]
+    out = mcp_server.find_sessions_where_action_worked_impl(action="Edit")
+    row = out["sessions"][0]
+    assert set(row.keys()) == {
+        "session_id", "project_slug", "project_path", "provider",
+        "first_ts", "last_ts", "message_count", "cost_usd", "snippet",
+        "outcome", "outcome_evidence", "outcome_msg_id",
+    }
+    assert row["session_id"] == "s-A"
+    assert row["outcome"] == "worked"
+    assert row["outcome_evidence"] == "user wrote: 'perfect'"
+    assert row["outcome_msg_id"] == 99
+    assert row["cost_usd"] == round(0.123456789, 6)
+    assert row["snippet"] is None
+
+
+def test_outcome_tools_validate_inputs(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    with pytest.raises(ValueError, match="action"):
+        mcp_server.find_sessions_where_action_worked_impl(action="")
+    with pytest.raises(ValueError, match="action"):
+        mcp_server.find_sessions_where_action_worked_impl(action="   ")
+    with pytest.raises(ValueError, match="limit"):
+        mcp_server.find_sessions_where_action_worked_impl(action="Edit", limit=0)
+    with pytest.raises(ValueError, match="path"):
+        mcp_server.find_failure_modes_for_file_impl(file_path="")
+    with pytest.raises(ValueError, match="limit"):
+        mcp_server.find_failure_modes_for_file_impl(file_path="/x/y.py", limit=-1)
+
+
 # ── tool registration ──────────────────────────────────────────────────────
 
 
 def test_discovery_tools_registered() -> None:
-    """The three new tools register on the FastMCP instance with strong descriptions."""
+    """The discovery tools register on the FastMCP instance with strong descriptions."""
     async def _info() -> list[Any]:
         return await mcp_server.mcp.list_tools()
 
@@ -392,12 +545,21 @@ def test_discovery_tools_registered() -> None:
         "find_sessions_in_path",
         "find_sessions_touching_file",
         "search_past_decisions",
+        "find_sessions_where_action_worked",
+        "find_failure_modes_for_file",
     ):
         assert name in by_name, f"{name} not registered on the MCP server"
         descr = by_name[name].description or ""
         # Description must explain *when* to use the tool — checked
         # loosely so wording can evolve.
         assert "Use this" in descr or "Use ``" in descr or "use this" in descr.lower()
+    # The two outcome tools cross-reference each other in their docs.
+    assert "find_failure_modes_for_file" in (
+        by_name["find_sessions_where_action_worked"].description or ""
+    )
+    assert "find_sessions_where_action_worked" in (
+        by_name["find_failure_modes_for_file"].description or ""
+    )
 
 
 def test_existing_tools_still_registered() -> None:
