@@ -640,6 +640,13 @@ def _detect_junk_reads(
     from any mart), but skipping the parse when no Read happened is a
     free win for project-scoped windows that didn't read anything.
     Empty-mart fallback: full aggregator pass.
+
+    v012: the pre-flight counts ``calls_total`` (non-distinct Read
+    occurrences) rather than ``event_count`` — this detector cares about
+    *how many times* a file was Read, which is the legacy aggregator's
+    ``calls`` semantics. On a pre-v012 ``tool_mart`` (``calls_total``
+    not yet rebuilt) the count reads 0 and we fall through to the full
+    scan, which still produces the correct answer.
     """
     if mart_queries.mart_has_tool_rows(conn):
         since = scope.since if scope is not None else None
@@ -648,6 +655,7 @@ def _detect_junk_reads(
             conn, tool_names=("Read",),
             since_iso=since, until_iso=until,
             project_filter=project_filter,
+            count_column="calls_total",
         )
         if reads == 0:
             return []

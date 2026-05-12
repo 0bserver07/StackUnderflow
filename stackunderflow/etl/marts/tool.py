@@ -79,27 +79,34 @@ class ToolMartBuilder(MartBuilder):
         rows = _fetch_window(conn, since_event_id=since_event_id, max_id=max_id)
 
         # Bucket by (day, project_id, provider, tool_name) and accumulate
-        # the additive measures (event_count, cost_usd, tokens_in/out).
+        # the additive measures (event_count, calls_total, cost_usd,
+        # tokens_in/out). ``event_count`` counts distinct (message, tool)
+        # pairs (1/N attribution contract); ``calls_total`` counts every
+        # tool occurrence — a turn that called Read 3× adds 1 to
+        # event_count and 3 to calls_total. Cost / tokens follow the
+        # event_count (distinct) split so a repeated call never doubles
+        # cost.
         buckets: dict[tuple[str, int, str, str], dict[str, float]] = {}
         for r in rows:
-            tool_names = _parse_tool_names(r["tools_json"])
-            if not tool_names:
+            tool_counts = _parse_tool_names(r["tools_json"])
+            if not tool_counts:
                 continue
-            n = len(tool_names)
+            n = len(tool_counts)
             cost_share = float(r["cost_usd"] or 0.0) / n
             in_share = int(r["input_tokens"] or 0) / n
             out_share = int(r["output_tokens"] or 0) / n
-            for tool_name in tool_names:
+            for tool_name, occurrences in tool_counts.items():
                 key = (
                     r["day"], int(r["project_id"]),
                     r["provider"], tool_name,
                 )
                 bucket = buckets.setdefault(
                     key,
-                    {"event_count": 0, "cost_usd": 0.0,
+                    {"event_count": 0, "calls_total": 0, "cost_usd": 0.0,
                      "tokens_in": 0.0, "tokens_out": 0.0},
                 )
                 bucket["event_count"] += 1
+                bucket["calls_total"] += occurrences
                 bucket["cost_usd"] += cost_share
                 bucket["tokens_in"] += in_share
                 bucket["tokens_out"] += out_share
@@ -109,11 +116,12 @@ class ToolMartBuilder(MartBuilder):
                 """
                 INSERT INTO tool_mart (
                     day, project_id, provider, tool_name,
-                    event_count, cost_usd, tokens_in, tokens_out,
+                    event_count, calls_total, cost_usd, tokens_in, tokens_out,
                     session_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT (day, project_id, provider, tool_name) DO UPDATE SET
                     event_count = event_count + excluded.event_count,
+                    calls_total = calls_total + excluded.calls_total,
                     cost_usd    = cost_usd    + excluded.cost_usd,
                     tokens_in   = tokens_in   + excluded.tokens_in,
                     tokens_out  = tokens_out  + excluded.tokens_out
@@ -121,7 +129,7 @@ class ToolMartBuilder(MartBuilder):
                 [
                     (
                         k[0], k[1], k[2], k[3],
-                        v["event_count"], v["cost_usd"],
+                        v["event_count"], v["calls_total"], v["cost_usd"],
                         int(v["tokens_in"]), int(v["tokens_out"]),
                     )
                     for k, v in buckets.items()
@@ -184,33 +192,33 @@ def _fetch_window(
     return [dict(r) for r in conn.execute(sql, (since_event_id, max_id)).fetchall()]
 
 
-def _parse_tool_names(tools_json: str | None) -> list[str]:
-    """Parse ``messages.tools_json`` into a deduped list of tool names.
+def _parse_tool_names(tools_json: str | None) -> dict[str, int]:
+    """Parse ``messages.tools_json`` into ``{tool_name: occurrence_count}``.
 
     The writer stores ``json.dumps(list(rec.tools))`` so the value is a
-    JSON array of strings. The legacy aggregator's tool-cost collector
-    keys on the **distinct** set of names per message (1/N attribution
-    across the distinct names). We match that contract here — a turn
-    that calls ``Read`` three times is one ``Read`` bucket, not three.
+    JSON array of strings. Distinct names = ``.keys()`` (the legacy
+    aggregator's 1/N-attribution unit — a turn that calls ``Read`` three
+    times is one ``Read`` bucket, not three); total occurrences =
+    ``sum(.values())`` (the ``calls_total`` signal, added in v012).
 
     Defensive: malformed JSON, empty arrays, and non-string entries all
-    return an empty list. The mart silently drops events with no
+    return an empty dict. The mart silently drops events with no
     parseable tool list — they contribute nothing to the per-tool
     rollup.
     """
     if not tools_json:
-        return []
+        return {}
     try:
         parsed = json.loads(tools_json)
     except (json.JSONDecodeError, TypeError):
-        return []
+        return {}
     if not isinstance(parsed, list):
-        return []
+        return {}
     counts: Counter[str] = Counter()
     for entry in parsed:
         if isinstance(entry, str) and entry:
             counts[entry] += 1
-    return list(counts.keys())
+    return dict(counts)
 
 
 def _recompute_session_counts(

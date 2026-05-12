@@ -48,7 +48,8 @@ def test_current_version_constant() -> None:
     # v006 added the ETL foundation (usage_events + 5 marts + watermark).
     # v007 added Wave 5 lower-grain marts (tool_mart + command_mart).
     # v008 partitioned messages into messages_YYYYMM tables behind a view.
-    assert schema.CURRENT_VERSION == 8
+    # v012 added tool_mart.calls_total (non-distinct tool-call count).
+    assert schema.CURRENT_VERSION == 12
 
 
 def test_v002_migration_preserves_existing_rows(tmp_path: Path) -> None:
