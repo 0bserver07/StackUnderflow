@@ -14,14 +14,18 @@ Three read-only endpoints, all under ``/api/agent-teams``:
   Drill into one agent's full transcript (mirrors ``/api/jsonl-content``
   but scoped + validated against the lead session).
 
-Empty-store contract: when a store has no sidechain messages, the list
-route returns ``{"teams": []}`` cleanly (no 500). The graph + transcript
-routes return 404 when the asked session can't be found, and 200 with
-an empty ``agents`` list when the session exists but spawned no
-sub-agents.
+Empty-store contract: when a store has no sidechain messages and no
+materialised teams, the list route returns ``{"teams": []}`` cleanly (no
+500). The graph + transcript routes return 404 when the asked session
+can't be found / isn't part of a team, and 200 with an empty ``agents``
+list when the session exists but spawned no sub-agents.
 
-See ``docs/specs/agent-teams.md`` for the design rationale and the
-"why no schema migration" choice.
+Since migration ``v013`` the response bodies carry the materialised
+extras transparently: each agent's ``spawn_prompt`` + ``agent_role`` and
+the team's ``description`` (all ``null`` on stores whose
+``~/.claude/teams/`` artefacts haven't been ingested yet — the service
+falls back to the ``is_sidechain`` / ``raw_json`` heuristic there). See
+``.notes/specs/09-multi-agent-fs-recognition.md``.
 """
 
 from __future__ import annotations

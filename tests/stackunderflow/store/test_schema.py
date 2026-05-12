@@ -53,6 +53,7 @@ def test_current_version_constant() -> None:
     # v010 added captured_events (opt-in hybrid-capture hook sink).
     # v011 added the per-message-grain message_tool_mart.
     # v012 added tool_mart.calls_total (non-distinct tool-call count).
+    # v013 added multi-agent session metadata (sessions.team_id + agent_teams).
     # (>= rather than == so a later migration wave doesn't have to touch this;
     #  the strong invariant — apply() lands on CURRENT_VERSION — is checked by
     #  test_apply_sets_user_version.)

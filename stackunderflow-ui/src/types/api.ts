@@ -785,8 +785,12 @@ export interface EtlBackfillResponse {
 
 // ---------------------------------------------------------------------------
 // Agent-teams — Claude Code parallel-agent topology surface.
-// Mirrors the response bodies of /api/agent-teams/*. See
-// docs/specs/agent-teams.md for the design rationale.
+// Mirrors the response bodies of /api/agent-teams/*. Since the v013
+// migration the team graph is materialised at ingest time, so the member
+// objects also carry `spawn_prompt` / `agent_role` and the graph carries
+// the team `description` (all null on stores whose ~/.claude/teams/
+// artefacts haven't been ingested — the backend falls back to a
+// heuristic there). See .notes/specs/09-multi-agent-fs-recognition.md.
 // ---------------------------------------------------------------------------
 
 export interface AgentTeamSummary {
@@ -799,6 +803,7 @@ export interface AgentTeamSummary {
   agent_count: number
   sub_agent_message_count: number
   lead_message_count: number
+  description?: string | null
 }
 
 export interface AgentTeamMember {
@@ -813,11 +818,15 @@ export interface AgentTeamMember {
   first_user_prompt: string | null
   model: string | null
   cost_usd: number
+  // v013 materialised extras (null/absent on un-materialised stores).
+  spawn_prompt?: string | null
+  agent_role?: 'lead' | 'subagent' | null
 }
 
 export interface AgentTeamGraph {
   session_id: string
   team_name: string | null
+  description?: string | null
   project_slug: string
   project_display_name: string
   lead: AgentTeamMember
