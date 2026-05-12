@@ -1319,6 +1319,14 @@ def _emit_sessions(
         click.echo(head)
         sub = f"      {m.project_slug}  {m.project_path}"
         click.echo(sub)
+        # OutcomeMatch rows carry an inferred outcome + evidence. Duck-typed
+        # so this stays generic over plain SessionMatch (no `outcome` attr).
+        outcome = getattr(m, "outcome", None)
+        if outcome:
+            evidence = getattr(m, "outcome_evidence", "")
+            if len(evidence) > 200:
+                evidence = evidence[:197] + "…"
+            click.echo(f"      → {outcome}: {evidence}")
         if show_snippet and m.snippet:
             snippet_line = m.snippet
             if len(snippet_line) > 200:
@@ -1442,6 +1450,110 @@ def search_past_decisions_cmd(
         fmt=fmt,
         title=f"Past decisions matching {query!r}",
         show_snippet=True,
+    )
+
+
+# ── outcome-aware discovery ───────────────────────────────────────────────────
+#
+# Two commands that go beyond "which sessions touched X" to "which sessions
+# touched X *and it worked* / *and it broke*". Same ``--format text|json``
+# contract; the JSON ``sessions`` dicts gain ``outcome``,
+# ``outcome_evidence`` and ``outcome_msg_id``.
+
+
+@cli.command("find-sessions-where-action-worked")
+@click.argument("action")
+@click.option("--project", default=None,
+              help="Filter by project slug (e.g. -Users-yad-dev-foo).")
+@click.option("--file", "file_path", default=None,
+              help="Narrow to sessions that also touched this file.")
+@click.option("--since", default=None,
+              help="Only sessions whose matching activity is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_where_action_worked_cmd(
+    action: str,
+    project: str | None,
+    file_path: str | None,
+    since: str | None,
+    limit: int,
+    fmt: str,
+):
+    """List sessions where ACTION was performed and the next user turn confirmed it worked.
+
+    ACTION is matched as a substring against tool calls and message text,
+    so it can be a tool name ("Edit"), a file fragment ("cost.py"), or a
+    phrase from the conversation ("add caching"). For each session the
+    *last* matching message is the anchor; the outcome is inferred from
+    the following user turns (an explicit "thanks"/"that worked", or no
+    revert and no complaint before the session ended). Pair with
+    ``find-failure-modes-for-file`` to see where an edit went wrong.
+    """
+    from stackunderflow.services.discovery import find_sessions_where_action_worked
+
+    conn = _open_store()
+    try:
+        try:
+            matches = find_sessions_where_action_worked(
+                conn, action=action, project=project, file_path=file_path,
+                since=since, limit=limit,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Sessions where {action!r} worked",
+    )
+
+
+@cli.command("find-failure-modes-for-file")
+@click.argument("file", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--since", default=None,
+              help="Only sessions whose edit is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_failure_modes_for_file_cmd(
+    file: str,
+    since: str | None,
+    limit: int,
+    fmt: str,
+):
+    """List sessions where editing FILE led to a follow-up correction.
+
+    Surfaces the sessions where a past edit to FILE was followed by the
+    user reporting it broke, the agent reverting it (``git revert`` /
+    ``git reset --hard`` / ``git checkout --``), or a complaint — each
+    with the evidence (the triggering message). The companion of
+    ``find-sessions-where-action-worked``: use this to learn why an edit
+    went wrong, that one to learn how a successful change was done.
+    """
+    from stackunderflow.services.discovery import find_failure_modes_for_file
+
+    conn = _open_store()
+    try:
+        try:
+            matches = find_failure_modes_for_file(
+                conn, file, since=since, limit=limit,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Failure modes for {file}",
     )
 
 
