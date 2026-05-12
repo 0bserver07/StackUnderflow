@@ -42,7 +42,7 @@ from fastapi.testclient import TestClient
 
 import stackunderflow.deps as deps
 from stackunderflow.etl import normalize as normalize_registry
-from stackunderflow.etl.watermark import refresh_all_marts
+from stackunderflow.etl.watermark import get_watermark, refresh_all_marts
 from stackunderflow.routes import (
     bookmarks,
     cfg,
@@ -423,24 +423,30 @@ def test_etl_full_pipeline_against_synthetic_store(populated_store):
 
         # ── refresh every mart ────────────────────────────────────────
         marts_processed = refresh_all_marts(conn)
-        # Wave 5 added tool_mart + command_mart on top of the original
-        # five Wave 2B marts; both watermarks advance the same as the
-        # rest, but the synthetic fixture has no tools_json or user
-        # prompts so these two marts may report 0 events processed.
+        # Wave 5 added tool_mart + command_mart; v011 added the
+        # per-message-grain message_tool mart. All advance their
+        # watermark like the rest, but the synthetic fixture has no
+        # tools_json / raw_json tool_use blocks / user prompts so these
+        # three content-dependent marts may report 0 events processed.
         assert set(marts_processed) == {
             "daily", "session", "project", "provider_day", "model_day",
-            "tool", "command",
+            "tool", "command", "message_tool",
         }
-        # Every Wave 2B mart must have consumed at least one event;
-        # Wave 5 marts are content-dependent so we don't assert > 0.
+        # Every Wave 2B mart must have consumed at least one event; the
+        # content-dependent marts are not asserted > 0 here.
         for name in ("daily", "session", "project", "provider_day", "model_day"):
             assert marts_processed[name] > 0, (
                 f"mart {name!r} consumed zero events"
             )
+        # message_tool's watermark still advances to the highest event id
+        # even though the fixture's raw_json carries no tool_use blocks.
+        events_max = conn.execute("SELECT COALESCE(MAX(id), 0) FROM usage_events").fetchone()[0]
+        assert get_watermark(conn, "message_tool") == events_max
 
         # ── row-count sanity ──────────────────────────────────────────
-        # Wave 5 marts (tool, command) intentionally excluded — the e2e
-        # synthetic fixture doesn't include tools_json or user-prompt
+        # The content-dependent marts (tool, command, message_tool) are
+        # intentionally excluded — the e2e synthetic fixture doesn't
+        # include tools_json / raw_json tool_use blocks / user-prompt
         # fixtures, so those marts stay empty here. Their own unit tests
         # cover row population.
         for tbl in (
@@ -452,6 +458,8 @@ def test_etl_full_pipeline_against_synthetic_store(populated_store):
                 f"SELECT COUNT(*) FROM {tbl}"  # noqa: S608
             ).fetchone()[0]
             assert count > 0, f"{tbl} is empty after refresh"
+        # message_tool_mart is queryable (empty given this fixture).
+        assert conn.execute("SELECT COUNT(*) FROM message_tool_mart").fetchone()[0] == 0
 
         # ── cost-conservation invariants ──────────────────────────────
         # Every mart's COALESCE(SUM(cost_usd), 0) must equal the events
