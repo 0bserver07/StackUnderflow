@@ -798,6 +798,308 @@ def command_mart_for_project(
     ]
 
 
+# ── message_tool_mart reads (per-message-grain mart, v011) ──────────────────
+#
+# These power the ``reports/optimize.py`` detectors that used to re-parse
+# ``messages.raw_json`` on every call. ``since_iso`` / ``until_iso`` are
+# ISO-8601 timestamps; we slice ``YYYY-MM-DD`` and push it down as a
+# ``day BETWEEN`` filter so the ``(tool_name, day)`` / ``(project_id, day)``
+# indexes do the work. ``project_slugs`` narrows to specific projects by
+# JOINing ``projects`` (the detectors speak slugs; the mart speaks
+# ``project_id``). Empty/``None`` filters == "all".
+
+
+def mart_has_message_tool_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``message_tool_mart`` has at least one row.
+
+    The "is the per-message mart materialised?" gate for the optimize
+    detectors — when True they read tool-call detail straight off the
+    mart; when False they fall through to the raw ``messages`` scan so
+    the empty-mart / fresh-install path keeps working unchanged.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return False
+    row = conn.execute("SELECT 1 FROM message_tool_mart LIMIT 1").fetchone()
+    return row is not None
+
+
+def _norm_slugs(project_slugs: Sequence[str] | None) -> list[str]:
+    """Drop falsy entries from a slug filter (mirrors the route-layer norm)."""
+    return [s for s in (project_slugs or []) if s]
+
+
+def message_tool_junk_reads(
+    conn: sqlite3.Connection,
+    *,
+    repeat_threshold: int,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    project_slugs: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-(session, file) Read counts that meet ``repeat_threshold``.
+
+    Returns ``[{session_id, file_path, reads}, ...]`` for files Read at
+    least ``repeat_threshold`` times within one session in the window —
+    the signal ``optimize._detect_junk_reads`` groups by session into a
+    finding. The aggregator-path equivalent is the per-session
+    ``per_path`` Counter over ``raw_json``; this is one indexed
+    ``GROUP BY ... HAVING``.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return []
+    slugs = _norm_slugs(project_slugs)
+    # `join` is one of two fixed literals; values are bound parametrically below.
+    join = " JOIN projects p ON p.id = mt.project_id" if slugs else ""
+    sql = (
+        "SELECT mt.session_id AS session_id, mt.file_path AS file_path, "  # noqa: S608
+        "       COUNT(*) AS reads "
+        f"FROM message_tool_mart mt{join} "
+        "WHERE mt.tool_name = 'Read' AND mt.file_path IS NOT NULL"
+    )
+    params: list[Any] = []
+    if slugs:
+        sql += f" AND p.slug IN ({','.join('?' * len(slugs))})"  # noqa: S608
+        params.extend(slugs)
+    sql, params = _push_day_window(sql, params, since_iso, until_iso, col="mt.day")
+    sql += " GROUP BY mt.session_id, mt.file_path HAVING COUNT(*) >= ?"
+    params.append(int(repeat_threshold))
+    return [
+        {
+            "session_id": r["session_id"],
+            "file_path": r["file_path"],
+            "reads": int(r["reads"] or 0),
+        }
+        for r in conn.execute(sql, params).fetchall()
+    ]
+
+
+def message_tool_read_edit_per_session(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    project_slugs: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-session ``{session_id, reads, edits}`` counts in the window.
+
+    ``reads`` counts ``Read`` calls; ``edits`` counts the write family
+    (``Edit`` / ``Write`` / ``MultiEdit`` / ``NotebookEdit``). Feeds
+    ``optimize._detect_low_read_edit_ratio`` — it flags sessions with
+    ``reads >= floor AND edits == 0``.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return []
+    slugs = _norm_slugs(project_slugs)
+    # `join` is one of two fixed literals; values are bound parametrically below.
+    join = " JOIN projects p ON p.id = mt.project_id" if slugs else ""
+    sql = (
+        "SELECT mt.session_id AS session_id, "  # noqa: S608
+        "       SUM(CASE WHEN mt.tool_name = 'Read' THEN 1 ELSE 0 END) AS reads, "
+        "       SUM(CASE WHEN mt.tool_name IN "
+        "           ('Edit', 'Write', 'MultiEdit', 'NotebookEdit') THEN 1 ELSE 0 END) AS edits "
+        f"FROM message_tool_mart mt{join} WHERE 1 = 1"
+    )
+    params: list[Any] = []
+    if slugs:
+        sql += f" AND p.slug IN ({','.join('?' * len(slugs))})"  # noqa: S608
+        params.extend(slugs)
+    sql, params = _push_day_window(sql, params, since_iso, until_iso, col="mt.day")
+    sql += " GROUP BY mt.session_id"
+    return [
+        {
+            "session_id": r["session_id"],
+            "reads": int(r["reads"] or 0),
+            "edits": int(r["edits"] or 0),
+        }
+        for r in conn.execute(sql, params).fetchall()
+    ]
+
+
+def message_tool_oversized(
+    conn: sqlite3.Connection,
+    *,
+    tool_name: str,
+    threshold_bytes: int,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    project_slugs: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Mart rows for *tool_name* whose ``byte_count`` exceeds *threshold_bytes*.
+
+    Returns ``[{session_id, message_id, byte_count}, ...]`` sorted by
+    ``byte_count`` desc. Feeds ``optimize._detect_bash_output_limits``
+    (``tool_name='Bash'``) — the mart already carries the tool-result
+    size (paired off the following ``tool_result`` block), so the
+    detector's two-pass raw scan collapses to this one query.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return []
+    slugs = _norm_slugs(project_slugs)
+    # `join` is one of two fixed literals; values are bound parametrically below.
+    join = " JOIN projects p ON p.id = mt.project_id" if slugs else ""
+    sql = (
+        "SELECT mt.session_id AS session_id, mt.message_id AS message_id, "  # noqa: S608
+        "       mt.byte_count AS byte_count "
+        f"FROM message_tool_mart mt{join} "
+        "WHERE mt.tool_name = ? AND mt.byte_count IS NOT NULL AND mt.byte_count > ?"
+    )
+    params: list[Any] = [tool_name, int(threshold_bytes)]
+    if slugs:
+        sql += f" AND p.slug IN ({','.join('?' * len(slugs))})"  # noqa: S608
+        params.extend(slugs)
+    sql, params = _push_day_window(sql, params, since_iso, until_iso, col="mt.day")
+    sql += " ORDER BY mt.byte_count DESC"
+    return [
+        {
+            "session_id": r["session_id"],
+            "message_id": int(r["message_id"]),
+            "byte_count": int(r["byte_count"] or 0),
+        }
+        for r in conn.execute(sql, params).fetchall()
+    ]
+
+
+def message_tool_invoked_agents(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+) -> set[str]:
+    """Distinct subagent names spawned via ``Task`` in the window.
+
+    The mart stores the ``subagent_type`` of each ``Task`` call in
+    ``file_path``, so this is a single ``SELECT DISTINCT`` — replacing
+    ``optimize._detect_ghost_agents``'s ``subagent_type=...`` string
+    match against every ``messages.raw_json``. ``ghost = registered −
+    this set``.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return set()
+    sql = (
+        "SELECT DISTINCT file_path FROM message_tool_mart "
+        "WHERE tool_name = 'Task' AND file_path IS NOT NULL"
+    )
+    params: list[Any] = []
+    sql, params = _push_day_window(sql, params, since_iso, until_iso, col="day")
+    return {
+        r["file_path"]
+        for r in conn.execute(sql, params).fetchall()
+        if r["file_path"]
+    }
+
+
+def message_tool_for_project(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    tool_name: str | None = None,
+    day_from: str | None = None,
+    day_to: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Raw ``message_tool_mart`` rows for one project, newest day first.
+
+    A general-purpose reader for future consumers (outcome-aware
+    discovery, auto-skill synthesis) that want per-tool-call detail
+    without re-deriving it from ``tools_json``. Optionally narrowed to a
+    single ``tool_name`` and/or a day window; ``limit`` caps the result.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return []
+    sql = (
+        "SELECT message_id, project_id, session_id, ts, day, "
+        "       tool_name, file_path, byte_count, call_index "
+        "FROM message_tool_mart WHERE project_id = ?"
+    )
+    params: list[Any] = [project_id]
+    if tool_name:
+        sql += " AND tool_name = ?"
+        params.append(tool_name)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " ORDER BY day DESC, message_id DESC, tool_name, call_index"
+    if limit is not None and limit > 0:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def tool_call_byte_dist_for_project(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    day_from: str | None = None,
+    day_to: str | None = None,
+) -> dict[str, dict[str, int]]:
+    """Per-tool byte-size distribution for one project.
+
+    Returns ``{tool_name: {calls, calls_with_bytes, total_bytes,
+    max_bytes}}`` — a cheap shape for "which tools produce the biggest
+    payloads in this project" UI / report rollups.
+    """
+    if not _table_exists(conn, "message_tool_mart"):
+        return {}
+    sql = (
+        "SELECT tool_name, "
+        "       COUNT(*) AS calls, "
+        "       COUNT(byte_count) AS calls_with_bytes, "
+        "       COALESCE(SUM(byte_count), 0) AS total_bytes, "
+        "       COALESCE(MAX(byte_count), 0) AS max_bytes "
+        "FROM message_tool_mart WHERE project_id = ?"
+    )
+    params: list[Any] = [project_id]
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY tool_name"
+    out: dict[str, dict[str, int]] = {}
+    for r in conn.execute(sql, params).fetchall():
+        name = r["tool_name"] or ""
+        if not name:
+            continue
+        out[name] = {
+            "calls": int(r["calls"] or 0),
+            "calls_with_bytes": int(r["calls_with_bytes"] or 0),
+            "total_bytes": int(r["total_bytes"] or 0),
+            "max_bytes": int(r["max_bytes"] or 0),
+        }
+    return out
+
+
+def _push_day_window(
+    sql: str,
+    params: list[Any],
+    since_iso: str | None,
+    until_iso: str | None,
+    *,
+    col: str,
+) -> tuple[str, list[Any]]:
+    """Append an inclusive ``[since, until]`` day filter on *col* to *sql*.
+
+    ``since_iso`` / ``until_iso`` are ISO-8601 timestamps; we slice the
+    leading ``YYYY-MM-DD`` so the day-keyed indexes drive the scan.
+    *col* is always a hardcoded column name from this module (``"day"``
+    or ``"mt.day"``), never user input. Returns ``(sql, params)`` with
+    *params* extended in place.
+    """
+    day_from = _iso_to_day(since_iso)
+    day_to = _iso_to_day(until_iso)
+    if day_from:
+        sql += f" AND {col} >= ?"  # noqa: S608 — `col` is a module-local literal
+        params.append(day_from)
+    if day_to:
+        sql += f" AND {col} <= ?"  # noqa: S608 — `col` is a module-local literal
+        params.append(day_to)
+    return sql, params
+
+
 # ── messages-summary helpers ────────────────────────────────────────────────
 
 
