@@ -47,6 +47,13 @@ stackunderflow plan reset
 stackunderflow etl backfill [--force]
 stackunderflow etl status [--format text|json]
 
+# Hooks (opt-in Claude Code lifecycle hooks — see docs/hooks.md)
+stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content]
+stackunderflow hooks uninstall [--scope project|user]
+stackunderflow hooks status    [--scope project|user] [--format text|json]
+stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
+stackunderflow hooks run <hook-id>            # internal — invoked by Claude Code
+
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
 stackunderflow backup list
@@ -1305,6 +1312,71 @@ each subset priced at its correct rate. The store schema does not yet
 carry the speed flag — SQLite-backed stat queries
 (`store/queries.get_project_stats`) report standard rates until a
 follow-up migration lands.
+
+---
+
+## Hook Commands
+
+Opt-in integration with Claude Code's lifecycle hooks (`PostToolUse`,
+`UserPromptSubmit`, `Stop`, `PreCompact`). Nothing is installed unless you run
+`hooks install`. Full details — what's captured, the privacy model, the
+performance characteristics, the Windows status — in [`docs/hooks.md`](hooks.md).
+
+### `stackunderflow hooks install`
+
+```
+stackunderflow hooks install [--scope project|user] [--dry-run] [--capture-content]
+```
+
+Merges StackUnderflow's hook entries into a `settings.json` —
+`<git-root>/.claude/settings.json` for `--scope project` (default), or
+`~/.claude/settings.json` for `--scope user`. Idempotent and convergent: a
+re-run lands on exactly the config the current flags describe (a stale entry or
+a changed `--capture-content` choice is *replaced*, never duplicated). Writes
+`settings.json.bak.<utc-ts>` before any mutation (not on a no-op, not under
+`--dry-run`). **Never touches another tool's hooks.** `--dry-run` prints the
+would-be `hooks` block and writes nothing. `--capture-content` makes the
+installed hook commands store full payloads (prompt text, tool output) instead
+of the conservative sanitised-metadata default.
+
+### `stackunderflow hooks uninstall`
+
+```
+stackunderflow hooks uninstall [--scope project|user]
+```
+
+Removes only the entries StackUnderflow recognises as its own. Never deletes the
+file, never touches other entries. Backs up first iff the file actually changes.
+
+### `stackunderflow hooks status`
+
+```
+stackunderflow hooks status [--scope project|user] [--format text|json]
+```
+
+Shows which StackUnderflow hooks are installed in which scope (default: both),
+whether any are *stale* (recognisably ours but not in the portable form), and how
+many non-StackUnderflow hook entries the file carries.
+
+### `stackunderflow hooks repair`
+
+```
+stackunderflow hooks repair [--scope project|user|all] [--dry-run]
+```
+
+Rewrites stale StackUnderflow hook commands (e.g. a hardcoded path left over from
+a moved venv) back to the portable `stackunderflow hooks run <id>` form,
+preserving `--capture-content`. Changes nothing else; backs up each file first;
+`--dry-run` reports without writing. `--scope all` walks `$HOME` for every
+project's `.claude/settings.json` — bounded (depth ≤ 8), never follows symlinks,
+prunes `node_modules`/`.git`/`.npm`/`.cache`/`.nvm` and other heavy trees. Only
+ever runs when you invoke it.
+
+### `stackunderflow hooks run <hook-id>`
+
+Internal — Claude Code invokes this; reads the hook payload as JSON on stdin and
+records a `captured_events` row when warranted. Always exits `0` (it must never
+disrupt Claude Code). Not for direct use.
 
 ---
 
