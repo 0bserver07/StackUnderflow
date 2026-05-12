@@ -79,7 +79,74 @@ def test_duplicate_tool_in_one_message_collapses(conn) -> None:
     assert rows[0]["tool_name"] == "Read"
     # event_count is 1, not 3 — distinct names is what we count.
     assert rows[0]["event_count"] == 1
+    # calls_total IS 3 — total occurrences, not distinct (v012).
+    assert rows[0]["calls_total"] == 3
     assert rows[0]["cost_usd"] == 0.10
+
+
+# ── calls_total — non-distinct occurrence count (v012) ─────────────────────
+
+
+def test_calls_total_single_tool_single_occurrence(conn) -> None:
+    """One tool, one occurrence → event_count == calls_total == 1."""
+    insert_event(
+        conn, event_id=1, cost_usd=0.10,
+        tools_json=json.dumps(["Read"]),
+    )
+    ToolMartBuilder().refresh(conn, since_event_id=0)
+    row = conn.execute("SELECT * FROM tool_mart").fetchone()
+    assert row["event_count"] == 1
+    assert row["calls_total"] == 1
+
+
+def test_calls_total_distinct_vs_total_parity(conn) -> None:
+    """``["Read", "Read", "Edit"]`` → Read 1/2, Edit 1/1 (event/calls)."""
+    insert_event(
+        conn, event_id=1, cost_usd=0.30,
+        tools_json=json.dumps(["Read", "Read", "Edit"]),
+    )
+    ToolMartBuilder().refresh(conn, since_event_id=0)
+    rows = {r["tool_name"]: r for r in conn.execute("SELECT * FROM tool_mart").fetchall()}
+    assert rows["Read"]["event_count"] == 1
+    assert rows["Read"]["calls_total"] == 2
+    assert rows["Edit"]["event_count"] == 1
+    assert rows["Edit"]["calls_total"] == 1
+    # Cost still splits 1/N over the *distinct* tools (2 here) — a repeated
+    # call must not double cost.
+    assert abs(rows["Read"]["cost_usd"] - 0.15) < 1e-9
+    assert abs(rows["Edit"]["cost_usd"] - 0.15) < 1e-9
+
+
+def test_calls_total_idempotent_across_windows(conn) -> None:
+    """Re-running refresh with the persisted watermark leaves calls_total stable."""
+    insert_event(
+        conn, event_id=1, cost_usd=0.10,
+        tools_json=json.dumps(["Read", "Read"]),
+    )
+    b = ToolMartBuilder()
+    w = b.refresh(conn, since_event_id=0)
+    b.refresh(conn, since_event_id=w)  # idempotent re-run
+    row = conn.execute("SELECT * FROM tool_mart").fetchone()
+    assert row["event_count"] == 1
+    assert row["calls_total"] == 2
+
+
+def test_calls_total_accumulates_additively(conn) -> None:
+    """Two events on the same key sum calls_total additively."""
+    insert_event(
+        conn, event_id=1, cost_usd=0.10,
+        tools_json=json.dumps(["Read", "Read"]),  # +2 calls
+    )
+    b = ToolMartBuilder()
+    w1 = b.refresh(conn, since_event_id=0)
+    insert_event(
+        conn, event_id=2, cost_usd=0.20,
+        tools_json=json.dumps(["Read", "Read", "Read"]),  # +3 calls
+    )
+    b.refresh(conn, since_event_id=w1)
+    row = conn.execute("SELECT * FROM tool_mart").fetchone()
+    assert row["event_count"] == 2
+    assert row["calls_total"] == 5  # 2 + 3
 
 
 def test_idempotency_re_running_with_watermark_is_noop(conn) -> None:

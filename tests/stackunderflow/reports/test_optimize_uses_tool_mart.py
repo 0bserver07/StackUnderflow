@@ -34,13 +34,19 @@ def _connect(store_db):
     return conn
 
 
-def _insert_tool_mart(conn, *, tool_name, event_count, day="2026-04-01"):
+def _insert_tool_mart(conn, *, tool_name, event_count, calls_total=None,
+                      day="2026-04-01"):
+    # ``calls_total`` defaults to ``event_count`` here — the "rebuilt"
+    # state. Pass ``calls_total=0`` to simulate a pre-v012 row that the
+    # migration left at the DEFAULT until a ``--force`` rebuild.
+    if calls_total is None:
+        calls_total = event_count
     conn.execute(
         "INSERT INTO tool_mart "
         "(day, project_id, provider, tool_name, "
-        " event_count, cost_usd, tokens_in, tokens_out, session_count) "
-        "VALUES (?, 1, 'claude', ?, ?, 0.0, 0, 0, 1)",
-        (day, tool_name, event_count),
+        " event_count, calls_total, cost_usd, tokens_in, tokens_out, session_count) "
+        "VALUES (?, 1, 'claude', ?, ?, ?, 0.0, 0, 0, 1)",
+        (day, tool_name, event_count, calls_total),
     )
 
 
@@ -78,6 +84,22 @@ def test_junk_reads_short_circuits_when_zero_reads(tmp_path):
     conn = _connect(tmp_path / "store.db")
     # Mart has rows for other tools but zero for Read.
     _insert_tool_mart(conn, tool_name="Bash", event_count=10)
+    findings = _detect_junk_reads(conn, scope=_scope_for_april())
+    assert findings == []
+
+
+def test_junk_reads_short_circuits_when_calls_total_zero(tmp_path):
+    """v012: a Read row whose ``calls_total`` is still 0 (pre-rebuild) short-circuits.
+
+    The detector counts ``calls_total`` (non-distinct Read occurrences),
+    not ``event_count``. On a ``tool_mart`` that predates v012 the column
+    reads 0 until a ``--force`` rebuild, so the pre-flight returns 0 and
+    we fall through to the full scan — which, with no messages staged,
+    correctly yields no findings.
+    """
+    conn = _connect(tmp_path / "store.db")
+    # event_count says "Read happened" but calls_total is the stale DEFAULT.
+    _insert_tool_mart(conn, tool_name="Read", event_count=12, calls_total=0)
     findings = _detect_junk_reads(conn, scope=_scope_for_april())
     assert findings == []
 
