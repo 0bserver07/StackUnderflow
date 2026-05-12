@@ -63,12 +63,29 @@ Changelog = "https://github.com/0bserver07/StackUnderflow/blob/main/CHANGELOG.md
 
 [tool.hatch.build.targets.wheel]
 packages = ["stackunderflow"]
+# Auto-generated skills (`stackunderflow skills generate`) are *project-local*
+# artifacts written to `<project>/.claude/skills/auto-*/SKILL.md` and mined
+# from a user's private session store. They must NEVER end up in a release
+# artifact — this is a hard constraint (see the auto-generated-skills spec),
+# the surface where an implicit broadening would leak user data into a wheel.
+# The skills shipped *with* the package live under `stackunderflow/skills/`
+# (none of them are `auto-*`), so this is belt-and-suspenders, but it survives
+# someone restructuring the package layout or dogfooding `skills generate`
+# from inside this repo.
+exclude = [
+    "**/auto-*/SKILL.md",
+    "**/.claude/skills/auto-*",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
     "stackunderflow-ui/",
     "tests/",
     ".github/",
+    # never package auto-generated skills (see the wheel target above)
+    "**/auto-*/SKILL.md",
+    "**/.claude/skills/auto-*",
+    ".claude/",
 ]
 
 [tool.ruff]
