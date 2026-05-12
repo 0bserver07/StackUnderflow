@@ -1445,6 +1445,197 @@ def search_past_decisions_cmd(
     )
 
 
+# ── auto-generated skills ─────────────────────────────────────────────────────
+#
+# Mine the local store for project-specific workflow patterns ("always run
+# pytest after editing", "never pkill") and emit Claude Code SKILL.md files.
+# Hard rules (see ``.notes/specs/02-auto-generated-skills.md``):
+#   * project-scoped by default — never an implicit "all projects"
+#   * never written into the package; only ``<project>/.claude/skills/auto-*/``
+#     (or ``~/.claude/skills/`` with explicit ``--scope user``)
+#   * idempotent; ``.bak`` written before any overwrite; never clobbers a
+#     hand-authored skill
+
+
+def _default_skills_out(scope: str) -> Path:
+    if scope == "user":
+        return Path.home() / ".claude" / "skills"
+    return Path.cwd() / ".claude" / "skills"
+
+
+def _detect_cwd_project_slug(conn) -> str | None:
+    """Best-effort: which project slug does the current directory belong to?"""
+    from stackunderflow.services.discovery import find_sessions_in_path
+    try:
+        matches = find_sessions_in_path(conn, str(Path.cwd()), limit=1)
+    except ValueError:
+        return None
+    return matches[0].project_slug if matches else None
+
+
+def _split_csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    out = [v.strip() for v in value.split(",") if v.strip()]
+    return out or None
+
+
+@cli.group("skills")
+def skills_group():
+    """Generate / list / clean project-specific Claude Code skills.
+
+    These are mined from your local session store — never from CLAUDE.md
+    or memory — and are always project-scoped unless you ask otherwise.
+    """
+
+
+@skills_group.command("generate")
+@click.option("--project", default=None,
+              help="Project slug to mine. Default: the project the current "
+                   "directory belongs to (for --scope project).")
+@click.option("--projects", default=None,
+              help="Comma-separated slugs for cross-project mining "
+                   "(required for --scope user when --project is not given).")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project",
+              show_default=True,
+              help="project → ./.claude/skills/ ; user → ~/.claude/skills/ "
+                   "(global; requires explicit --project/--projects).")
+@click.option("--min-occurrences", type=click.IntRange(min=1), default=5, show_default=True,
+              help="A pattern must appear in this many distinct sessions.")
+@click.option("--kind", "kinds", multiple=True,
+              type=click.Choice(("avoids-X", "never-touches-paths", "canonical-test-command",
+                                 "always-runs-X-after-Y", "uses-tool-flag-combo")),
+              help="Restrict to these pattern kinds (repeatable). Default: all.")
+@click.option("--window", default="90d", show_default=True,
+              help="Only consider sessions newer than this ('90d'/'1w'/ISO; "
+                   "'all' or empty for no bound).")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Output directory. Default depends on --scope.")
+@click.option("--dry-run", is_flag=True, help="Show what would be generated; write nothing.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def skills_generate_cmd(project, projects, scope, min_occurrences, kinds, window, out_path, dry_run, fmt):
+    """Mine session patterns and emit auto-generated SKILL.md files."""
+    from stackunderflow.services import skill_synth
+
+    projects_list = _split_csv(projects)
+    if scope == "user" and not project and not projects_list:
+        raise click.UsageError(
+            "--scope user is global; pass --project SLUG or --projects A,B,C "
+            "explicitly. There is no implicit all-projects mode."
+        )
+    window_arg = None if (window or "").strip().lower() in ("", "all", "none") else window
+
+    conn = _open_store()
+    try:
+        if not project and not projects_list:
+            project = _detect_cwd_project_slug(conn)
+            if not project:
+                raise click.UsageError(
+                    "could not infer a project for the current directory — "
+                    "pass --project SLUG (see `stackunderflow find-sessions-in-path .`)."
+                )
+        try:
+            candidates = skill_synth.synthesize_skills(
+                conn,
+                project=project,
+                projects=projects_list,
+                min_occurrences=min_occurrences,
+                pattern_kinds=list(kinds) or None,
+                since=window_arg,
+            )
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+    finally:
+        conn.close()
+
+    out_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    results = skill_synth.write_skill_files(candidates, out_dir, dry_run=dry_run)
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "scope": scope,
+            "out_dir": str(out_dir),
+            "dry_run": dry_run,
+            "candidates": [c.to_dict() for c in candidates],
+            "written": [{"name": r.name, "path": str(r.path), "action": r.action} for r in results],
+        }, indent=2))
+        return
+
+    if not candidates:
+        click.echo("No patterns met the threshold — nothing generated. "
+                   "(Try a lower --min-occurrences or a wider --window.)")
+        return
+    verb = "Would generate" if dry_run else "Generated"
+    click.echo(f"{verb} {len(candidates)} skill(s) under {out_dir}:")
+    for r in results:
+        click.echo(f"  [{r.action}] {r.name}  ({r.path})")
+    for c in candidates:
+        click.echo(f"    · {c.name}: {c.pattern_kind}, {c.evidence_count} sessions")
+    if dry_run:
+        click.echo("(dry run — nothing written)")
+
+
+@skills_group.command("list")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project", show_default=True,
+              help="Where to look: ./.claude/skills/ or ~/.claude/skills/.")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Skills directory to inspect. Default depends on --scope.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def skills_list_cmd(scope, out_path, fmt):
+    """List the auto-generated skills present in the skills directory."""
+    from stackunderflow.services import skill_synth
+
+    skills_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    items = skill_synth.list_generated_skills(skills_dir)
+    if fmt == "json":
+        click.echo(json.dumps({"skills_dir": str(skills_dir), "skills": items}, indent=2))
+        return
+    if not items:
+        click.echo(f"No auto-generated skills in {skills_dir}.")
+        return
+    click.echo(f"Auto-generated skills in {skills_dir}  ({len(items)}):")
+    for it in items:
+        click.echo(f"  {it['name']}  [{it['pattern_kind']}]  evidence={it['evidence_count']}  "
+                   f"generated={it['generated_at']}")
+        click.echo(f"      {it['description']}")
+
+
+@skills_group.command("clean")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project", show_default=True,
+              help="Where to clean: ./.claude/skills/ or ~/.claude/skills/.")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Skills directory to clean. Default depends on --scope.")
+@click.option("--older-than", default=None,
+              help="Only remove skills generated before this ('30d'/'2w'/ISO). "
+                   "Default: remove all auto-generated skills.")
+@click.option("--dry-run", is_flag=True, help="Show what would be removed; delete nothing.")
+@click.option("--yes", "-y", "assume_yes", is_flag=True,
+              help="Actually delete. Without this, clean only previews.")
+def skills_clean_cmd(scope, out_path, older_than, dry_run, assume_yes):
+    """Remove auto-generated skills (never touches hand-authored ones)."""
+    from stackunderflow.services import skill_synth
+
+    skills_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    preview = dry_run or not assume_yes
+    try:
+        removed = skill_synth.clean_generated_skills(
+            skills_dir, older_than=older_than, dry_run=preview,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--older-than") from exc
+    if not removed:
+        click.echo(f"No auto-generated skills to remove in {skills_dir}.")
+        return
+    verb = "Would remove" if preview else "Removed"
+    click.echo(f"{verb} {len(removed)} auto-generated skill(s) from {skills_dir}:")
+    for p in removed:
+        click.echo(f"  {p.name}")
+    if preview and not dry_run:
+        click.echo("(preview — re-run with --yes to delete)")
+
+
 # ── ETL ──────────────────────────────────────────────────────────────────────
 #
 # The ETL refactor (see ``docs/specs/etl-architecture.md``) ships in

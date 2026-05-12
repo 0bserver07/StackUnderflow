@@ -41,6 +41,7 @@ __all__ = [
     "search_past_decisions",
     "parse_since",
     "decode_slug_to_path",
+    "load_messages_for_project",
 ]
 
 
@@ -590,3 +591,70 @@ def search_past_decisions(
         if limit and limit > 0 and len(out) >= limit:
             break
     return out
+
+
+# ── bulk message loading (used by skill synthesis) ──────────────────────────
+
+
+def load_messages_for_project(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    since: str | None = None,
+) -> list[sqlite3.Row]:
+    """Return every message row for one project, ordered for sequence walking.
+
+    Joined to ``sessions`` so each row carries ``session_id`` (the
+    provider-facing id, not the internal fk) plus the project ``slug``;
+    callers that need to group by session — pattern mining in
+    ``services.skill_synth`` is the first — get a self-contained row.
+
+    Parameters
+    ----------
+    conn:
+        Main store connection.
+    project_id:
+        Internal ``projects.id`` (not a slug — resolve the slug first).
+    since:
+        Optional cutoff. Same accepted forms as the rest of this module
+        (``"7d"`` / ``"1w"`` / ``"1m"`` / ``"24h"`` / ISO). Filters on
+        ``messages.timestamp``.
+
+    Returns
+    -------
+    Rows ordered by ``(session_fk, seq)`` so a consumer can walk each
+    session's turns in order. Columns: ``message_id``, ``session_fk``,
+    ``session_id``, ``project_slug``, ``provider``, ``seq``,
+    ``timestamp``, ``role``, ``model``, ``content_text``, ``tools_json``,
+    ``raw_json``, ``is_sidechain``.
+    """
+    _ensure_row_factory(conn)
+    since_iso = parse_since(since)
+
+    where_extra = ""
+    params: list[Any] = [int(project_id)]
+    if since_iso:
+        where_extra = " AND m.timestamp >= ?"
+        params.append(since_iso)
+
+    return conn.execute(
+        "SELECT m.id            AS message_id, "  # noqa: S608 — where_extra is a fixed literal + placeholder
+        "       m.session_fk    AS session_fk, "
+        "       s.session_id    AS session_id, "
+        "       p.slug          AS project_slug, "
+        "       p.provider      AS provider, "
+        "       m.seq           AS seq, "
+        "       m.timestamp     AS timestamp, "
+        "       m.role          AS role, "
+        "       m.model         AS model, "
+        "       m.content_text  AS content_text, "
+        "       m.tools_json    AS tools_json, "
+        "       m.raw_json      AS raw_json, "
+        "       m.is_sidechain  AS is_sidechain "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "JOIN projects p ON p.id = s.project_id "
+        f"WHERE s.project_id = ?{where_extra} "
+        "ORDER BY m.session_fk, m.seq",
+        params,
+    ).fetchall()

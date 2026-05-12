@@ -21,6 +21,11 @@ data/claude_usage_stats.json
 # Worktrees (isolated parallel-work checkouts)
 .worktrees/
 .claude/
+# Auto-generated skills (`stackunderflow skills generate`) — project-local
+# artifacts mined from the session store. Never committed, never packaged.
+# (`.claude/` above already covers this; kept explicit so the intent is clear
+# even if `.claude/` is ever narrowed.)
+.claude/skills/auto-*/
 
 
 # macOS
