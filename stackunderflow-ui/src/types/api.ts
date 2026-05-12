@@ -846,3 +846,48 @@ export interface AgentTeamTranscriptResponse {
   }>
 }
 
+// ---------------------------------------------------------------------------
+// Playback — per-session (and per-project) tool-call timeline. One row per
+// tool call; the dashboard "Playback" tab steps through them with a scrubber.
+// See .notes/specs/10-playback-timeline.md (v1: event stream only).
+// ---------------------------------------------------------------------------
+
+export interface PlaybackEvent {
+  /** 0-based index of this tool call in the full (unfiltered) stream. */
+  seq: number
+  /** ISO-8601 UTC timestamp of the message that issued the call. */
+  ts: string
+  /** `messages.id` of the issuing assistant message. */
+  message_id: number
+  tool_name: string
+  /** One-line label, e.g. "Edit routes/cost.py", "Bash: pytest". */
+  summary: string
+  /** File path the tool operated on, when applicable. */
+  target_path: string | null
+  /** Payload size in bytes (result text, or written content for writes). */
+  byte_count: number | null
+  /** Outcome — `false` on a recorded failure, `true` on success, `null` unknown. */
+  success: boolean | null
+  /** Wall-clock from call to result, in ms, when both timestamps are present. */
+  duration_ms: number | null
+  /** Up-to-200-char excerpt of the input/output (empty when not requested). */
+  payload_excerpt: string
+  /** Owning session id (redundant per-session; meaningful for project timelines). */
+  session_id: string
+}
+
+export interface PlaybackResponse {
+  session_id: string
+  events: PlaybackEvent[]
+  total: number
+  /** `true` when `limit` capped the stream — more events exist. */
+  truncated: boolean
+}
+
+export interface ProjectTimelineResponse {
+  project_slug: string
+  events: PlaybackEvent[]
+  total: number
+  truncated: boolean
+}
+
