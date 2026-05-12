@@ -30,6 +30,7 @@ from stackunderflow.adapters.base import Record, SessionRef
 from stackunderflow.adapters.claude import ClaudeAdapter
 from stackunderflow.mcp import store_reader
 from stackunderflow.services import discovery as _discovery
+from stackunderflow.services import discovery_telemetry as _telemetry
 
 _log = logging.getLogger(__name__)
 
@@ -248,6 +249,30 @@ def _session_query_jsonl(
     return matches[:limit]
 
 
+def _record_cited_best_effort(session_id: str, conn) -> None:
+    """Citation-feedback telemetry — note that ``session_id`` was looked up.
+
+    Lax attribution (see ``services.discovery_telemetry``): any
+    ``session_query`` on a specific session counts as a cite for it,
+    regardless of which discovery command surfaced it. Best-effort —
+    opens the store (or reuses ``conn``); if the store doesn't exist yet
+    we simply skip it, and ``record_cited`` itself swallows write
+    failures. Gated behind ``STACKUNDERFLOW_DISCOVERY_TELEMETRY``
+    (default on).
+    """
+    if not session_id or not _telemetry.telemetry_enabled():
+        return
+    try:
+        with store_reader._maybe_conn(conn) as c:
+            if c is not None:
+                _telemetry.record_cited(c, session_id)
+    except Exception:  # noqa: BLE001 - a telemetry hiccup must never break the query
+        _log.debug(
+            "discovery cite-recording failed for session %s", session_id,
+            exc_info=True,
+        )
+
+
 def session_query_impl(
     session_id: str | None = None,
     limit: int = 20,
@@ -268,9 +293,19 @@ def session_query_impl(
     3. If ``session_id`` is ``None``, return recent events across all
        providers from the store (or fall back to JSONL if the store
        doesn't exist).
+
+    Side effect: when a specific ``session_id`` is requested, records a
+    citation against the discovery telemetry (``cited_count``) so the
+    discovery surface can rerank toward sessions agents actually use.
     """
     if limit <= 0:
         return []
+
+    # Citation feedback: a specific-session lookup is a "cite" for that
+    # session. Recorded before the resolution branches so it counts
+    # whether the data comes from the store or the JSONL fallback.
+    if session_id is not None:
+        _record_cited_best_effort(session_id, conn)
 
     store_ok = store_reader.store_available(conn=conn)
 

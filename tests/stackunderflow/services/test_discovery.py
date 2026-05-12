@@ -574,3 +574,118 @@ class TestSearchPastDecisions:
         # to_dict round-trips JSON-serialisable.
         as_dict = out[0].to_dict()
         json.dumps(as_dict)  # must not raise
+
+
+# ── citation-feedback telemetry wiring (spec 04) ────────────────────────────
+#
+# The three discovery functions passively record which sessions they
+# surface into ``discovery_telemetry`` via ``services.discovery_telemetry``.
+# These tests verify the *wiring* (the recording happens, with the right
+# command label, on the actually-returned subset, and respects the env
+# gate). The telemetry mechanics themselves live in
+# ``test_discovery_telemetry.py``.
+
+
+def _telemetry_rows(conn):
+    return {
+        (r["command"], r["session_id"]): r["loaded_count"]
+        for r in conn.execute(
+            "SELECT command, session_id, loaded_count FROM discovery_telemetry"
+        ).fetchall()
+    }
+
+
+class TestDiscoveryRecordsTelemetry:
+    def test_find_sessions_in_path_records_loaded(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn, slug="-Users-yad-dev-foo")
+        _seed_session(conn, project_id=pid, session_id="s-1",
+                      first_ts="2026-04-01T00:00:00+00:00",
+                      last_ts="2026-04-02T00:00:00+00:00")
+        _seed_session(conn, project_id=pid, session_id="s-2",
+                      first_ts="2026-04-03T00:00:00+00:00",
+                      last_ts="2026-04-04T00:00:00+00:00")
+        conn.commit()
+
+        out = find_sessions_in_path(conn, "/Users/yad/dev/foo")
+        returned = {m.session_id for m in out}
+        rows = _telemetry_rows(conn)
+        assert all(cmd == "find_sessions_in_path" for cmd, _ in rows)
+        assert {sid for _, sid in rows} == returned
+        assert all(v == 1 for v in rows.values())
+
+        # Calling again bumps, doesn't duplicate.
+        find_sessions_in_path(conn, "/Users/yad/dev/foo")
+        rows2 = _telemetry_rows(conn)
+        assert set(rows2) == set(rows)
+        assert all(v == 2 for v in rows2.values())
+
+    def test_records_only_the_limited_subset(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn, slug="-Users-yad-dev-foo")
+        for i in range(3):
+            _seed_session(conn, project_id=pid, session_id=f"s-{i}",
+                          first_ts=f"2026-04-0{i+1}T00:00:00+00:00",
+                          last_ts=f"2026-04-0{i+1}T00:00:00+00:00")
+        conn.commit()
+
+        out = find_sessions_in_path(conn, "/Users/yad/dev/foo", limit=1)
+        assert len(out) == 1
+        rows = _telemetry_rows(conn)
+        assert len(rows) == 1
+        assert (("find_sessions_in_path", out[0].session_id)) in rows
+
+    def test_find_sessions_touching_file_records_loaded(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn, slug="-Users-yad-dev-foo")
+        sfk = _seed_session(conn, project_id=pid, session_id="s-touch",
+                            first_ts="2026-04-01T00:00:00+00:00",
+                            last_ts="2026-04-02T00:00:00+00:00")
+        _insert_message(
+            conn, session_fk=sfk, seq=0,
+            timestamp="2026-04-01T00:00:00+00:00",
+            tools_json=json.dumps([
+                {"name": "Read", "input": {"file_path": "/Users/yad/dev/foo/x.py"}}
+            ]),
+        )
+        conn.commit()
+
+        out = find_sessions_touching_file(conn, "/Users/yad/dev/foo/x.py")
+        assert {m.session_id for m in out} == {"s-touch"}
+        rows = _telemetry_rows(conn)
+        assert rows == {("find_sessions_touching_file", "s-touch"): 1}
+
+    def test_search_past_decisions_records_loaded(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn, slug="-Users-yad-dev-foo")
+        sfk = _seed_session(conn, project_id=pid, session_id="s-dec",
+                            first_ts="2026-04-01T00:00:00+00:00",
+                            last_ts="2026-04-02T00:00:00+00:00")
+        _insert_message(conn, session_fk=sfk, seq=0,
+                        timestamp="2026-04-01T00:00:00+00:00",
+                        content_text="we decided to use sqlite here")
+        conn.commit()
+
+        out = search_past_decisions(conn, "use sqlite")
+        assert {m.session_id for m in out} == {"s-dec"}
+        rows = _telemetry_rows(conn)
+        assert rows == {("search_past_decisions", "s-dec"): 1}
+
+    def test_no_matches_records_nothing(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        _seed_project(conn, slug="-Users-yad-dev-foo")
+        conn.commit()
+        find_sessions_in_path(conn, "/somewhere/else")
+        assert _telemetry_rows(conn) == {}
+
+    def test_env_gate_disables_recording(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STACKUNDERFLOW_DISCOVERY_TELEMETRY", "0")
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn, slug="-Users-yad-dev-foo")
+        _seed_session(conn, project_id=pid, session_id="s-1",
+                      first_ts="2026-04-01T00:00:00+00:00",
+                      last_ts="2026-04-02T00:00:00+00:00")
+        conn.commit()
+        out = find_sessions_in_path(conn, "/Users/yad/dev/foo")
+        assert out  # query still works
+        assert _telemetry_rows(conn) == {}
