@@ -384,8 +384,13 @@ def _resolve_user_path(raw: str) -> str:
 
 
 def _match_to_dict(m: _discovery.SessionMatch) -> dict:
-    """Render a SessionMatch as the JSON dict the MCP/CLI surface emits."""
-    return {
+    """Render a SessionMatch (or OutcomeMatch) as the JSON dict the surface emits.
+
+    Plain ``SessionMatch`` rows keep the original 9-key shape; an
+    ``OutcomeMatch`` additionally carries ``outcome``, ``outcome_evidence``
+    and ``outcome_msg_id`` (the contract the outcome-aware tools document).
+    """
+    out = {
         "session_id": m.session_id,
         "project_slug": m.project_slug,
         "project_path": m.project_path,
@@ -396,6 +401,11 @@ def _match_to_dict(m: _discovery.SessionMatch) -> dict:
         "cost_usd": round(float(m.cost_usd), 6),
         "snippet": m.snippet,
     }
+    if isinstance(m, _discovery.OutcomeMatch):
+        out["outcome"] = m.outcome
+        out["outcome_evidence"] = m.outcome_evidence
+        out["outcome_msg_id"] = int(m.outcome_msg_id)
+    return out
 
 
 def _validate_limit(limit: int) -> int:
@@ -474,6 +484,49 @@ def search_past_decisions_impl(
             return {"sessions": []}
         matches = _discovery.search_past_decisions(
             c, query, project=project, since=since, limit=limit,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
+def find_sessions_where_action_worked_impl(
+    action: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_where_action_worked`` MCP tool."""
+    _validate_limit(limit)
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("action must be a non-empty string")
+    file_resolved = _resolve_user_path(file_path) if file_path else None
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_sessions_where_action_worked(
+            c, action=action, project=project, file_path=file_resolved,
+            since=since, limit=limit,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
+def find_failure_modes_for_file_impl(
+    file_path: str,
+    since: str | None = None,
+    limit: int = 20,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_failure_modes_for_file`` MCP tool."""
+    _validate_limit(limit)
+    resolved = _resolve_user_path(file_path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_failure_modes_for_file(
+            c, resolved, since=since, limit=limit,
         )
         return {"sessions": [_match_to_dict(m) for m in matches]}
 
@@ -685,6 +738,102 @@ def search_past_decisions(
     """
     return search_past_decisions_impl(
         query=query, project=project, since=since, limit=limit,
+    )
+
+
+@mcp.tool()
+def find_sessions_where_action_worked(
+    action: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Discover prior sessions where an action was performed *and it worked*.
+
+    Use this when you're about to do something and want a proven recipe:
+    it returns past sessions where ``action`` was carried out and the
+    next user turn confirmed success (an explicit "thanks"/"that worked",
+    or simply no revert and no complaint before the session ended). Each
+    result carries the evidence — the message that established the
+    outcome — so you can open it with ``session_query`` and copy what
+    worked.
+
+    This is the positive-signal counterpart to
+    ``find_failure_modes_for_file``: use *that* one to learn why a
+    previous edit to a file went wrong; use *this* one to learn how a
+    successful change was done. For "which sessions touched X at all"
+    (no outcome filter) use ``find_sessions_in_path`` /
+    ``find_sessions_touching_file`` / ``search_past_decisions``.
+
+    Args:
+        action: Free-text descriptor, matched as a case-insensitive
+            substring against tool calls and message text. Can be a tool
+            name (``"Edit"``), a file fragment (``"cost.py"``), or a
+            phrase (``"add caching"``). Must be non-empty.
+        project: Restrict to one project slug (e.g. ``"-Users-x-app"``).
+            ``None`` (default) = all projects.
+        file_path: Optionally narrow to sessions that *also* touched this
+            file. ``~`` is expanded and the path resolved. ``None`` =
+            don't narrow.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp. ``None``
+            (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` where each match has the keys of
+        ``find_sessions_in_path`` plus ``outcome`` (always ``"worked"``
+        here), ``outcome_evidence`` (a short justification), and
+        ``outcome_msg_id`` (the message that established it). Empty list
+        if the store is missing or nothing matched.
+    """
+    return find_sessions_where_action_worked_impl(
+        action=action, project=project, file_path=file_path,
+        since=since, limit=limit,
+    )
+
+
+@mcp.tool()
+def find_failure_modes_for_file(
+    file_path: str,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Discover prior sessions where editing a file led to a follow-up correction.
+
+    Use this BEFORE editing a file with a rocky history: it returns the
+    past sessions where an edit to ``file_path`` was followed by the user
+    saying it broke, the agent reverting it (``git revert`` / ``git reset
+    --hard`` / ``git checkout --``), or a complaint — each with the
+    evidence (the triggering message). Read those sessions with
+    ``session_query`` to learn the trap before you fall into it.
+
+    This is the negative-signal counterpart to
+    ``find_sessions_where_action_worked``: use *this* one to learn why an
+    edit went wrong, use *that* one to learn how a successful change was
+    done. For an unfiltered "which sessions touched this file" list, use
+    ``find_sessions_touching_file``.
+
+    Args:
+        file_path: Absolute or working-directory-relative file path.
+            ``~`` is expanded and the path is resolved. Must be non-empty.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp. ``None``
+            (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` where each match has the keys of
+        ``find_sessions_in_path`` plus ``outcome`` (``"failed"`` or
+        ``"reverted"``), ``outcome_evidence``, and ``outcome_msg_id``.
+        Empty list if the store is missing or no edit to the file led to
+        a correction.
+    """
+    return find_failure_modes_for_file_impl(
+        file_path=file_path, since=since, limit=limit,
     )
 
 
