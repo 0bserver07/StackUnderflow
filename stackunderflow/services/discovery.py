@@ -29,16 +29,19 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 __all__ = [
     "SessionMatch",
+    "BudgetedResult",
     "find_sessions_in_path",
     "find_sessions_touching_file",
     "search_past_decisions",
+    "pack_within_budget",
     "parse_since",
     "decode_slug_to_path",
 ]
@@ -68,6 +71,32 @@ class SessionMatch:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class BudgetedResult:
+    """Outcome of running a discovery query with a token budget applied.
+
+    The three discovery functions return a plain ``list[SessionMatch]``
+    when no ``context_budget`` is given (backward-compatible), and a
+    ``BudgetedResult`` when one is. ``sessions`` is rank-ordered (most
+    useful first), not ``last_ts``-ordered, because the point of the
+    budget path is to surface the highest-value rows before the budget
+    runs out.
+
+    * ``truncated`` — at least one matched session was dropped to fit.
+    * ``more_available`` — how many were dropped (0 when not truncated).
+    * ``budget_used_tokens`` — Σ of the chars/4 estimate over kept rows.
+    * ``budget_max_tokens`` — the budget that was enforced (``<= 0`` means
+      "no enforcement"; everything that the ``--limit`` cap allowed is
+      kept).
+    """
+
+    sessions: list[SessionMatch]
+    truncated: bool
+    more_available: int
+    budget_used_tokens: int
+    budget_max_tokens: int
 
 
 # ── shared helpers ──────────────────────────────────────────────────────────
@@ -227,9 +256,214 @@ def _ensure_row_factory(conn: sqlite3.Connection) -> None:
         conn.row_factory = sqlite3.Row
 
 
+# ── token-budgeted output ───────────────────────────────────────────────────
+#
+# Discovery results default to ``--limit 20`` rows of dumb recency
+# truncation. For an agent caller that's noise dumped into a tight
+# context window. The machinery below ranks rows (recency + cost +
+# command-specific relevance), packs greedily until an estimated token
+# budget is exhausted, and tells the caller how many rows were dropped
+# so it can emit a tail marker.
+
+
+def _estimate_tokens(session_dict: dict[str, Any]) -> int:
+    """Rough chars/4 token estimate for one serialised session row.
+
+    Avoids an llm-side tokenizer dependency; off by ~10-20% either way,
+    which is fine for budget enforcement. If precision ever matters,
+    add a ``--precise-tokens`` flag backed by tiktoken (extra dep).
+    """
+    serialized = json.dumps(session_dict, separators=(",", ":"))
+    return (len(serialized) // 4) + 1
+
+
+# Until citation telemetry exists (separate spec) the rank is a weighted
+# sum of three terms in [0, 1]: recency, cost, and a command-specific
+# relevance term. The citation-feedback spec appends a fourth
+# ``cite_rate`` term — that's why ``_build_rank_fn`` assembles a *list*
+# of (weight, score_fn) tuples in one place instead of hard-coding the
+# arithmetic: a new term is one appended tuple, no packer rewrite.
+_DEFAULT_RANK_WEIGHTS: tuple[float, float, float] = (0.5, 0.2, 0.3)
+_COST_SATURATION_USD = 5.0  # sessions ≥ $5 get the full cost score
+
+
+def _parse_rank_weights(raw: str | None) -> tuple[float, float, float]:
+    """Parse ``"recency,cost,relevance"`` leniently.
+
+    A missing/blank/malformed value, the wrong component count, or any
+    negative weight falls back to ``_DEFAULT_RANK_WEIGHTS``. A fourth+
+    component (reserved for the citation-feedback term) is ignored here.
+    """
+    if not raw or not isinstance(raw, str):
+        return _DEFAULT_RANK_WEIGHTS
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    try:
+        vals = [float(p) for p in parts]
+    except ValueError:
+        return _DEFAULT_RANK_WEIGHTS
+    if len(vals) < 3 or any(v < 0 for v in vals[:3]):
+        return _DEFAULT_RANK_WEIGHTS
+    return (vals[0], vals[1], vals[2])
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    """Best-effort ISO-timestamp parse; tz-naive strings get UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _recency_score(m: SessionMatch, *, now: datetime | None = None) -> float:
+    """``1 / (1 + days_since_last_ts)`` — 1.0 today, ~0.05 at 20 days."""
+    ts = _parse_ts(m.last_ts)
+    if ts is None:
+        return 0.0
+    ref = now or datetime.now(UTC)
+    days = max(0.0, (ref - ts).total_seconds() / 86400.0)
+    return 1.0 / (1.0 + days)
+
+
+def _cost_score(m: SessionMatch) -> float:
+    """``min(1.0, cost_usd / 5.0)`` — cheap sessions are less reusable."""
+    return min(1.0, max(0.0, float(m.cost_usd)) / _COST_SATURATION_USD)
+
+
+def _build_rank_fn(
+    relevance_fn: Callable[[SessionMatch], float],
+    *,
+    now: datetime | None = None,
+    weights: tuple[float, float, float] | None = None,
+) -> Callable[[SessionMatch], float]:
+    """Compose the weighted-sum rank function for a discovery command.
+
+    ``relevance_fn`` is the command-specific term (path-relationship,
+    tool-vs-content match kind, LIKE-match density). ``weights`` defaults
+    to the ``discovery_rank_weights`` setting.
+
+    Extension point: the citation-feedback spec adds a ``cite_rate`` term
+    by appending ``(w_cite, _cite_rate_score)`` to ``terms`` below and a
+    fourth component to the default weights tuple.
+    """
+    if weights is None:
+        from stackunderflow.settings import Settings
+
+        weights = _parse_rank_weights(Settings().discovery_rank_weights)
+    w_recency, w_cost, w_relevance = weights
+    terms: list[tuple[float, Callable[[SessionMatch], float]]] = [
+        (w_recency, lambda m: _recency_score(m, now=now)),
+        (w_cost, _cost_score),
+        (w_relevance, relevance_fn),
+    ]
+
+    def _rank(m: SessionMatch) -> float:
+        return sum(w * fn(m) for w, fn in terms)
+
+    return _rank
+
+
+def pack_within_budget(
+    sessions: Sequence[SessionMatch],
+    *,
+    budget_tokens: int,
+    rank_fn: Callable[[SessionMatch], float] | None = None,
+) -> tuple[list[SessionMatch], int, int]:
+    """Sort by ``rank_fn``, pack greedily, return ``(kept, dropped, used)``.
+
+    * ``rank_fn`` — higher score sorts first; ``None`` keeps input order
+      (use when the caller already sorted). Ties keep input order
+      (stable sort), so a recency-sorted SQL result stays recency-ordered
+      within an equal-rank band.
+    * ``budget_tokens`` — ``<= 0`` disables enforcement (keep everything,
+      still re-ordered by ``rank_fn``).
+    * ``used`` — Σ of :func:`_estimate_tokens` over the kept rows.
+
+    Greedy + strict: once a row doesn't fit we stop (we do *not* skip it
+    and keep scanning for a smaller one — that would reorder by size and
+    defeat the ranking). If the top-ranked row alone exceeds the budget,
+    zero rows are kept and the caller's marker should tell the agent to
+    raise ``--context-budget``.
+    """
+    ordered = sorted(sessions, key=rank_fn, reverse=True) if rank_fn else list(sessions)
+
+    if budget_tokens is None or budget_tokens <= 0:
+        used = sum(_estimate_tokens(m.to_dict()) for m in ordered)
+        return ordered, 0, used
+
+    kept: list[SessionMatch] = []
+    used = 0
+    for m in ordered:
+        cost = _estimate_tokens(m.to_dict())
+        if used + cost > budget_tokens:
+            break
+        kept.append(m)
+        used += cost
+    return kept, len(ordered) - len(kept), used
+
+
+def _budgeted(
+    matches: list[SessionMatch],
+    *,
+    context_budget: int,
+    rank_fn: Callable[[SessionMatch], float],
+) -> BudgetedResult:
+    """Run ``pack_within_budget`` and wrap the result for a discovery fn."""
+    kept, dropped, used = pack_within_budget(
+        matches, budget_tokens=context_budget, rank_fn=rank_fn,
+    )
+    return BudgetedResult(
+        sessions=kept,
+        truncated=dropped > 0,
+        more_available=dropped,
+        budget_used_tokens=used,
+        budget_max_tokens=context_budget,
+    )
+
+
 # ── public API ──────────────────────────────────────────────────────────────
 
 
+def _relevance_in_path(resolved: str) -> Callable[[SessionMatch], float]:
+    """Relevance term for ``find_sessions_in_path``.
+
+    1.0 when the queried path *is* the project root, 0.5 when the queried
+    path is a descendant of it (working in a subdir), 0.25 when the
+    project sits below the queried path (defensive — this function only
+    returns ancestor-or-equal projects, so that branch is unreachable in
+    practice but kept for standalone reuse), 0.0 otherwise.
+    """
+    target = resolved.rstrip("/")
+
+    def _rel(m: SessionMatch) -> float:
+        proj = (m.project_path or "").rstrip("/")
+        if not proj:
+            return 0.0
+        if proj == target:
+            return 1.0
+        if target.startswith(proj + "/"):
+            return 0.5
+        if proj.startswith(target + "/"):
+            return 0.25
+        return 0.0
+
+    return _rel
+
+
+@overload
+def find_sessions_in_path(
+    conn: sqlite3.Connection, path: str | Path, *, since: str | None = ...,
+    limit: int = ..., provider: str | None = ..., context_budget: None = ...,
+) -> list[SessionMatch]: ...
+@overload
+def find_sessions_in_path(
+    conn: sqlite3.Connection, path: str | Path, *, since: str | None = ...,
+    limit: int = ..., provider: str | None = ..., context_budget: int,
+) -> BudgetedResult: ...
 def find_sessions_in_path(
     conn: sqlite3.Connection,
     path: str | Path,
@@ -237,7 +471,8 @@ def find_sessions_in_path(
     since: str | None = None,
     limit: int = 20,
     provider: str | None = None,
-) -> list[SessionMatch]:
+    context_budget: int | None = None,
+) -> list[SessionMatch] | BudgetedResult:
     """Sessions whose project path is ``path`` or any ancestor of ``path``.
 
     The caller's ``path`` is resolved to an absolute string. We then
@@ -259,10 +494,19 @@ def find_sessions_in_path(
         Max rows returned. Negative or zero means no limit.
     provider:
         Optional provider slug filter (e.g. ``"claude"``).
+    context_budget:
+        When ``None`` (default) the return is a plain ``list[SessionMatch]``
+        sorted by ``last_ts DESC`` — today's behaviour. When an int, the
+        ``limit``-capped rows are re-ranked (recency + cost + path
+        relevance), packed greedily until ~that many estimated tokens are
+        used, and a :class:`BudgetedResult` is returned instead. ``limit``
+        stays a hard cap; the budget is the additional constraint.
 
     Returns
     -------
-    Sessions sorted by ``last_ts DESC``; ``snippet`` is always ``None``.
+    ``list[SessionMatch]`` (``context_budget`` unset) or
+    :class:`BudgetedResult` (``context_budget`` set). ``snippet`` is
+    always ``None`` for this query.
     """
     _ensure_row_factory(conn)
     resolved = _resolve_input_path(path)
@@ -286,6 +530,11 @@ def find_sessions_in_path(
             matched_ids.append(int(prow["id"]))
 
     if not matched_ids:
+        if context_budget is not None:
+            return _budgeted(
+                [], context_budget=context_budget,
+                rank_fn=_build_rank_fn(_relevance_in_path(resolved)),
+            )
         return []
 
     since_iso = parse_since(since)
@@ -311,7 +560,13 @@ def find_sessions_in_path(
         params.append(int(limit))
 
     rows = conn.execute(sql, params).fetchall()
-    return [_row_to_match(r) for r in rows]
+    matches = [_row_to_match(r) for r in rows]
+    if context_budget is not None:
+        return _budgeted(
+            matches, context_budget=context_budget,
+            rank_fn=_build_rank_fn(_relevance_in_path(resolved)),
+        )
+    return matches
 
 
 # ── tools-json filtering ────────────────────────────────────────────────────
@@ -380,13 +635,40 @@ def _tools_json_mentions_file(
     return False
 
 
+# Relevance tiers for ``find_sessions_touching_file``: an exact tool-arg
+# match is the strongest signal, a free-form content mention weaker,
+# anything else weakest (defensive default — every match falls into one
+# of the first two in practice).
+_TOUCHING_FILE_RELEVANCE = {"tool": 1.0, "content": 0.5}
+
+
+def _relevance_touching_file(
+    match_kind_by_sid: dict[str, str],
+) -> Callable[[SessionMatch], float]:
+    def _rel(m: SessionMatch) -> float:
+        return _TOUCHING_FILE_RELEVANCE.get(match_kind_by_sid.get(m.session_id, ""), 0.25)
+
+    return _rel
+
+
+@overload
+def find_sessions_touching_file(
+    conn: sqlite3.Connection, file_path: str | Path, *, limit: int = ...,
+    mode: str = ..., context_budget: None = ...,
+) -> list[SessionMatch]: ...
+@overload
+def find_sessions_touching_file(
+    conn: sqlite3.Connection, file_path: str | Path, *, limit: int = ...,
+    mode: str = ..., context_budget: int,
+) -> BudgetedResult: ...
 def find_sessions_touching_file(
     conn: sqlite3.Connection,
     file_path: str | Path,
     *,
     limit: int = 20,
     mode: str = "any",
-) -> list[SessionMatch]:
+    context_budget: int | None = None,
+) -> list[SessionMatch] | BudgetedResult:
     """Sessions where ``file_path`` shows up in tools or message content.
 
     ``mode``
@@ -396,8 +678,11 @@ def find_sessions_touching_file(
         * ``"any"`` (default) — any of the above OR a free-form mention
           in ``messages.content_text``.
 
-    The match is substring-based on the resolved absolute path. Sessions
-    are returned sorted by ``last_ts DESC``.
+    The match is substring-based on the resolved absolute path. Returns a
+    plain ``list[SessionMatch]`` sorted by ``last_ts DESC`` when
+    ``context_budget`` is ``None``; when set, the ``limit``-capped rows
+    are re-ranked (recency + cost + tool-vs-content match strength),
+    packed greedily, and returned as a :class:`BudgetedResult`.
     """
     if mode not in {"read", "write", "any"}:
         raise ValueError(
@@ -419,7 +704,7 @@ def find_sessions_touching_file(
         sql_params = [pattern]
 
     rows = conn.execute(
-        "SELECT s.id AS sfk, m.tools_json, m.content_text "  # noqa: S608 — sql_filter is a fixed literal selected by mode
+        "SELECT s.id AS sfk, s.session_id AS sid, m.tools_json, m.content_text "  # noqa: S608 — sql_filter is a fixed literal selected by mode
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
         f"WHERE {sql_filter}",
@@ -428,30 +713,42 @@ def find_sessions_touching_file(
 
     # Group hits per-session, applying the mode-specific tool-match
     # check. Sessions that only had a free-form content_text mention
-    # are kept only when ``mode == 'any'``.
+    # are kept only when ``mode == 'any'``. ``match_kind_by_sid`` records
+    # the strongest match seen per session for the relevance term —
+    # first-hit-wins (we short-circuit after a session matches), which is
+    # fine for a heuristic score.
     matched_session_fks: set[int] = set()
+    match_kind_by_sid: dict[str, str] = {}
     for row in rows:
         sfk = int(row["sfk"])
         if sfk in matched_session_fks:
             continue
+        sid = row["sid"]
         tools_json = row["tools_json"]
         if mode in {"read", "write"}:
             if _tools_json_mentions_file(
                 tools_json, file_path=resolved, mode=mode
             ):
                 matched_session_fks.add(sfk)
+                match_kind_by_sid[sid] = "tool"
             continue
         # mode == "any"
         if _tools_json_mentions_file(
             tools_json, file_path=resolved, mode="any"
         ):
             matched_session_fks.add(sfk)
+            match_kind_by_sid[sid] = "tool"
         else:
             content = row["content_text"] or ""
             if resolved in content:
                 matched_session_fks.add(sfk)
+                match_kind_by_sid[sid] = "content"
+
+    rank_fn = _build_rank_fn(_relevance_touching_file(match_kind_by_sid))
 
     if not matched_session_fks:
+        if context_budget is not None:
+            return _budgeted([], context_budget=context_budget, rank_fn=rank_fn)
         return []
 
     placeholders = ",".join("?" for _ in matched_session_fks)
@@ -467,7 +764,10 @@ def find_sessions_touching_file(
         sql += " LIMIT ?"
         params.append(int(limit))
     rows2 = conn.execute(sql, params).fetchall()
-    return [_row_to_match(r) for r in rows2]
+    matches = [_row_to_match(r) for r in rows2]
+    if context_budget is not None:
+        return _budgeted(matches, context_budget=context_budget, rank_fn=rank_fn)
+    return matches
 
 
 # ── search past decisions ───────────────────────────────────────────────────
@@ -501,6 +801,31 @@ def _build_snippet(content: str, query: str) -> str | None:
     return " ".join(excerpt.split())
 
 
+# LIKE-match-density relevance for ``search_past_decisions``: total
+# needle occurrences across a session's matching messages, saturating at
+# 5 (a stand-in for a BM25 score until an FTS index exists).
+_DECISIONS_OCCURRENCE_SATURATION = 5.0
+
+
+def _relevance_decisions(
+    occ_by_sid: dict[str, int],
+) -> Callable[[SessionMatch], float]:
+    def _rel(m: SessionMatch) -> float:
+        return min(1.0, occ_by_sid.get(m.session_id, 0) / _DECISIONS_OCCURRENCE_SATURATION)
+
+    return _rel
+
+
+@overload
+def search_past_decisions(
+    conn: sqlite3.Connection, query: str, *, project: str | None = ...,
+    since: str | None = ..., limit: int = ..., context_budget: None = ...,
+) -> list[SessionMatch]: ...
+@overload
+def search_past_decisions(
+    conn: sqlite3.Connection, query: str, *, project: str | None = ...,
+    since: str | None = ..., limit: int = ..., context_budget: int,
+) -> BudgetedResult: ...
 def search_past_decisions(
     conn: sqlite3.Connection,
     query: str,
@@ -508,7 +833,8 @@ def search_past_decisions(
     project: str | None = None,
     since: str | None = None,
     limit: int = 20,
-) -> list[SessionMatch]:
+    context_budget: int | None = None,
+) -> list[SessionMatch] | BudgetedResult:
     """Substring search over ``messages.content_text``.
 
     The store does not currently host an FTS5 virtual table for
@@ -531,9 +857,19 @@ def search_past_decisions(
     limit:
         Max rows returned. Sorted by ``last_ts DESC`` so the most
         recent matching session is first.
+    context_budget:
+        ``None`` (default) → plain ``list[SessionMatch]`` as above. An
+        int → the ``limit``-capped rows are re-ranked (recency + cost +
+        LIKE-match density) and packed greedily into a
+        :class:`BudgetedResult`.
     """
     _ensure_row_factory(conn)
     if not query or not query.strip():
+        if context_budget is not None:
+            return _budgeted(
+                [], context_budget=context_budget,
+                rank_fn=_build_rank_fn(_relevance_decisions({})),
+            )
         return []
 
     needle = query.strip()
@@ -550,12 +886,12 @@ def search_past_decisions(
 
     # We need (a) one row per session for the SessionMatch, plus (b)
     # the first matching content_text per session for snippet
-    # generation. SQLite's window functions would solve this in one
-    # query but we keep the SQL portable: pull
-    # (session_fk, content_text) hits sorted by timestamp DESC, dedup
-    # in Python keeping the first hit per session.
+    # generation, plus (c) total needle occurrences per session for the
+    # relevance term. SQLite's window functions would solve this in one
+    # query but we keep the SQL portable: pull (session_fk, session_id,
+    # content_text) hits sorted by timestamp DESC and fold in Python.
     hit_rows = conn.execute(
-        "SELECT m.session_fk AS sfk, m.content_text AS content_text "  # noqa: S608 — where_extra is built from fixed clauses + parameter placeholders
+        "SELECT m.session_fk AS sfk, s.session_id AS sid, m.content_text AS content_text "  # noqa: S608 — where_extra is built from fixed clauses + parameter placeholders
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
         "JOIN projects p ON p.id = s.project_id "
@@ -564,14 +900,22 @@ def search_past_decisions(
         params,
     ).fetchall()
 
+    needle_lower = needle.lower()
     snippet_by_sfk: dict[int, str | None] = {}
+    occ_by_sid: dict[str, int] = {}
     for hr in hit_rows:
         sfk = int(hr["sfk"])
+        content = hr["content_text"] or ""
+        occ_by_sid[hr["sid"]] = occ_by_sid.get(hr["sid"], 0) + content.lower().count(needle_lower)
         if sfk in snippet_by_sfk:
             continue
-        snippet_by_sfk[sfk] = _build_snippet(hr["content_text"] or "", needle)
+        snippet_by_sfk[sfk] = _build_snippet(content, needle)
+
+    rank_fn = _build_rank_fn(_relevance_decisions(occ_by_sid))
 
     if not snippet_by_sfk:
+        if context_budget is not None:
+            return _budgeted([], context_budget=context_budget, rank_fn=rank_fn)
         return []
 
     placeholders = ",".join("?" for _ in snippet_by_sfk)
@@ -584,9 +928,14 @@ def search_past_decisions(
     )
     rows = conn.execute(sql, list(snippet_by_sfk.keys())).fetchall()
 
+    # ``rows`` is ``last_ts DESC``; ``limit`` is a hard cap applied here
+    # before any budget re-ranking (the budget is the *additional*
+    # constraint, never a way to see past ``--limit``).
     out: list[SessionMatch] = []
     for r in rows:
         out.append(_row_to_match(r, snippet=snippet_by_sfk.get(int(r["session_fk"]))))
         if limit and limit > 0 and len(out) >= limit:
             break
+    if context_budget is not None:
+        return _budgeted(out, context_budget=context_budget, rank_fn=rank_fn)
     return out
