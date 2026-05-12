@@ -30,6 +30,7 @@ from stackunderflow.adapters.base import Record, SessionRef
 from stackunderflow.adapters.claude import ClaudeAdapter
 from stackunderflow.mcp import store_reader
 from stackunderflow.services import discovery as _discovery
+from stackunderflow.settings import Settings
 
 _log = logging.getLogger(__name__)
 
@@ -412,49 +413,91 @@ def _validate_mode(mode: str) -> str:
     return mode
 
 
+def _resolve_context_budget(context_budget: int | None) -> int:
+    """``context_budget`` arg → effective budget.
+
+    ``None`` (the tool default) resolves to
+    ``Settings().discovery_budget_tokens`` (env
+    ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000). ``0`` / negative
+    disables enforcement (``--limit`` stays the only cap).
+    """
+    if context_budget is None:
+        return int(Settings().discovery_budget_tokens)
+    if not isinstance(context_budget, int):
+        raise ValueError("context_budget must be an integer or null")
+    return context_budget
+
+
+def _budgeted_payload(
+    result: _discovery.BudgetedResult | list[_discovery.SessionMatch],
+) -> dict:
+    """Render a :class:`BudgetedResult` as the discovery-tool JSON dict.
+
+    ``_truncated`` / ``_more_available`` appear only when rows were
+    dropped; ``_budget_used_tokens`` / ``_budget_max_tokens`` are always
+    present so a programmatic consumer can see the cap that applied. A
+    bare list (no budget applied — only possible via a direct service
+    call) renders as the legacy ``{"sessions": [...]}`` shape.
+    """
+    if not isinstance(result, _discovery.BudgetedResult):
+        return {"sessions": [_match_to_dict(m) for m in result]}
+    payload: dict = {"sessions": [_match_to_dict(m) for m in result.sessions]}
+    if result.truncated:
+        payload["_truncated"] = True
+        payload["_more_available"] = result.more_available
+    payload["_budget_used_tokens"] = result.budget_used_tokens
+    payload["_budget_max_tokens"] = result.budget_max_tokens
+    return payload
+
+
 def find_sessions_in_path_impl(
     path: str,
     since: str | None = None,
     limit: int = 20,
     provider: str | None = None,
+    context_budget: int | None = None,
     *,
     conn=None,
 ) -> dict:
     """Implementation behind the ``find_sessions_in_path`` MCP tool.
 
     Validates inputs, opens the store (or reuses ``conn``), delegates
-    to ``services.discovery.find_sessions_in_path`` and formats the
-    response.
+    to ``services.discovery.find_sessions_in_path`` with the resolved
+    token budget, and formats the response.
     """
     _validate_limit(limit)
+    budget = _resolve_context_budget(context_budget)
     resolved = _resolve_user_path(path)
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
-        matches = _discovery.find_sessions_in_path(
+        result = _discovery.find_sessions_in_path(
             c, resolved, since=since, limit=limit, provider=provider,
+            context_budget=budget,
         )
-        return {"sessions": [_match_to_dict(m) for m in matches]}
+        return _budgeted_payload(result)
 
 
 def find_sessions_touching_file_impl(
     file_path: str,
     limit: int = 20,
     mode: str = "any",
+    context_budget: int | None = None,
     *,
     conn=None,
 ) -> dict:
     """Implementation behind the ``find_sessions_touching_file`` MCP tool."""
     _validate_limit(limit)
     _validate_mode(mode)
+    budget = _resolve_context_budget(context_budget)
     resolved = _resolve_user_path(file_path)
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
-        matches = _discovery.find_sessions_touching_file(
-            c, resolved, limit=limit, mode=mode,
+        result = _discovery.find_sessions_touching_file(
+            c, resolved, limit=limit, mode=mode, context_budget=budget,
         )
-        return {"sessions": [_match_to_dict(m) for m in matches]}
+        return _budgeted_payload(result)
 
 
 def search_past_decisions_impl(
@@ -462,6 +505,7 @@ def search_past_decisions_impl(
     project: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    context_budget: int | None = None,
     *,
     conn=None,
 ) -> dict:
@@ -469,13 +513,15 @@ def search_past_decisions_impl(
     _validate_limit(limit)
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must be a non-empty string")
+    budget = _resolve_context_budget(context_budget)
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
-        matches = _discovery.search_past_decisions(
+        result = _discovery.search_past_decisions(
             c, query, project=project, since=since, limit=limit,
+            context_budget=budget,
         )
-        return {"sessions": [_match_to_dict(m) for m in matches]}
+        return _budgeted_payload(result)
 
 
 mcp = FastMCP("stackunderflow")
@@ -561,6 +607,7 @@ def find_sessions_in_path(
     since: str | None = None,
     limit: int = 20,
     provider: str | None = None,
+    context_budget: int | None = None,
 ) -> dict:
     """Discover prior sessions that worked in a given project path.
 
@@ -586,21 +633,30 @@ def find_sessions_in_path(
         since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
             ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
             ``None`` (default) = all time.
-        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
-            Default 20. Must be a positive integer.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
         provider: Restrict to one provider (``"claude"``, ``"codex"``,
             ``"cursor"``, ``"cline"``, ``"droid"``, ``"copilot"``, …).
             ``None`` (default) = all providers.
+        context_budget: Token budget for the response. Within the
+            ``limit`` cap, results are ranked (recency + cost + path
+            relevance) and packed greedily until ~this many estimated
+            tokens are used. ``None`` (default) uses the server default
+            (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000);
+            ``0`` disables the budget so ``limit`` is the only cap.
 
     Returns:
-        ``{"sessions": [<match>, ...]}`` where each match has keys:
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` where each match has keys:
         ``session_id``, ``project_slug``, ``project_path``,
         ``provider``, ``first_ts``, ``last_ts``, ``message_count``,
-        ``cost_usd``, ``snippet``. Empty list if the store is missing
-        or no sessions match.
+        ``cost_usd``, ``snippet``. When the budget dropped rows, also
+        includes ``"_truncated": true`` and ``"_more_available": <count>``.
+        Empty ``sessions`` list if the store is missing or nothing matched.
     """
     return find_sessions_in_path_impl(
         path=path, since=since, limit=limit, provider=provider,
+        context_budget=context_budget,
     )
 
 
@@ -609,6 +665,7 @@ def find_sessions_touching_file(
     file_path: str,
     limit: int = 20,
     mode: str = "any",
+    context_budget: int | None = None,
 ) -> dict:
     """Discover prior sessions whose tool calls referenced a specific file.
 
@@ -629,19 +686,27 @@ def find_sessions_touching_file(
     Args:
         file_path: Absolute or working-directory-relative file path.
             Will be ``~``-expanded and resolved.
-        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
-            Default 20. Must be a positive integer.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
         mode: ``"any"`` (default) — match any tool call referencing
             the file. ``"write"`` — only Edit/Write/MultiEdit/NotebookEdit
             mutations. ``"read"`` — only Read-style accesses.
+        context_budget: Token budget for the response (within the
+            ``limit`` cap, ranked by recency + cost + match strength,
+            packed greedily). ``None`` (default) = server default (env
+            ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000); ``0``
+            disables it.
 
     Returns:
-        ``{"sessions": [<match>, ...]}`` with the same keys as
-        ``find_sessions_in_path``. Empty list if the store is missing
-        or no sessions reference the file.
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` with the same match keys as
+        ``find_sessions_in_path`` (plus ``_truncated`` / ``_more_available``
+        when the budget dropped rows). Empty ``sessions`` list if the
+        store is missing or no sessions reference the file.
     """
     return find_sessions_touching_file_impl(
         file_path=file_path, limit=limit, mode=mode,
+        context_budget=context_budget,
     )
 
 
@@ -651,6 +716,7 @@ def search_past_decisions(
     project: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    context_budget: int | None = None,
 ) -> dict:
     """Free-text search across past session transcripts.
 
@@ -674,17 +740,25 @@ def search_past_decisions(
         since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
             ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
             ``None`` (default) = all time.
-        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
-            Default 20. Must be a positive integer.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
+        context_budget: Token budget for the response (within the
+            ``limit`` cap, ranked by recency + cost + LIKE-match
+            density, packed greedily). ``None`` (default) = server
+            default (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or
+            2000); ``0`` disables it.
 
     Returns:
-        ``{"sessions": [<match>, ...]}`` with the same keys as
-        ``find_sessions_in_path``. The ``snippet`` field is populated
-        with a short excerpt around the match where available. Empty
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` with the same match keys as
+        ``find_sessions_in_path`` (plus ``_truncated`` / ``_more_available``
+        when the budget dropped rows). The ``snippet`` field carries a
+        short excerpt around the match where available. Empty ``sessions``
         list if the store is missing or no matches are found.
     """
     return search_past_decisions_impl(
         query=query, project=project, since=since, limit=limit,
+        context_budget=context_budget,
     )
 
 

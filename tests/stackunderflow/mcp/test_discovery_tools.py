@@ -119,32 +119,48 @@ class _RecordingDiscovery:
         if self.raise_with is not None:
             raise self.raise_with
 
+    def _wrap(self, context_budget):
+        """Mirror the real service: bare list when ``context_budget`` is
+        ``None``, a :class:`BudgetedResult` otherwise (no truncation —
+        these stubs return small lists)."""
+        sessions = list(self.returns)
+        if context_budget is None:
+            return sessions
+        used = sum(discovery._estimate_tokens(m.to_dict()) for m in sessions)
+        return discovery.BudgetedResult(
+            sessions=sessions, truncated=False, more_available=0,
+            budget_used_tokens=used, budget_max_tokens=context_budget,
+        )
+
     def _find_sessions_in_path(
-        self, conn, path, *, since=None, limit=20, provider=None,
-    ) -> list[discovery.SessionMatch]:
+        self, conn, path, *, since=None, limit=20, provider=None, context_budget=None,
+    ):
         self.find_sessions_in_path_calls.append(
-            {"conn": conn, "path": path, "since": since, "limit": limit, "provider": provider},
+            {"conn": conn, "path": path, "since": since, "limit": limit,
+             "provider": provider, "context_budget": context_budget},
         )
         self._maybe_raise()
-        return list(self.returns)
+        return self._wrap(context_budget)
 
     def _find_sessions_touching_file(
-        self, conn, file_path, *, limit=20, mode="any",
-    ) -> list[discovery.SessionMatch]:
+        self, conn, file_path, *, limit=20, mode="any", context_budget=None,
+    ):
         self.find_sessions_touching_file_calls.append(
-            {"conn": conn, "file_path": file_path, "limit": limit, "mode": mode},
+            {"conn": conn, "file_path": file_path, "limit": limit, "mode": mode,
+             "context_budget": context_budget},
         )
         self._maybe_raise()
-        return list(self.returns)
+        return self._wrap(context_budget)
 
     def _search_past_decisions(
-        self, conn, query, *, project=None, since=None, limit=20,
-    ) -> list[discovery.SessionMatch]:
+        self, conn, query, *, project=None, since=None, limit=20, context_budget=None,
+    ):
         self.search_past_decisions_calls.append(
-            {"conn": conn, "query": query, "project": project, "since": since, "limit": limit},
+            {"conn": conn, "query": query, "project": project, "since": since,
+             "limit": limit, "context_budget": context_budget},
         )
         self._maybe_raise()
-        return list(self.returns)
+        return self._wrap(context_budget)
 
 
 @pytest.fixture
@@ -192,9 +208,15 @@ def test_initialised_empty_store_returns_empty_sessions(
     """Store exists but has no sessions — service returns []."""
     discovery_stub.returns = []
     out = mcp_server.find_sessions_in_path_impl(path=str(tmp_path / "any"))
-    assert out == {"sessions": []}
+    assert out["sessions"] == []
+    # An empty result still reports the budget that applied (always
+    # present once the service was consulted), but not a truncation.
+    assert "_truncated" not in out
+    assert out["_budget_used_tokens"] == 0
+    assert out["_budget_max_tokens"] == 2000  # the configured default
     # The service layer *was* called this time (store is present).
     assert len(discovery_stub.find_sessions_in_path_calls) == 1
+    assert discovery_stub.find_sessions_in_path_calls[0]["context_budget"] == 2000
 
 
 # ── arg plumb-through ──────────────────────────────────────────────────────
@@ -321,6 +343,79 @@ def test_multiple_matches_preserved_order(
     assert [r["session_id"] for r in out["sessions"]] == ["s1", "s2", "s3"]
 
 
+# ── token budget ────────────────────────────────────────────────────────────
+
+
+def test_default_context_budget_resolves_from_settings(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    """Omitting ``context_budget`` threads the configured default (2000)
+    into the service and surfaces it in the response."""
+    discovery_stub.returns = [_match()]
+    out = mcp_server.find_sessions_in_path_impl(path="/x")
+    assert discovery_stub.find_sessions_in_path_calls[0]["context_budget"] == 2000
+    assert out["_budget_max_tokens"] == 2000
+    assert out["_budget_used_tokens"] > 0
+    # All three tools resolve the same default.
+    mcp_server.find_sessions_touching_file_impl(file_path="/x/y.py")
+    mcp_server.search_past_decisions_impl(query="hi")
+    assert discovery_stub.find_sessions_touching_file_calls[0]["context_budget"] == 2000
+    assert discovery_stub.search_past_decisions_calls[0]["context_budget"] == 2000
+
+
+def test_explicit_context_budget_plumbs_through(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    discovery_stub.returns = [_match()]
+    out = mcp_server.find_sessions_in_path_impl(path="/x", context_budget=777)
+    assert discovery_stub.find_sessions_in_path_calls[0]["context_budget"] == 777
+    assert out["_budget_max_tokens"] == 777
+
+
+def test_context_budget_env_override(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS", "500")
+    discovery_stub.returns = []
+    out = mcp_server.search_past_decisions_impl(query="hi")
+    assert discovery_stub.search_past_decisions_calls[0]["context_budget"] == 500
+    assert out["_budget_max_tokens"] == 500
+
+
+def test_zero_context_budget_disables_enforcement(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    discovery_stub.returns = [_match(session_id="s1"), _match(session_id="s2")]
+    out = mcp_server.find_sessions_in_path_impl(path="/x", context_budget=0)
+    # 0 → no truncation, every (limit-capped) row kept.
+    assert len(out["sessions"]) == 2
+    assert "_truncated" not in out
+    assert out["_budget_max_tokens"] == 0
+
+
+def test_truncated_budget_result_renders_tail_keys(empty_store: Path) -> None:
+    """``_budgeted_payload`` surfaces ``_truncated`` / ``_more_available``
+    when the service reports dropped rows."""
+    truncated = discovery.BudgetedResult(
+        sessions=[
+            discovery.SessionMatch(
+                session_id="s-kept", project_slug="-p", project_path="/p",
+                provider="claude", first_ts="2026-05-01T00:00:00Z",
+                last_ts="2026-05-01T00:00:00Z", message_count=1, cost_usd=0.0,
+            ),
+        ],
+        truncated=True, more_available=17,
+        budget_used_tokens=42, budget_max_tokens=100,
+    )
+    payload = mcp_server._budgeted_payload(truncated)
+    assert [s["session_id"] for s in payload["sessions"]] == ["s-kept"]
+    assert payload["_truncated"] is True
+    assert payload["_more_available"] == 17
+    assert payload["_budget_used_tokens"] == 42
+    assert payload["_budget_max_tokens"] == 100
+
+
 # ── validation / error cases ────────────────────────────────────────────────
 
 
@@ -374,7 +469,7 @@ def test_unknown_provider_passes_through_for_service_decision(
     """The MCP layer doesn't gatekeep providers — the service decides."""
     discovery_stub.returns = []
     out = mcp_server.find_sessions_in_path_impl(path="/x", provider="bogus")
-    assert out == {"sessions": []}
+    assert out["sessions"] == []
     assert discovery_stub.find_sessions_in_path_calls[0]["provider"] == "bogus"
 
 
