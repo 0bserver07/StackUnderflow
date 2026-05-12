@@ -42,9 +42,9 @@ ALTER TABLE sessions ADD COLUMN spawned_by_session_id TEXT;
 ALTER TABLE sessions ADD COLUMN spawn_prompt          TEXT;
 ALTER TABLE sessions ADD COLUMN agent_role            TEXT;
 
-CREATE INDEX idx_sessions_team       ON sessions(team_id)
+CREATE INDEX IF NOT EXISTS idx_sessions_team       ON sessions(team_id)
     WHERE team_id IS NOT NULL;
-CREATE INDEX idx_sessions_spawned_by ON sessions(spawned_by_session_id)
+CREATE INDEX IF NOT EXISTS idx_sessions_spawned_by ON sessions(spawned_by_session_id)
     WHERE spawned_by_session_id IS NOT NULL;
 
 -- ── agent_teams: one row per Claude Code team ───────────────────────────────
@@ -56,7 +56,7 @@ CREATE INDEX idx_sessions_spawned_by ON sessions(spawned_by_session_id)
 -- filesystem. ``lead_session_id`` is the team config's ``leadSessionId``
 -- — nullable because a team whose lead transcript hasn't been ingested
 -- yet still gets a row (the lead links up on a later ingest pass).
-CREATE TABLE agent_teams (
+CREATE TABLE IF NOT EXISTS agent_teams (
     team_id          TEXT PRIMARY KEY,
     project_id       INTEGER NOT NULL REFERENCES projects(id),
     created_ts       TEXT NOT NULL,
@@ -64,7 +64,7 @@ CREATE TABLE agent_teams (
     lead_session_id  TEXT,
     config_json      TEXT NOT NULL
 );
-CREATE INDEX idx_agent_teams_project ON agent_teams(project_id);
+CREATE INDEX IF NOT EXISTS idx_agent_teams_project ON agent_teams(project_id);
 
 PRAGMA user_version = 13;
 

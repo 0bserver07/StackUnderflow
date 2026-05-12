@@ -302,6 +302,7 @@ def test_success_overlay_from_captured_events_when_present(conn):
     _seed_message(conn, session_fk=sfk, seq=1, role="user",
                   raw=_result(("t0", "exit 1", False)), ts="2026-05-01T00:10:01Z")
     # Mimic the spec-05 schema (session_id text, ts, event_kind).
+    conn.execute("DROP TABLE IF EXISTS captured_events")
     conn.execute(
         "CREATE TABLE captured_events ("
         " id INTEGER PRIMARY KEY, ts TEXT NOT NULL, project_id INTEGER, session_id TEXT,"
