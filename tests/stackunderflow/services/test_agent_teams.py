@@ -557,3 +557,149 @@ def test_get_agent_transcript_cross_project_returns_none(conn):
         )
         is None
     )
+
+
+# ── indexed (v013-materialised) path ─────────────────────────────────────────
+#
+# When the ``agent_teams`` table is populated the service JOINs the
+# indexed ``sessions.{team_id, agent_role, spawn_prompt, ...}`` columns
+# instead of scanning ``messages.raw_json``. These tests seed that state
+# directly and lock the contract that the indexed path produces the same
+# shapes (plus the richer ``spawn_prompt`` / ``agent_role`` / team
+# ``description``).
+
+
+def _materialise_session_team(
+    conn,
+    *,
+    session_fk: int,
+    team_id: str,
+    role: str,
+    spawned_by: str | None = None,
+    spawn_prompt: str | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE sessions SET team_id = ?, agent_role = ?, spawned_by_session_id = ?, "
+        "  spawn_prompt = ?, message_count = ("
+        "    SELECT COUNT(*) FROM messages WHERE session_fk = ?) "
+        "WHERE id = ?",
+        (team_id, role, spawned_by, spawn_prompt, session_fk, session_fk),
+    )
+
+
+def _insert_agent_team(conn, *, team_id, project_id, lead_session_id, description):
+    conn.execute(
+        "INSERT INTO agent_teams (team_id, project_id, created_ts, description, lead_session_id, config_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (team_id, project_id, "2026-04-01T00:00:00+00:00", description, lead_session_id, "{}"),
+    )
+
+
+def test_indexed_list_team_sessions(conn):
+    pid = _seed_project(conn)
+    lead_fk = _seed_session(
+        conn, project_id=pid, session_id="L1",
+        first_ts="2026-04-01T00:00:00Z", last_ts="2026-04-01T03:00:00Z",
+    )
+    a_fk = _seed_session(
+        conn, project_id=pid, session_id="A1",
+        first_ts="2026-04-01T00:10:00Z", last_ts="2026-04-01T01:00:00Z",
+    )
+    b_fk = _seed_session(
+        conn, project_id=pid, session_id="B1",
+        first_ts="2026-04-01T00:20:00Z", last_ts="2026-04-01T02:00:00Z",
+    )
+    _seed_message(conn, session_fk=lead_fk, seq=0, role="user", content="boot")
+    _seed_message(conn, session_fk=lead_fk, seq=1)
+    for sfk in (a_fk, b_fk):
+        _seed_message(conn, session_fk=sfk, seq=0, role="user", is_sidechain=True, content="go")
+        _seed_message(conn, session_fk=sfk, seq=1, is_sidechain=True)
+        _seed_message(conn, session_fk=sfk, seq=2, is_sidechain=True)
+
+    _insert_agent_team(conn, team_id="alpha", project_id=pid, lead_session_id="L1", description="my team")
+    _materialise_session_team(conn, session_fk=lead_fk, team_id="alpha", role="lead")
+    _materialise_session_team(conn, session_fk=a_fk, team_id="alpha", role="subagent",
+                              spawned_by="L1", spawn_prompt="do A")
+    _materialise_session_team(conn, session_fk=b_fk, team_id="alpha", role="subagent",
+                              spawned_by="L1", spawn_prompt="do B")
+
+    teams = agent_teams_service.list_team_sessions(conn)
+    assert len(teams) == 1
+    t = teams[0]
+    assert t.session_id == "L1"
+    assert t.team_name == "alpha"
+    assert t.description == "my team"
+    assert t.agent_count == 2
+    assert t.lead_message_count == 2
+    assert t.sub_agent_message_count == 6  # 3 + 3
+
+
+def test_indexed_build_team_graph_surfaces_spawn_prompt(conn):
+    pid = _seed_project(conn)
+    lead_fk = _seed_session(
+        conn, project_id=pid, session_id="lead-ix",
+        first_ts="2026-04-01T00:00:00Z", last_ts="2026-04-01T03:00:00Z",
+    )
+    a_fk = _seed_session(
+        conn, project_id=pid, session_id="agent-ix-a",
+        first_ts="2026-04-01T00:10:00Z", last_ts="2026-04-01T01:00:00Z",
+    )
+    b_fk = _seed_session(
+        conn, project_id=pid, session_id="agent-ix-b",
+        first_ts="2026-04-01T00:20:00Z", last_ts="2026-04-01T02:00:00Z",
+    )
+    _seed_message(conn, session_fk=lead_fk, seq=0, role="user", content="kick off")
+    _seed_message(conn, session_fk=lead_fk, seq=1)
+    _seed_message(conn, session_fk=a_fk, seq=0, role="user", is_sidechain=True,
+                  agent_id="worker-a", content="terse prompt a")
+    _seed_message(conn, session_fk=b_fk, seq=0, role="user", is_sidechain=True,
+                  agent_id="worker-b", content="terse prompt b")
+
+    _insert_agent_team(conn, team_id="beta", project_id=pid, lead_session_id="lead-ix", description="beta team")
+    _materialise_session_team(conn, session_fk=lead_fk, team_id="beta", role="lead")
+    _materialise_session_team(conn, session_fk=a_fk, team_id="beta", role="subagent",
+                              spawned_by="lead-ix", spawn_prompt="FULL SPAWN PROMPT A")
+    _materialise_session_team(conn, session_fk=b_fk, team_id="beta", role="subagent",
+                              spawned_by="lead-ix", spawn_prompt="FULL SPAWN PROMPT B")
+
+    g = agent_teams_service.build_team_graph(conn, lead_session_id="lead-ix")
+    assert g is not None
+    assert g.team_name == "beta"
+    assert g.description == "beta team"
+    assert g.lead.is_lead is True
+    assert g.lead.agent_role == "lead"
+    assert g.lead.first_user_prompt == "kick off"
+    assert [a.session_id for a in g.agents] == ["agent-ix-a", "agent-ix-b"]
+    assert g.agents[0].agent_role == "subagent"
+    assert g.agents[0].parent_session_id == "lead-ix"  # from sessions.spawned_by_session_id
+    assert g.agents[0].spawn_prompt == "FULL SPAWN PROMPT A"
+    assert g.agents[1].spawn_prompt == "FULL SPAWN PROMPT B"
+    # to_dict carries the new fields through verbatim
+    d = agent_teams_service.team_graph_to_dict(g)
+    assert d["description"] == "beta team"
+    assert d["agents"][0]["spawn_prompt"] == "FULL SPAWN PROMPT A"
+    assert d["agents"][0]["agent_role"] == "subagent"
+
+
+def test_indexed_build_team_graph_from_subagent_resolves_to_lead(conn):
+    pid = _seed_project(conn)
+    lead_fk = _seed_session(
+        conn, project_id=pid, session_id="lead-r",
+        first_ts="2026-04-01T00:00:00Z", last_ts="2026-04-01T02:00:00Z",
+    )
+    sub_fk = _seed_session(
+        conn, project_id=pid, session_id="sub-r",
+        first_ts="2026-04-01T00:10:00Z", last_ts="2026-04-01T01:00:00Z",
+    )
+    _seed_message(conn, session_fk=lead_fk, seq=0, role="user", content="boot")
+    _seed_message(conn, session_fk=sub_fk, seq=0, role="user", is_sidechain=True, agent_id="w", content="x")
+    _insert_agent_team(conn, team_id="gamma", project_id=pid, lead_session_id="lead-r", description=None)
+    _materialise_session_team(conn, session_fk=lead_fk, team_id="gamma", role="lead")
+    _materialise_session_team(conn, session_fk=sub_fk, team_id="gamma", role="subagent",
+                              spawned_by="lead-r", spawn_prompt="P")
+
+    # Passing the *sub-agent's* id resolves up to the team lead.
+    g = agent_teams_service.build_team_graph(conn, lead_session_id="sub-r")
+    assert g is not None
+    assert g.lead.session_id == "lead-r"
+    assert [a.session_id for a in g.agents] == ["sub-r"]

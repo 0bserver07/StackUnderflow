@@ -404,6 +404,17 @@ function AgentDetailPane({ graph, member, onOpenTranscript }: AgentDetailPanePro
         />
       </div>
 
+      {member.spawn_prompt && (
+        <div className="rounded-md border border-gray-200 dark:border-gray-800 p-3">
+          <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">
+            Spawn prompt
+          </div>
+          <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+            {member.spawn_prompt}
+          </div>
+        </div>
+      )}
+
       <div className="rounded-md border border-gray-200 dark:border-gray-800 p-3">
         <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">
           First user prompt
