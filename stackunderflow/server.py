@@ -30,6 +30,7 @@ from stackunderflow.routes import (
     misc,
     optimize,
     plan,
+    playback,
     projects,
     qa,
     search,
@@ -242,6 +243,7 @@ app.include_router(context_budget.router)
 app.include_router(cfg.router)
 app.include_router(etl.router)
 app.include_router(agent_teams.router)
+app.include_router(playback.router)
 
 
 

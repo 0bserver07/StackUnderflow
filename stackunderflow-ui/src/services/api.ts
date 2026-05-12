@@ -25,6 +25,8 @@ import type {
   AgentTeamListResponse,
   AgentTeamGraph,
   AgentTeamTranscriptResponse,
+  PlaybackResponse,
+  ProjectTimelineResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -614,6 +616,106 @@ export function writeAgentTeamSelection(
     params.set('agent', selection.agent)
   } else {
     params.delete('agent')
+  }
+  const out = params.toString()
+  return out.length > 0 ? `?${out}` : ''
+}
+
+// ---------------------------------------------------------------------------
+// Playback — per-session (and per-project) tool-call timeline.
+//
+//   * GET /api/playback/{session}                  — ordered event stream
+//   * GET /api/playback/project/{slug}             — cross-session timeline
+//
+// 404 → wrong session/slug; 200 + empty `events` → nothing to play back. The
+// `?include_payload=0` knob trims the per-event 200-char excerpts (the
+// project endpoint defaults it off — a project-wide stream is large). See
+// .notes/specs/10-playback-timeline.md.
+// ---------------------------------------------------------------------------
+
+export interface PlaybackQuery {
+  /** Restrict to a subset of tool names (exact match). */
+  toolFilter?: string[]
+  /** Cap on the number of events returned. */
+  limit?: number
+  /** Whether to include the per-event `payload_excerpt`. */
+  includePayload?: boolean
+}
+
+function buildPlaybackParams(q?: PlaybackQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  if (q?.toolFilter && q.toolFilter.length > 0) {
+    params.set('tool_filter', q.toolFilter.join(','))
+  }
+  if (typeof q?.limit === 'number') params.set('limit', String(q.limit))
+  if (typeof q?.includePayload === 'boolean') {
+    params.set('include_payload', q.includePayload ? '1' : '0')
+  }
+  return params
+}
+
+export async function getPlayback(
+  sessionId: string,
+  q?: PlaybackQuery,
+): Promise<PlaybackResponse> {
+  const qs = buildPlaybackParams(q).toString()
+  return fetchJson(`${BASE}/playback/${encodeURIComponent(sessionId)}${qs ? `?${qs}` : ''}`)
+}
+
+export async function getProjectTimeline(
+  projectSlug: string,
+  q?: PlaybackQuery & { since?: string },
+): Promise<ProjectTimelineResponse> {
+  const params = buildPlaybackParams(q)
+  if (q?.since) params.set('since', q.since)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/playback/project/${encodeURIComponent(projectSlug)}${qs ? `?${qs}` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// URL-state helpers for the Playback tab — keep PlaybackTab thin and give the
+// test suite a pure surface to round-trip the encoding.
+//
+// Contract: ?session=<id> selects the session being played back; ?seq=<n>
+// positions the scrubber at the n-th event. `seq` parses to a non-negative
+// integer or `null` (anything else — negative, NaN, absent — is `null`).
+// ---------------------------------------------------------------------------
+
+export interface PlaybackSelection {
+  session: string | null
+  seq: number | null
+}
+
+function parseSeq(raw: string | null): number | null {
+  if (raw === null || raw.trim() === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0) return null
+  return n
+}
+
+export function readPlaybackSelection(search: string): PlaybackSelection {
+  const params = new URLSearchParams(search)
+  const session = params.get('session')
+  return {
+    session: session && session.length > 0 ? session : null,
+    seq: parseSeq(params.get('seq')),
+  }
+}
+
+export function writePlaybackSelection(
+  search: string,
+  selection: PlaybackSelection,
+): string {
+  const params = new URLSearchParams(search)
+  if (selection.session) {
+    params.set('session', selection.session)
+  } else {
+    params.delete('session')
+  }
+  if (selection.seq !== null && selection.seq >= 0 && Number.isInteger(selection.seq)) {
+    params.set('seq', String(selection.seq))
+  } else {
+    params.delete('seq')
   }
   const out = params.toString()
   return out.length > 0 ? `?${out}` : ''
