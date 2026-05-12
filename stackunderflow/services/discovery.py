@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,9 +37,12 @@ from typing import Any
 
 __all__ = [
     "SessionMatch",
+    "OutcomeMatch",
     "find_sessions_in_path",
     "find_sessions_touching_file",
     "search_past_decisions",
+    "find_sessions_where_action_worked",
+    "find_failure_modes_for_file",
     "parse_since",
     "decode_slug_to_path",
 ]
@@ -68,6 +72,35 @@ class SessionMatch:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True, kw_only=True)
+class OutcomeMatch(SessionMatch):
+    """A discovery match annotated with an inferred outcome.
+
+    Extends :class:`SessionMatch` with three fields that say whether the
+    matched action *worked*, and the evidence for that judgement. The
+    inherited ``snippet`` stays ``None`` for outcome queries — the
+    evidence string carries the relevant excerpt instead.
+
+    ``outcome`` is one of:
+
+    * ``"worked"``    — a following user turn confirmed success, or the
+      session continued/ended with no revert and no complaint.
+    * ``"failed"``    — a following user turn reported it broke / was
+      wrong / wasn't what was asked.
+    * ``"reverted"``  — the change was undone (the user asked, or the
+      agent ran ``git revert`` / ``git reset --hard`` / ``git checkout --``).
+    * ``"uncertain"`` — the action was the last recorded turn, or the
+      follow-up turns gave no clear signal.
+
+    The new fields are keyword-only so they can follow ``SessionMatch``'s
+    defaulted ``snippet`` without dataclass field-ordering complaints.
+    """
+
+    outcome: str            # "worked" | "failed" | "reverted" | "uncertain"
+    outcome_evidence: str   # short human-readable justification + msg ref
+    outcome_msg_id: int     # id of the message that established the outcome
 
 
 # ── shared helpers ──────────────────────────────────────────────────────────
@@ -590,3 +623,458 @@ def search_past_decisions(
         if limit and limit > 0 and len(out) >= limit:
             break
     return out
+
+
+# ── outcome-aware discovery ──────────────────────────────────────────────────
+#
+# The three functions above answer "which sessions touched X". These two
+# answer "which sessions touched X *and it worked* / *and it broke*" — a
+# qualitatively different signal. We don't store outcomes; we infer them
+# by walking forward from the message that performed the action and
+# reading the next few user turns for confirmation / complaint / revert.
+#
+# No schema change: ``messages.role`` + ``seq`` + ``tools_json`` +
+# ``content_text`` + ``is_sidechain`` are all we need.
+#
+# This is heuristic. False positives (especially "silence ⇒ worked") are
+# expected; the keyword lists and the lookahead window are deliberately
+# kept in one place so they can be tuned against a real store later.
+
+
+# Keyword classifiers. One module-level dict so they can be tuned or
+# localised later — the initial set is English-only. Phrases are matched
+# case-insensitively on word boundaries (so bare ``no`` doesn't fire on
+# "another" / "node" / "notes"); ``revert`` wins over ``negative`` wins
+# over ``positive`` when more than one class matches a message.
+OUTCOME_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "revert": (
+        "undo", "undo that", "undo it",
+        "revert", "revert that", "revert it",
+        "roll back", "rollback", "roll that back",
+        "take that back", "back it out", "back that out",
+        "git revert", "git reset --hard", "git checkout --",
+    ),
+    "negative": (
+        "no", "nope",
+        "that broke", "you broke", "broke it", "broke the build", "broke the tests",
+        "still broken", "still failing", "still fails", "still errors",
+        "doesn't work", "does not work", "didn't work", "did not work",
+        "not working", "isn't working", "won't work", "wont work", "stopped working",
+        "wrong", "that's wrong", "thats wrong", "incorrect",
+        "not what i asked", "not what i wanted", "not what i meant",
+        "that's not right", "thats not right", "that's not it", "thats not it",
+        "no good", "doesn't help", "didn't help",
+    ),
+    "positive": (
+        "thanks", "thank you", "thx",
+        "that worked", "it worked", "works now", "working now",
+        "that works", "it works", "works great", "works perfectly",
+        "perfect", "nice", "great", "awesome", "excellent",
+        "ship it", "lgtm", "looks good", "looks great", "love it",
+        "exactly right", "that's it", "thats it", "nailed it",
+    ),
+}
+
+# Benign ``no <noun>`` bigrams — "no problem", "no worries" etc. are not
+# complaints, so a bare-``no`` negative match immediately followed by one
+# of these is suppressed (we keep scanning for a real signal).
+_BENIGN_NO_SUFFIXES = (
+    "problem", "problems", "worries", "worry", "rush", "biggie", "prob",
+    "issue", "issues", "need", "need to", "doubt",
+)
+
+# Bash commands that revert work — matched as substrings inside a
+# whitespace-normalised Bash tool-call ``command`` arg.
+_REVERT_COMMAND_PATTERNS = (
+    "git revert",
+    "git reset --hard",
+    "git reset --merge",
+    "git reset head",
+    "git checkout --",
+    "git checkout .",
+    "git restore ",
+    "git stash",
+)
+
+# Tool names (across providers) that run a shell command.
+_SHELL_TOOL_NAMES = ("Bash", "shell", "run_command", "execute_command", "RunCommand")
+
+# How many follow-up user turns to inspect past the anchor before giving
+# up. Open question in the spec — start at 5, tune empirically.
+_OUTCOME_LOOKAHEAD = 5
+
+
+def _compile_keyword_re(words: tuple[str, ...]) -> re.Pattern[str]:
+    """Build a word-boundary alternation regex, longest phrase first."""
+    parts = sorted({w.strip() for w in words if w.strip()}, key=len, reverse=True)
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(p) for p in parts) + r")\b",
+        re.IGNORECASE,
+    )
+
+
+_KW_RE: dict[str, re.Pattern[str]] = {
+    klass: _compile_keyword_re(words) for klass, words in OUTCOME_KEYWORDS.items()
+}
+
+
+def _trim_inline(text: str, limit: int) -> str:
+    """Collapse whitespace and clip to ``limit`` chars with an ellipsis."""
+    one_line = " ".join(text.split())
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[: max(1, limit - 1)].rstrip() + "…"
+
+
+def _classify_user_text(text: str) -> str | None:
+    """Classify a single user message.
+
+    Returns ``"revert"`` / ``"negative"`` / ``"positive"`` for the first
+    class that fires, or ``None`` if nothing matched. Precedence: revert >
+    negative > positive (a "thanks, but revert that" is a revert request,
+    not approval).
+    """
+    if not text:
+        return None
+    if _KW_RE["revert"].search(text):
+        return "revert"
+    for m in _KW_RE["negative"].finditer(text):
+        if m.group(0).lower() == "no":
+            tail = text[m.end():m.end() + 16].lower().lstrip(" ,.!:;-")
+            if tail.startswith(_BENIGN_NO_SUFFIXES):
+                continue  # "no problem" / "no worries" — not a complaint
+        return "negative"
+    if _KW_RE["positive"].search(text):
+        return "positive"
+    return None
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read ``key`` from a ``sqlite3.Row`` / dict-ish row, tolerating absence."""
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        if isinstance(row, dict):
+            return row.get(key, default)
+        return default
+
+
+def _is_sidechain_row(row: Any) -> bool:
+    return bool(_row_value(row, "is_sidechain", 0))
+
+
+def _revert_command_in_tools(tools_json: str | None) -> str | None:
+    """Return the first revert-y shell command in ``tools_json``, or ``None``."""
+    if not tools_json or tools_json == "[]":
+        return None
+    try:
+        tools = json.loads(tools_json)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(tools, list):
+        return None
+    for entry in tools:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("tool") or ""
+        if name not in _SHELL_TOOL_NAMES:
+            continue
+        candidate = entry.get("input") or entry.get("arguments") or entry
+        cmd = ""
+        if isinstance(candidate, dict):
+            cmd = candidate.get("command") or candidate.get("cmd") or ""
+        if not isinstance(cmd, str) or not cmd:
+            continue
+        norm = " ".join(cmd.lower().split())
+        if any(pat in norm for pat in _REVERT_COMMAND_PATTERNS):
+            return cmd
+    return None
+
+
+def _classify_outcome(
+    messages: Sequence[Any],
+    anchor_idx: int,
+    lookahead: int = _OUTCOME_LOOKAHEAD,
+) -> tuple[str, str, int]:
+    """Infer the outcome of the action at ``messages[anchor_idx]``.
+
+    ``messages`` must be the session's rows in conversation order (sorted
+    by ``seq``); each row exposes ``id``, ``role``, ``content_text``,
+    ``tools_json`` and ``is_sidechain``. We walk strictly forward from the
+    anchor, skipping sidechain rows (a Task sub-agent's transcript doesn't
+    speak for the parent session), and look at up to ``lookahead`` real
+    user turns plus any agent revert command in between.
+
+    Returns ``(outcome, evidence, outcome_msg_id)``. ``outcome`` is one of
+    ``"worked"`` / ``"failed"`` / ``"reverted"`` / ``"uncertain"``.
+    """
+    anchor_id = int(_row_value(messages[anchor_idx], "id", 0) or 0)
+
+    tail = [m for m in list(messages)[anchor_idx + 1:] if not _is_sidechain_row(m)]
+    if not tail:
+        return (
+            "uncertain",
+            "action is the last recorded turn in the session — no follow-up to judge",
+            anchor_id,
+        )
+
+    user_turns_seen = 0
+    last_user_id = anchor_id
+    for m in tail:
+        mid = int(_row_value(m, "id", 0) or 0)
+        role = str(_row_value(m, "role", "") or "").lower()
+        if role == "assistant":
+            cmd = _revert_command_in_tools(_row_value(m, "tools_json"))
+            if cmd is not None:
+                return (
+                    "reverted",
+                    f"agent ran `{_trim_inline(cmd, 120)}` after the action",
+                    mid,
+                )
+            continue
+        if role != "user":
+            continue
+        text = str(_row_value(m, "content_text", "") or "").strip()
+        if not text:
+            # A tool-result user message — not a real turn. Walk further.
+            continue
+        klass = _classify_user_text(text)
+        if klass is None:
+            user_turns_seen += 1
+            last_user_id = mid
+            if user_turns_seen >= lookahead:
+                break
+            continue
+        excerpt = _trim_inline(text, 160)
+        if klass == "revert":
+            return ("reverted", f"user wrote: '{excerpt}'", mid)
+        if klass == "negative":
+            return ("failed", f"user wrote: '{excerpt}'", mid)
+        return ("worked", f"user wrote: '{excerpt}'", mid)
+
+    # Window exhausted (or session ended) with no explicit signal.
+    if user_turns_seen == 0:
+        # The session continued — more agent work, tool calls, maybe a
+        # sub-agent — but the user never came back to complain or ask for
+        # a revert. Treat that silence as acceptance.
+        return (
+            "worked",
+            "session continued after the action with no user complaint or revert",
+            int(_row_value(messages[-1], "id", anchor_id) or anchor_id),
+        )
+    return (
+        "uncertain",
+        f"{user_turns_seen} follow-up user turn(s) but none confirmed or rejected the action",
+        last_user_id,
+    )
+
+
+def _row_to_outcome_match(
+    row: sqlite3.Row, outcome: str, evidence: str, outcome_msg_id: int
+) -> OutcomeMatch:
+    return OutcomeMatch(
+        session_id=row["session_id"],
+        project_slug=row["project_slug"],
+        project_path=_project_fs_path(row["stored_path"], row["project_slug"]),
+        provider=row["provider"],
+        first_ts=row["first_ts"] or "",
+        last_ts=row["last_ts"] or "",
+        message_count=int(row["message_count"] or 0),
+        cost_usd=float(row["cost_usd"] or 0.0),
+        snippet=None,
+        outcome=outcome,
+        outcome_evidence=evidence,
+        outcome_msg_id=int(outcome_msg_id),
+    )
+
+
+def _outcome_matches_for(
+    conn: sqlite3.Connection,
+    anchor_seq_by_fk: dict[int, int],
+    *,
+    wanted_outcomes: set[str],
+    limit: int,
+) -> list[OutcomeMatch]:
+    """Back half shared by the two outcome functions.
+
+    ``anchor_seq_by_fk`` maps a candidate ``sessions.id`` to the ``seq``
+    of its anchor message (the *last* one that matched the query). For
+    each session — newest ``last_ts`` first — we pull the rows from the
+    anchor's ``seq`` onward, classify the outcome (the first row is the
+    anchor), and keep the session when ``outcome`` is in
+    ``wanted_outcomes``. ``limit`` (> 0) caps the count and lets us stop
+    loading early once we've got enough.
+    """
+    if not anchor_seq_by_fk:
+        return []
+    fks = list(anchor_seq_by_fk)
+    placeholders = ",".join("?" for _ in fks)
+    meta_sql = (
+        "SELECT " + _SESSION_SELECT + ", s.id AS session_fk " + _SESSION_FROM
+        + f" WHERE s.id IN ({placeholders}) ORDER BY s.last_ts DESC"
+    )
+    meta_rows = conn.execute(meta_sql, fks).fetchall()
+
+    out: list[OutcomeMatch] = []
+    for meta in meta_rows:
+        sfk = int(meta["session_fk"])
+        msg_rows = conn.execute(
+            "SELECT id, seq, role, content_text, tools_json, is_sidechain "
+            "FROM messages WHERE session_fk = ? AND seq >= ? ORDER BY seq, id",
+            (sfk, anchor_seq_by_fk[sfk]),
+        ).fetchall()
+        if not msg_rows:
+            continue
+        outcome, evidence, msg_id = _classify_outcome(msg_rows, 0)
+        if outcome not in wanted_outcomes:
+            continue
+        out.append(_row_to_outcome_match(meta, outcome, evidence, msg_id))
+        if limit and limit > 0 and len(out) >= limit:
+            break
+    return out
+
+
+def find_sessions_where_action_worked(
+    conn: sqlite3.Connection,
+    *,
+    action: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> list[OutcomeMatch]:
+    """Sessions where ``action`` was performed and the next user turn confirmed success.
+
+    ``action`` is matched as a case-insensitive substring against both the
+    serialised tool calls (``messages.tools_json``) and the message text
+    (``messages.content_text``) — so it can be a tool name (``"Edit"``), a
+    file fragment (``"cost.py"``), or a phrase from the conversation
+    (``"add caching"``). Empty/whitespace ``action`` returns no matches.
+
+    For each candidate session, the *last* message matching ``action`` is
+    the anchor; the outcome is inferred by walking forward from it (see
+    :func:`_classify_outcome`). Only sessions whose inferred outcome is
+    ``"worked"`` are returned, sorted by ``last_ts`` DESC.
+
+    Parameters
+    ----------
+    conn:
+        Main store connection (``~/.stackunderflow/store.db``).
+    action:
+        Free-text action descriptor.
+    project:
+        Optional ``projects.slug`` filter.
+    file_path:
+        Optional — narrow to sessions that *also* touch this file (any
+        Read/Edit/Write tool arg or a free-form mention). Resolved to an
+        absolute path before matching.
+    since:
+        Optional cutoff on ``messages.timestamp``. Same forms as
+        :func:`parse_since` accepts. Raises ``ValueError`` if malformed.
+    limit:
+        Max rows returned. Negative or zero means no limit.
+    """
+    _ensure_row_factory(conn)
+    if not action or not action.strip():
+        return []
+    needle = action.strip()
+    since_iso = parse_since(since)
+
+    where = ["(m.tools_json LIKE ? OR m.content_text LIKE ?)"]
+    params: list[Any] = [f"%{needle}%", f"%{needle}%"]
+    if project:
+        where.append("p.slug = ?")
+        params.append(project)
+    if since_iso:
+        where.append("m.timestamp >= ?")
+        params.append(since_iso)
+    cand_sql = (
+        "SELECT s.id AS sfk, MAX(m.seq) AS anchor_seq "
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "JOIN projects p ON p.id = s.project_id "
+        "WHERE " + " AND ".join(where) + " GROUP BY s.id"
+    )
+    cand_rows = conn.execute(cand_sql, params).fetchall()
+    anchor_seq_by_fk = {int(r["sfk"]): int(r["anchor_seq"]) for r in cand_rows}
+
+    # Optional file narrowing — intersect with sessions touching the file
+    # (loose: any tools_json / content_text mention of the resolved path).
+    if file_path and anchor_seq_by_fk:
+        resolved = _resolve_input_path(file_path)
+        like = f"%{resolved}%"
+        touch_rows = conn.execute(
+            "SELECT DISTINCT s.id AS sfk FROM messages m "
+            "JOIN sessions s ON s.id = m.session_fk "
+            "WHERE m.tools_json LIKE ? OR m.content_text LIKE ?",
+            [like, like],
+        ).fetchall()
+        touched = {int(r["sfk"]) for r in touch_rows}
+        anchor_seq_by_fk = {
+            fk: seq for fk, seq in anchor_seq_by_fk.items() if fk in touched
+        }
+
+    return _outcome_matches_for(
+        conn, anchor_seq_by_fk, wanted_outcomes={"worked"}, limit=limit,
+    )
+
+
+def find_failure_modes_for_file(
+    conn: sqlite3.Connection,
+    file_path: str,
+    *,
+    since: str | None = None,
+    limit: int = 20,
+) -> list[OutcomeMatch]:
+    """Sessions where editing ``file_path`` led to a follow-up correction.
+
+    Candidate sessions are those with at least one Edit / Write /
+    MultiEdit / NotebookEdit tool call whose arguments reference
+    ``file_path``. The anchor is the *last* such edit; the outcome is
+    inferred forward from it. Sessions whose inferred outcome is
+    ``"failed"`` or ``"reverted"`` are returned, sorted by ``last_ts``
+    DESC — i.e. "here's where touching this file went wrong, and why".
+
+    Parameters
+    ----------
+    conn:
+        Main store connection.
+    file_path:
+        File to look up. Resolved to an absolute path before matching.
+    since:
+        Optional cutoff on ``messages.timestamp``. Same forms as
+        :func:`parse_since`. Raises ``ValueError`` if malformed.
+    limit:
+        Max rows returned. Negative or zero means no limit.
+    """
+    _ensure_row_factory(conn)
+    resolved = _resolve_input_path(file_path)
+    since_iso = parse_since(since)
+
+    where = ["m.tools_json LIKE ?"]
+    params: list[Any] = [f"%{resolved}%"]
+    if since_iso:
+        where.append("m.timestamp >= ?")
+        params.append(since_iso)
+    cand_sql = (
+        "SELECT s.id AS sfk, m.seq AS seq, m.tools_json AS tools_json "
+        "FROM messages m JOIN sessions s ON s.id = m.session_fk "
+        "WHERE " + " AND ".join(where)
+    )
+    # The SQL ``LIKE`` is generous (it would match a Read of the file, or
+    # the path mentioned inside some unrelated arg). Pin the anchor to the
+    # *last* genuine write-mode mention per session; sessions with none
+    # drop out.
+    anchor_seq_by_fk: dict[int, int] = {}
+    for r in conn.execute(cand_sql, params).fetchall():
+        if not _tools_json_mentions_file(
+            r["tools_json"], file_path=resolved, mode="write",
+        ):
+            continue
+        sfk, seq = int(r["sfk"]), int(r["seq"])
+        if seq > anchor_seq_by_fk.get(sfk, -1):
+            anchor_seq_by_fk[sfk] = seq
+
+    return _outcome_matches_for(
+        conn, anchor_seq_by_fk, wanted_outcomes={"failed", "reverted"}, limit=limit,
+    )
