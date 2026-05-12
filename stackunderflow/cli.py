@@ -1284,33 +1284,63 @@ def reindex():
 # it without parsing the human-readable text.
 
 
+def _resolve_context_budget(context_budget: int | None) -> int:
+    """``--context-budget`` value, falling back to the configured default.
+
+    ``None`` (flag omitted) → ``Settings().discovery_budget_tokens``
+    (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000).
+    """
+    if context_budget is not None:
+        return int(context_budget)
+    return int(Settings().discovery_budget_tokens)
+
+
 def _emit_sessions(
-    matches: list,
+    result,
     *,
     fmt: str,
     title: str,
     show_snippet: bool = False,
 ) -> None:
-    """Render a list of ``SessionMatch`` rows in either format.
+    """Render a discovery result (``BudgetedResult`` or bare list).
 
     Lifted out of the three command bodies so they stay one screen
     each. The JSON branch wraps the dataclass list as ``{"sessions":
-    [...]}`` so empty results round-trip as an explicit empty list
-    rather than a bare ``[]`` (matches the contract the MCP + skills
-    callers depend on).
+    [...]}`` (so empty results round-trip as an explicit empty list, not
+    a bare ``[]``) and — when a budget was applied — adds
+    ``_budget_used_tokens`` / ``_budget_max_tokens``; ``_truncated`` /
+    ``_more_available`` appear only when the budget actually dropped
+    rows. The text branch appends a one-line tail marker in that same
+    case.
     """
+    # Duck-type: ``BudgetedResult`` has these attrs; a bare list doesn't.
+    sessions = getattr(result, "sessions", result)
+    truncated = bool(getattr(result, "truncated", False))
+    more_available = int(getattr(result, "more_available", 0))
+    budget_used = getattr(result, "budget_used_tokens", None)
+    budget_max = getattr(result, "budget_max_tokens", None)
+
     if fmt == "json":
-        payload = {"sessions": [m.to_dict() for m in matches]}
+        payload: dict = {"sessions": [m.to_dict() for m in sessions]}
+        if truncated:
+            payload["_truncated"] = True
+            payload["_more_available"] = more_available
+        if budget_used is not None:
+            payload["_budget_used_tokens"] = budget_used
+        if budget_max is not None:
+            payload["_budget_max_tokens"] = budget_max
         click.echo(json.dumps(payload, indent=2))
         return
 
-    if not matches:
+    if not sessions:
         click.echo(f"{title}: no matching sessions.")
+        if truncated:
+            click.echo(_truncation_footer(more_available))
         return
 
-    click.echo(f"{title}  ({len(matches)} session(s))")
+    click.echo(f"{title}  ({len(sessions)} session(s))")
     click.echo("")
-    for m in matches:
+    for m in sessions:
         head = (
             f"  [{m.provider}] {m.session_id[:12]}…  "
             f"{m.last_ts[:19] if m.last_ts else '(no ts)'}  "
@@ -1333,6 +1363,16 @@ def _emit_sessions(
                 snippet_line = snippet_line[:197] + "…"
             click.echo(f"      … {snippet_line}")
         click.echo("")
+    if truncated:
+        click.echo(_truncation_footer(more_available))
+
+
+def _truncation_footer(more_available: int) -> str:
+    noun = "session" if more_available == 1 else "sessions"
+    return (
+        f"... ({more_available} more {noun} matched but truncated to fit "
+        f"context budget; raise --limit or --context-budget to see more)"
+    )
 
 
 @cli.command("find-sessions-in-path")
@@ -1341,7 +1381,14 @@ def _emit_sessions(
               help="Only sessions whose last activity is newer than this. "
                    "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
 @click.option("--limit", type=int, default=20, show_default=True,
-              help="Max sessions to return.")
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output. Results are ranked "
+                   "(recency + cost + relevance) and packed greedily until "
+                   "~this many estimated tokens are used; a tail marker "
+                   "reports how many more matched. Default: "
+                   "STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
 @click.option("--provider", default=None,
               help="Filter by provider slug (e.g. claude, codex, cursor).")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
@@ -1350,6 +1397,7 @@ def find_sessions_in_path_cmd(
     path: str,
     since: str | None,
     limit: int,
+    context_budget: int | None,
     provider: str | None,
     fmt: str,
 ):
@@ -1361,11 +1409,13 @@ def find_sessions_in_path_cmd(
     """
     from stackunderflow.services.discovery import find_sessions_in_path
 
+    budget = _resolve_context_budget(context_budget)
     conn = _open_store()
     try:
         try:
-            matches = find_sessions_in_path(
+            result = find_sessions_in_path(
                 conn, path, since=since, limit=limit, provider=provider,
+                context_budget=budget,
             )
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--since") from exc
@@ -1373,7 +1423,7 @@ def find_sessions_in_path_cmd(
         conn.close()
 
     _emit_sessions(
-        matches,
+        result,
         fmt=fmt,
         title=f"Sessions in path {path}",
     )
@@ -1382,7 +1432,11 @@ def find_sessions_in_path_cmd(
 @cli.command("find-sessions-touching-file")
 @click.argument("file", type=click.Path(file_okay=True, dir_okay=True))
 @click.option("--limit", type=int, default=20, show_default=True,
-              help="Max sessions to return.")
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output (ranked + greedily packed). "
+                   "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
 @click.option("--mode", type=click.Choice(("read", "write", "any")),
               default="any", show_default=True,
               help="Match against Read tool args, Edit/Write tool args, "
@@ -1392,22 +1446,24 @@ def find_sessions_in_path_cmd(
 def find_sessions_touching_file_cmd(
     file: str,
     limit: int,
+    context_budget: int | None,
     mode: str,
     fmt: str,
 ):
     """List sessions where FILE shows up in tool calls or message text."""
     from stackunderflow.services.discovery import find_sessions_touching_file
 
+    budget = _resolve_context_budget(context_budget)
     conn = _open_store()
     try:
-        matches = find_sessions_touching_file(
-            conn, file, limit=limit, mode=mode,
+        result = find_sessions_touching_file(
+            conn, file, limit=limit, mode=mode, context_budget=budget,
         )
     finally:
         conn.close()
 
     _emit_sessions(
-        matches,
+        result,
         fmt=fmt,
         title=f"Sessions touching {file}  (mode={mode})",
     )
@@ -1421,7 +1477,11 @@ def find_sessions_touching_file_cmd(
               help="Filter to messages newer than this. Accepts '7d', "
                    "'1w', '1m', '24h', or ISO.")
 @click.option("--limit", type=int, default=20, show_default=True,
-              help="Max sessions to return.")
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output (ranked + greedily packed). "
+                   "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
               show_default=True, help="Output format.")
 def search_past_decisions_cmd(
@@ -1429,16 +1489,19 @@ def search_past_decisions_cmd(
     project: str | None,
     since: str | None,
     limit: int,
+    context_budget: int | None,
     fmt: str,
 ):
     """Substring-search QUERY across past message content; return matching sessions."""
     from stackunderflow.services.discovery import search_past_decisions
 
+    budget = _resolve_context_budget(context_budget)
     conn = _open_store()
     try:
         try:
-            matches = search_past_decisions(
+            result = search_past_decisions(
                 conn, query, project=project, since=since, limit=limit,
+                context_budget=budget,
             )
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--since") from exc
@@ -1446,7 +1509,7 @@ def search_past_decisions_cmd(
         conn.close()
 
     _emit_sessions(
-        matches,
+        result,
         fmt=fmt,
         title=f"Past decisions matching {query!r}",
         show_snippet=True,

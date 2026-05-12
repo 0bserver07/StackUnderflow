@@ -129,6 +129,19 @@ class Settings:
     plan_name                    = _Opt(None,  None)
     plan_monthly_usd             = _Opt(None,  None)
     plan_reset_day               = _Opt(1,     None)
+    # Discovery output token budget — the three discovery commands
+    # (``find-sessions-in-path`` / ``find-sessions-touching-file`` /
+    # ``search-past-decisions``) rank their results and pack greedily
+    # until this many *estimated* tokens (chars/4 heuristic) are used,
+    # so an agent calling them doesn't get an unprioritised dump into a
+    # tight context window. ``--context-budget`` on each command
+    # overrides per-invocation.
+    discovery_budget_tokens      = _Opt(2000,  "STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS")
+    # Comma-separated rank weights for discovery output:
+    # ``recency,cost,relevance``. Parsed leniently — a malformed value or
+    # the wrong number of components falls back to the default. A future
+    # ``cite_rate`` term (citation-feedback spec) appends a fourth weight.
+    discovery_rank_weights       = _Opt("0.5,0.2,0.3", "STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS")
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 
