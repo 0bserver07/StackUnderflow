@@ -414,7 +414,7 @@ class TestIterTelemetry:
 class TestMigrationV009:
     def test_brings_fresh_db_to_version_9_with_table(self, tmp_path):
         conn = _make_conn(tmp_path)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 9
         assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.CURRENT_VERSION
         cols = {r[1] for r in conn.execute(
             "PRAGMA table_info(discovery_telemetry)"
@@ -429,7 +429,7 @@ class TestMigrationV009:
                   first_loaded_ts="2026-01-01T00:00:00+00:00")
         # Re-apply — must be a no-op (already at v009) and keep the row.
         schema.apply(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 9
         row = conn.execute(
             "SELECT loaded_count, cited_count FROM discovery_telemetry "
             "WHERE session_id = 'keep'"
@@ -443,7 +443,7 @@ class TestMigrationV009:
         schema.apply(conn)  # → v9
         conn.execute("PRAGMA user_version = 8")  # simulate the crash window
         schema.apply(conn)  # must not raise on CREATE TABLE
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 9
 
 
 # ── MCP session_query wiring ────────────────────────────────────────────────

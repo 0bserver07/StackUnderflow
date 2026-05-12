@@ -41,7 +41,7 @@
 
 BEGIN;
 
-CREATE TABLE message_tool_mart (
+CREATE TABLE IF NOT EXISTS message_tool_mart (
     id              INTEGER PRIMARY KEY,
     message_id      INTEGER NOT NULL,            -- references messages.id (no FK; messages is a view post-v008)
     project_id      INTEGER NOT NULL REFERENCES projects(id),
@@ -54,10 +54,10 @@ CREATE TABLE message_tool_mart (
     call_index      INTEGER NOT NULL,            -- 0-based index of this call within the message, per tool_name
     UNIQUE (message_id, tool_name, call_index)
 );
-CREATE INDEX idx_message_tool_mart_session    ON message_tool_mart(session_id);
-CREATE INDEX idx_message_tool_mart_project    ON message_tool_mart(project_id, day);
-CREATE INDEX idx_message_tool_mart_file       ON message_tool_mart(file_path);
-CREATE INDEX idx_message_tool_mart_tool_day   ON message_tool_mart(tool_name, day);
+CREATE INDEX IF NOT EXISTS idx_message_tool_mart_session    ON message_tool_mart(session_id);
+CREATE INDEX IF NOT EXISTS idx_message_tool_mart_project    ON message_tool_mart(project_id, day);
+CREATE INDEX IF NOT EXISTS idx_message_tool_mart_file       ON message_tool_mart(file_path);
+CREATE INDEX IF NOT EXISTS idx_message_tool_mart_tool_day   ON message_tool_mart(tool_name, day);
 
 PRAGMA user_version = 11;
 
