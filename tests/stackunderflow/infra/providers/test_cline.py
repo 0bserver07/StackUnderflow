@@ -49,6 +49,20 @@ def test_unknown_vendor_returns_none() -> None:
     assert cline.rates_for(cline.canonicalize("ollama/mistral")) is None
 
 
+def test_cline_auto_routes_to_sonnet_45() -> None:
+    """``cline-auto`` (adapter default) pegs to Sonnet 4.5 rates.
+
+    Was returning ``None`` → $0; the v0.7.1 sweep didn't address the
+    adapter-default placeholder that 103 events in the live store carry.
+    """
+    cline = ClinePricer()
+    anth = AnthropicPricer()
+    cline_rates = cline.rates_for(cline.canonicalize("cline-auto"))
+    expected = anth.rates_for(anth.canonicalize("claude-sonnet-4-5"))
+    assert cline_rates is not None
+    assert cline_rates == expected
+
+
 def test_bare_claude_prefix_routes_to_anthropic() -> None:
     """No vendor slash — bare ``claude-*`` still routes to Anthropic."""
     cline = ClinePricer()

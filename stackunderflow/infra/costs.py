@@ -118,6 +118,8 @@ def format_dollars(amount: float) -> str:
 # ── compat shims ─────────────────────────────────────────────────────────────
 
 _CANONICAL_IDS = [
+    # Anthropic — current Opus / Sonnet / Haiku
+    "claude-opus-4-7",
     "claude-opus-4-6", "claude-sonnet-4-6",
     "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
     "claude-opus-4-20250514", "claude-sonnet-4-20250514",
@@ -128,6 +130,10 @@ _CANONICAL_IDS = [
     # ``claude-3-5-sonnet``). The Anthropic pricer's family heuristic
     # matches these via hyphen-split token set.
     "claude-3-5-sonnet",
+    # ZhipuAI GLM models surfaced behind a Claude-shape proxy. The
+    # AnthropicPricer's heuristic now routes these to dedicated GLM_5 /
+    # GLM_51 family rates (see providers/anthropic.py).
+    "glm-5", "glm-5.1",
     # OpenAI Codex + base GPT families
     "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",
     "gpt-5.4", "gpt-5", "gpt-5-mini",
@@ -141,7 +147,16 @@ _CANONICAL_IDS = [
     "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
     "gemini-1.5-pro", "gemini-1.5-flash",
     "gemini-3.0-pro", "gemini-3.1-pro",
+    # Preview ids the Gemini CLI emits in the wild today.
+    "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
     "gemini-auto",
+    # Cursor's own composer line + autoselector defaults — rates in
+    # ``providers/cursor.py``.
+    "composer-1", "composer-2",
+    "cursor-auto", "cursor-fast",
+    # Droid (Factory) / Cline auto-defaults — peg to Sonnet 4.x rates in
+    # their respective pricers when the concrete model isn't known.
+    "droid-auto", "cline-auto",
 ]
 
 
@@ -153,6 +168,10 @@ def _provider_for_model(model: str) -> str:
     * ``qwen-*``    → qwen pricer
     * ``gemini-*``  → gemini pricer
     * ``codex-*`` / contains ``gpt`` or ``codex`` → openai pricer
+    * ``composer-*`` / ``cursor-*`` → cursor pricer
+    * ``droid-auto`` → droid pricer
+    * ``cline-auto`` → cline pricer
+    * ``glm-*`` → anthropic pricer (consumed through Anthropic-shape proxy)
     * ``claude-*``  → anthropic pricer (also the default fallback)
     """
     lowered = model.lower()
@@ -160,7 +179,13 @@ def _provider_for_model(model: str) -> str:
         return "qwen"
     if lowered.startswith("gemini") or lowered == "gemini-auto":
         return "gemini"
-    if "claude" in lowered:
+    if lowered.startswith("composer-") or lowered.startswith("cursor-"):
+        return "cursor"
+    if lowered == "droid-auto":
+        return "droid"
+    if lowered == "cline-auto":
+        return "cline"
+    if "claude" in lowered or lowered.startswith("glm-"):
         return "anthropic"
     if "gpt" in lowered or "codex" in lowered:
         return "openai"

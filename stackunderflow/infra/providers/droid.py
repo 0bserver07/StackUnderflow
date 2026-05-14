@@ -53,6 +53,18 @@ class DroidPricer(ProviderPricer):
             return self._anthropic.rates_for(self._anthropic.canonicalize(canonical))
         if canonical.startswith("gpt-") or "codex" in canonical:
             return self._openai.rates_for(self._openai.canonicalize(canonical))
+        # ``droid-auto`` is the adapter default when the settings.json
+        # record doesn't carry a concrete model id. Real-world Droid
+        # sessions running against the user's Anthropic key route through
+        # Claude Sonnet-class models, so peg the auto-selector to Sonnet
+        # 4.x rates (Anthropic published — $3/$15) and stamp it as
+        # rate_card via the canonical-id list. ESTIMATED in the sense
+        # that we're guessing the underlying engine; the dollar figure
+        # is grounded in Anthropic's published Sonnet rate.
+        if canonical == "droid-auto":
+            return self._anthropic.rates_for(
+                self._anthropic.canonicalize("claude-sonnet-4-5")
+            )
         # Unknown vendor — let the cost layer flag rather than misprice.
         return None
 

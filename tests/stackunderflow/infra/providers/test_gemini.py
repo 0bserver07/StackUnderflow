@@ -71,6 +71,7 @@ def test_cache_write_is_zero_for_all_gemini() -> None:
         "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
         "gemini-1.5-pro", "gemini-1.5-flash",
         "gemini-3.1-pro", "gemini-3.0-pro",
+        "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
         "gemini-auto",
     ):
         rates = p.rates_for(canonical)
@@ -92,3 +93,89 @@ def test_compute_with_gemini_2_5_pro() -> None:
     cost = p.compute(tokens, "gemini-2.5-pro")
     # 1M × $1.25 + 1M × $10 = $11.25
     assert cost["total_cost"] == 11.25
+
+
+# ── Gemini 3 preview ids — pricing-fixes-round2 ─────────────────────────────
+
+
+def test_rates_for_gemini_3_pro_preview() -> None:
+    """``gemini-3-pro-preview`` — Google's published Pro rate ($2/$12)."""
+    p = GeminiPricer()
+    rates = p.rates_for(p.canonicalize("gemini-3-pro-preview"))
+    assert rates == (2.00, 12.00, 0.0, 0.50)
+
+
+def test_rates_for_gemini_31_pro_preview() -> None:
+    """``gemini-3.1-pro-preview`` — same $2/$12 rate as the 3.0 preview."""
+    p = GeminiPricer()
+    rates = p.rates_for(p.canonicalize("gemini-3.1-pro-preview"))
+    assert rates == (2.00, 12.00, 0.0, 0.50)
+
+
+def test_rates_for_gemini_3_flash_preview() -> None:
+    """``gemini-3-flash-preview`` — Flash tier at $0.30/$2.50 (≤200K)."""
+    p = GeminiPricer()
+    rates = p.rates_for(p.canonicalize("gemini-3-flash-preview"))
+    assert rates == (0.30, 2.50, 0.0, 0.075)
+
+
+def test_gemini_2_5_pro_normalizer_emits_rate_card() -> None:
+    """Regression for v0.7.1 cost-coverage gap.
+
+    Constructs a ``messages``-shape row for ``gemini-2.5-pro`` and runs it
+    through ``GeminiNormalizer`` end-to-end; the emitted event must stamp
+    ``cost_source='rate_card'`` (not ``'unknown'``). The v0.7.1 rate sweep
+    added ``gemini-2.5-pro`` to ``RATE_CARD`` but the live store still
+    showed 239 unknown events for this model because they were created
+    pre-sweep and never re-derived. Locks in that a fresh row stamps
+    correctly.
+    """
+    from stackunderflow.etl.normalize.base import COST_SOURCE_RATE_CARD
+    from stackunderflow.etl.normalize.gemini import GeminiNormalizer
+
+    msg_row = {
+        "id": 1,
+        "session_id": "s1",
+        "project_id": 1,
+        "provider": "gemini",
+        "role": "assistant",
+        "timestamp": "2026-05-13T10:00:00Z",
+        "model": "gemini-2.5-pro",
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "cache_read_tokens": 0,
+        "cache_create_tokens": 0,
+    }
+    events = list(GeminiNormalizer().normalize(msg_row))
+    assert len(events) == 1
+    assert events[0]["cost_source"] == COST_SOURCE_RATE_CARD
+    assert events[0]["cost_usd"] > 0
+
+
+def test_gemini_3_pro_preview_normalizer_emits_rate_card() -> None:
+    """A ``gemini-3-pro-preview`` row stamps ``rate_card`` (not ``unknown``).
+
+    Before this fix the model wasn't in ``RATE_CARD``; the v0.7.1 sweep
+    added the bare ``gemini-3.0-pro`` / ``gemini-3.1-pro`` ids but missed
+    the ``-preview`` suffix the Gemini CLI actually emits.
+    """
+    from stackunderflow.etl.normalize.base import COST_SOURCE_RATE_CARD
+    from stackunderflow.etl.normalize.gemini import GeminiNormalizer
+
+    msg_row = {
+        "id": 2,
+        "session_id": "s2",
+        "project_id": 1,
+        "provider": "gemini",
+        "role": "assistant",
+        "timestamp": "2026-05-13T10:00:00Z",
+        "model": "gemini-3-pro-preview",
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "cache_read_tokens": 0,
+        "cache_create_tokens": 0,
+    }
+    events = list(GeminiNormalizer().normalize(msg_row))
+    assert len(events) == 1
+    assert events[0]["cost_source"] == COST_SOURCE_RATE_CARD
+    assert events[0]["cost_usd"] > 0

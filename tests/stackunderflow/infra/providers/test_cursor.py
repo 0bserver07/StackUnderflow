@@ -28,10 +28,16 @@ from stackunderflow.infra.providers.cursor import CursorPricer
 from stackunderflow.infra.providers.gemini import GeminiPricer
 from stackunderflow.infra.providers.openai import OpenAIPricer
 
-# Sonnet 4.x tier — the ESTIMATED fallback used for cursor-native and
-# unknown ids. Pinned here so an accidental rate-table edit in cursor.py
-# trips this test.
+# Sonnet 4.x tier — the ESTIMATED fallback used for cursor-native
+# composer-2 / autoselector / unknown ids. Pinned here so an accidental
+# rate-table edit in cursor.py trips this test.
 _SONNET = (3.0, 15.0, 3.75, 0.30)
+
+# Composer 1 — Cursor's published per-token rate ($1.25/$10.00) as of
+# May 2026. Composer 1 has its own number; the rest of the cursor-native
+# ids still fall back to the Sonnet-tier estimate. Source:
+# cursor.com/docs/models-and-pricing.
+_COMPOSER_1 = (1.25, 10.00, 1.5625, 0.125)
 
 
 # ── delegation tests ────────────────────────────────────────────────────────
@@ -113,9 +119,13 @@ def test_rates_for_gemini_preview_suffix_strips_to_base() -> None:
 # ── cursor-native (ESTIMATED) ────────────────────────────────────────────────
 
 
-def test_rates_for_composer_1_uses_sonnet_tier() -> None:
-    """``composer-1`` is Cursor-trained — ESTIMATED at Sonnet-tier."""
-    assert CursorPricer().rates_for("composer-1") == _SONNET
+def test_rates_for_composer_1_uses_published_rate() -> None:
+    """``composer-1`` has a published Cursor rate ($1.25/$10).
+
+    Was pegged to the Sonnet-tier estimate in v0.7.1; switched to Cursor's
+    published number once we confirmed it on the models & pricing page.
+    """
+    assert CursorPricer().rates_for("composer-1") == _COMPOSER_1
 
 
 def test_rates_for_composer_2_uses_sonnet_tier() -> None:
@@ -225,8 +235,8 @@ def test_compute_cost_for_composer_1_is_nonzero() -> None:
         provider="cursor",
     )
     assert cost["total_cost"] > 0
-    # 1000 × $3/M + 500 × $15/M = 0.003 + 0.0075 = 0.0105
-    assert cost["total_cost"] == pytest.approx(0.0105)
+    # 1000 × $1.25/M + 500 × $10/M = 0.00125 + 0.005 = 0.00625
+    assert cost["total_cost"] == pytest.approx(0.00625)
 
 
 def test_compute_cost_for_cursor_auto_is_nonzero() -> None:
