@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `init --install-skills` flag for the shipped SKILL.md files
+
+`stackunderflow init` gains three new flags that automate the install of the three static skills shipped under `stackunderflow/skills/` (`check-prior-work`, `find-related-sessions`, `recall-past-decisions`) — closes the manual `cp -r stackunderflow/skills/* ~/.claude/skills/` step that `docs/skills.md` previously documented as the only install path.
+
+- `--install-skills` — copies the three `SKILL.md` files into `~/.claude/skills/<name>/SKILL.md` before starting the dashboard. Source path resolved via `importlib.resources.files("stackunderflow") / "skills"` so it works in both source-checkout and installed-wheel layouts (the wheel already ships these files; see `pyproject.toml`'s hatch build config). Idempotent: byte-identical destinations are skipped silently (no warning, no rewrite); a destination that differs from the shipped copy is preserved with a yellow warning unless `--skills-force` is set.
+- `--skills-dest <path>` — overrides the destination directory (defaults to `~/.claude/skills/`). Used by tests and advanced setups where Claude Code reads skills from a non-standard location; the production path keeps the default and never has to think about it.
+- `--skills-force` — overwrite a destination `SKILL.md` that differs from the shipped copy. Without it, local edits survive a re-run.
+
+Implementation in `stackunderflow/cli.py`: new module-level `_install_static_skills(dest, *, force)` helper returns a `dict[str, list[str]]` of `created` / `unchanged` / `overwritten` / `skipped_modified` / `missing_source` actions; the CLI command formats the report as user-facing echo + warnings. Tests in `tests/stackunderflow/cli/test_init_install_skills.py` (11 new): cold install lands all three files, idempotent re-run rewrites nothing (byte-compared before/after), modified destination warns + survives without `--skills-force`, modified destination overwrites with `--skills-force`, source-path resolution via `importlib.resources` works in either layout. All tests use `tmp_path` + `--skills-dest` so the real `~/.claude/skills/` is never touched. `docs/skills.md` updated: the bundled CLI flag is now the recommended path; the manual `cp -r` is documented as an alternative.
+
 ### Added — self-referential discovery for coding agents + skills + hooks (specs 01–10)
 
 Ten specs land together. They turn the local store from a passive cost dashboard into something a coding agent queries reflexively before doing work — "what's happened in this project / this file / about this decision?" — and close out the remaining Wave 5 follow-up backlog (`message_tool_mart`, `tool_mart.calls_total`, the `last_job` retention slot). All new migrations are **additive** — no existing table is mutated. `schema.CURRENT_VERSION = 13`. **None of v007–v013 are auto-applied to the maintainer's real `~/.stackunderflow/store.db` (still on `user_version = 6`)** — apply them per the documented rollout in `docs/specs/messages-partitioning.md`; until then every feature here that needs a v007+ migration is dormant on the production store (the code is all merged and tested against `tmp_path`/`:memory:` stores).

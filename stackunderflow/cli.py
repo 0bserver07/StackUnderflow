@@ -165,15 +165,190 @@ def start_cmd(
     click.echo("\nStopped.")
 
 
+# ── shipped skills install (see ``docs/skills.md``) ──────────────────────────
+#
+# The three static `SKILL.md` files under ``stackunderflow/skills/`` teach
+# Claude Code when to call the discovery commands. They're packaged in the
+# wheel (see ``pyproject.toml``'s hatch build config), so the source-of-truth
+# is found via ``importlib.resources`` — that works in both an editable
+# source-checkout install and an installed wheel without caring which.
+#
+# The install is **idempotent**: byte-identical destinations are skipped
+# silently; destinations that differ from source are skipped with a warning
+# unless ``--skills-force`` is set. The auto-generated skills surface
+# (``stackunderflow skills generate``) is unrelated — that one writes
+# *project-local* artefacts mined from the local store, never the static
+# files here.
+
+_SHIPPED_SKILLS: tuple[str, ...] = (
+    "check-prior-work",
+    "find-related-sessions",
+    "recall-past-decisions",
+)
+
+
+def _shipped_skills_source_dir() -> Path:
+    """Resolve the on-disk location of the packaged ``stackunderflow/skills/`` tree.
+
+    Uses ``importlib.resources.files(...)`` so this works both in an
+    editable source-checkout install (returns the repo path) and in an
+    installed wheel (returns the unpacked package path). The returned
+    path is guaranteed to be a real filesystem directory — the wheel
+    layout keeps the skill files as concrete files, not zipped resources.
+    """
+    from importlib.resources import files
+
+    skills_ref = files("stackunderflow") / "skills"
+    # ``MultiplexedPath`` / ``PosixPath`` both expose ``__fspath__`` via str().
+    return Path(str(skills_ref))
+
+
+def _install_static_skills(
+    dest_dir: Path,
+    *,
+    force: bool = False,
+) -> dict[str, list[str]]:
+    """Copy the 3 shipped ``SKILL.md`` files into ``dest_dir/<name>/SKILL.md``.
+
+    Behaviour matrix:
+      * dest missing → copy (``created``)
+      * dest exists and bytes match source → skip silently (``unchanged``)
+      * dest exists and bytes differ, ``force=False`` → warn + skip (``skipped_modified``)
+      * dest exists and bytes differ, ``force=True`` → overwrite (``overwritten``)
+
+    Returns a dict mapping action → list of skill names so the caller can
+    summarise. Does not echo anything itself; the caller (the CLI command)
+    is responsible for user-facing output, which keeps this function easy
+    to call from tests and from future programmatic surfaces.
+    """
+    import shutil
+
+    src_dir = _shipped_skills_source_dir()
+    result: dict[str, list[str]] = {
+        "created": [],
+        "unchanged": [],
+        "overwritten": [],
+        "skipped_modified": [],
+        "missing_source": [],
+    }
+
+    dest_dir = Path(dest_dir).expanduser()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in _SHIPPED_SKILLS:
+        src_file = src_dir / name / "SKILL.md"
+        dst_file = dest_dir / name / "SKILL.md"
+
+        if not src_file.is_file():
+            # Belt + suspenders: should never happen on a normal install,
+            # but a wheel built from a broken tree could conceivably ship
+            # a missing skill — surface it rather than crash.
+            result["missing_source"].append(name)
+            continue
+
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if not dst_file.exists():
+            shutil.copyfile(src_file, dst_file)
+            result["created"].append(name)
+            continue
+
+        src_bytes = src_file.read_bytes()
+        dst_bytes = dst_file.read_bytes()
+        if src_bytes == dst_bytes:
+            result["unchanged"].append(name)
+            continue
+
+        if force:
+            shutil.copyfile(src_file, dst_file)
+            result["overwritten"].append(name)
+        else:
+            result["skipped_modified"].append(name)
+
+    return result
+
+
 # backward compat: `stackunderflow init` maps to `start`
 @cli.command("init")
 @click.option("--port", type=int, default=None)
 @click.option("--host", type=str, default=None)
 @click.option("--no-browser", is_flag=True)
 @click.option("--clear-cache", is_flag=True)
+@click.option(
+    "--install-skills",
+    is_flag=True,
+    help=(
+        "Copy the 3 shipped Claude Code skills (check-prior-work, "
+        "find-related-sessions, recall-past-decisions) into the skills "
+        "destination (default ~/.claude/skills/) before starting the "
+        "dashboard. Idempotent: byte-identical files are skipped silently."
+    ),
+)
+@click.option(
+    "--skills-dest",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help=(
+        "Destination directory for --install-skills. Defaults to "
+        "~/.claude/skills/. Useful for testing and advanced setups where "
+        "Claude Code reads skills from a non-standard location."
+    ),
+)
+@click.option(
+    "--skills-force",
+    is_flag=True,
+    help=(
+        "With --install-skills, overwrite destination SKILL.md files that "
+        "differ from the shipped copy. Default behaviour preserves local "
+        "edits — a modified destination is skipped with a warning."
+    ),
+)
 @click.pass_context
-def init_cmd(ctx: click.Context, port: int | None, host: str | None, no_browser: bool, clear_cache: bool):
-    """Start the dashboard (alias for ``start``)."""
+def init_cmd(
+    ctx: click.Context,
+    port: int | None,
+    host: str | None,
+    no_browser: bool,
+    clear_cache: bool,
+    install_skills: bool,
+    skills_dest: Path | None,
+    skills_force: bool,
+):
+    """Start the dashboard (alias for ``start``).
+
+    With ``--install-skills``, copies the three shipped Claude Code
+    ``SKILL.md`` files into ``~/.claude/skills/`` (or ``--skills-dest``)
+    before starting the dashboard. See ``docs/skills.md``.
+    """
+    if install_skills:
+        dest = skills_dest if skills_dest is not None else Path.home() / ".claude" / "skills"
+        report = _install_static_skills(dest, force=skills_force)
+
+        for name in report["created"]:
+            click.echo(f"  + installed skill: {name} → {dest / name / 'SKILL.md'}")
+        for name in report["overwritten"]:
+            click.echo(f"  ~ overwrote skill (--skills-force): {name} → {dest / name / 'SKILL.md'}")
+        for name in report["unchanged"]:
+            click.echo(f"  = skill already current: {name}")
+        for name in report["skipped_modified"]:
+            click.secho(
+                f"  ⚠  skill {name} differs from shipped copy; skipped. "
+                f"Re-run with --skills-force to overwrite.",
+                fg="yellow",
+                err=True,
+            )
+        for name in report["missing_source"]:
+            click.secho(
+                f"  ⚠  shipped skill source missing for {name}; this is a "
+                f"packaging bug — please file an issue.",
+                fg="yellow",
+                err=True,
+            )
+        # Skills-only mode: if the user passed --install-skills and no other
+        # flags that imply running the server, we still go on to start it
+        # (the spec says "after init's normal work"). The user can pipe
+        # --no-browser or hit Ctrl-C if they only wanted the install.
+
     ctx.invoke(start_cmd, port=port, host=host, headless=no_browser, fresh=clear_cache)
 
 

@@ -25,15 +25,19 @@ Claude Code discovers skills from two locations, in order:
 
 Project-level skills override user-level skills with the same name.
 
-## Install (today, manual)
+## Install
 
-Until `stackunderflow init --install-skills` ships (see [Future work](#future-work)), copy them by hand:
+The recommended path is the bundled installer flag — `stackunderflow init` will copy the three shipped `SKILL.md` files into `~/.claude/skills/` for you:
 
 ```bash
-# from the repo root
-mkdir -p ~/.claude/skills
-cp -r stackunderflow/skills/* ~/.claude/skills/
+stackunderflow init --install-skills
 ```
+
+The install is idempotent — byte-identical files are skipped silently on re-run, and a destination file that differs from the shipped copy is preserved unless you pass `--skills-force`. Useful flags:
+
+- `--install-skills` — copy the three skills into `~/.claude/skills/` before starting the dashboard.
+- `--skills-dest <path>` — override the destination directory (defaults to `~/.claude/skills/`). Handy for testing or non-standard Claude Code setups.
+- `--skills-force` — overwrite a destination `SKILL.md` that differs from the shipped copy. Default behaviour preserves local edits with a warning.
 
 Verify the install:
 
@@ -44,6 +48,18 @@ ls ~/.claude/skills/recall-past-decisions/SKILL.md
 ```
 
 Restart Claude Code (or start a fresh session) and the skills are picked up. Confirm by checking the skill list at session start (Claude Code prints available skills when running with verbose output, or skills are listed in the system prompt context).
+
+### Manual install (alternative)
+
+If you prefer to do the copy yourself — for example to inspect the files first, or to install into a layout the CLI doesn't support — the source files live under `stackunderflow/skills/` in the repo:
+
+```bash
+# from the repo root
+mkdir -p ~/.claude/skills
+cp -r stackunderflow/skills/* ~/.claude/skills/
+```
+
+Same files, same destination — just without the idempotency + warning behaviour of the bundled installer.
 
 ### Prerequisites
 
@@ -175,7 +191,7 @@ The synthesis lives in `stackunderflow/services/skill_synth.py`; the bulk-load h
 
 ## Future work
 
-A future `stackunderflow init --install-skills` command will automate the install of the static skills (copy them idempotently, with `--force` for upgrades). Until that ships, the manual `cp` above is the supported path. Tracking issue: ship in the next release after the discovery CLI lands.
+`stackunderflow init --install-skills` covers the idempotent install of the three static skills today; there's no longer a manual-only path. Possible follow-ups: a `stackunderflow skills update` subcommand that diffs the destination against the shipped copy without writing anything (preview), or a per-skill opt-out flag (`--skip-skill <name>`) for users who want only a subset of the three.
 
 ## Validation
 
