@@ -1,14 +1,14 @@
 # StackUnderflow — Handoff doc
 
-**Date:** 2026-05-12 (last tagged release: v0.7.0; Wave 5 follow-ups + the spec-01…10 round, all merged on `feat/post-0.7.0`, unreleased)
+**Date:** 2026-05-13 (last tagged release: v0.7.2; the v0.7.1 → v0.7.2 round merged into `main` directly)
 **Maintainer:** 0bserver07 / 0bserver07
-**Branch:** `feat/post-0.7.0` (this is the live branch — base new work here, **not** `main`, which is stale relative to it); last tag `v0.7.0`
-**Tests:** 2272 fast (`pytest tests/ -q`) / 2 skipped / 12 deselected, 10 slow (`pytest -m slow tests/stackunderflow/integration`) / 1 skipped, 110 frontend (`node --test stackunderflow-ui/tests/services/*.test.ts`). Was ~1747 at the start of the post-v0.7 round — +525 fast tests across the spec-01…10 work.
+**Branch:** `main` is the live branch; last tag `v0.7.2`
+**Tests:** 2355 fast (`pytest tests/ -q`) / 2 skipped / 12 deselected, 10 slow (`pytest -m slow tests/stackunderflow/integration`) / 1 skipped, 110 frontend (`node --test stackunderflow-ui/tests/services/*.test.ts`). Was 2310 immediately after v0.7.1 — +45 fast tests across the v0.7.2 follow-up round (outcome confidence, optimize parity, command_costs structural lock-in, pricing-fixes-round2).
 **Frontend:** typecheck + build clean; the dashboard build output lands in `stackunderflow/static/react/`
 
 This doc gets a fresh agent oriented in 10 minutes. Read it before reading code.
 
-> **Versioning note for an incoming agent.** Everything below the v0.7.0 line is **unreleased** — it's all merged on `feat/post-0.7.0` but no version number is assigned. The maintainer owns version decisions; do **not** bump `__version__.py` / `pyproject.toml` / `package.json` or move a "release" label without being asked. The CHANGELOG carries it under `## [Unreleased]`.
+> **Versioning note for an incoming agent.** The maintainer owns version decisions; do **not** bump `__version__.py` / `pyproject.toml` / `package.json` or move a "release" label without being asked. New CHANGELOG entries go under `## [Unreleased]` only.
 
 ---
 
@@ -385,38 +385,39 @@ node --test tests/services/*.test.ts      # frontend unit tests (Node built-in r
 ## Real-data state right now (maintainer's machine)
 
 ```
-~/.stackunderflow/store.db (~1.9 GB):
-  user_version: 6   ← v007 through v013 all ship on feat/post-0.7.0 but are UNAPPLIED here
-                       pending manual rollout (see docs/specs/messages-partitioning.md)
-  ~150K usage_events
-  Marts populated for the 5 v0.7.0 marts (daily / session / project / provider_day / model_day),
-  watermarks in sync.
-  tool_mart / command_mart / message_tool_mart : not yet present (need v007/v011 applied + a backfill).
-  agent_teams table + the 4 new `sessions` columns : not yet present (need v013).
-  discovery_telemetry / captured_events : not yet present (need v009 / v010).
-  Per-provider events: claude ~150K, cursor ~220, cline ~103.
+~/.stackunderflow/store.db (~3.9 GB, swap done 2026-05-13):
+  user_version: 13   ← v007 through v013 applied
+  ~150,843 usage_events (re-derived under v0.7.2 pricers — cost_source=unknown is 0)
+  All 8 marts populated (daily / session / project / provider_day / model_day / tool / command / message_tool),
+  watermarks in sync at last_event_id=150,843.
+  agent_teams + the 4 new `sessions` columns (team_id / spawned_by_session_id / spawn_prompt / agent_role)
+  populate on the next ingest cycle when ~/.claude/teams/ artefacts exist.
+  discovery_telemetry / captured_events are empty by default (only populate on use).
+  Per-provider events: claude ~150K, gemini ~400, cursor ~220, droid ~100, cline ~100.
+  Pre-swap backups kept at /tmp/stackunderflow-migration/store.{backup,pre-swap}.<TS>.db.
 ```
 
-**Practical upshot for an incoming agent:** on the maintainer's box every post-v0.7 feature that depends on a v007+ migration is *dormant* until the manual rollout runs. The code is all there and passes tests against `tmp_path` / `:memory:` stores; it just hasn't been applied to the 1.9 GB production store yet. Don't be surprised when `stackunderflow etl status` against the real store doesn't show `tool` / `command` / `message_tool` rows, or when `/api/agent-teams` falls back to the heuristic path.
+**Practical upshot for an incoming agent:** the maintainer's real store is at the current schema version with every post-v0.7 feature live. The dashboard reads from populated marts, not the aggregator fallback. The next 46-min `backfill --force` is only needed if pricing entries change again.
 
 ---
 
 ## What's left / known follow-ups
 
-Wave 5 follow-ups #2 (`message_tool_mart` — spec 07), #5 (`last_job` retention — `LAST_JOB_TTL_SECONDS`), and #6 (`tool_mart.calls_total` — spec 08) are now **closed** by the post-v0.7 round. Post-v0.7 follow-up #2 (the per-message-mart wiring inside the four `optimize` detectors) is **closed** as of the `[Unreleased]` block in `CHANGELOG.md` — the v011 `message_tool_mart` fast paths fully replace the raw-`messages` scan when the mart is populated (parity tests + a `bench_optimize_mart.py` benchmark lock the contract). The remaining live items:
+The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store now on `user_version=13` with all 8 marts populated, 31,859 → 0 `cost_source=unknown` after the post-fix backfill), #2 (optimize → `message_tool_mart`, locked in with parity tests + perf bench), #3 (pricing-table coverage — `claude-opus-4-7`, `gemini-3-pro-preview` family, `glm-5*`, `composer-1`, `droid-auto`, `cline-auto` all added), #5 (verified `command_costs` structural mismatch — locked the aggregator path with tests), #7 (`init --install-skills` shipped in v0.7.1), and #9 (outcome heuristic + `outcome_confidence` ladder + default `min_confidence=0.5`). The remaining live items:
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | **Apply v007–v013 to the real `~/.stackunderflow/store.db`.** They all ship on `feat/post-0.7.0` but none are auto-applied (1.9 GB store, manual review preferred). Follow the rollout in `docs/specs/messages-partitioning.md`: backup → apply on `/tmp/store.test.db` copy → verify counts (`view total == Σ partition counts`) → spot-check dashboard → swap. Until then the maintainer's store stays on `user_version = 6` and every post-v0.7 feature that needs a v007+ migration is dormant. | medium (not blocking; do when comfortable) |
-| 2 | ~~Migrate `optimize` per-message detectors fully onto `message_tool_mart`.~~ **Closed** — locked in by the `[Unreleased]` parity tests + `bench_optimize_mart.py`. On a real-store-shape DB the migrated detectors run 270×–1242× faster than the raw-scan fallback. | — |
-| 3 | Beta normalizer pricing-table coverage gap: `qwen-coder-plus` and `gemini-1.5-pro` (and probably others in the long tail) aren't in the canonical RATE_CARD, so they emit `cost_source=unknown`. Adapter/normalizer code is correct — it's a pricing-table population question. Track the missing models per provider and fold them in. | low (correctness for enabled betas) |
+| 1 | ~~Apply v007–v013 to the real store.~~ **Closed** — applied 2026-05-13. Real store at `user_version=13`, all 8 marts populated, 0 unknown cost rows. | — |
+| 2 | ~~Migrate `optimize` detectors onto `message_tool_mart`.~~ **Closed** — parity tests + `bench_optimize_mart.py` lock the contract; 270×–1242× speedups verified. | — |
+| 3 | ~~Beta-normalizer pricing-table coverage.~~ **Closed in v0.7.2** — `claude-opus-4-7`, `gemini-3-(pro/flash)-preview` family, `glm-5` / `glm-5.1`, `composer-1`, `droid-auto`, `cline-auto` added with cited sources. Real-store unknowns dropped to zero. | — |
 | 4 | Watcher / lock cross-platform coverage. POSIX `fcntl.flock` is smoke-tested on macOS. Windows `msvcrt.locking()` code path is written but **not verified on a real Windows box**. Linux watcher (watchfiles cross-platform) also untested on real data. Most users are on macOS so low urgency, but worth a CI matrix run before claiming Windows support. | low |
-| 5 | `command_costs` per-Interaction block in `/api/cost-data` stays on the aggregator path — its shape doesn't fit `(day, project, command_name)` aggregation. `command_mart_for_project` is wired and ready; if you want a per-command-NAME rollup surfaced, route it. | low (current path works) |
+| 5 | ~~`command_costs` → `command_mart`.~~ **Closed (verified infeasible)** — the aggregator's per-Interaction shape carries 7 fields the `(day, project, command_name)` mart grain throws away on ingest. Locked the aggregator path with tests in `test_cost_command_mart_overlay.py`. A future per-Interaction-grain mart could revisit this. | — |
 | 6 | Beta normalizer fixtures (`tests/fixtures/beta_normalizers/`) are synthetic-but-spec-accurate per the codeburn catalog. They don't replace real-world parity — that needs actual session data per provider on the maintainer's machine, which most beta providers don't have. The defensive empty/malformed coverage from v0.6.1 + the spec-shape coverage from Wave 5 catch the structural failure modes; the next "Cursor v3 conversationId-in-the-key" still needs real local data. | low (no concrete bug today) |
-| 7 | `stackunderflow init --install-skills` — auto-installing the 3 static `SKILL.md` files (idempotent copy, `--force` for upgrades). Today the install is a manual `cp -r stackunderflow/skills/* ~/.claude/skills/` per `docs/skills.md`. | low (UX nicety) |
+| 7 | ~~`stackunderflow init --install-skills`.~~ **Closed in v0.7.1.** | — |
 | 8 | Playback v2 — the v1 surface (`/api/playback/*` + the Playback tab) is event-stream-only; v2 (virtual-filesystem reconstruction at a point in time) is sketched but not built. Beta-flagged today. | low (v1 covers the immediate need) |
-| 9 | `outcome` inference quality. The outcome-aware discovery commands prefer the deterministic `captured_events` table but fall back to a transcript heuristic on hook-less installs ("no complaint before the session ended" can false-positive). Worth tightening the heuristic, or nudging users toward `stackunderflow hooks install`. | low |
+| 9 | ~~Outcome inference quality.~~ **Closed in v0.7.2** — confidence ladder (0.0 / 0.3 / 0.5 / 0.8 / 1.0), default `min_confidence=0.5` filters silence-as-worked false positives. 8 adversarial tests lock the contract. | — |
 | 10 | Discovery search is plain `LIKE` substring — no embeddings / fuzzy. A spec-noted "opt-in `--use-llm` refinement pass" for `skills generate` and a semantic search mode for `search-past-decisions` are both candidates if the substring matcher proves too brittle in practice. | low (substring works for distinctive keywords) |
+| 11 | Drop beta flag on Playback + Agents dashboard tabs once empty-state UX is verified against the now-populated real store. | low (UX polish) |
 
 ---
 
@@ -475,11 +476,11 @@ Wave 5 follow-ups #2 (`message_tool_mart` — spec 07), #5 (`last_job` retention
 
 ## What I'd do next if I had a week
 
-1. **Apply v007–v013 to the maintainer's real store + verify on the dashboard.** Walk the documented rollout (`docs/specs/messages-partitioning.md`) end-to-end against the 1.9 GB store, then `stackunderflow etl backfill --force` to populate `tool_mart` / `command_mart` / `message_tool_mart` (+ `tool_mart.calls_total`), and re-ingest so the v013 team metadata materialises. Measure read-fanout cost on the live dashboard. This unblocks every dormant post-v0.7 feature on the production box.
-2. ~~**Finish migrating `optimize` onto `message_tool_mart`.**~~ **Done** — the four detectors (`junk_reads`, `bash_output_limits`, `low_read_edit_ratio`, `ghost_agents`) read from `message_tool_mart` when populated and fall back to raw-`messages` only on empty mart. See `[Unreleased]` in `CHANGELOG.md` for the parity tests + perf benchmark that lock the contract.
-3. **Pricing-table population sweep for the long-tail betas.** Audit which models the 12 beta providers emit in real-world fixtures and add the missing entries to the canonical RATE_CARD. Closes the `cost_source=unknown` cosmetic gap on `qwen-coder-plus`, `gemini-1.5-pro`, and friends. Probably 30–50 model entries across the 12 providers.
-4. **Cross-platform CI matrix for the watcher + lock.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
-5. **`stackunderflow init --install-skills`.** Auto-install the 3 static `SKILL.md` files (idempotent copy into `~/.claude/skills/`, `--force` for upgrades) so the discovery skills aren't a manual `cp`. Closes follow-up #7.
+1. **Spec 06 — backup / sync service.** Separate package, BYO mode (S3 / R2 / MinIO), client-side encrypted, opt-in. Name TBD (`cairn` rejected; placeholder `stackunderflow-backup`). The local store is the only source of truth today; this gives users a portable second copy without phoning home to a central service. Live in a separate repo per the spec.
+2. **Playback v2 — virtual-filesystem reconstruction at a point in time.** v1 is event-stream-only and beta-flagged. v2 reconstructs the state of every file the agent touched at any timestamp, so users can "rewind" a session and see what the working tree looked like mid-task. Closes follow-up #8.
+3. **Cross-platform CI matrix.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
+4. **Drop the beta flag on Playback + Agents dashboard tabs.** Real-store data is now live and populated; verify the empty-state UX and the data-rich UX both look right. Closes follow-up #11.
+5. **Discovery semantic-search mode (`--use-embeddings`).** Opt-in re-ranker that runs after the substring filter and brings up sessions that talk about the same idea in different words. Closes follow-up #10 — only do this if substring search proves brittle in practice.
 
 ---
 
