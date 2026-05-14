@@ -35,6 +35,7 @@ from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.services import playback as playback_service
+from stackunderflow.services import playback_fs as playback_fs_service
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
@@ -69,6 +70,55 @@ def _parse_since(raw: str | None) -> str | None:
         secs = amount * _UNIT_SECONDS[m.group(2).lower()]
         return (datetime.now(UTC) - timedelta(seconds=secs)).isoformat()
     return raw.strip()
+
+
+def _parse_paths_param(raw: str | None) -> list[str] | None:
+    """``"src/a.py,src/b.py"`` → ``["src/a.py", "src/b.py"]``."""
+    if not raw:
+        return None
+    parts = [p.strip() for p in raw.split(",")]
+    cleaned = [p for p in parts if p]
+    return cleaned or None
+
+
+@router.get("/api/playback/{session_id}/fs")
+async def get_session_fs_snapshot(
+    session_id: str,
+    at: str = Query(..., description="ISO-8601 / RFC-3339 cutoff timestamp"),
+    paths: str | None = Query(None, description="Comma-separated file paths to restrict"),
+    include_content: bool = Query(True),
+) -> JSONResponse:
+    """Reconstruct file contents for ``session_id`` at time ``at``.
+
+    Replays the session's Read / Write / Edit / MultiEdit / NotebookEdit
+    tool calls (in order, up to and including ``at``) and returns the
+    state of each touched file. ``paths`` restricts to specific files;
+    ``include_content=false`` returns metadata only (sizes + which
+    operations were applied) without the file bodies.
+
+    * 404 — session not in store.
+    * 422 — ``at`` couldn't be parsed.
+    * 200 — ``files`` may be empty when the session exists but issued no
+      file-touching tool calls before ``at``.
+    """
+    conn = db.connect(deps.store_path)
+    try:
+        schema.apply(conn)
+        try:
+            snapshot = playback_fs_service.reconstruct_fs_at(
+                conn,
+                session_id,
+                at=at,
+                paths=_parse_paths_param(paths),
+                include_content=include_content,
+            )
+        except playback_fs_service.UnknownSession as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except playback_fs_service.FsReconstructionError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    finally:
+        conn.close()
+    return JSONResponse(snapshot)
 
 
 @router.get("/api/playback/{session_id}")
