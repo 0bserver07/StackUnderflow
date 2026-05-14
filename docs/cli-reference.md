@@ -12,7 +12,7 @@ data export, config management, and session backups. All persistent state lives 
 ```
 # Dashboard
 stackunderflow init [--port N] [--host H] [--no-browser] [--clear-cache]
-stackunderflow start [-p N] [-H H] [--headless] [--fresh]
+stackunderflow start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-lock]
 stackunderflow reindex
 stackunderflow clear-cache [PROJECT]
 
@@ -30,6 +30,22 @@ stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [-
 stackunderflow yield [-p PERIOD] [--format text|json] [--project SLUG]
 stackunderflow context-budget [--project DIR] [--global] [--format text|json]
 
+# Discovery — self-referential queries for coding agents (also exposed as MCP tools)
+stackunderflow find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
+stackunderflow find-sessions-touching-file FILE [--limit N] [--mode read|write|any] [--format text|json] [--context-budget N]
+stackunderflow search-past-decisions QUERY [--project P] [--since X] [--limit N] [--format text|json] [--context-budget N]
+stackunderflow find-sessions-where-action-worked ACTION [--project P] [--file F] [--since X] [--limit N] [--format text|json]
+stackunderflow find-failure-modes-for-file FILE [--since X] [--limit N] [--format text|json]
+
+# Auto-generated skills (mined from the local store — see docs/skills.md)
+stackunderflow skills generate [--project P] [--projects A,B] [--scope project|user] [--min-occurrences N] [--kind K] [--window W] [--out DIR] [--dry-run] [--format text|json]
+stackunderflow skills list [--scope project|user] [--out DIR] [--format text|json]
+stackunderflow skills clean [--scope project|user] [--out DIR] [--older-than X] [--dry-run] [--yes]
+
+# Discovery citation-feedback telemetry
+stackunderflow discovery telemetry [--command C] [--session S] [--limit N] [--format text|json]
+stackunderflow discovery demote-uncited [--dry-run] [--min-loads N] [--min-age-days N] [--format text|json]
+
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
 stackunderflow cfg ls [--json]
 stackunderflow cfg set KEY VALUE
@@ -46,6 +62,13 @@ stackunderflow plan reset
 # ETL pipeline
 stackunderflow etl backfill [--force]
 stackunderflow etl status [--format text|json]
+
+# Hooks (opt-in Claude Code lifecycle hooks — see docs/hooks.md)
+stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content]
+stackunderflow hooks uninstall [--scope project|user]
+stackunderflow hooks status    [--scope project|user] [--format text|json]
+stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
+stackunderflow hooks run <hook-id>            # internal — invoked by Claude Code
 
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
@@ -73,6 +96,7 @@ Usage: stackunderflow start [OPTIONS]
 | `--headless` | flag | false | Don't open the browser |
 | `--fresh` | flag | false | Clear disk cache before starting |
 | `--no-watcher` | flag | false | Disable the Wave 2C ETL filesystem watcher (headless / debugging) |
+| `--no-lock` | flag | false | Skip the watcher single-instance lock (sets `STACKUNDERFLOW_DISABLE_LOCK=1`). Useful for running multiple servers against the same store, or when a stale lock file is blocking startup |
 
 **Examples:**
 
@@ -94,6 +118,13 @@ $ stackunderflow start --no-watcher
   StackUnderflow is live at http://127.0.0.1:8081
   # ETL filesystem watcher disabled — dashboard data refreshes only on
   # manual reindex / restart. Useful for headless profiling runs.
+  Ctrl+C to stop
+
+$ stackunderflow start --no-lock
+  StackUnderflow is live at http://127.0.0.1:8081
+  # Watcher single-instance lock skipped (STACKUNDERFLOW_DISABLE_LOCK=1).
+  # Useful for running multiple servers against the same store, or when
+  # a stale lock file from a crashed prior run is blocking startup.
   Ctrl+C to stop
 ```
 
@@ -466,37 +497,6 @@ Side-by-side per-model comparison over a time window — answers "is it worth us
 
 ```
 Usage: stackunderflow compare [OPTIONS]
-### `stackunderflow yield`
-
-Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
-
-For each session in the window, the command resolves the session's `cwd` to a
-git repo, runs `git log` over the 24h after the session started, and
-classifies the result:
-
-| Class        | Meaning                                                                 |
-|--------------|-------------------------------------------------------------------------|
-| `productive` | A commit landed within 24h and is still reachable from `HEAD`.          |
-| `reverted`   | A commit landed but was later reverted (by `git revert` or by being wiped from `HEAD` via reset / force push). |
-| `abandoned`  | No commit landed within the window.                                     |
-| `no_repo`    | The session's `cwd` is missing or isn't a git repository.               |
-
-> **Heuristic warning.** This correlates by **time**, not by content. A commit
-> inside the 24h window is credited to the session even if it was about
-> something else. Treat the breakdown as a smoke signal, not a verdict.
-> Sessions and commits don't have to share a topic to get matched up.
-
-```
-Usage: stackunderflow yield [OPTIONS]
-### `stackunderflow context-budget`
-
-Estimate the per-session "context tax" — the tokens every Claude Code
-turn pays before the user types: system prompt + registered MCP servers
-+ available skills + agent definitions + memory files (project
-`CLAUDE.md`, global `~/.claude/CLAUDE.md`).
-
-```
-Usage: stackunderflow context-budget [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -514,28 +514,6 @@ Usage: stackunderflow context-budget [OPTIONS]
 - **$/call** — `total_cost / calls` (per assistant message).
 - **$/session** — `total_cost / sessions` (sessions are attributed to whichever model dominated the session — most assistant messages wins, ties broken alphabetically).
 - **Total $** — sum of `compute_cost` over every assistant message in the window.
-| `--project` | PATH | cwd | Project directory to inspect |
-| `--global` | flag | false | Estimate the global budget only (`~/.claude`); ignore project files |
-| `--format` | `text\|json` | text | Output format |
-
-**Estimation heuristic — explicit and approximate.**
-
-| Source | Cost |
-|---|---|
-| System prompt | Fixed `DEFAULT_SYSTEM_PROMPT_TOKENS=3000` (Claude Code default, public scratch count) |
-| `CLAUDE.md` files | `len(content) // 4` — 1 token ≈ 4 characters of English |
-| MCP server | `MCP_BASE_TOKENS=200` + `MCP_PER_TOOL_TOKENS=50` × declared tools, **or** `MCP_UNKNOWN_TOOLS_FALLBACK=200` flat when tool counts aren't statically known (the common case) |
-| Skill (`SKILL.md`) | `len(content) // 4` |
-| Subagent (`*.md`) | `len(content) // 4` |
-| Cost projection | Total tokens × `$3/M` (current Sonnet input rate) per session, × 100 sessions/month |
-
-**Underestimates code-heavy or non-Latin content; the full heuristic
-string is echoed in every output payload (`heuristic` field in JSON).
-Useful for spotting bloat — not for billing.**
-
-A budget over 20k tokens triggers a yellow warning in the text output
-and a `context_budget_bloat` finding (severity: medium) when consumed
-by the optimize report.
 
 **Examples:**
 
@@ -573,6 +551,35 @@ $ stackunderflow compare --period week --provider claude --format json
 ```
 
 The same data is available via `GET /api/compare` — see `docs/api-reference.md`.
+
+---
+
+### `stackunderflow yield`
+
+Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
+
+For each session in the window, the command resolves the session's `cwd` to a
+git repo, runs `git log` over the 24h after the session started, and
+classifies the result:
+
+| Class        | Meaning                                                                 |
+|--------------|-------------------------------------------------------------------------|
+| `productive` | A commit landed within 24h and is still reachable from `HEAD`.          |
+| `reverted`   | A commit landed but was later reverted (by `git revert` or by being wiped from `HEAD` via reset / force push). |
+| `abandoned`  | No commit landed within the window.                                     |
+| `no_repo`    | The session's `cwd` is missing or isn't a git repository.               |
+
+> **Heuristic warning.** This correlates by **time**, not by content. A commit
+> inside the 24h window is credited to the session even if it was about
+> something else. Treat the breakdown as a smoke signal, not a verdict.
+> Sessions and commits don't have to share a topic to get matched up.
+
+```
+Usage: stackunderflow yield [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
 | `-p, --period` | TEXT | `month` | Period: `today`, `week`, `month`, `all`, `7days`, `30days` |
 | `--project` | TEXT | (all) | Filter by project slug (repeatable) |
 | `--format` | `text\|json` | text | Output format |
@@ -610,6 +617,48 @@ query parameters (`period`, `project`).
   the same follow-up commit attribution across every session that ran first.
 - Each git invocation has a 5-second timeout; a hung repo (e.g. NFS lock)
   falls through to `no_repo` rather than stalling the report.
+
+---
+
+### `stackunderflow context-budget`
+
+Estimate the per-session "context tax" — the tokens every Claude Code
+turn pays before the user types: system prompt + registered MCP servers
++ available skills + agent definitions + memory files (project
+`CLAUDE.md`, global `~/.claude/CLAUDE.md`).
+
+```
+Usage: stackunderflow context-budget [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | PATH | cwd | Project directory to inspect |
+| `--global` | flag | false | Estimate the global budget only (`~/.claude`); ignore project files |
+| `--format` | `text\|json` | text | Output format |
+
+**Estimation heuristic — explicit and approximate.**
+
+| Source | Cost |
+|---|---|
+| System prompt | Fixed `DEFAULT_SYSTEM_PROMPT_TOKENS=3000` (Claude Code default, public scratch count) |
+| `CLAUDE.md` files | `len(content) // 4` — 1 token ≈ 4 characters of English |
+| MCP server | `MCP_BASE_TOKENS=200` + `MCP_PER_TOOL_TOKENS=50` × declared tools, **or** `MCP_UNKNOWN_TOOLS_FALLBACK=200` flat when tool counts aren't statically known (the common case) |
+| Skill (`SKILL.md`) | `len(content) // 4` |
+| Subagent (`*.md`) | `len(content) // 4` |
+| Cost projection | Total tokens × `$3/M` (current Sonnet input rate) per session, × 100 sessions/month |
+
+**Underestimates code-heavy or non-Latin content; the full heuristic
+string is echoed in every output payload (`heuristic` field in JSON).
+Useful for spotting bloat — not for billing.**
+
+A budget over 20k tokens triggers a yellow warning in the text output
+and a `context_budget_bloat` finding (severity: medium) when consumed
+by the optimize report.
+
+**Examples:**
+
+```
 $ stackunderflow context-budget
 Context budget (per-session estimate)
   heuristic: len(text) // 4; per-MCP-server 200 + 50/tool
@@ -700,7 +749,12 @@ $ stackunderflow cfg set log_level DEBUG
 ```
 
 Valid keys: `port`, `host`, `auto_browser`, `max_date_range_days`,
-`messages_initial_load`, `log_level`, `currency`. Passing an unknown key exits with an error.
+`messages_initial_load`, `log_level`, `auto_reindex_on_ingest`, `currency`,
+`discovery_budget_tokens`, `discovery_rank_weights` (full list in
+[Config Keys Reference](#config-keys-reference) below). Passing an unknown key
+exits with an error. Structured settings (`model_aliases`, the `plan_*` group)
+are rejected here — use their dedicated subcommands (`cfg model-alias`, `plan
+set`).
 
 > Legacy alias: `stackunderflow config set KEY VALUE`
 
@@ -957,10 +1011,11 @@ $ stackunderflow plan reset
 ## ETL Commands
 
 The ETL pipeline turns raw `messages` rows into a `usage_events` fact table and
-five indexed marts (`daily_mart`, `session_mart`, `project_mart`,
-`provider_day_mart`, `model_day_mart`). The watcher keeps everything fresh in
-the background; these commands let you do a one-shot backfill and check
-pipeline health from the command line.
+eight indexed marts (`daily_mart`, `session_mart`, `project_mart`,
+`provider_day_mart`, `model_day_mart`, `tool_mart`, `command_mart`,
+`message_tool_mart`). The watcher keeps everything fresh in the background; these
+commands let you do a one-shot backfill and check pipeline health from the command
+line.
 
 ### `stackunderflow etl backfill`
 
@@ -983,11 +1038,13 @@ $ stackunderflow etl backfill
   events inserted:           247,278
   events skipped (duplicate): 0
   marts refreshed:
+    command          247,278 events
     daily            247,278 events
     model_day        247,278 events
     project          247,278 events
     provider_day     247,278 events
     session          247,278 events
+    tool             247,278 events
   duration:                  4.812s
 ```
 
@@ -1030,9 +1087,13 @@ ETL pipeline — live (last refresh 7s ago)
                  provider_day=312 rows    (watermark 228,311, fresh)
                  model_day=482 rows       (watermark 228,311, fresh)
 
-  Watcher:       running
+  Watcher:       running (lock held by PID 48213)
                  last cycle: 12 events processed
 ```
+
+The `lock held by PID N` suffix only appears when a watcher lock file is
+present and readable. When no process holds the lock the suffix is
+omitted (the line just reads `running`).
 
 **JSON output:**
 
@@ -1044,14 +1105,17 @@ $ stackunderflow etl status --format json
     "running": true,
     "last_refresh_ts": "2026-05-06T08:24:11+00:00",
     "seconds_since_refresh": 7,
-    "events_in_last_cycle": 12
+    "events_in_last_cycle": 12,
+    "lock_held_by": 48213
   },
   "marts": {
     "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
     "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
     "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
     "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
-    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
+    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."},
+    "tool":         {"watermark": 228311, "row_count": 47,   "last_refresh_ts": "..."},
+    "command":      {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
   },
   "events": {
     "total": 228311,
@@ -1059,6 +1123,7 @@ $ stackunderflow etl status --format json
     "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
     "by_cost_source": {"rate_card": 226000, "estimated": 2311}
   },
+  "current_job": null,
   "lag_seconds": 0,
   "health": "live"
 }
@@ -1067,6 +1132,326 @@ $ stackunderflow etl status --format json
 When the CLI is run with no live server (the typical case for `etl status`),
 `watcher.running` reports `"unknown"` — the assembler has no way to introspect
 a daemon thread that lives in another process.
+
+---
+
+## Discovery Commands
+
+Self-referential queries over the local store: "what's happened in this project /
+this file / about this decision?" — designed for a coding agent to call before
+starting non-trivial work, so it can reuse prior context instead of re-deriving it.
+The first three are also exposed as MCP tools (see [`docs/mcp.md`](mcp.md)). All
+read the store directly (no running server needed), accept `--format text|json`
+(the JSON shape is stable), and resolve `~` / relative paths before matching.
+
+`--since` everywhere accepts a relative spec (`7d`, `1w`, `1m`, `24h`) or an
+ISO-8601 date/datetime. An unparseable value exits with a `--since` parameter
+error.
+
+### Token budgeting (`--context-budget`)
+
+`find-sessions-in-path`, `find-sessions-touching-file`, and `search-past-decisions`
+are *budget-aware*: within the `--limit` hard cap, results are ranked
+(recency + cost + relevance — weights tunable via
+`STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS`) and packed greedily until roughly
+`--context-budget` estimated tokens (chars/4 heuristic) are used, so an agent
+calling them doesn't get an unprioritised dump into a tight context window.
+
+| Aspect | Behaviour |
+|---|---|
+| Default | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` (env) or `2000` |
+| Disable | pass `--context-budget 0` — then `--limit` is the only cap |
+| Text output | when rows were dropped, a tail marker reports how many more matched |
+| JSON output | always carries `_budget_used_tokens` / `_budget_max_tokens`; adds `_truncated: true` + `_more_available: <count>` when rows were dropped |
+
+### `stackunderflow find-sessions-in-path`
+
+List sessions whose project root is `PATH` or any ancestor of `PATH` (ancestor-only
+— projects rooted *below* `PATH` don't match). Useful when an agent is working in
+`/a/b/c` and wants to know what's happened in the project rooted at `/a/b`.
+
+```
+Usage: stackunderflow find-sessions-in-path [OPTIONS] PATH
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--since` | TEXT | (all time) | Only sessions whose last activity is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
+| `--provider` | TEXT | (all) | Filter by provider slug (`claude`, `codex`, `cursor`, …) |
+| `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow find-sessions-in-path "$(pwd)" --since 30d --limit 5
+Sessions in path /Users/you/dev/my-app  (3 session(s))
+
+  [claude] abc123def456…  2026-05-10T14:22:01  msgs=128  $1.4210
+      -Users-you-dev-my-app  /Users/you/dev/my-app
+  ...
+
+$ stackunderflow find-sessions-in-path . --format json --limit 5 --context-budget 1500
+```
+
+### `stackunderflow find-sessions-touching-file`
+
+List sessions where `FILE` shows up in tool calls (Read / Edit / Write /
+MultiEdit / NotebookEdit, Bash redirects, …) or message text.
+
+```
+Usage: stackunderflow find-sessions-touching-file [OPTIONS] FILE
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
+| `--mode` | `read\|write\|any` | `any` | `read` = Read-style accesses; `write` = Edit/Write/MultiEdit/NotebookEdit mutations; `any` = any mention (tools or freeform) |
+| `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow find-sessions-touching-file stackunderflow/store/queries.py --mode write
+Sessions touching stackunderflow/store/queries.py  (mode=write)  (2 session(s))
+  ...
+
+$ stackunderflow find-sessions-touching-file ~/code/app/main.py --format json --limit 5
+```
+
+### `stackunderflow search-past-decisions`
+
+Substring-search `QUERY` across past message content (and tool-call arguments);
+return matching sessions, each with a short snippet for context.
+
+```
+Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | TEXT | (all) | Filter by project slug (e.g. `-Users-you-dev-foo`) |
+| `--since` | TEXT | (all time) | Filter to messages newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
+| `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow search-past-decisions "watchfiles inotify" --limit 10
+Past decisions matching 'watchfiles inotify'  (1 session(s))
+
+  [claude] def456abc789…  2026-04-25T09:11:33  msgs=64  $0.8800
+      -Users-you-dev-app  /Users/you/dev/app
+      … "watchfiles is Rust-backed and cross-platform; raw inotify would mean a separate macOS path…"
+
+$ stackunderflow search-past-decisions "auth middleware" --project -Users-you-dev-api --format json
+```
+
+### `stackunderflow find-sessions-where-action-worked`
+
+List sessions where `ACTION` was performed *and the next user turn confirmed it
+worked* (an explicit "thanks"/"that worked", or no revert and no complaint before
+the session ended). `ACTION` is matched as a case-insensitive substring against
+tool calls and message text — a tool name (`Edit`), a file fragment (`cost.py`),
+or a phrase (`add caching`). The positive-signal counterpart to
+`find-failure-modes-for-file`. Not budget-aware — `--limit` is the only cap.
+
+```
+Usage: stackunderflow find-sessions-where-action-worked [OPTIONS] ACTION
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | TEXT | (all) | Filter by project slug |
+| `--file` | TEXT | (none) | Narrow to sessions that also touched this file |
+| `--since` | TEXT | (all time) | Only sessions whose matching activity is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `--limit` | INTEGER | `20` | Max sessions to return |
+| `--format` | `text\|json` | text | Output format |
+
+Each result carries the inferred `outcome` (`"worked"`), `outcome_evidence` (the
+message that established it), and `outcome_msg_id`. The text output prints a
+`→ worked: <evidence>` line under each session.
+
+**Example:**
+
+```
+$ stackunderflow find-sessions-where-action-worked "add caching" --file stackunderflow/infra/cache.py
+Sessions where 'add caching' worked  (1 session(s))
+
+  [claude] aaa111bbb222…  2026-05-08T16:40:02  msgs=92  $1.1000
+      -Users-you-dev-app  /Users/you/dev/app
+      → worked: user replied "perfect, that's exactly it" two turns later
+```
+
+### `stackunderflow find-failure-modes-for-file`
+
+List sessions where editing `FILE` led to a follow-up correction — the user
+reporting it broke, the agent reverting it (`git revert` / `git reset --hard` /
+`git checkout --`), or a complaint — each with the triggering message as evidence.
+The negative-signal counterpart to `find-sessions-where-action-worked`. Not
+budget-aware.
+
+```
+Usage: stackunderflow find-failure-modes-for-file [OPTIONS] FILE
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--since` | TEXT | (all time) | Only sessions whose edit is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `--limit` | INTEGER | `20` | Max sessions to return |
+| `--format` | `text\|json` | text | Output format |
+
+Each result carries `outcome` (`"failed"` or `"reverted"`), `outcome_evidence`,
+and `outcome_msg_id`.
+
+**Example:**
+
+```
+$ stackunderflow find-failure-modes-for-file stackunderflow/routes/cost.py --since 90d
+Failure modes for stackunderflow/routes/cost.py  (1 session(s))
+
+  [claude] ccc333ddd444…  2026-04-29T11:02:55  msgs=140  $2.0100
+      -Users-you-dev-app  /Users/you/dev/app
+      → reverted: agent ran `git checkout -- stackunderflow/routes/cost.py` after the test broke
+```
+
+---
+
+## Skills Commands
+
+Mine the local store for project-specific workflow patterns ("always run `pytest`
+after editing", "never `pkill`", a flag combo this project favours, a path the
+user keeps steering edits away from) and emit Claude Code `SKILL.md` files. These
+are derived from ground truth (what actually happened across your sessions) — never
+from `CLAUDE.md`. Pure-regex synthesis, no network. Full background in
+[`docs/skills.md`](skills.md).
+
+**Guardrails (deliberate):** project-scoped by default — there is no
+`--all-projects` mode; cross-project mining is opt-in via `--scope user` with an
+explicit `--project`/`--projects` allowlist. Generated skills land under
+`<project>/.claude/skills/auto-*/` (or `~/.claude/skills/` with `--scope user`) —
+never into the package, never released. Idempotent (`.bak` written before any
+overwrite); never clobbers a hand-authored skill.
+
+### `stackunderflow skills generate`
+
+```
+Usage: stackunderflow skills generate [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | TEXT | (cwd's project) | Project slug to mine. Default for `--scope project`: the project the current directory belongs to |
+| `--projects` | TEXT | (none) | Comma-separated slugs for cross-project mining (required for `--scope user` when `--project` isn't given) |
+| `--scope` | `project\|user` | `project` | `project` → `./.claude/skills/` ; `user` → `~/.claude/skills/` (global; requires explicit `--project`/`--projects`) |
+| `--min-occurrences` | INTEGER (≥1) | `5` | A pattern must appear in this many distinct sessions |
+| `--kind` | choice (repeatable) | (all) | Restrict to these pattern kinds: `avoids-X`, `never-touches-paths`, `canonical-test-command`, `always-runs-X-after-Y`, `uses-tool-flag-combo` |
+| `--window` | TEXT | `90d` | Only consider sessions newer than this (`90d`/`1w`/ISO; `all` or empty for no bound) |
+| `--out` | PATH | (per `--scope`) | Output directory |
+| `--dry-run` | flag | false | Show what would be generated; write nothing |
+| `--format` | `text\|json` | text | Output format |
+
+**Examples:**
+
+```
+$ stackunderflow skills generate
+Generated 2 skill(s) under /Users/you/dev/app/.claude/skills:
+  [created] auto-canonical-test-command  (.../auto-canonical-test-command/SKILL.md)
+  [updated] auto-never-touches-store-db  (.../auto-never-touches-store-db/SKILL.md)
+    · auto-canonical-test-command: canonical-test-command, 14 sessions
+    · auto-never-touches-store-db: never-touches-paths, 9 sessions
+
+$ stackunderflow skills generate --dry-run --format json
+$ stackunderflow skills generate --project -Users-you-dev-foo --min-occurrences 8 --window 60d
+$ stackunderflow skills generate --scope user --projects app,api,infra
+```
+
+### `stackunderflow skills list`
+
+```
+Usage: stackunderflow skills list [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--scope` | `project\|user` | `project` | Where to look: `./.claude/skills/` or `~/.claude/skills/` |
+| `--out` | PATH | (per `--scope`) | Skills directory to inspect |
+| `--format` | `text\|json` | text | Output format |
+
+Lists only the auto-generated skills (directory prefix `auto-`, frontmatter
+`auto_generated: true`).
+
+### `stackunderflow skills clean`
+
+```
+Usage: stackunderflow skills clean [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--scope` | `project\|user` | `project` | Where to clean: `./.claude/skills/` or `~/.claude/skills/` |
+| `--out` | PATH | (per `--scope`) | Skills directory to clean |
+| `--older-than` | TEXT | (all) | Only remove skills generated before this (`30d`/`2w`/ISO) |
+| `--dry-run` | flag | false | Show what would be removed; delete nothing |
+| `-y, --yes` | flag | false | Actually delete. Without this, `clean` only previews |
+
+Only ever removes `auto-*` directories marked `auto_generated: true` — never a
+hand-authored skill. Without `--yes` it prints the would-be deletions and exits.
+
+```
+$ stackunderflow skills clean --older-than 30d        # preview
+$ stackunderflow skills clean --older-than 30d --yes  # delete
+```
+
+---
+
+## Discovery Telemetry Commands
+
+A citation-feedback loop on discovery: the three budget-aware discovery commands
+passively record which sessions they surface (`loaded_count`), and the
+`session_query` MCP tool records which surfaced sessions get looked up
+(`cited_count`). `cite_rate = cited_count / loaded_count` feeds the discovery
+ranking so sessions agents actually use climb and uncited noise sinks. Telemetry
+is local-only (session ids + counters, no transcript content) and the passive
+recording is gated behind `STACKUNDERFLOW_DISCOVERY_TELEMETRY` (default on; set to
+`0` to disable).
+
+### `stackunderflow discovery telemetry`
+
+Show the telemetry table: loaded/cited counters + cite-rate per session, sorted
+most-recently-surfaced first.
+
+```
+Usage: stackunderflow discovery telemetry [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--command` | TEXT | (all) | Filter to one discovery command (`find_sessions_in_path`, `find_sessions_touching_file`, `search_past_decisions`) |
+| `--session` | TEXT | (all) | Filter to one session id |
+| `--limit` | INTEGER | `50` | Max rows to show; ≤ 0 means no limit |
+| `--format` | `text\|json` | text | Output format |
+
+### `stackunderflow discovery demote-uncited`
+
+Flag sessions surfaced N+ times over M+ days that were never cited. Demoted
+sessions drop out of default discovery ranking (their cite-rate term is zeroed)
+but stay reachable via direct lookup.
+
+```
+Usage: stackunderflow discovery demote-uncited [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dry-run` | flag | false | List candidates without flagging them |
+| `--min-loads` | INTEGER | `20` | Minimum times surfaced |
+| `--min-age-days` | INTEGER | `7` | Minimum age (days since first surfaced) |
+| `--format` | `text\|json` | text | Output format |
 
 ---
 
@@ -1199,11 +1584,14 @@ $ stackunderflow backup auto --disable
 | `max_date_range_days` | int | `30` | Maximum days allowed in a dashboard date range query |
 | `messages_initial_load` | int | `500` | Number of messages loaded on initial dashboard view |
 | `log_level` | str | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `auto_reindex_on_ingest` | bool | `true` | Re-aggregate dashboard data automatically after a background ingest cycle |
 | `currency` | str | `USD` | Display currency for cost figures — any 3-letter ISO 4217 code |
 | `model_aliases` | dict[str,str] | `{}` | Proxy-rewritten model id → canonical id (manage via `cfg model-alias`) |
 | `plan_name` | str \| null | `null` | Active plan preset name (manage via `plan set`) |
 | `plan_monthly_usd` | float \| null | `null` | Monthly budget in USD (manage via `plan set`) |
 | `plan_reset_day` | int | `1` | Day-of-month the budget resets (manage via `plan set`) |
+| `discovery_budget_tokens` | int | `2000` | Default `--context-budget` for the budget-aware discovery commands / MCP tools |
+| `discovery_rank_weights` | str | `0.5,0.2,0.3` | Discovery-ranking weights `recency,cost,relevance` (malformed → default) |
 
 **Example — set, verify, then reset a key:**
 
@@ -1235,7 +1623,10 @@ Environment variables take precedence over the config file.
 | `max_date_range_days` | `MAX_DATE_RANGE_DAYS` | `MAX_DATE_RANGE_DAYS=90 stackunderflow start` |
 | `messages_initial_load` | `MESSAGES_INITIAL_LOAD` | `MESSAGES_INITIAL_LOAD=1000 stackunderflow start` |
 | `log_level` | `LOG_LEVEL` | `LOG_LEVEL=DEBUG stackunderflow start` |
+| `auto_reindex_on_ingest` | `AUTO_REINDEX_ON_INGEST` | `AUTO_REINDEX_ON_INGEST=false stackunderflow start` |
 | `currency` | `STACKUNDERFLOW_CURRENCY` | `STACKUNDERFLOW_CURRENCY=GBP stackunderflow start` |
+| `discovery_budget_tokens` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=4000 stackunderflow mcp` |
+| `discovery_rank_weights` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS=0.6,0.1,0.3 stackunderflow find-sessions-in-path .` |
 
 Boolean env vars accept `1`, `true`, `yes`, `on` (case-insensitive) as truthy values;
 anything else is treated as false.
@@ -1244,6 +1635,22 @@ anything else is treated as false.
 1. Environment variable
 2. Config file (`~/.stackunderflow/config.json`)
 3. Built-in default
+
+### Standalone environment variables (not config-key-backed)
+
+These aren't in `~/.stackunderflow/config.json` — they're read directly at the call
+site:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `STACKUNDERFLOW_DISABLE_WATCHER` | unset | Truthy = skip spawning the ETL filesystem watcher (same as `start --no-watcher`) |
+| `STACKUNDERFLOW_DISABLE_LOCK` | unset | Truthy = skip the watcher single-instance lock at `~/.stackunderflow/server.lock` (same as `start --no-lock`) |
+| `STACKUNDERFLOW_DISCOVERY_TELEMETRY` | on | Set to `0` / `false` to disable the passive discovery citation-feedback recording |
+| `STACKUNDERFLOW_BETA_<NAME>` | unset | Truthy = enable a beta-flagged provider adapter (e.g. `STACKUNDERFLOW_BETA_GEMINI=1`) |
+
+The `discovery_rank_weights` value is `recency,cost,relevance` (three comma-separated
+floats); a malformed value or the wrong component count falls back to the default
+(`0.5,0.2,0.3`).
 
 ---
 
@@ -1287,6 +1694,71 @@ each subset priced at its correct rate. The store schema does not yet
 carry the speed flag — SQLite-backed stat queries
 (`store/queries.get_project_stats`) report standard rates until a
 follow-up migration lands.
+
+---
+
+## Hook Commands
+
+Opt-in integration with Claude Code's lifecycle hooks (`PostToolUse`,
+`UserPromptSubmit`, `Stop`, `PreCompact`). Nothing is installed unless you run
+`hooks install`. Full details — what's captured, the privacy model, the
+performance characteristics, the Windows status — in [`docs/hooks.md`](hooks.md).
+
+### `stackunderflow hooks install`
+
+```
+stackunderflow hooks install [--scope project|user] [--dry-run] [--capture-content]
+```
+
+Merges StackUnderflow's hook entries into a `settings.json` —
+`<git-root>/.claude/settings.json` for `--scope project` (default), or
+`~/.claude/settings.json` for `--scope user`. Idempotent and convergent: a
+re-run lands on exactly the config the current flags describe (a stale entry or
+a changed `--capture-content` choice is *replaced*, never duplicated). Writes
+`settings.json.bak.<utc-ts>` before any mutation (not on a no-op, not under
+`--dry-run`). **Never touches another tool's hooks.** `--dry-run` prints the
+would-be `hooks` block and writes nothing. `--capture-content` makes the
+installed hook commands store full payloads (prompt text, tool output) instead
+of the conservative sanitised-metadata default.
+
+### `stackunderflow hooks uninstall`
+
+```
+stackunderflow hooks uninstall [--scope project|user]
+```
+
+Removes only the entries StackUnderflow recognises as its own. Never deletes the
+file, never touches other entries. Backs up first iff the file actually changes.
+
+### `stackunderflow hooks status`
+
+```
+stackunderflow hooks status [--scope project|user] [--format text|json]
+```
+
+Shows which StackUnderflow hooks are installed in which scope (default: both),
+whether any are *stale* (recognisably ours but not in the portable form), and how
+many non-StackUnderflow hook entries the file carries.
+
+### `stackunderflow hooks repair`
+
+```
+stackunderflow hooks repair [--scope project|user|all] [--dry-run]
+```
+
+Rewrites stale StackUnderflow hook commands (e.g. a hardcoded path left over from
+a moved venv) back to the portable `stackunderflow hooks run <id>` form,
+preserving `--capture-content`. Changes nothing else; backs up each file first;
+`--dry-run` reports without writing. `--scope all` walks `$HOME` for every
+project's `.claude/settings.json` — bounded (depth ≤ 8), never follows symlinks,
+prunes `node_modules`/`.git`/`.npm`/`.cache`/`.nvm` and other heavy trees. Only
+ever runs when you invoke it.
+
+### `stackunderflow hooks run <hook-id>`
+
+Internal — Claude Code invokes this; reads the hook payload as JSON on stdin and
+records a `captured_events` row when warranted. Always exits `0` (it must never
+disrupt Claude Code). Not for direct use.
 
 ---
 

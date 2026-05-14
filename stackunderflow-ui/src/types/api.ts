@@ -739,16 +739,164 @@ export interface EtlEventsStatus {
   by_cost_source: Record<string, number>
 }
 
+// Live backfill job — populated by the route module's process-local
+// slot from `stackunderflow.etl.backfill_jobs` while a POST /api/etl/backfill
+// run is in flight, and `null` otherwise.
+export interface EtlBackfillJob {
+  job_id: string
+  started_at: string
+  force: boolean
+  status: string
+}
+
+// Most-recently completed backfill — populated by the same module's
+// last-job slot. Retained for `LAST_JOB_TTL_SECONDS` (30s) so the
+// dashboard has a chance to render the outcome before the slot
+// garbage-collects on read. ``error`` is populated only when
+// ``status === "failed"``; success completions omit it.
+export type EtlBackfillFinalStatus = 'complete' | 'failed'
+
+export interface EtlCompletedJob {
+  job_id: string
+  started_at: string
+  completed_at: string
+  force: boolean
+  status: EtlBackfillFinalStatus
+  error?: string | null
+}
+
 export interface EtlStatusResponse {
   watcher: EtlWatcherStatus
   marts: Record<string, EtlMartStatus>
   events: EtlEventsStatus
   lag_seconds: number
   health: EtlHealth
+  current_job: EtlBackfillJob | null
+  last_job: EtlCompletedJob | null
 }
 
+// 202 Accepted body returned by POST /api/etl/backfill once the
+// background task has been queued. Poll /api/etl/status to track
+// progress via `current_job`.
 export interface EtlBackfillResponse {
-  ok: boolean
-  message: string
+  job_id: string
+  started_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Agent-teams — Claude Code parallel-agent topology surface.
+// Mirrors the response bodies of /api/agent-teams/*. Since the v013
+// migration the team graph is materialised at ingest time, so the member
+// objects also carry `spawn_prompt` / `agent_role` and the graph carries
+// the team `description` (all null on stores whose ~/.claude/teams/
+// artefacts haven't been ingested — the backend falls back to a
+// heuristic there). See .notes/specs/09-multi-agent-fs-recognition.md.
+// ---------------------------------------------------------------------------
+
+export interface AgentTeamSummary {
+  session_id: string
+  project_slug: string
+  project_display_name: string
+  team_name: string | null
+  first_ts: string | null
+  last_ts: string | null
+  agent_count: number
+  sub_agent_message_count: number
+  lead_message_count: number
+  description?: string | null
+}
+
+export interface AgentTeamMember {
+  session_id: string
+  agent_id: string | null
+  agent_name: string | null
+  is_lead: boolean
+  parent_session_id: string | null
+  message_count: number
+  first_ts: string | null
+  last_ts: string | null
+  first_user_prompt: string | null
+  model: string | null
+  cost_usd: number
+  // v013 materialised extras (null/absent on un-materialised stores).
+  spawn_prompt?: string | null
+  agent_role?: 'lead' | 'subagent' | null
+}
+
+export interface AgentTeamGraph {
+  session_id: string
+  team_name: string | null
+  description?: string | null
+  project_slug: string
+  project_display_name: string
+  lead: AgentTeamMember
+  agents: AgentTeamMember[]
+}
+
+export interface AgentTeamListResponse {
+  teams: AgentTeamSummary[]
+}
+
+export interface AgentTeamTranscriptResponse {
+  session_id: string
+  agent_session_id: string
+  message_count: number
+  messages: Array<{
+    id: number
+    seq: number
+    timestamp: string
+    role: string
+    model: string | null
+    content_text: string
+    is_sidechain: boolean
+    uuid: string | null
+    parent_uuid: string | null
+    [k: string]: unknown
+  }>
+}
+
+// ---------------------------------------------------------------------------
+// Playback — per-session (and per-project) tool-call timeline. One row per
+// tool call; the dashboard "Playback" tab steps through them with a scrubber.
+// See .notes/specs/10-playback-timeline.md (v1: event stream only).
+// ---------------------------------------------------------------------------
+
+export interface PlaybackEvent {
+  /** 0-based index of this tool call in the full (unfiltered) stream. */
+  seq: number
+  /** ISO-8601 UTC timestamp of the message that issued the call. */
+  ts: string
+  /** `messages.id` of the issuing assistant message. */
+  message_id: number
+  tool_name: string
+  /** One-line label, e.g. "Edit routes/cost.py", "Bash: pytest". */
+  summary: string
+  /** File path the tool operated on, when applicable. */
+  target_path: string | null
+  /** Payload size in bytes (result text, or written content for writes). */
+  byte_count: number | null
+  /** Outcome — `false` on a recorded failure, `true` on success, `null` unknown. */
+  success: boolean | null
+  /** Wall-clock from call to result, in ms, when both timestamps are present. */
+  duration_ms: number | null
+  /** Up-to-200-char excerpt of the input/output (empty when not requested). */
+  payload_excerpt: string
+  /** Owning session id (redundant per-session; meaningful for project timelines). */
+  session_id: string
+}
+
+export interface PlaybackResponse {
+  session_id: string
+  events: PlaybackEvent[]
+  total: number
+  /** `true` when `limit` capped the stream — more events exist. */
+  truncated: boolean
+}
+
+export interface ProjectTimelineResponse {
+  project_slug: string
+  events: PlaybackEvent[]
+  total: number
+  truncated: boolean
 }
 

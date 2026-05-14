@@ -31,7 +31,8 @@ The shape returned is:
         "watcher": {"enabled": bool, "running": bool|"unknown",
                      "last_refresh_ts": str|None,
                      "seconds_since_refresh": int|None,
-                     "events_in_last_cycle": int|None},
+                     "events_in_last_cycle": int|None,
+                     "lock_held_by": int|None},
         "marts": {<mart_name>: {"watermark": int, "row_count": int,
                                 "last_refresh_ts": str|None}},
         "events": {"total": int, "max_id": int,
@@ -39,6 +40,12 @@ The shape returned is:
                     "by_cost_source": {source: count}},
         "lag_seconds": int,           # spec-misnomer: actually "lag_events"
         "health": "live"|"syncing"|"stale"|"error",
+        "current_job": {"job_id": str, "started_at": str,
+                          "force": bool, "status": str} | None,
+        "last_job": {"job_id": str, "started_at": str,
+                      "completed_at": str, "force": bool,
+                      "status": "complete"|"failed",
+                      "error": str | None} | None,
     }
 
 The ``lag_seconds`` field is the worst-case difference between the
@@ -46,6 +53,22 @@ The ``lag_seconds`` field is the worst-case difference between the
 ``lag_seconds`` but it's really a count of lagging events — the rename
 would break the route contract before any consumer exists, so we keep
 the spec-defined key name and document the reality here.
+
+The ``current_job`` field reflects the per-process backfill slot from
+:mod:`stackunderflow.etl.backfill_jobs` — non-null while a
+``POST /api/etl/backfill`` request is being serviced, ``None``
+otherwise. The dashboard polls this surface every 10s and uses the
+field to drive the badge's "backfilling" state without having to call
+the backfill route again.
+
+The ``last_job`` field carries the most recently completed backfill
+within :data:`stackunderflow.etl.backfill_jobs.LAST_JOB_TTL_SECONDS`
+(30s by default). It surfaces failures the route can't otherwise
+report — POST returns 202 the moment the job is queued, so an
+orchestrator exception leaves no trace on the wire. The dashboard
+banners off ``last_job.status == "failed"`` to show the operator what
+broke, and ``health`` is escalated to ``"error"`` for the same window
+so the badge mirrors the failure without a parallel signal path.
 """
 
 from __future__ import annotations
@@ -57,6 +80,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import stackunderflow.deps as deps
+from stackunderflow.etl.backfill_jobs import get_current_job, get_last_job
 
 _log = logging.getLogger(__name__)
 
@@ -124,6 +148,20 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         watcher=watcher,
         lag_events=lag,
     )
+    # ``current_job`` and ``last_job`` reflect the in-process backfill
+    # slots — both can change between back-to-back assembler calls
+    # without any DB activity.
+    current = get_current_job()
+    last = get_last_job()
+
+    # Escalate health to ``error`` while a recently failed backfill is
+    # still inside the TTL window. The pipeline itself may be live
+    # (events flowing, marts caught up), but a fresh failure is the
+    # operator's most actionable signal — the badge should reflect it
+    # for the 30s the slot is retained, then return to whatever the
+    # mart-lag-based health says.
+    if last is not None and last.get("status") == "failed":
+        health = "error"
 
     return {
         "watcher": watcher,
@@ -131,6 +169,8 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         "events": events,
         "lag_seconds": lag,
         "health": health,
+        "current_job": current,
+        "last_job": last,
     }
 
 
@@ -231,6 +271,25 @@ def _marts_summary(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
 # ── watcher ───────────────────────────────────────────────────────────────────
 
 
+def _read_lock_holder_safe() -> int | None:
+    """Read the watcher-lock holder PID. Never raises.
+
+    Imported lazily so the etl.lock module doesn't enter the import
+    graph of pure-status callers (e.g. the CLI ``etl status``
+    subcommand) until it's actually needed. Returns ``None`` on any
+    failure — the lock holder field is informational, not load-bearing.
+    """
+    try:
+        from stackunderflow.etl.lock import read_lock_holder
+    except ImportError:
+        return None
+    try:
+        return read_lock_holder()
+    except Exception as exc:  # noqa: BLE001 — never propagate from a status probe
+        _log.debug("etl.status: read_lock_holder raised: %s", exc)
+        return None
+
+
 def _watcher_state() -> dict[str, Any]:
     """Best-effort snapshot of the Wave 2C watcher's runtime state.
 
@@ -248,6 +307,7 @@ def _watcher_state() -> dict[str, Any]:
     """
     enabled = not _watcher_env_disabled()
     handle = getattr(deps, "watcher_handle", None)
+    lock_held_by = _read_lock_holder_safe()
 
     if handle is None:
         # Either CLI mode (lifespan never ran) or the lifespan started
@@ -259,6 +319,7 @@ def _watcher_state() -> dict[str, Any]:
             "last_refresh_ts": None,
             "seconds_since_refresh": None,
             "events_in_last_cycle": None,
+            "lock_held_by": lock_held_by,
         }
 
     running: bool | str
@@ -284,6 +345,7 @@ def _watcher_state() -> dict[str, Any]:
         "last_refresh_ts": last_ts,
         "seconds_since_refresh": seconds_since,
         "events_in_last_cycle": events_last,
+        "lock_held_by": lock_held_by,
     }
 
 

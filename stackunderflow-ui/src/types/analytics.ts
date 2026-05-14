@@ -45,7 +45,13 @@ export interface CommandCost {
 }
 
 export interface ToolCost {
+  // Distinct (message, tool) pairs — a turn that called this tool N times
+  // counts once (the 1/N cost-attribution unit).
   calls: number
+  // Total tool occurrences (a turn that called this tool 3× counts 3).
+  // Added by backend v012; `0` on a tool_mart that predates the migration
+  // and hasn't been `--force`-rebuilt yet. Optional so older payloads parse.
+  calls_total?: number
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number

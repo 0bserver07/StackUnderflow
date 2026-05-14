@@ -71,6 +71,19 @@ def run_ingest(conn: sqlite3.Connection, adapters: list[SourceAdapter]) -> dict[
         if added:
             touched_slugs.add(ref.project_slug)
 
+    # Per-adapter post-ingest hook. Claude uses it to materialise agent-team
+    # metadata from ~/.claude/teams + ~/.claude/tasks into the schema (so the
+    # Agents tab JOINs instead of re-parsing raw_json on every render). Each
+    # call is fenced — a hook hiccup must never break the ingest pass.
+    for adapter in adapters:
+        hook = getattr(adapter, "materialize_metadata", None)
+        if hook is None:
+            continue
+        try:
+            hook(conn)
+        except Exception as e:  # noqa: BLE001 — a metadata hook must never break ingest
+            _logger.warning("materialize_metadata failed for %s: %s", adapter.name, e)
+
     if touched_slugs:
         auto_reindex_touched(conn, touched_slugs)
 

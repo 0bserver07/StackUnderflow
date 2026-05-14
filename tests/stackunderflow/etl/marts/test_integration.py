@@ -63,10 +63,13 @@ def _seed_100_events(conn: sqlite3.Connection) -> float:
     return total_cost
 
 
-def test_registry_lists_all_five(conn) -> None:
-    """marts.all() must expose every Wave 2B builder by spec name."""
+def test_registry_lists_all_marts(conn) -> None:
+    """marts.all() must expose every registered builder by spec name."""
+    # Wave 2B = the 5 foundational marts; Wave 5 added tool + command;
+    # v011 added the per-message-grain message_tool mart.
     assert set(marts_pkg.all().keys()) == {
         "daily", "session", "project", "provider_day", "model_day",
+        "tool", "command", "message_tool",
     }
 
 
@@ -130,26 +133,35 @@ def test_full_pipeline_consistency(conn) -> None:
     assert actual_sessions == expected_sessions
 
 
+_ALL_MART_NAMES = (
+    "daily", "session", "project", "provider_day", "model_day",
+    "tool", "command", "message_tool",
+)
+
+
 def test_watermark_contract_persisted_per_mart(conn) -> None:
     """``mart_watermark`` records each mart's ``last_event_id`` independently."""
     _seed_100_events(conn)
     # Use the Wave-1 helper so the integration mirrors what the watcher
     # / backfill orchestrator will do in production.
     processed = refresh_all_marts(conn)
-    assert set(processed) == {
-        "daily", "session", "project", "provider_day", "model_day",
-    }
-    # Every mart consumed all 100 events on the first run.
-    assert all(v == 100 for v in processed.values())
+    assert set(processed) == set(_ALL_MART_NAMES)
+    # Every mart consumed all 100 events on the first run. ``tool``,
+    # ``command`` and ``message_tool`` may report fewer events processed
+    # because they only count events whose source message had tools /
+    # tool_use blocks / a preceding user prompt — but the watermark
+    # itself still advances to max_id for every mart.
+    daily_processed = processed["daily"]
+    assert daily_processed == 100
 
     # Each mart's watermark is at the highest event id (100).
-    for name in ("daily", "session", "project", "provider_day", "model_day"):
+    for name in _ALL_MART_NAMES:
         assert get_watermark(conn, name) == 100
 
     # A second refresh with no new events is a clean no-op.
     processed = refresh_all_marts(conn)
     assert all(v == 0 for v in processed.values())
-    for name in ("daily", "session", "project", "provider_day", "model_day"):
+    for name in _ALL_MART_NAMES:
         assert get_watermark(conn, name) == 100
 
 
@@ -165,7 +177,7 @@ def test_watermark_helpers_round_trip(conn) -> None:
 def _snapshot_marts(conn: sqlite3.Connection) -> dict:
     """Return per-mart row sets, with float columns rounded for comparison."""
     out: dict = {}
-    for name in ("daily", "session", "project", "provider_day", "model_day"):
+    for name in _ALL_MART_NAMES:
         rows = []
         # noqa via inline-on-the-fstring: the name comes from a hardcoded
         # literal tuple — there is no user input.
@@ -226,12 +238,21 @@ def test_two_window_incremental_matches_full(conn) -> None:
 
     incremental = _snapshot_marts(conn)
 
-    # Now rebuild from scratch and compare.
+    # Now rebuild from scratch and compare. The content-dependent marts
+    # (tool, command, message_tool) have no rows in this fixture — events
+    # here have no tools_json / raw_json tool_use blocks / preceding user
+    # prompts in messages — so the rebuild is a no-op for them. We still
+    # walk the registry so the comparison stays exhaustive when the
+    # fixture grows.
     for cls in (
         DailyMartBuilder, SessionMartBuilder, ProjectMartBuilder,
         ProviderDayMartBuilder, ModelDayMartBuilder,
     ):
         cls().rebuild_from_scratch(conn)
+    for name in ("tool", "command", "message_tool"):
+        cls_t = marts_pkg.get(name)
+        assert cls_t is not None
+        cls_t().rebuild_from_scratch(conn)
 
     one_shot = _snapshot_marts(conn)
 

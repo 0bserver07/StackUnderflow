@@ -152,12 +152,23 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
 def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
     """Replace the rollup blocks of ``stats`` with mart-derived values.
 
-    Touches only the keys the daily mart can fully reconstruct
-    (``token_composition.daily``, ``token_composition.totals``).
-    Per-session breakdowns stay aggregator-driven — they need the
-    session-level grain we'll get from ``session_mart`` once Wave 4
-    lands. Returns the same dict object (mutated) so the caller's
-    payload assembly stays unchanged.
+    Touches keys the day/tool/command marts can reconstruct:
+
+    * ``token_composition.daily`` / ``token_composition.totals`` — from
+      ``daily_mart`` (Wave 3A).
+    * ``tool_costs`` — from ``tool_mart`` (Wave 5). The mart's
+      pre-attributed 1/N cost/token shares mirror the aggregator's
+      ``_ToolCostCollector`` contract so the JSON shape is identical.
+
+    ``command_costs`` and ``session_costs`` stay aggregator-driven —
+    their existing shapes are per-Interaction / per-session lists keyed
+    on interaction_id / session_id, which the per-(day, project,
+    command_name) ``command_mart`` doesn't preserve. The route's
+    ``trends`` block also stays on the aggregator path because the
+    period split (current vs prior) needs interaction-level
+    correlations the daily mart can't see by itself. Returns the same
+    dict object (mutated) so the caller's payload assembly stays
+    unchanged.
     """
     daily_rows = mart_queries.daily_for_project(conn, project_id=project_id)
     if not daily_rows:
@@ -188,9 +199,56 @@ def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
         stats["token_composition"] = tc
     tc["daily"] = daily
     tc["totals"] = totals
-    # ``per_session`` stays whatever the aggregator produced — Wave 4
-    # work item.
+
+    # Wave 5: overlay tool_costs from tool_mart when populated. Empty
+    # mart → keep whatever the aggregator emitted (default fallback).
+    if mart_queries.mart_has_tool_rows(conn):
+        tool_rows = mart_queries.tool_mart_for_project(
+            conn, project_id=project_id,
+        )
+        if tool_rows:
+            stats["tool_costs"] = _tool_mart_to_aggregator_shape(tool_rows)
+
     return stats
+
+
+def _tool_mart_to_aggregator_shape(
+    tool_rows: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Reshape ``tool_mart_for_project`` rows into ``tool_costs`` JSON.
+
+    The legacy ``_ToolCostCollector`` (``stats/aggregator.py`` §1.3)
+    emits ``{tool_name: {calls, input_tokens, output_tokens,
+    cache_read_tokens, cache_creation_tokens, cost}}``. ``tool_mart``
+    pre-attributes the 1/N split per the same contract; we just rename
+    the column keys to the aggregator's field names so the JSON
+    consumer doesn't notice the swap.
+
+    ``calls`` is the distinct ``(message, tool)`` pair count (the mart's
+    ``event_count`` — the 1/N-attribution unit). ``calls_total`` (added
+    in v012) surfaces the non-distinct occurrence count alongside it:
+    a turn that called Read 3× contributes ``calls += 1`` but
+    ``calls_total += 3``. Pre-v012 ``tool_mart`` rows carry
+    ``calls_total = 0`` until a ``--force`` rebuild — consumers should
+    treat that as "not yet rebuilt", not "zero calls".
+
+    Cache token columns are not materialised in ``tool_mart`` (the v1
+    mart shape per the spec only carries tokens_in/tokens_out) — we
+    surface zeroes for them. The downstream chart only consumes
+    ``calls`` + ``cost``, so the shim stays additive.
+    """
+    return {
+        name: {
+            "calls": v["calls"],
+            "calls_total": v.get("calls_total", 0),
+            "input_tokens": v["tokens_in"],
+            "output_tokens": v["tokens_out"],
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cost": v["cost"],
+        }
+        for name, v in tool_rows.items()
+    }
 
 
 # ── /api/cost-data/by-provider ──────────────────────────────────────────────

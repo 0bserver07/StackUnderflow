@@ -15,18 +15,74 @@ normalizer), the hook silently no-ops and a debug line is logged. The
 ``messages`` row still lands; the ETL just doesn't materialise an
 event for it. The next ``stackunderflow etl backfill`` will pick it
 up.
+
+v008 partitioning
+-----------------
+``messages`` is now a UNION-ALL view over per-month ``messages_YYYYMM``
+partition tables (see ``stackunderflow/store/migrations/
+v008_messages_partitioning.py``). Writes route through
+:func:`_partition_for` and land in the matching partition table; the
+per-row id comes from the global ``_messages_id_seq`` so ids stay
+unique across partitions (preserving the dedup key
+``usage_events.uniq_events_msg``). When a record's timestamp falls
+into a month without a partition yet, :func:`_ensure_partition`
+creates the table + indexes and rebuilds the ``messages`` view inside
+the same per-file transaction.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 
 from stackunderflow.adapters.base import Record, SessionRef, SourceAdapter
 
 _log = logging.getLogger(__name__)
+
+# Columns every partition table exposes — kept in sync with the
+# migration's ``_PARTITION_COLUMNS`` (the migration module is loaded by
+# pathname, not as a regular package member, so we duplicate rather
+# than import). Future schema additions to ``messages`` must update
+# both lists, every existing partition table, and the view rebuild.
+_PARTITION_COLUMNS = (
+    "id",
+    "session_fk",
+    "seq",
+    "timestamp",
+    "role",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "cache_create_tokens",
+    "cache_read_tokens",
+    "content_text",
+    "tools_json",
+    "raw_json",
+    "is_sidechain",
+    "uuid",
+    "parent_uuid",
+    "speed",
+)
+
+_PARTITION_NAME_RE = re.compile(r"^messages_(\d{6}|unknown)$")
+
+# Default literals for the INSTEAD OF INSERT trigger — kept in sync
+# with the migration's identically-named map. NOT NULL + DEFAULT
+# columns need an explicit COALESCE in the trigger because NEW.col is
+# NULL when the original INSERT didn't supply the column.
+_COLUMN_DEFAULTS = {
+    "input_tokens": "0",
+    "output_tokens": "0",
+    "cache_create_tokens": "0",
+    "cache_read_tokens": "0",
+    "content_text": "''",
+    "tools_json": "'[]'",
+    "is_sidechain": "0",
+    "speed": "'standard'",
+}
 
 
 def ingest_file(
@@ -227,26 +283,38 @@ def _upsert_session(conn: sqlite3.Connection, project_id: int, ref: SessionRef) 
 def _insert_message(
     conn: sqlite3.Connection, session_fk: int, rec: Record,
 ) -> tuple[int, int | None]:
-    """Insert one message row.
+    """Insert one message row into the partition for ``rec.timestamp``.
 
     Returns ``(rowcount, rowid_or_none)``. ``rowcount`` is ``1`` on a
     successful insert, ``0`` if the row was already present (the
     ``INSERT OR IGNORE`` path). The rowid is the new ``messages.id``
     when an insert happened, ``None`` otherwise — callers use it to
     drive the per-record normalize hook (Wave 4B).
+
+    v008 partitions ``messages`` into monthly ``messages_YYYYMM``
+    tables behind a UNION-ALL view. The writer routes inserts to the
+    partition matching ``rec.timestamp`` (or ``messages_unknown`` for
+    malformed timestamps), creating the partition + extending the
+    ``messages`` view on demand. Ids come from the global
+    ``_messages_id_seq`` table so they stay unique across partitions
+    (preserving the dedup key the normalizer relies on).
     """
     # ``speed`` carries Anthropic's priority/fast tier flag (PR #44).
-    # Persisted to the messages table by v003 so SQL-driven cost paths
+    # Persisted to the messages partitions by v003 so SQL-driven cost paths
     # (get_global_stats, services/compare, reports/export, build_enriched_dataset)
     # can apply the 6× Opus multiplier without round-tripping raw_json.
+    partition = _partition_for(rec.timestamp)
+    _ensure_partition(conn, partition)
+    new_id = _next_message_id(conn)
     cur = conn.execute(
-        "INSERT OR IGNORE INTO messages ("
-        "  session_fk, seq, timestamp, role, model, "
+        f"INSERT OR IGNORE INTO {partition} ("  # noqa: S608 — partition is regex-validated
+        "  id, session_fk, seq, timestamp, role, model, "
         "  input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
         "  content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid, "
         "  speed"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
+            new_id,
             session_fk,
             rec.seq,
             rec.timestamp,
@@ -265,8 +333,12 @@ def _insert_message(
             rec.speed,
         ),
     )
-    rowid = cur.lastrowid if cur.rowcount else None
-    return cur.rowcount, rowid
+    if cur.rowcount:
+        return 1, new_id
+    # UNIQUE conflict on (session_fk, seq) — the assigned id is unused;
+    # we leak it (sequence keeps moving forward). Acceptable: bounded by
+    # the number of duplicate INSERT attempts, which on a normal run is 0.
+    return 0, None
 
 
 # ── Wave 4B: normalize + insert hook ─────────────────────────────────────────
@@ -435,3 +507,210 @@ def _day_of(ts: str) -> str:
     if not ts or len(ts) < 10:
         return ""
     return ts[:10] if ts[4] == "-" and ts[7] == "-" else ""
+
+
+# ── v008: messages partitioning helpers ──────────────────────────────────────
+
+
+def _partition_for(ts: str) -> str:
+    """Return the partition table name for an ISO-8601 *ts*.
+
+    Maps ``"2026-04-15T..."`` → ``"messages_202604"``. Falls back to
+    ``"messages_unknown"`` on empty or malformed timestamps so no row
+    is ever lost — the writer + view both treat ``messages_unknown``
+    as a regular partition.
+    """
+    if not ts or len(ts) < 7 or ts[4] != "-":
+        return "messages_unknown"
+    year = ts[:4]
+    month = ts[5:7]
+    if not (year.isdigit() and month.isdigit()):
+        return "messages_unknown"
+    return f"messages_{year}{month}"
+
+
+def _ensure_partition(conn: sqlite3.Connection, partition: str) -> bool:
+    """Create *partition* + indexes + extend the messages view if missing.
+
+    Returns ``True`` when a new partition was created (the view was
+    rebuilt). The caller can ignore the return value — it's only there
+    so tests can assert the expected state transitions.
+
+    Cheap on the hot path: a single ``SELECT FROM sqlite_master`` per
+    insert checks whether the partition exists. The DDL + view rebuild
+    only runs on the first insert into a brand-new month — typically
+    once per month boundary.
+
+    The partition name is regex-validated (``messages_YYYYMM`` or
+    ``messages_unknown``) before formatting into SQL so we cannot be
+    coerced into running arbitrary DDL.
+    """
+    if not _PARTITION_NAME_RE.match(partition):
+        raise ValueError(f"Invalid partition name: {partition!r}")
+    existing = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (partition,),
+    ).fetchone()
+    if existing:
+        return False
+
+    conn.execute(f"""
+        CREATE TABLE {partition} (
+            id                    INTEGER PRIMARY KEY,
+            session_fk            INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq                   INTEGER NOT NULL,
+            timestamp             TEXT NOT NULL,
+            role                  TEXT NOT NULL,
+            model                 TEXT,
+            input_tokens          INTEGER NOT NULL DEFAULT 0,
+            output_tokens         INTEGER NOT NULL DEFAULT 0,
+            cache_create_tokens   INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+            content_text          TEXT NOT NULL DEFAULT '',
+            tools_json            TEXT NOT NULL DEFAULT '[]',
+            raw_json              TEXT NOT NULL,
+            is_sidechain          INTEGER NOT NULL DEFAULT 0,
+            uuid                  TEXT,
+            parent_uuid           TEXT,
+            speed                 TEXT NOT NULL DEFAULT 'standard',
+            UNIQUE (session_fk, seq)
+        )
+    """)
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{partition}_session_seq "
+        f"ON {partition}(session_fk, seq)"
+    )
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{partition}_timestamp "
+        f"ON {partition}(timestamp)"
+    )
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{partition}_model "
+        f"ON {partition}(model)"
+    )
+    _rebuild_messages_view(conn)
+    _rebuild_messages_insert_trigger(conn)
+    return True
+
+
+def _list_partitions(conn: sqlite3.Connection) -> list[str]:
+    """Return every partition table name in sorted order."""
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND (name GLOB 'messages_[0-9][0-9][0-9][0-9][0-9][0-9]' "
+        "     OR name = 'messages_unknown')"
+    ).fetchall()
+    return sorted(str(r[0] if not hasattr(r, "keys") else r["name"]) for r in rows)
+
+
+def _rebuild_messages_view(conn: sqlite3.Connection) -> None:
+    """(Re)create the ``messages`` view spanning every existing partition.
+
+    Discovers partitions via ``sqlite_master`` GLOB, sorts them, and
+    emits ``CREATE VIEW messages AS SELECT cols FROM p1 UNION ALL
+    SELECT cols FROM p2 ...``. Explicit columns guard against silent
+    drift in any one partition.
+    """
+    partitions = _list_partitions(conn)
+    if not partitions:
+        return
+    cols_csv = ", ".join(_PARTITION_COLUMNS)
+    union_sql = " UNION ALL ".join(
+        f"SELECT {cols_csv} FROM {p}" for p in partitions  # noqa: S608
+    )
+    conn.execute("DROP VIEW IF EXISTS messages")
+    conn.execute(f"CREATE VIEW messages AS {union_sql}")  # noqa: S608
+
+
+def _rebuild_messages_insert_trigger(conn: sqlite3.Connection) -> None:
+    """(Re)create the INSTEAD OF INSERT trigger on the ``messages`` view.
+
+    Mirrors the trigger built by the v008 migration so callers that
+    use the ``messages`` name directly (e.g. fixture-seeding tests, ad
+    hoc tooling) keep working. Production writes route directly via
+    :func:`_insert_message` and bypass this trigger.
+
+    Rebuilt every time a new partition is added so the trigger's WHEN
+    clauses cover every active month.
+    """
+    partitions = _list_partitions(conn)
+    if not partitions:
+        return
+
+    cols_csv = ", ".join(_PARTITION_COLUMNS)
+    select_exprs: list[str] = []
+    for col in _PARTITION_COLUMNS:
+        if col == "id":
+            select_exprs.append(
+                "COALESCE(NEW.id, "
+                "(SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1))"
+            )
+        elif col in _COLUMN_DEFAULTS:
+            select_exprs.append(f"COALESCE(NEW.{col}, {_COLUMN_DEFAULTS[col]})")
+        else:
+            select_exprs.append(f"NEW.{col}")
+    base_select = ", ".join(select_exprs)
+
+    known_months = [p[len("messages_"):] for p in partitions if p != "messages_unknown"]
+    inserts: list[str] = []
+    for ym in known_months:
+        yyyy_mm = f"{ym[:4]}-{ym[4:]}"
+        inserts.append(
+            f"INSERT OR IGNORE INTO messages_{ym} ({cols_csv}) "  # noqa: S608
+            f"SELECT {base_select} "
+            f"WHERE substr(NEW.timestamp, 1, 7) = '{yyyy_mm}';"
+        )
+    if known_months:
+        known_list = ", ".join(f"'{ym[:4]}-{ym[4:]}'" for ym in known_months)
+        fallback_where = (
+            f"length(NEW.timestamp) < 7 "
+            f"OR substr(NEW.timestamp, 5, 1) <> '-' "
+            f"OR substr(NEW.timestamp, 1, 7) NOT IN ({known_list})"
+        )
+    else:
+        fallback_where = "1 = 1"
+    inserts.append(
+        f"INSERT OR IGNORE INTO messages_unknown ({cols_csv}) "
+        f"SELECT {base_select} "
+        f"WHERE {fallback_where};"
+    )
+
+    bump_sql = (
+        "UPDATE _messages_id_seq SET next_id = MAX("
+        "  next_id + (CASE WHEN NEW.id IS NULL THEN 1 ELSE 0 END),"
+        "  COALESCE(NEW.id + 1, next_id)"
+        ") WHERE rowid_kind = 1;"
+    )
+    body = bump_sql + "".join(inserts)
+
+    conn.execute("DROP TRIGGER IF EXISTS messages_insert_route")
+    conn.execute(
+        "CREATE TRIGGER messages_insert_route INSTEAD OF INSERT ON messages "
+        f"BEGIN {body} END"  # noqa: S608
+    )
+
+
+def _next_message_id(conn: sqlite3.Connection) -> int:
+    """Atomically reserve and return the next global ``messages.id``.
+
+    The caller is already inside a transaction (``ingest_file`` opens
+    ``BEGIN`` before the first ``_insert_message``), so the read-then-
+    update pair is serialised against any concurrent writer on the
+    same connection.
+
+    On a v008-migrated DB the ``_messages_id_seq`` row is initialised
+    to ``MAX(id) + 1`` from the pre-migration ``messages`` table. On
+    a brand-new DB it starts at 1.
+    """
+    row = conn.execute(
+        "SELECT next_id FROM _messages_id_seq WHERE rowid_kind = 1"
+    ).fetchone()
+    if row is None:  # pragma: no cover — defensive: would mean migration didn't run
+        raise RuntimeError(
+            "ingest.writer: _messages_id_seq is missing — run schema.apply() first"
+        )
+    next_id = int(row[0] if not hasattr(row, "keys") else row["next_id"])
+    conn.execute(
+        "UPDATE _messages_id_seq SET next_id = next_id + 1 WHERE rowid_kind = 1"
+    )
+    return next_id

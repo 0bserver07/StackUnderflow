@@ -56,14 +56,34 @@ def insert_message(
     seq: int | None = None,
     role: str = "assistant",
     timestamp: str = "2024-01-01T00:00:00Z",
+    tools_json: str | None = None,
+    content_text: str | None = None,
+    raw_json: str | None = None,
 ) -> None:
-    """Insert a placeholder ``messages`` row so a usage_event can FK to it."""
+    """Insert a placeholder ``messages`` row so a usage_event can FK to it.
+
+    Wave 5 callers may pass ``tools_json`` (a JSON-encoded array of tool
+    name strings) and ``content_text`` for the per-tool / per-command
+    mart fixtures. ``message_tool_mart`` tests additionally pass
+    ``raw_json`` (a JSON-encoded Claude-style ``{"message": {"content":
+    [...]}}`` record carrying ``tool_use`` / ``tool_result`` blocks).
+    Older callers leave all three ``None`` and the table's column
+    defaults take over (``tools_json='[]'``, empty content, ``raw_json``
+    ``'{}'``).
+    """
     if seq is None:
         seq = msg_id
+    if tools_json is None:
+        tools_json = "[]"
+    if content_text is None:
+        content_text = ""
+    if raw_json is None:
+        raw_json = "{}"
     conn.execute(
-        "INSERT INTO messages (id, session_fk, seq, timestamp, role, raw_json) "
-        "VALUES (?, ?, ?, ?, ?, '{}')",
-        (msg_id, session_fk, seq, timestamp, role),
+        "INSERT INTO messages "
+        "(id, session_fk, seq, timestamp, role, tools_json, content_text, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (msg_id, session_fk, seq, timestamp, role, tools_json, content_text, raw_json),
     )
 
 
@@ -85,14 +105,30 @@ def insert_event(
     cache_create: int = 0,
     cost_usd: float = 0.0,
     role: str = "assistant",
+    tools_json: str | None = None,
+    raw_json: str | None = None,
+    seq: int | None = None,
+    session_fk: int | None = None,
 ) -> None:
-    """Insert one synthetic ``usage_events`` row + its placeholder message."""
+    """Insert one synthetic ``usage_events`` row + its placeholder message.
+
+    The Wave 5 marts (``tool_mart``, ``command_mart``) read ``tools_json``
+    and walk back to the preceding user message; ``message_tool_mart``
+    parses the message's ``raw_json`` for ``tool_use`` blocks. The
+    helper accepts optional ``tools_json`` / ``raw_json`` / ``seq``
+    overrides for richer fixtures. Older callers that don't pass them
+    get the same defaults as before.
+    """
     if msg_id is None:
         msg_id = event_id
+    if session_fk is None:
+        session_fk = 1 if project_id == 1 else 2
+    if seq is None:
+        seq = event_id
     insert_message(
         conn, msg_id=msg_id, role=role, timestamp=ts,
-        session_fk=1 if project_id == 1 else 2,
-        seq=event_id,  # globally-unique seq per session is overkill but safe
+        session_fk=session_fk, seq=seq,
+        tools_json=tools_json, raw_json=raw_json,
     )
     conn.execute(
         """
@@ -109,4 +145,27 @@ def insert_event(
             input_tokens, output_tokens, cache_read, cache_create,
             cost_usd, role,
         ),
+    )
+
+
+def insert_user_prompt(
+    conn: sqlite3.Connection,
+    *,
+    msg_id: int,
+    session_fk: int,
+    seq: int,
+    content_text: str,
+    timestamp: str = "2024-01-01T00:00:00Z",
+) -> None:
+    """Insert a ``role='user'`` message used by ``command_mart`` tests.
+
+    The mart walks ``messages`` back from each event to the most recent
+    ``role='user'`` row; tests stage these with explicit ``seq`` so the
+    walk lands deterministically.
+    """
+    conn.execute(
+        "INSERT INTO messages (id, session_fk, seq, timestamp, role, "
+        "content_text, raw_json) "
+        "VALUES (?, ?, ?, ?, 'user', ?, '{}')",
+        (msg_id, session_fk, seq, timestamp, content_text),
     )

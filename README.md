@@ -143,6 +143,8 @@ The pipeline is three layers tied together by a watermarked refresh loop and a f
                │  project_mart                  │
                │  provider_day_mart             │
                │  model_day_mart                │
+               │  tool_mart                     │
+               │  command_mart                  │
                └─────────────┬──────────────────┘
                               ▼
                REST routes — plain SELECTs
@@ -159,8 +161,8 @@ Every dashboard route reads from the marts. On a 247K-message store the cold-loa
 stackunderflow/
   adapters/         # 16 source-file parsers (4 default-on, 12 beta)
   etl/              # ETL pipeline (v0.7+)
-    normalize/      #   Normalizer ABC + 16 per-provider transforms
-    marts/          #   MartBuilder ABC + 5 mart builders
+    normalize/      #   Normalizer ABC + per-provider transforms (16 adapters; 13 beta normalizers wired, omp aliases pi)
+    marts/          #   MartBuilder ABC + 7 mart builders
     backfill.py     #   streams messages → events → marts
     watcher.py      #   watchfiles daemon, debounced 200ms
     watermark.py    #   per-mart last_event_id tracking
@@ -168,7 +170,7 @@ stackunderflow/
   api/              # public Python API (list_projects/process/list_sessions)
   ingest/           # writer + per-record normalize hook
   store/            # SQLite at ~/.stackunderflow/store.db
-    migrations/     #   v001 → v006 (additive)
+    migrations/     #   v001 → v008 (additive)
     queries.py      #   typed read helpers (raw layer)
     mart_queries.py #   typed read helpers (marts)
   infra/
@@ -256,6 +258,12 @@ See [docs/mcp.md](docs/mcp.md) for the full tool reference + Cursor / Claude Cod
 
 ---
 
+## Claude Code skills
+
+StackUnderflow ships a set of [Claude Code skills](https://code.claude.com/docs/en/skills) that turn the local store into a reflex: Claude Code automatically surfaces prior session context when you start work in a project, mention a specific file, or reference a past decision. Install with `cp -r stackunderflow/skills/* ~/.claude/skills/` — see [docs/skills.md](docs/skills.md) for trigger semantics and example transcripts.
+
+---
+
 ## ETL operations
 
 The pipeline is incremental + idempotent. Most users never need to think about it. For when you do:
@@ -268,13 +276,25 @@ stackunderflow etl status
 stackunderflow etl backfill          # incremental — skips converted msgs
 stackunderflow etl backfill --force  # drop + rebuild from scratch
 
+# Same backfill, kicked off in the background from HTTP (used by the
+# Settings page "Backfill now" button); poll /api/etl/status to follow it
+curl -X POST http://127.0.0.1:8081/api/etl/backfill
+
 # Disable the watcher (headless / debugging)
 stackunderflow start --no-watcher
 # or via env var:
 STACKUNDERFLOW_DISABLE_WATCHER=1 stackunderflow start
+
+# Skip the watcher single-instance lock (multi-server, or stale lock file)
+stackunderflow start --no-lock
+# or via env var:
+STACKUNDERFLOW_DISABLE_LOCK=1 stackunderflow start
 ```
 
-Watcher state, watermarks, and per-provider event counts are also at `GET /api/etl/status` and visible as a badge in the dashboard header.
+Watcher state (including the PID currently holding the watcher lock),
+watermarks, per-provider event counts, and any in-flight backfill job
+are also at `GET /api/etl/status` and visible as a badge in the
+dashboard header.
 
 ---
 

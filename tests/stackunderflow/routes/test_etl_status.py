@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import stackunderflow.deps as deps
+import stackunderflow.etl.backfill_jobs as backfill_jobs
 from stackunderflow.routes.etl import router as etl_router
 from stackunderflow.store import db, schema
 
@@ -39,6 +40,8 @@ def app_client(tmp_path, monkeypatch):
     # Reset the per-session seq counter so tests across the module don't
     # collide on the shared dict.
     _SEQ_COUNTERS.clear()
+    # Clear any leftover backfill slot from a sibling test module.
+    backfill_jobs._reset_for_tests()
 
     app = FastAPI()
     app.include_router(etl_router)
@@ -69,10 +72,15 @@ _SEQ_COUNTERS: dict[int, int] = {}
 def _insert_message(conn, *, session_fk: int) -> int:
     """Insert a message; auto-increment ``seq`` per session so the
     ``UNIQUE(session_fk, seq)`` index is respected in the multi-event tests.
+
+    v008: ``messages`` is a UNION-ALL view with an INSTEAD OF trigger.
+    ``cur.lastrowid`` doesn't propagate the trigger's nested INSERT id,
+    so we read the freshly-allocated id from ``_messages_id_seq``
+    (``next_id - 1``).
     """
     seq = _SEQ_COUNTERS.get(session_fk, 0)
     _SEQ_COUNTERS[session_fk] = seq + 1
-    cur = conn.execute(
+    conn.execute(
         "INSERT INTO messages "
         "(session_fk, seq, timestamp, role, model, "
         " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
@@ -81,7 +89,9 @@ def _insert_message(conn, *, session_fk: int) -> int:
         " 0, 0, 0, 0, '', '[]', '{}', 0)",
         (session_fk, seq),
     )
-    return int(cur.lastrowid)
+    return int(conn.execute(
+        "SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1"
+    ).fetchone()[0])
 
 
 def _insert_event(
@@ -141,12 +151,19 @@ class TestResponseShape:
         body = r.json()
 
         # Top-level keys
-        assert set(body.keys()) == {"watcher", "marts", "events", "lag_seconds", "health"}
+        assert set(body.keys()) == {
+            "watcher", "marts", "events", "lag_seconds", "health",
+            "current_job", "last_job",
+        }
+        # Idle store: no backfill in flight, none recently completed.
+        assert body["current_job"] is None
+        assert body["last_job"] is None
 
         # Watcher subshape
         assert set(body["watcher"].keys()) == {
             "enabled", "running", "last_refresh_ts",
             "seconds_since_refresh", "events_in_last_cycle",
+            "lock_held_by",
         }
 
         # All five mart names present, even on a fresh store
@@ -402,3 +419,75 @@ class TestWatcherDegrade:
 
         body = client.get("/api/etl/status").json()
         assert body["watcher"]["running"] == "unknown"
+
+
+# ── last_job block ───────────────────────────────────────────────────────────
+
+
+class TestLastJob:
+    """The ``last_job`` block carries the most recent backfill outcome
+    so the dashboard banner can render success / failure for the
+    duration of the slot's TTL.
+    """
+
+    def test_completion_surfaces_in_last_job_block(self, app_client):
+        client, _ = app_client
+        # Run a full start → complete cycle through the public surface.
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="complete")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["current_job"] is None
+            last = body["last_job"]
+            assert last is not None
+            assert last["job_id"] == job["job_id"]
+            assert last["status"] == "complete"
+            assert last["force"] is False
+            assert isinstance(last["completed_at"], str) and "T" in last["completed_at"]
+            # Successful completions have no error key on the slot.
+            assert "error" not in last or last.get("error") is None
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_failure_surfaces_error_in_last_job_block(self, app_client):
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=True)
+        backfill_jobs.complete_job(
+            job["job_id"], status="failed", error="connection refused: 5/5",
+        )
+        try:
+            body = client.get("/api/etl/status").json()
+            last = body["last_job"]
+            assert last is not None
+            assert last["job_id"] == job["job_id"]
+            assert last["status"] == "failed"
+            assert last["error"] == "connection refused: 5/5"
+            assert last["force"] is True
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_failed_last_job_escalates_health_to_error(self, app_client):
+        """A recent failure surfaces as ``health="error"`` so the badge
+        turns red even when the marts themselves are caught up."""
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="failed", error="boom")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["health"] == "error"
+            assert body["last_job"]["status"] == "failed"
+        finally:
+            backfill_jobs._reset_for_tests()
+
+    def test_complete_last_job_does_not_escalate_health(self, app_client):
+        """A successful completion leaves the lag-derived health alone
+        — empty store stays ``live``."""
+        client, _ = app_client
+        job = backfill_jobs.start_job(force=False)
+        backfill_jobs.complete_job(job["job_id"], status="complete")
+        try:
+            body = client.get("/api/etl/status").json()
+            assert body["last_job"]["status"] == "complete"
+            assert body["health"] == "live"
+        finally:
+            backfill_jobs._reset_for_tests()

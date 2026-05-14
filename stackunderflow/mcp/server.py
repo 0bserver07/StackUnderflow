@@ -29,6 +29,9 @@ from mcp.server.fastmcp import FastMCP
 from stackunderflow.adapters.base import Record, SessionRef
 from stackunderflow.adapters.claude import ClaudeAdapter
 from stackunderflow.mcp import store_reader
+from stackunderflow.services import discovery as _discovery
+from stackunderflow.services import discovery_telemetry as _telemetry
+from stackunderflow.settings import Settings
 
 _log = logging.getLogger(__name__)
 
@@ -247,6 +250,30 @@ def _session_query_jsonl(
     return matches[:limit]
 
 
+def _record_cited_best_effort(session_id: str, conn) -> None:
+    """Citation-feedback telemetry — note that ``session_id`` was looked up.
+
+    Lax attribution (see ``services.discovery_telemetry``): any
+    ``session_query`` on a specific session counts as a cite for it,
+    regardless of which discovery command surfaced it. Best-effort —
+    opens the store (or reuses ``conn``); if the store doesn't exist yet
+    we simply skip it, and ``record_cited`` itself swallows write
+    failures. Gated behind ``STACKUNDERFLOW_DISCOVERY_TELEMETRY``
+    (default on).
+    """
+    if not session_id or not _telemetry.telemetry_enabled():
+        return
+    try:
+        with store_reader._maybe_conn(conn) as c:
+            if c is not None:
+                _telemetry.record_cited(c, session_id)
+    except Exception:  # noqa: BLE001 - a telemetry hiccup must never break the query
+        _log.debug(
+            "discovery cite-recording failed for session %s", session_id,
+            exc_info=True,
+        )
+
+
 def session_query_impl(
     session_id: str | None = None,
     limit: int = 20,
@@ -267,9 +294,19 @@ def session_query_impl(
     3. If ``session_id`` is ``None``, return recent events across all
        providers from the store (or fall back to JSONL if the store
        doesn't exist).
+
+    Side effect: when a specific ``session_id`` is requested, records a
+    citation against the discovery telemetry (``cited_count``) so the
+    discovery surface can rerank toward sessions agents actually use.
     """
     if limit <= 0:
         return []
+
+    # Citation feedback: a specific-session lookup is a "cite" for that
+    # session. Recorded before the resolution branches so it counts
+    # whether the data comes from the store or the JSONL fallback.
+    if session_id is not None:
+        _record_cited_best_effort(session_id, conn)
 
     store_ok = store_reader.store_available(conn=conn)
 
@@ -367,6 +404,214 @@ def list_projects_impl(
     ]
 
 
+# ── discovery helpers ───────────────────────────────────────────────────────
+
+
+def _resolve_user_path(raw: str) -> str:
+    """Expand ``~`` and resolve to an absolute path string (no strict check).
+
+    Discovery is path-prefix based and should also work for paths that
+    don't exist on disk (e.g. a checkout the user has since deleted but
+    whose past sessions are still in the store).
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("path must be a non-empty string")
+    return str(Path(raw).expanduser().resolve(strict=False))
+
+
+def _match_to_dict(m: _discovery.SessionMatch) -> dict:
+    """Render a SessionMatch (or OutcomeMatch) as the JSON dict the surface emits.
+
+    Plain ``SessionMatch`` rows keep the original 9-key shape; an
+    ``OutcomeMatch`` additionally carries ``outcome``, ``outcome_evidence``
+    and ``outcome_msg_id`` (the contract the outcome-aware tools document).
+    """
+    out = {
+        "session_id": m.session_id,
+        "project_slug": m.project_slug,
+        "project_path": m.project_path,
+        "provider": m.provider,
+        "first_ts": m.first_ts,
+        "last_ts": m.last_ts,
+        "message_count": int(m.message_count),
+        "cost_usd": round(float(m.cost_usd), 6),
+        "snippet": m.snippet,
+    }
+    if isinstance(m, _discovery.OutcomeMatch):
+        out["outcome"] = m.outcome
+        out["outcome_evidence"] = m.outcome_evidence
+        out["outcome_msg_id"] = int(m.outcome_msg_id)
+    return out
+
+
+def _validate_limit(limit: int) -> int:
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+    return limit
+
+
+def _validate_mode(mode: str) -> str:
+    if mode not in ("any", "write", "read"):
+        raise ValueError(
+            f"mode must be one of 'any', 'write', 'read'; got {mode!r}",
+        )
+    return mode
+
+
+def _resolve_context_budget(context_budget: int | None) -> int:
+    """``context_budget`` arg → effective budget.
+
+    ``None`` (the tool default) resolves to
+    ``Settings().discovery_budget_tokens`` (env
+    ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000). ``0`` / negative
+    disables enforcement (``--limit`` stays the only cap).
+    """
+    if context_budget is None:
+        return int(Settings().discovery_budget_tokens)
+    if not isinstance(context_budget, int):
+        raise ValueError("context_budget must be an integer or null")
+    return context_budget
+
+
+def _budgeted_payload(
+    result: _discovery.BudgetedResult | list[_discovery.SessionMatch],
+) -> dict:
+    """Render a :class:`BudgetedResult` as the discovery-tool JSON dict.
+
+    ``_truncated`` / ``_more_available`` appear only when rows were
+    dropped; ``_budget_used_tokens`` / ``_budget_max_tokens`` are always
+    present so a programmatic consumer can see the cap that applied. A
+    bare list (no budget applied — only possible via a direct service
+    call) renders as the legacy ``{"sessions": [...]}`` shape.
+    """
+    if not isinstance(result, _discovery.BudgetedResult):
+        return {"sessions": [_match_to_dict(m) for m in result]}
+    payload: dict = {"sessions": [_match_to_dict(m) for m in result.sessions]}
+    if result.truncated:
+        payload["_truncated"] = True
+        payload["_more_available"] = result.more_available
+    payload["_budget_used_tokens"] = result.budget_used_tokens
+    payload["_budget_max_tokens"] = result.budget_max_tokens
+    return payload
+
+
+def find_sessions_in_path_impl(
+    path: str,
+    since: str | None = None,
+    limit: int = 20,
+    provider: str | None = None,
+    context_budget: int | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_in_path`` MCP tool.
+
+    Validates inputs, opens the store (or reuses ``conn``), delegates
+    to ``services.discovery.find_sessions_in_path`` with the resolved
+    token budget, and formats the response.
+    """
+    _validate_limit(limit)
+    budget = _resolve_context_budget(context_budget)
+    resolved = _resolve_user_path(path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        result = _discovery.find_sessions_in_path(
+            c, resolved, since=since, limit=limit, provider=provider,
+            context_budget=budget,
+        )
+        return _budgeted_payload(result)
+
+
+def find_sessions_touching_file_impl(
+    file_path: str,
+    limit: int = 20,
+    mode: str = "any",
+    context_budget: int | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_touching_file`` MCP tool."""
+    _validate_limit(limit)
+    _validate_mode(mode)
+    budget = _resolve_context_budget(context_budget)
+    resolved = _resolve_user_path(file_path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        result = _discovery.find_sessions_touching_file(
+            c, resolved, limit=limit, mode=mode, context_budget=budget,
+        )
+        return _budgeted_payload(result)
+
+
+def search_past_decisions_impl(
+    query: str,
+    project: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+    context_budget: int | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``search_past_decisions`` MCP tool."""
+    _validate_limit(limit)
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    budget = _resolve_context_budget(context_budget)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        result = _discovery.search_past_decisions(
+            c, query, project=project, since=since, limit=limit,
+            context_budget=budget,
+        )
+        return _budgeted_payload(result)
+
+
+def find_sessions_where_action_worked_impl(
+    action: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_sessions_where_action_worked`` MCP tool."""
+    _validate_limit(limit)
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("action must be a non-empty string")
+    file_resolved = _resolve_user_path(file_path) if file_path else None
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_sessions_where_action_worked(
+            c, action=action, project=project, file_path=file_resolved,
+            since=since, limit=limit,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
+def find_failure_modes_for_file_impl(
+    file_path: str,
+    since: str | None = None,
+    limit: int = 20,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``find_failure_modes_for_file`` MCP tool."""
+    _validate_limit(limit)
+    resolved = _resolve_user_path(file_path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {"sessions": []}
+        matches = _discovery.find_failure_modes_for_file(
+            c, resolved, since=since, limit=limit,
+        )
+        return {"sessions": [_match_to_dict(m) for m in matches]}
+
+
 mcp = FastMCP("stackunderflow")
 
 
@@ -442,6 +687,263 @@ def list_projects(provider: str | None = None) -> list[dict]:
         last_modified, path.
     """
     return list_projects_impl(provider=provider)
+
+
+@mcp.tool()
+def find_sessions_in_path(
+    path: str,
+    since: str | None = None,
+    limit: int = 20,
+    provider: str | None = None,
+    context_budget: int | None = None,
+) -> dict:
+    """Discover prior sessions that worked in a given project path.
+
+    Use this BEFORE starting non-trivial work in a directory: it
+    surfaces past sessions in the same project so you can avoid
+    re-deriving context, re-debating decisions, or duplicating work
+    a sibling agent already did. Pair with ``session_query`` once a
+    promising ``session_id`` is identified.
+
+    Path matching is ancestor-based: passing ``/Users/x/dev/proj/src``
+    returns sessions for projects rooted at ``/Users/x/dev/proj`` or
+    any ancestor of it. ``~`` is expanded and the path is resolved to
+    absolute form before matching, so a relative path or a tilde-form
+    both work.
+
+    Use ``find_sessions_touching_file`` instead when you care about a
+    specific file rather than a directory tree, and ``search_past_decisions``
+    when you want to grep for a phrase across past transcripts.
+
+    Args:
+        path: Absolute or working-directory-relative path. Will be
+            ``~``-expanded and resolved.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
+            ``None`` (default) = all time.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
+        provider: Restrict to one provider (``"claude"``, ``"codex"``,
+            ``"cursor"``, ``"cline"``, ``"droid"``, ``"copilot"``, …).
+            ``None`` (default) = all providers.
+        context_budget: Token budget for the response. Within the
+            ``limit`` cap, results are ranked (recency + cost + path
+            relevance) and packed greedily until ~this many estimated
+            tokens are used. ``None`` (default) uses the server default
+            (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000);
+            ``0`` disables the budget so ``limit`` is the only cap.
+
+    Returns:
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` where each match has keys:
+        ``session_id``, ``project_slug``, ``project_path``,
+        ``provider``, ``first_ts``, ``last_ts``, ``message_count``,
+        ``cost_usd``, ``snippet``. When the budget dropped rows, also
+        includes ``"_truncated": true`` and ``"_more_available": <count>``.
+        Empty ``sessions`` list if the store is missing or nothing matched.
+    """
+    return find_sessions_in_path_impl(
+        path=path, since=since, limit=limit, provider=provider,
+        context_budget=context_budget,
+    )
+
+
+@mcp.tool()
+def find_sessions_touching_file(
+    file_path: str,
+    limit: int = 20,
+    mode: str = "any",
+    context_budget: int | None = None,
+) -> dict:
+    """Discover prior sessions whose tool calls referenced a specific file.
+
+    Use this BEFORE editing or refactoring a file with non-obvious
+    history: it surfaces every past session that read, wrote, or
+    edited it across every coding agent that's been ingested. Helps
+    you find the rationale a previous session left behind without
+    grepping through commit messages.
+
+    Match is on the file path appearing in tool-call arguments (Read,
+    Edit, Write, Bash with redirects, etc.). The path is ``~``-expanded
+    and resolved to absolute form before matching.
+
+    Use ``find_sessions_in_path`` instead when you want a directory-wide
+    sweep, and ``search_past_decisions`` when you're searching transcript
+    content rather than file references.
+
+    Args:
+        file_path: Absolute or working-directory-relative file path.
+            Will be ``~``-expanded and resolved.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
+        mode: ``"any"`` (default) — match any tool call referencing
+            the file. ``"write"`` — only Edit/Write/MultiEdit/NotebookEdit
+            mutations. ``"read"`` — only Read-style accesses.
+        context_budget: Token budget for the response (within the
+            ``limit`` cap, ranked by recency + cost + match strength,
+            packed greedily). ``None`` (default) = server default (env
+            ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000); ``0``
+            disables it.
+
+    Returns:
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` with the same match keys as
+        ``find_sessions_in_path`` (plus ``_truncated`` / ``_more_available``
+        when the budget dropped rows). Empty ``sessions`` list if the
+        store is missing or no sessions reference the file.
+    """
+    return find_sessions_touching_file_impl(
+        file_path=file_path, limit=limit, mode=mode,
+        context_budget=context_budget,
+    )
+
+
+@mcp.tool()
+def search_past_decisions(
+    query: str,
+    project: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+    context_budget: int | None = None,
+) -> dict:
+    """Free-text search across past session transcripts.
+
+    Use this when you remember a decision, design discussion, or bug
+    diagnosis happened in a prior session but don't remember which
+    one. Returns sessions whose message content matches ``query``,
+    each with a short snippet for context — pivot into
+    ``session_query`` with the ``session_id`` to read the full thread.
+
+    Do NOT use for structured questions answerable from session
+    metadata (use ``list_sessions`` / ``find_sessions_in_path``) or for
+    finding which sessions touched a file (use
+    ``find_sessions_touching_file`` — its tool-call match is more
+    precise than text search).
+
+    Args:
+        query: Free-text search string. Matched against message content
+            and tool-call arguments. Must be non-empty.
+        project: Restrict to one project slug (e.g. ``"-Users-x-app"``).
+            ``None`` (default) = all projects.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp.
+            ``None`` (default) = all time.
+        limit: Hard cap on sessions returned. Default 20. Must be a
+            positive integer.
+        context_budget: Token budget for the response (within the
+            ``limit`` cap, ranked by recency + cost + LIKE-match
+            density, packed greedily). ``None`` (default) = server
+            default (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or
+            2000); ``0`` disables it.
+
+    Returns:
+        ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
+        "_budget_max_tokens": M}`` with the same match keys as
+        ``find_sessions_in_path`` (plus ``_truncated`` / ``_more_available``
+        when the budget dropped rows). The ``snippet`` field carries a
+        short excerpt around the match where available. Empty ``sessions``
+        list if the store is missing or no matches are found.
+    """
+    return search_past_decisions_impl(
+        query=query, project=project, since=since, limit=limit,
+        context_budget=context_budget,
+    )
+
+
+@mcp.tool()
+def find_sessions_where_action_worked(
+    action: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Discover prior sessions where an action was performed *and it worked*.
+
+    Use this when you're about to do something and want a proven recipe:
+    it returns past sessions where ``action`` was carried out and the
+    next user turn confirmed success (an explicit "thanks"/"that worked",
+    or simply no revert and no complaint before the session ended). Each
+    result carries the evidence — the message that established the
+    outcome — so you can open it with ``session_query`` and copy what
+    worked.
+
+    This is the positive-signal counterpart to
+    ``find_failure_modes_for_file``: use *that* one to learn why a
+    previous edit to a file went wrong; use *this* one to learn how a
+    successful change was done. For "which sessions touched X at all"
+    (no outcome filter) use ``find_sessions_in_path`` /
+    ``find_sessions_touching_file`` / ``search_past_decisions``.
+
+    Args:
+        action: Free-text descriptor, matched as a case-insensitive
+            substring against tool calls and message text. Can be a tool
+            name (``"Edit"``), a file fragment (``"cost.py"``), or a
+            phrase (``"add caching"``). Must be non-empty.
+        project: Restrict to one project slug (e.g. ``"-Users-x-app"``).
+            ``None`` (default) = all projects.
+        file_path: Optionally narrow to sessions that *also* touched this
+            file. ``~`` is expanded and the path resolved. ``None`` =
+            don't narrow.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp. ``None``
+            (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` where each match has the keys of
+        ``find_sessions_in_path`` plus ``outcome`` (always ``"worked"``
+        here), ``outcome_evidence`` (a short justification), and
+        ``outcome_msg_id`` (the message that established it). Empty list
+        if the store is missing or nothing matched.
+    """
+    return find_sessions_where_action_worked_impl(
+        action=action, project=project, file_path=file_path,
+        since=since, limit=limit,
+    )
+
+
+@mcp.tool()
+def find_failure_modes_for_file(
+    file_path: str,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Discover prior sessions where editing a file led to a follow-up correction.
+
+    Use this BEFORE editing a file with a rocky history: it returns the
+    past sessions where an edit to ``file_path`` was followed by the user
+    saying it broke, the agent reverting it (``git revert`` / ``git reset
+    --hard`` / ``git checkout --``), or a complaint — each with the
+    evidence (the triggering message). Read those sessions with
+    ``session_query`` to learn the trap before you fall into it.
+
+    This is the negative-signal counterpart to
+    ``find_sessions_where_action_worked``: use *this* one to learn why an
+    edit went wrong, use *that* one to learn how a successful change was
+    done. For an unfiltered "which sessions touched this file" list, use
+    ``find_sessions_touching_file``.
+
+    Args:
+        file_path: Absolute or working-directory-relative file path.
+            ``~`` is expanded and the path is resolved. Must be non-empty.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp. ``None``
+            (default) = all time.
+        limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
+            Default 20. Must be a positive integer.
+
+    Returns:
+        ``{"sessions": [<match>, ...]}`` where each match has the keys of
+        ``find_sessions_in_path`` plus ``outcome`` (``"failed"`` or
+        ``"reverted"``), ``outcome_evidence``, and ``outcome_msg_id``.
+        Empty list if the store is missing or no edit to the file led to
+        a correction.
+    """
+    return find_failure_modes_for_file_impl(
+        file_path=file_path, since=since, limit=limit,
+    )
 
 
 def main() -> None:

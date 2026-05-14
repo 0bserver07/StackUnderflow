@@ -61,6 +61,7 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/optimize` | Optimize |
 | GET | `/api/context-budget` | Context Budget |
 | GET | `/api/etl/status` | ETL pipeline |
+| POST | `/api/etl/backfill` | ETL pipeline |
 | GET | `/api/tool-distribution` | Cost analytics |
 | GET | `/api/cfg` | Settings |
 | GET | `/api/cfg/currencies` | Settings |
@@ -1751,20 +1752,27 @@ None.
     "running": true,
     "last_refresh_ts": "2026-05-06T08:24:11+00:00",
     "seconds_since_refresh": 7,
-    "events_in_last_cycle": 12
+    "events_in_last_cycle": 12,
+    "lock_held_by": 48213
   },
   "marts": {
     "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
     "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
     "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
     "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
-    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
+    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."},
+    "tool":         {"watermark": 228311, "row_count": 47,   "last_refresh_ts": "..."},
+    "command":      {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
   },
   "events": {
     "total": 228311,
     "max_id": 228311,
     "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
     "by_cost_source": {"rate_card": 226000, "estimated": 2311}
+  },
+  "current_job": {
+    "job_id": "bf_01HXYZ...",
+    "started_at": "2026-05-06T08:23:54+00:00"
   },
   "lag_seconds": 0,
   "health": "live"
@@ -1780,6 +1788,7 @@ None.
 | `watcher.last_refresh_ts` | string \| null | ISO 8601 UTC timestamp of the most recent watcher cycle; null until the watcher publishes a refresh stamp |
 | `watcher.seconds_since_refresh` | int \| null | Seconds elapsed since `last_refresh_ts`. Drives the `health=syncing` rule |
 | `watcher.events_in_last_cycle` | int \| null | Number of events written in the most recent watcher cycle |
+| `watcher.lock_held_by` | int \| null | PID of the process currently holding the watcher lock; `null` when no lock is held or when the lock file is missing |
 | `marts.<name>.watermark` | int | The `last_event_id` the mart has caught up to. `0` until the mart has refreshed once |
 | `marts.<name>.row_count` | int | `SELECT COUNT(*)` against the underlying mart table |
 | `marts.<name>.last_refresh_ts` | string \| null | ISO 8601 UTC timestamp of the most recent mart refresh; null until the mart has refreshed once |
@@ -1787,13 +1796,50 @@ None.
 | `events.max_id` | int | `MAX(id) FROM usage_events`; `0` on an empty store |
 | `events.by_provider` | object | `{provider: count}` over every row in `usage_events` |
 | `events.by_cost_source` | object | `{cost_source: count}` over every row in `usage_events`. The two values today are `rate_card` (priced from a published rate table) and `estimated` (priced from a heuristic when source data lacks per-token counts) |
+| `current_job` | object \| null | When a backfill is in flight, `{job_id, started_at}` (ISO 8601 UTC); `null` when no backfill is running |
 | `lag_seconds` | int | `max(0, max_event_id - min(mart watermarks))`. Spec name is `lag_seconds`; the unit is actually "events behind", not seconds — kept under the spec key to match the wave-4C contract |
 | `health` | enum | `"live"` (zero lag or empty store) / `"syncing"` (lag > 0 and refresh in last 10s) / `"stale"` (any mart > 100 events behind, watcher alive) / `"error"` (any mart > 100 events behind **and** watcher reports `running=false`) |
+
+The `marts` block now includes seven entries — the original five plus `tool` (per-tool aggregates) and `command` (per-command aggregates), added by store schema v007 + v008.
 
 **Status codes:** `200` success on every call (the route never 4xx/5xxs
 on a missing watcher or empty store — the response degrades gracefully
 to `running="unknown"` and zero counts so a status pill in the UI is
 never blocked by an in-flight bring-up).
+
+---
+
+### POST /api/etl/backfill
+
+Kick off an ETL backfill in the background. Equivalent to running
+`stackunderflow etl backfill` from the CLI, but non-blocking — the route
+returns immediately with a job identifier and the caller polls
+`GET /api/etl/status` (`current_job` block) to track progress. Powers the
+"Backfill now" button on the Settings page.
+
+**Request body** — none (any body is ignored).
+
+**Response (202 Accepted — backfill scheduled)**
+
+```json
+{
+  "job_id": "bf_01HXYZABC...",
+  "started_at": "2026-05-06T08:23:54+00:00"
+}
+```
+
+**Response (409 Conflict — a backfill is already running)**
+
+```json
+{
+  "error": "backfill already running",
+  "job_id": "bf_01HXYZABC..."
+}
+```
+
+**Status codes:** `202` accepted; `409` a backfill is already in flight
+(the in-flight `job_id` is echoed in the body so the caller can join
+the existing run instead of starting a new one).
 
 ---
 

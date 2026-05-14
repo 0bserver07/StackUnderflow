@@ -22,6 +22,11 @@ import type {
   EtlStatusResponse,
   EtlBackfillResponse,
   EtlHealth,
+  AgentTeamListResponse,
+  AgentTeamGraph,
+  AgentTeamTranscriptResponse,
+  PlaybackResponse,
+  ProjectTimelineResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -408,6 +413,18 @@ export class EtlPipelineNotReadyError extends Error {
   }
 }
 
+// Raised when POST /api/etl/backfill returns 409 because another job
+// is already running. Carries the existing job's id so callers can
+// surface "Backfill abc123 already running" without re-fetching status.
+export class EtlBackfillInProgressError extends Error {
+  jobId: string
+  constructor(jobId: string) {
+    super(`A backfill is already running (job ${jobId.slice(0, 8)}…)`)
+    this.name = 'EtlBackfillInProgressError'
+    this.jobId = jobId
+  }
+}
+
 export async function getEtlStatus(): Promise<EtlStatusResponse> {
   const res = await fetch(`${BASE}/etl/status`)
   if (res.status === 404) {
@@ -431,10 +448,27 @@ export async function triggerEtlBackfill(force = false): Promise<EtlBackfillResp
       'Backfill route not available — run `stackunderflow etl backfill` from the CLI instead.',
     )
   }
+  if (res.status === 409) {
+    // Backfill already running. Pull the existing job_id out of the
+    // body so the UI can mention it; default to a placeholder if the
+    // body is malformed.
+    let jobId = 'unknown'
+    try {
+      const body = (await res.json()) as { job_id?: string }
+      if (typeof body?.job_id === 'string' && body.job_id.length > 0) {
+        jobId = body.job_id
+      }
+    } catch {
+      // Malformed JSON — keep the placeholder; the toast will still
+      // tell the user a backfill is in progress.
+    }
+    throw new EtlBackfillInProgressError(jobId)
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
   }
+  // 202 Accepted — body is `{job_id, started_at}`.
   return res.json()
 }
 
@@ -484,7 +518,7 @@ export function etlHealthColor(health: EtlHealth): {
  * rendered for screen readers via aria-label.
  */
 export function formatEtlBadgeText(status: EtlStatusResponse): string {
-  const { health, lag_seconds, watcher, events } = status
+  const { health, lag_seconds, watcher, events, last_job } = status
   switch (health) {
     case 'live':
       return `Live (synced ${formatLagDuration(watcher.seconds_since_refresh ?? lag_seconds)} ago)`
@@ -498,9 +532,191 @@ export function formatEtlBadgeText(status: EtlStatusResponse): string {
     case 'stale':
       return `Stale by ${formatLagDuration(lag_seconds)}`
     case 'error':
+      // A recent backfill failure is a more specific (and more
+      // actionable) message than the generic ETL error. The assembler
+      // escalates ``health`` to ``error`` while the failed last_job
+      // is inside its TTL window, so this branch handles both the
+      // dead-watcher case and the failed-backfill case.
+      if (last_job?.status === 'failed') {
+        return `Backfill failed (job ${last_job.job_id.slice(0, 8)}…)`
+      }
       return 'ETL error — see /etl/status'
   }
   // Defensive — TS exhaustiveness already catches missing branches above, but
   // an unexpected runtime value should not crash the badge.
   return `Unknown (${events.total} events)`
+}
+
+// ---------------------------------------------------------------------------
+// Agent-teams — Claude Code parallel-agent topology surface.
+//
+// Three read-only endpoints:
+//   * GET /api/agent-teams                                — list view
+//   * GET /api/agent-teams/{session}                      — full graph
+//   * GET /api/agent-teams/{session}/agent/{agent_session} — drill-in
+//
+// Empty stores return {teams: []} cleanly; the route layer never raises 500
+// when no sidechain messages are present. See docs/specs/agent-teams.md.
+// ---------------------------------------------------------------------------
+
+export async function listAgentTeams(limit = 50): Promise<AgentTeamListResponse> {
+  return fetchJson(`${BASE}/agent-teams?limit=${limit}`)
+}
+
+export async function getAgentTeam(sessionId: string): Promise<AgentTeamGraph> {
+  return fetchJson(`${BASE}/agent-teams/${encodeURIComponent(sessionId)}`)
+}
+
+export async function getAgentTeamTranscript(
+  sessionId: string,
+  agentSessionId: string,
+): Promise<AgentTeamTranscriptResponse> {
+  return fetchJson(
+    `${BASE}/agent-teams/${encodeURIComponent(sessionId)}` +
+      `/agent/${encodeURIComponent(agentSessionId)}`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// URL-state helpers for the Agents tab — keeps the AgentsTab component thin
+// and gives the test suite a pure surface to round-trip the encoding.
+//
+// Contract: ?session=<lead> selects the lead session in the left rail;
+// ?agent=<sub> selects one of its sub-agents in the right pane. Either may
+// be absent (no selection) or non-string (defensive: URL params always come
+// back as `string | null` from the URLSearchParams API).
+// ---------------------------------------------------------------------------
+
+export interface AgentTeamSelection {
+  session: string | null
+  agent: string | null
+}
+
+export function readAgentTeamSelection(search: string): AgentTeamSelection {
+  const params = new URLSearchParams(search)
+  const session = params.get('session')
+  const agent = params.get('agent')
+  return {
+    session: session && session.length > 0 ? session : null,
+    agent: agent && agent.length > 0 ? agent : null,
+  }
+}
+
+export function writeAgentTeamSelection(
+  search: string,
+  selection: AgentTeamSelection,
+): string {
+  const params = new URLSearchParams(search)
+  if (selection.session) {
+    params.set('session', selection.session)
+  } else {
+    params.delete('session')
+  }
+  if (selection.agent) {
+    params.set('agent', selection.agent)
+  } else {
+    params.delete('agent')
+  }
+  const out = params.toString()
+  return out.length > 0 ? `?${out}` : ''
+}
+
+// ---------------------------------------------------------------------------
+// Playback — per-session (and per-project) tool-call timeline.
+//
+//   * GET /api/playback/{session}                  — ordered event stream
+//   * GET /api/playback/project/{slug}             — cross-session timeline
+//
+// 404 → wrong session/slug; 200 + empty `events` → nothing to play back. The
+// `?include_payload=0` knob trims the per-event 200-char excerpts (the
+// project endpoint defaults it off — a project-wide stream is large). See
+// .notes/specs/10-playback-timeline.md.
+// ---------------------------------------------------------------------------
+
+export interface PlaybackQuery {
+  /** Restrict to a subset of tool names (exact match). */
+  toolFilter?: string[]
+  /** Cap on the number of events returned. */
+  limit?: number
+  /** Whether to include the per-event `payload_excerpt`. */
+  includePayload?: boolean
+}
+
+function buildPlaybackParams(q?: PlaybackQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  if (q?.toolFilter && q.toolFilter.length > 0) {
+    params.set('tool_filter', q.toolFilter.join(','))
+  }
+  if (typeof q?.limit === 'number') params.set('limit', String(q.limit))
+  if (typeof q?.includePayload === 'boolean') {
+    params.set('include_payload', q.includePayload ? '1' : '0')
+  }
+  return params
+}
+
+export async function getPlayback(
+  sessionId: string,
+  q?: PlaybackQuery,
+): Promise<PlaybackResponse> {
+  const qs = buildPlaybackParams(q).toString()
+  return fetchJson(`${BASE}/playback/${encodeURIComponent(sessionId)}${qs ? `?${qs}` : ''}`)
+}
+
+export async function getProjectTimeline(
+  projectSlug: string,
+  q?: PlaybackQuery & { since?: string },
+): Promise<ProjectTimelineResponse> {
+  const params = buildPlaybackParams(q)
+  if (q?.since) params.set('since', q.since)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/playback/project/${encodeURIComponent(projectSlug)}${qs ? `?${qs}` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// URL-state helpers for the Playback tab — keep PlaybackTab thin and give the
+// test suite a pure surface to round-trip the encoding.
+//
+// Contract: ?session=<id> selects the session being played back; ?seq=<n>
+// positions the scrubber at the n-th event. `seq` parses to a non-negative
+// integer or `null` (anything else — negative, NaN, absent — is `null`).
+// ---------------------------------------------------------------------------
+
+export interface PlaybackSelection {
+  session: string | null
+  seq: number | null
+}
+
+function parseSeq(raw: string | null): number | null {
+  if (raw === null || raw.trim() === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0) return null
+  return n
+}
+
+export function readPlaybackSelection(search: string): PlaybackSelection {
+  const params = new URLSearchParams(search)
+  const session = params.get('session')
+  return {
+    session: session && session.length > 0 ? session : null,
+    seq: parseSeq(params.get('seq')),
+  }
+}
+
+export function writePlaybackSelection(
+  search: string,
+  selection: PlaybackSelection,
+): string {
+  const params = new URLSearchParams(search)
+  if (selection.session) {
+    params.set('session', selection.session)
+  } else {
+    params.delete('session')
+  }
+  if (selection.seq !== null && selection.seq >= 0 && Number.isInteger(selection.seq)) {
+    params.set('seq', String(selection.seq))
+  } else {
+    params.delete('seq')
+  }
+  const out = params.toString()
+  return out.length > 0 ? `?${out}` : ''
 }

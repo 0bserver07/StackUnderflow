@@ -95,12 +95,22 @@ def cli():
     is_flag=True,
     help="Disable the Wave 2C ETL filesystem watcher (headless / debugging).",
 )
+@click.option(
+    "--no-lock",
+    is_flag=True,
+    help=(
+        "Skip the singleton watcher lock at ~/.stackunderflow/server.lock. "
+        "Headless / test scenarios only — letting two instances run watchers "
+        "against the same store will race on ingest+marts."
+    ),
+)
 def start_cmd(
     port: int | None,
     host: str | None,
     headless: bool,
     fresh: bool,
     no_watcher: bool,
+    no_lock: bool,
 ):
     """Launch the StackUnderflow dashboard."""
     if no_watcher:
@@ -109,6 +119,11 @@ def start_cmd(
         # ``deps`` directly) is what lets ``uvicorn.run`` reload the app
         # without losing the flag.
         os.environ["STACKUNDERFLOW_DISABLE_WATCHER"] = "1"
+    if no_lock:
+        # Same survives-into-lifespan trick as --no-watcher. The server
+        # reads this in ``_lock_disabled()`` and skips the
+        # ``acquire_watcher_lock`` call so the watcher always starts.
+        os.environ["STACKUNDERFLOW_DISABLE_LOCK"] = "1"
     if fresh:
         import shutil
         cache = _STATE_DIR / "cache"
@@ -1261,6 +1276,683 @@ def reindex():
     click.echo(f"Done: {counts}")
 
 
+# ── discovery (self-referential queries for coding agents) ─────────────────
+#
+# Three commands let an agent ask the local store about its current
+# project / file / past decisions. Each accepts ``--format text|json``;
+# the JSON shape is stable so MCP tools and shell consumers can rely on
+# it without parsing the human-readable text.
+
+
+def _resolve_context_budget(context_budget: int | None) -> int:
+    """``--context-budget`` value, falling back to the configured default.
+
+    ``None`` (flag omitted) → ``Settings().discovery_budget_tokens``
+    (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or 2000).
+    """
+    if context_budget is not None:
+        return int(context_budget)
+    return int(Settings().discovery_budget_tokens)
+
+
+def _emit_sessions(
+    result,
+    *,
+    fmt: str,
+    title: str,
+    show_snippet: bool = False,
+) -> None:
+    """Render a discovery result (``BudgetedResult`` or bare list).
+
+    Lifted out of the three command bodies so they stay one screen
+    each. The JSON branch wraps the dataclass list as ``{"sessions":
+    [...]}`` (so empty results round-trip as an explicit empty list, not
+    a bare ``[]``) and — when a budget was applied — adds
+    ``_budget_used_tokens`` / ``_budget_max_tokens``; ``_truncated`` /
+    ``_more_available`` appear only when the budget actually dropped
+    rows. The text branch appends a one-line tail marker in that same
+    case.
+    """
+    # Duck-type: ``BudgetedResult`` has these attrs; a bare list doesn't.
+    sessions = getattr(result, "sessions", result)
+    truncated = bool(getattr(result, "truncated", False))
+    more_available = int(getattr(result, "more_available", 0))
+    budget_used = getattr(result, "budget_used_tokens", None)
+    budget_max = getattr(result, "budget_max_tokens", None)
+
+    if fmt == "json":
+        payload: dict = {"sessions": [m.to_dict() for m in sessions]}
+        if truncated:
+            payload["_truncated"] = True
+            payload["_more_available"] = more_available
+        if budget_used is not None:
+            payload["_budget_used_tokens"] = budget_used
+        if budget_max is not None:
+            payload["_budget_max_tokens"] = budget_max
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    if not sessions:
+        click.echo(f"{title}: no matching sessions.")
+        if truncated:
+            click.echo(_truncation_footer(more_available))
+        return
+
+    click.echo(f"{title}  ({len(sessions)} session(s))")
+    click.echo("")
+    for m in sessions:
+        head = (
+            f"  [{m.provider}] {m.session_id[:12]}…  "
+            f"{m.last_ts[:19] if m.last_ts else '(no ts)'}  "
+            f"msgs={m.message_count}  ${m.cost_usd:.4f}"
+        )
+        click.echo(head)
+        sub = f"      {m.project_slug}  {m.project_path}"
+        click.echo(sub)
+        # OutcomeMatch rows carry an inferred outcome + evidence. Duck-typed
+        # so this stays generic over plain SessionMatch (no `outcome` attr).
+        outcome = getattr(m, "outcome", None)
+        if outcome:
+            evidence = getattr(m, "outcome_evidence", "")
+            if len(evidence) > 200:
+                evidence = evidence[:197] + "…"
+            click.echo(f"      → {outcome}: {evidence}")
+        if show_snippet and m.snippet:
+            snippet_line = m.snippet
+            if len(snippet_line) > 200:
+                snippet_line = snippet_line[:197] + "…"
+            click.echo(f"      … {snippet_line}")
+        click.echo("")
+    if truncated:
+        click.echo(_truncation_footer(more_available))
+
+
+def _truncation_footer(more_available: int) -> str:
+    noun = "session" if more_available == 1 else "sessions"
+    return (
+        f"... ({more_available} more {noun} matched but truncated to fit "
+        f"context budget; raise --limit or --context-budget to see more)"
+    )
+
+
+@cli.command("find-sessions-in-path")
+@click.argument("path", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--since", default=None,
+              help="Only sessions whose last activity is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output. Results are ranked "
+                   "(recency + cost + relevance) and packed greedily until "
+                   "~this many estimated tokens are used; a tail marker "
+                   "reports how many more matched. Default: "
+                   "STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
+@click.option("--provider", default=None,
+              help="Filter by provider slug (e.g. claude, codex, cursor).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_in_path_cmd(
+    path: str,
+    since: str | None,
+    limit: int,
+    context_budget: int | None,
+    provider: str | None,
+    fmt: str,
+):
+    """List sessions whose project root is PATH or any ancestor of PATH.
+
+    Useful when an agent is working in /a/b/c and wants to know what
+    has happened in the project rooted at /a/b. The match is
+    ancestor-only — projects rooted *below* PATH do not match.
+    """
+    from stackunderflow.services.discovery import find_sessions_in_path
+
+    budget = _resolve_context_budget(context_budget)
+    conn = _open_store()
+    try:
+        try:
+            result = find_sessions_in_path(
+                conn, path, since=since, limit=limit, provider=provider,
+                context_budget=budget,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        result,
+        fmt=fmt,
+        title=f"Sessions in path {path}",
+    )
+
+
+@cli.command("find-sessions-touching-file")
+@click.argument("file", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output (ranked + greedily packed). "
+                   "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
+@click.option("--mode", type=click.Choice(("read", "write", "any")),
+              default="any", show_default=True,
+              help="Match against Read tool args, Edit/Write tool args, "
+                   "or any mention (tools or freeform).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_touching_file_cmd(
+    file: str,
+    limit: int,
+    context_budget: int | None,
+    mode: str,
+    fmt: str,
+):
+    """List sessions where FILE shows up in tool calls or message text."""
+    from stackunderflow.services.discovery import find_sessions_touching_file
+
+    budget = _resolve_context_budget(context_budget)
+    conn = _open_store()
+    try:
+        result = find_sessions_touching_file(
+            conn, file, limit=limit, mode=mode, context_budget=budget,
+        )
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        result,
+        fmt=fmt,
+        title=f"Sessions touching {file}  (mode={mode})",
+    )
+
+
+@cli.command("search-past-decisions")
+@click.argument("query")
+@click.option("--project", default=None,
+              help="Filter by project slug (e.g. -Users-yad-dev-foo).")
+@click.option("--since", default=None,
+              help="Filter to messages newer than this. Accepts '7d', "
+                   "'1w', '1m', '24h', or ISO.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return (hard cap).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for the output (ranked + greedily packed). "
+                   "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
+                   "Pass 0 to disable.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def search_past_decisions_cmd(
+    query: str,
+    project: str | None,
+    since: str | None,
+    limit: int,
+    context_budget: int | None,
+    fmt: str,
+):
+    """Substring-search QUERY across past message content; return matching sessions."""
+    from stackunderflow.services.discovery import search_past_decisions
+
+    budget = _resolve_context_budget(context_budget)
+    conn = _open_store()
+    try:
+        try:
+            result = search_past_decisions(
+                conn, query, project=project, since=since, limit=limit,
+                context_budget=budget,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        result,
+        fmt=fmt,
+        title=f"Past decisions matching {query!r}",
+        show_snippet=True,
+    )
+
+
+# ── outcome-aware discovery ───────────────────────────────────────────────────
+#
+# Two commands that go beyond "which sessions touched X" to "which sessions
+# touched X *and it worked* / *and it broke*". Same ``--format text|json``
+# contract; the JSON ``sessions`` dicts gain ``outcome``,
+# ``outcome_evidence`` and ``outcome_msg_id``.
+
+
+@cli.command("find-sessions-where-action-worked")
+@click.argument("action")
+@click.option("--project", default=None,
+              help="Filter by project slug (e.g. -Users-yad-dev-foo).")
+@click.option("--file", "file_path", default=None,
+              help="Narrow to sessions that also touched this file.")
+@click.option("--since", default=None,
+              help="Only sessions whose matching activity is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_sessions_where_action_worked_cmd(
+    action: str,
+    project: str | None,
+    file_path: str | None,
+    since: str | None,
+    limit: int,
+    fmt: str,
+):
+    """List sessions where ACTION was performed and the next user turn confirmed it worked.
+
+    ACTION is matched as a substring against tool calls and message text,
+    so it can be a tool name ("Edit"), a file fragment ("cost.py"), or a
+    phrase from the conversation ("add caching"). For each session the
+    *last* matching message is the anchor; the outcome is inferred from
+    the following user turns (an explicit "thanks"/"that worked", or no
+    revert and no complaint before the session ended). Pair with
+    ``find-failure-modes-for-file`` to see where an edit went wrong.
+    """
+    from stackunderflow.services.discovery import find_sessions_where_action_worked
+
+    conn = _open_store()
+    try:
+        try:
+            matches = find_sessions_where_action_worked(
+                conn, action=action, project=project, file_path=file_path,
+                since=since, limit=limit,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Sessions where {action!r} worked",
+    )
+
+
+@cli.command("find-failure-modes-for-file")
+@click.argument("file", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--since", default=None,
+              help="Only sessions whose edit is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max sessions to return.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def find_failure_modes_for_file_cmd(
+    file: str,
+    since: str | None,
+    limit: int,
+    fmt: str,
+):
+    """List sessions where editing FILE led to a follow-up correction.
+
+    Surfaces the sessions where a past edit to FILE was followed by the
+    user reporting it broke, the agent reverting it (``git revert`` /
+    ``git reset --hard`` / ``git checkout --``), or a complaint — each
+    with the evidence (the triggering message). The companion of
+    ``find-sessions-where-action-worked``: use this to learn why an edit
+    went wrong, that one to learn how a successful change was done.
+    """
+    from stackunderflow.services.discovery import find_failure_modes_for_file
+
+    conn = _open_store()
+    try:
+        try:
+            matches = find_failure_modes_for_file(
+                conn, file, since=since, limit=limit,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    _emit_sessions(
+        matches,
+        fmt=fmt,
+        title=f"Failure modes for {file}",
+    )
+
+
+# ── auto-generated skills ─────────────────────────────────────────────────────
+#
+# Mine the local store for project-specific workflow patterns ("always run
+# pytest after editing", "never pkill") and emit Claude Code SKILL.md files.
+# Hard rules (see ``.notes/specs/02-auto-generated-skills.md``):
+#   * project-scoped by default — never an implicit "all projects"
+#   * never written into the package; only ``<project>/.claude/skills/auto-*/``
+#     (or ``~/.claude/skills/`` with explicit ``--scope user``)
+#   * idempotent; ``.bak`` written before any overwrite; never clobbers a
+#     hand-authored skill
+
+
+def _default_skills_out(scope: str) -> Path:
+    if scope == "user":
+        return Path.home() / ".claude" / "skills"
+    return Path.cwd() / ".claude" / "skills"
+
+
+def _detect_cwd_project_slug(conn) -> str | None:
+    """Best-effort: which project slug does the current directory belong to?"""
+    from stackunderflow.services.discovery import find_sessions_in_path
+    try:
+        matches = find_sessions_in_path(conn, str(Path.cwd()), limit=1)
+    except ValueError:
+        return None
+    return matches[0].project_slug if matches else None
+
+
+def _split_csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    out = [v.strip() for v in value.split(",") if v.strip()]
+    return out or None
+
+
+@cli.group("skills")
+def skills_group():
+    """Generate / list / clean project-specific Claude Code skills.
+
+    These are mined from your local session store — never from CLAUDE.md
+    or memory — and are always project-scoped unless you ask otherwise.
+    """
+
+
+@skills_group.command("generate")
+@click.option("--project", default=None,
+              help="Project slug to mine. Default: the project the current "
+                   "directory belongs to (for --scope project).")
+@click.option("--projects", default=None,
+              help="Comma-separated slugs for cross-project mining "
+                   "(required for --scope user when --project is not given).")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project",
+              show_default=True,
+              help="project → ./.claude/skills/ ; user → ~/.claude/skills/ "
+                   "(global; requires explicit --project/--projects).")
+@click.option("--min-occurrences", type=click.IntRange(min=1), default=5, show_default=True,
+              help="A pattern must appear in this many distinct sessions.")
+@click.option("--kind", "kinds", multiple=True,
+              type=click.Choice(("avoids-X", "never-touches-paths", "canonical-test-command",
+                                 "always-runs-X-after-Y", "uses-tool-flag-combo")),
+              help="Restrict to these pattern kinds (repeatable). Default: all.")
+@click.option("--window", default="90d", show_default=True,
+              help="Only consider sessions newer than this ('90d'/'1w'/ISO; "
+                   "'all' or empty for no bound).")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Output directory. Default depends on --scope.")
+@click.option("--dry-run", is_flag=True, help="Show what would be generated; write nothing.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def skills_generate_cmd(project, projects, scope, min_occurrences, kinds, window, out_path, dry_run, fmt):
+    """Mine session patterns and emit auto-generated SKILL.md files."""
+    from stackunderflow.services import skill_synth
+
+    projects_list = _split_csv(projects)
+    if scope == "user" and not project and not projects_list:
+        raise click.UsageError(
+            "--scope user is global; pass --project SLUG or --projects A,B,C "
+            "explicitly. There is no implicit all-projects mode."
+        )
+    window_arg = None if (window or "").strip().lower() in ("", "all", "none") else window
+
+    conn = _open_store()
+    try:
+        if not project and not projects_list:
+            project = _detect_cwd_project_slug(conn)
+            if not project:
+                raise click.UsageError(
+                    "could not infer a project for the current directory — "
+                    "pass --project SLUG (see `stackunderflow find-sessions-in-path .`)."
+                )
+        try:
+            candidates = skill_synth.synthesize_skills(
+                conn,
+                project=project,
+                projects=projects_list,
+                min_occurrences=min_occurrences,
+                pattern_kinds=list(kinds) or None,
+                since=window_arg,
+            )
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+    finally:
+        conn.close()
+
+    out_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    results = skill_synth.write_skill_files(candidates, out_dir, dry_run=dry_run)
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "scope": scope,
+            "out_dir": str(out_dir),
+            "dry_run": dry_run,
+            "candidates": [c.to_dict() for c in candidates],
+            "written": [{"name": r.name, "path": str(r.path), "action": r.action} for r in results],
+        }, indent=2))
+        return
+
+    if not candidates:
+        click.echo("No patterns met the threshold — nothing generated. "
+                   "(Try a lower --min-occurrences or a wider --window.)")
+        return
+    verb = "Would generate" if dry_run else "Generated"
+    click.echo(f"{verb} {len(candidates)} skill(s) under {out_dir}:")
+    for r in results:
+        click.echo(f"  [{r.action}] {r.name}  ({r.path})")
+    for c in candidates:
+        click.echo(f"    · {c.name}: {c.pattern_kind}, {c.evidence_count} sessions")
+    if dry_run:
+        click.echo("(dry run — nothing written)")
+
+
+@skills_group.command("list")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project", show_default=True,
+              help="Where to look: ./.claude/skills/ or ~/.claude/skills/.")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Skills directory to inspect. Default depends on --scope.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def skills_list_cmd(scope, out_path, fmt):
+    """List the auto-generated skills present in the skills directory."""
+    from stackunderflow.services import skill_synth
+
+    skills_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    items = skill_synth.list_generated_skills(skills_dir)
+    if fmt == "json":
+        click.echo(json.dumps({"skills_dir": str(skills_dir), "skills": items}, indent=2))
+        return
+    if not items:
+        click.echo(f"No auto-generated skills in {skills_dir}.")
+        return
+    click.echo(f"Auto-generated skills in {skills_dir}  ({len(items)}):")
+    for it in items:
+        click.echo(f"  {it['name']}  [{it['pattern_kind']}]  evidence={it['evidence_count']}  "
+                   f"generated={it['generated_at']}")
+        click.echo(f"      {it['description']}")
+
+
+@skills_group.command("clean")
+@click.option("--scope", type=click.Choice(("project", "user")), default="project", show_default=True,
+              help="Where to clean: ./.claude/skills/ or ~/.claude/skills/.")
+@click.option("--out", "out_path", type=click.Path(file_okay=False), default=None,
+              help="Skills directory to clean. Default depends on --scope.")
+@click.option("--older-than", default=None,
+              help="Only remove skills generated before this ('30d'/'2w'/ISO). "
+                   "Default: remove all auto-generated skills.")
+@click.option("--dry-run", is_flag=True, help="Show what would be removed; delete nothing.")
+@click.option("--yes", "-y", "assume_yes", is_flag=True,
+              help="Actually delete. Without this, clean only previews.")
+def skills_clean_cmd(scope, out_path, older_than, dry_run, assume_yes):
+    """Remove auto-generated skills (never touches hand-authored ones)."""
+    from stackunderflow.services import skill_synth
+
+    skills_dir = Path(out_path) if out_path else _default_skills_out(scope)
+    preview = dry_run or not assume_yes
+    try:
+        removed = skill_synth.clean_generated_skills(
+            skills_dir, older_than=older_than, dry_run=preview,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--older-than") from exc
+    if not removed:
+        click.echo(f"No auto-generated skills to remove in {skills_dir}.")
+        return
+    verb = "Would remove" if preview else "Removed"
+    click.echo(f"{verb} {len(removed)} auto-generated skill(s) from {skills_dir}:")
+    for p in removed:
+        click.echo(f"  {p.name}")
+    if preview and not dry_run:
+        click.echo("(preview — re-run with --yes to delete)")
+
+
+# ── discovery citation-feedback telemetry ──────────────────────────────────
+#
+# The three discovery commands above passively record which sessions they
+# surface (``loaded_count``) and the ``session_query`` MCP tool records
+# which surfaced sessions get looked up (``cited_count``). These two
+# subcommands let you introspect that table and run the periodic
+# "demote sessions nobody ever cites" sweep. Telemetry is local-only
+# (session ids + counters, no content) and the passive recording is
+# gated behind ``STACKUNDERFLOW_DISCOVERY_TELEMETRY`` (default on).
+
+@cli.group("discovery")
+def discovery_group():
+    """Inspect / maintain the discovery citation-feedback telemetry."""
+
+
+@discovery_group.command("telemetry")
+@click.option("--command", "command_filter", default=None,
+              help="Filter to one discovery command "
+                   "(find_sessions_in_path | find_sessions_touching_file | "
+                   "search_past_decisions).")
+@click.option("--session", "session_filter", default=None,
+              help="Filter to one session id.")
+@click.option("--limit", type=int, default=50, show_default=True,
+              help="Max rows to show. <= 0 means no limit.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def discovery_telemetry_cmd(
+    command_filter: str | None,
+    session_filter: str | None,
+    limit: int,
+    fmt: str,
+):
+    """Show discovery telemetry: loaded/cited counters + cite-rate per session.
+
+    ``cite_rate`` = cited_count / loaded_count (0.0 if never loaded).
+    Rows sorted by most-recently-surfaced first.
+    """
+    from stackunderflow.services import discovery_telemetry as telemetry
+
+    conn = _open_store()
+    try:
+        rows = telemetry.iter_telemetry(
+            conn,
+            command=command_filter,
+            session_id=session_filter,
+            limit=limit,
+        )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({"rows": rows}, indent=2))
+        return
+
+    if not rows:
+        click.echo("Discovery telemetry: no rows.")
+        return
+
+    click.echo(f"Discovery telemetry  ({len(rows)} row(s))")
+    click.echo("")
+    for r in rows:
+        flag = "  [demoted]" if r.get("demoted") else ""
+        click.echo(
+            f"  {r['command']:<28s} {str(r['session_id'])[:12]}…  "
+            f"loaded={r['loaded_count']:<4d} cited={r['cited_count']:<4d} "
+            f"cite_rate={r['cite_rate']:.3f}{flag}"
+        )
+        last_loaded = r.get("last_loaded_ts") or "(never)"
+        last_cited = r.get("last_cited_ts") or "(never)"
+        click.echo(
+            f"      first_loaded={r.get('first_loaded_ts') or '(never)'}  "
+            f"last_loaded={last_loaded}  last_cited={last_cited}"
+        )
+    click.echo("")
+
+
+@discovery_group.command("demote-uncited")
+@click.option("--dry-run", is_flag=True,
+              help="List candidates without flagging them.")
+@click.option("--min-loads", type=int, default=20, show_default=True,
+              help="Minimum times surfaced.")
+@click.option("--min-age-days", type=int, default=7, show_default=True,
+              help="Minimum age (days since first surfaced).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def discovery_demote_uncited_cmd(
+    dry_run: bool,
+    min_loads: int,
+    min_age_days: int,
+    fmt: str,
+):
+    """Flag sessions surfaced N+ times over M+ days that were never cited.
+
+    Demoted sessions drop out of default discovery ranking (their
+    cite-rate ranking term is zeroed) but stay reachable via direct
+    lookup. ``--dry-run`` reports the candidates without touching them.
+    """
+    from stackunderflow.services import discovery_telemetry as telemetry
+
+    conn = _open_store()
+    try:
+        candidates = telemetry.demote_candidates(
+            conn, min_loads=min_loads, min_age_days=min_age_days,
+        )
+        demoted_n = 0
+        if candidates and not dry_run:
+            demoted_n = telemetry.mark_demoted(
+                conn, [(c, s) for c, s, _ in candidates],
+            )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "candidates": [
+                {"command": c, "session_id": s, "loaded_count": n}
+                for c, s, n in candidates
+            ],
+            "dry_run": dry_run,
+            "demoted": demoted_n,
+        }, indent=2))
+        return
+
+    if not candidates:
+        click.echo(
+            f"demote-uncited: no candidates "
+            f"(min_loads={min_loads}, min_age_days={min_age_days})."
+        )
+        return
+
+    verb = "Would demote" if dry_run else "Demoted"
+    click.echo(f"{verb} {len(candidates)} uncited session(s):")
+    click.echo("")
+    for c, s, n in candidates:
+        click.echo(f"  {c:<28s} {str(s)[:12]}…  loaded={n}")
+    click.echo("")
+    if dry_run:
+        click.echo("(dry run — nothing changed; re-run without --dry-run to apply)")
+    else:
+        click.echo(f"({demoted_n} row(s) flagged demoted)")
+
+
 # ── ETL ──────────────────────────────────────────────────────────────────────
 #
 # The ETL refactor (see ``docs/specs/etl-architecture.md``) ships in
@@ -1464,12 +2156,191 @@ def _render_etl_status_text(payload: dict) -> None:
         click.echo(
             f"                 last cycle: {events_last:,} events processed"
         )
+    lock_held_by = watcher.get("lock_held_by")
+    if lock_held_by is not None:
+        click.echo(f"                 lock held by PID {lock_held_by}")
 
     # Footer hint about lag for the eager reader — no badge ceremony.
     lag = payload.get("lag_seconds", 0)
     if lag:
         click.echo("")
         click.echo(f"  Lag (events behind marts): {lag:,}")
+
+
+# ── hybrid-capture hooks ─────────────────────────────────────────────────────
+#
+# Opt-in Claude Code lifecycle hooks (see ``.notes/specs/05-hybrid-capture-hooks.md``
+# and ``docs/hooks.md``). Everything here is user-invoked — nothing installs
+# hooks behind your back. ``hooks run`` is the one command Claude Code itself
+# calls; the rest are for you.
+
+@cli.group("hooks")
+def hooks_group():
+    """Manage opt-in Claude Code lifecycle hooks (hybrid capture)."""
+
+
+_HOOK_SCOPES = ("project", "user")
+
+
+@hooks_group.command("install")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="project = .claude/settings.json in cwd's git root; user = ~/.claude/settings.json")
+@click.option("--dry-run", is_flag=True, help="Show what would change; write nothing.")
+@click.option("--capture-content", is_flag=True,
+              help="Store full hook payloads (prompt text, tool output) instead of sanitised "
+                   "metadata. Off by default — the conservative choice.")
+def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool):
+    """Register the StackUnderflow hooks in a settings.json (idempotent, backs up first)."""
+    from stackunderflow.hooks import install as _install
+    from stackunderflow.hooks import templates as _templates
+
+    try:
+        report = _install(scope, dry_run=dry_run, capture_content=capture_content)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    verb = "Would install" if dry_run else ("Installed" if report.changed else "Already installed")
+    click.echo(f"{verb} StackUnderflow hooks ({scope} scope)")
+    click.echo(f"  settings file:   {report.settings_path}")
+    if dry_run:
+        if report.changed:
+            click.echo("  would write the 'hooks' block:")
+            block = _templates.canonical_hooks_block(capture_content=capture_content)
+            for line in json.dumps({"hooks": block}, indent=2).splitlines():
+                click.echo(f"    {line}")
+            if report.stale_entries_replaced:
+                click.echo(f"  would replace stale entries: {', '.join(sorted(set(report.stale_entries_replaced)))}")
+            click.echo(f"  would preserve {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+        else:
+            click.echo("  no change — already up to date.")
+        return
+    if report.backup_path:
+        click.echo(f"  backup written:  {report.backup_path}")
+    if report.created_file:
+        click.echo("  (created a new settings.json)")
+    click.echo(f"  hooks active:    {', '.join(report.hooks_installed)}")
+    if report.stale_entries_replaced:
+        click.echo(f"  replaced stale:  {', '.join(sorted(set(report.stale_entries_replaced)))}")
+    click.echo(f"  preserved:       {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+    if report.capture_content:
+        click.secho("  ⚠  --capture-content: full payloads (incl. prompt text & tool output) will be stored.",
+                    fg="yellow")
+    if not report.captured_events_table_ready:
+        click.secho("  note: couldn't pre-create the captured_events table; it'll be created on first hook fire.",
+                    fg="yellow")
+    import shutil as _shutil
+    if _shutil.which("stackunderflow") is None:
+        click.secho("  note: 'stackunderflow' isn't on your PATH — Claude Code may not be able to run the "
+                    "hook command. Make sure it resolves in your shell.", fg="yellow")
+
+
+@hooks_group.command("uninstall")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="Which settings.json to clean.")
+def hooks_uninstall_cmd(scope: str):
+    """Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks)."""
+    from stackunderflow.hooks import uninstall as _uninstall
+
+    try:
+        report = _uninstall(scope)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not report.file_existed:
+        click.echo(f"No settings.json at {report.settings_path} — nothing to uninstall.")
+        return
+    if not report.changed:
+        click.echo(f"No StackUnderflow hooks in {report.settings_path} — nothing to remove.")
+        return
+    click.echo(f"Removed StackUnderflow hooks ({scope} scope)")
+    click.echo(f"  settings file:  {report.settings_path}")
+    click.echo(f"  backup written: {report.backup_path}")
+    click.echo(f"  removed:        {', '.join(sorted(set(report.hooks_removed)))}")
+    click.echo(f"  preserved:      {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
+
+
+@hooks_group.command("status")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default=None,
+              help="Limit to one scope (default: show both project and user).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text", show_default=True)
+def hooks_status_cmd(scope: str | None, fmt: str):
+    """Show which StackUnderflow hooks are installed, where, and whether any are stale."""
+    from stackunderflow.hooks import status as _status
+
+    payload = _status(scope)
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for sc, info in payload.items():
+        click.echo(f"[{sc}]  {info['settings_path']}")
+        if not info["exists"]:
+            click.echo("  (no settings.json)")
+            continue
+        if not info.get("valid_json", True):
+            click.secho("  ⚠  not valid JSON — fix or remove it before installing.", fg="yellow")
+            continue
+        hooks_map = info.get("hooks", {})
+        if not hooks_map:
+            click.echo("  no StackUnderflow hooks installed.")
+        else:
+            for hid in sorted(hooks_map):
+                tags = []
+                if hooks_map[hid]:
+                    tags.append("capture-content")
+                if hid in info.get("stale", []):
+                    tags.append("STALE — run `stackunderflow hooks repair`")
+                suffix = f"  ({', '.join(tags)})" if tags else ""
+                click.echo(f"  ✓ {hid}{suffix}")
+        click.echo(f"  ({info.get('other_hook_count', 0)} non-StackUnderflow hook entry(ies) in this file)")
+
+
+@hooks_group.command("repair")
+@click.option("--scope", type=click.Choice(("project", "user", "all")), default="project", show_default=True,
+              help="project = cwd's git root; user = ~/.claude; all = walk $HOME for every .claude/settings.json")
+@click.option("--dry-run", is_flag=True, help="Report stale entries; rewrite nothing.")
+def hooks_repair_cmd(scope: str, dry_run: bool):
+    """Rewrite stale StackUnderflow hook commands to the portable form (changes nothing else)."""
+    from stackunderflow.hooks import repair as _repair
+
+    report = _repair(scope, dry_run=dry_run)
+    n = len(report.repaired)
+    if scope == "all":
+        click.echo(f"Scanned {len(report.scanned_files)} settings.json file(s) under $HOME "
+                   f"({report.pruned_dirs} dir(s) pruned).")
+    else:
+        click.echo(f"Scanned: {report.scanned_files[0] if report.scanned_files else '(none)'}")
+    if n == 0:
+        click.echo("No stale StackUnderflow hook commands found.")
+        return
+    verb = "Would rewrite" if dry_run else "Rewrote"
+    click.echo(f"{verb} {n} stale command(s) across {report.files_changed} file(s):")
+    for entry in report.repaired:
+        click.echo(f"  {entry['file']}")
+        click.echo(f"    {entry['hook_id']}: {entry['old']}")
+        click.echo(f"      → {entry['new']}")
+    if not dry_run and report.backups:
+        click.echo(f"  backups written: {len(report.backups)}")
+
+
+@hooks_group.command("run")
+@click.argument("hook_id")
+@click.option("--capture-content", is_flag=True,
+              help="Store the full payload (set by `hooks install --capture-content`).")
+def hooks_run_cmd(hook_id: str, capture_content: bool):
+    """Internal — invoked by Claude Code. Reads the hook payload as JSON on stdin."""
+    from stackunderflow.hooks import run as _run
+
+    raw = ""
+    try:
+        if not sys.stdin.isatty():
+            raw = sys.stdin.read()
+    except (OSError, ValueError):
+        raw = ""
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    sys.exit(_run(hook_id, payload, capture_content=capture_content))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

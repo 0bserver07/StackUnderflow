@@ -1,0 +1,53 @@
+{
+  "_doc": "Spec for the opencode SQLite fixture. The test materialises this into a session/message/part schema in tmp_path/opencode.db before running the adapter.",
+  "session": {
+    "id": "opencode-sess-001",
+    "directory": "/Users/yad/myproj",
+    "title": "Refactor cache layer",
+    "time_created": 1745596800000,
+    "time_archived": null,
+    "parent_id": null
+  },
+  "messages": [
+    {
+      "id": "oc-msg-001",
+      "time_created": 1745596801000,
+      "data": {
+        "role": "user",
+        "modelID": "claude-sonnet-4-5-20250929",
+        "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+        "cost": 0
+      },
+      "parts": [
+        {"type": "text", "text": "Refactor the cache layer with TieredCache."}
+      ]
+    },
+    {
+      "id": "oc-msg-002",
+      "time_created": 1745596802000,
+      "data": {
+        "role": "assistant",
+        "modelID": "claude-sonnet-4-5-20250929",
+        "tokens": {"input": 1800, "output": 520, "reasoning": 130, "cache": {"read": 900, "write": 250}},
+        "cost": 0.0145
+      },
+      "parts": [
+        {"type": "text", "text": "Refactored: hot LRU + cold disk JSON, with TTL eviction."},
+        {"type": "tool", "tool": "edit_file"}
+      ]
+    },
+    {
+      "id": "oc-msg-003",
+      "time_created": 1745596803000,
+      "data": {
+        "role": "assistant",
+        "modelID": "claude-sonnet-4-5-20250929",
+        "tokens": {"input": 2100, "output": 380, "reasoning": 80, "cache": {"read": 1400, "write": 100}},
+        "cost": 0.0098
+      },
+      "parts": [
+        {"type": "text", "text": "Added benchmark showing 4x speedup on cold reads."}
+      ]
+    }
+  ]
+}

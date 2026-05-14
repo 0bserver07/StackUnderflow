@@ -18,6 +18,7 @@ import stackunderflow.deps as deps
 
 # Route modules
 from stackunderflow.routes import (
+    agent_teams,
     bookmarks,
     cfg,
     commands,
@@ -29,6 +30,7 @@ from stackunderflow.routes import (
     misc,
     optimize,
     plan,
+    playback,
     projects,
     qa,
     search,
@@ -133,21 +135,62 @@ async def _lifespan(_app: FastAPI):
     # dies with the process — explicit shutdown via the handle is
     # available if FastAPI ever surfaces a teardown hook.
     if not _watcher_disabled():
+        # Single-watcher invariant: only one process at a time runs the
+        # filesystem watcher. The lock at ``~/.stackunderflow/server.lock``
+        # is acquired non-blockingly. If another live instance already
+        # holds it, we log a clear warning and continue serving HTTP
+        # without spawning a second watcher — the dashboard reads from
+        # the store and is happy without a local watcher.
+        # ``--no-lock`` (or ``STACKUNDERFLOW_DISABLE_LOCK=1``) skips the
+        # fence for tests / headless scenarios.
+        lock_handle = None
+        if not _lock_disabled():
+            from stackunderflow.etl.lock import (
+                acquire_watcher_lock,
+                read_lock_holder,
+            )
+
+            lock_handle = acquire_watcher_lock()
+            if lock_handle is None:
+                holder = read_lock_holder()
+                logger.warning(
+                    "Watcher lock held by PID %s; this instance will serve "
+                    "HTTP but will not run the watcher",
+                    holder if holder is not None else "<unknown>",
+                )
+            else:
+                deps.watcher_lock_handle = lock_handle
+
+        if lock_handle is not None or _lock_disabled():
+            try:
+                from stackunderflow.etl.watcher import start_watcher
+
+                def _watcher_conn() -> "object":
+                    # Each cycle gets its own short-lived connection so a
+                    # crash mid-write can't poison the next refresh.
+                    return db.connect(deps.store_path)
+
+                handle = start_watcher(_watcher_conn)
+                deps.watcher_handle = handle
+                logger.info("ETL watcher started (Wave 2C)")
+            except Exception as exc:  # noqa: BLE001 — never block server start on watcher
+                logger.warning("ETL watcher failed to start: %s", exc)
+
+    try:
+        yield
+    finally:
+        # Lifespan shutdown — release the watcher lock so a follow-up
+        # ``stackunderflow start`` can pick it up cleanly. The OS-level
+        # flock would also drop on process exit, but explicit release
+        # keeps the metadata file content honest in test scenarios that
+        # bring the lifespan up and down inside one process.
         try:
-            from stackunderflow.etl.watcher import start_watcher
+            from stackunderflow.etl.lock import release_watcher_lock
 
-            def _watcher_conn() -> "object":
-                # Each cycle gets its own short-lived connection so a
-                # crash mid-write can't poison the next refresh.
-                return db.connect(deps.store_path)
-
-            handle = start_watcher(_watcher_conn)
-            deps.watcher_handle = handle
-            logger.info("ETL watcher started (Wave 2C)")
-        except Exception as exc:  # noqa: BLE001 — never block server start on watcher
-            logger.warning("ETL watcher failed to start: %s", exc)
-
-    yield
+            release_watcher_lock(deps.watcher_lock_handle)
+            deps.watcher_lock_handle = None
+        except Exception as exc:  # noqa: BLE001 — never raise from lifespan shutdown
+            logger.debug("etl.lock: release on shutdown raised: %s", exc)
 
 
 # Create FastAPI app
@@ -199,6 +242,8 @@ app.include_router(yield_route.router)
 app.include_router(context_budget.router)
 app.include_router(cfg.router)
 app.include_router(etl.router)
+app.include_router(agent_teams.router)
+app.include_router(playback.router)
 
 
 
@@ -234,6 +279,19 @@ def _watcher_disabled() -> bool:
     without the live-watcher wakeups.
     """
     val = os.environ.get("STACKUNDERFLOW_DISABLE_WATCHER", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _lock_disabled() -> bool:
+    """Return True when the env opts out of the watcher lock fence.
+
+    The CLI's ``stackunderflow start --no-lock`` sets
+    ``STACKUNDERFLOW_DISABLE_LOCK=1`` so two instances against the same
+    store can both run watchers — useful for the tests that exercise
+    parallel watchers and for headless setups where the user has manual
+    control of the singleton invariant.
+    """
+    val = os.environ.get("STACKUNDERFLOW_DISABLE_LOCK", "").strip().lower()
     return val in ("1", "true", "yes", "on")
 
 
