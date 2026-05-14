@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,10 @@ from stackunderflow.adapters.cline import RooCodeAdapter
 
 
 _IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# Windows ignores Unix file permissions; chmod(0o000) is a no-op on NTFS, so the
+# permission-denied path under test is unreachable there. Skip those tests on
+# Windows the same way we skip them when running as root on POSIX.
+_SKIP_CHMOD = _IS_ROOT or sys.platform == "win32"
 
 
 # ── missing / empty source ────────────────────────────────────────────
@@ -174,7 +179,7 @@ def test_event_without_type_say_is_skipped(tmp_path: Path) -> None:
 # ── permission denied ─────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root bypasses chmod 000")
+@pytest.mark.skipif(_SKIP_CHMOD, reason="chmod 000 is a no-op on Windows / bypassed by root")
 def test_permission_denied_does_not_raise(tmp_path: Path) -> None:
     tasks = tmp_path / "tasks"
     task_dir = tasks / "t"
