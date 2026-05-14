@@ -160,15 +160,29 @@ def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
       pre-attributed 1/N cost/token shares mirror the aggregator's
       ``_ToolCostCollector`` contract so the JSON shape is identical.
 
-    ``command_costs`` and ``session_costs`` stay aggregator-driven —
-    their existing shapes are per-Interaction / per-session lists keyed
-    on interaction_id / session_id, which the per-(day, project,
-    command_name) ``command_mart`` doesn't preserve. The route's
-    ``trends`` block also stays on the aggregator path because the
-    period split (current vs prior) needs interaction-level
-    correlations the daily mart can't see by itself. Returns the same
-    dict object (mutated) so the caller's payload assembly stays
-    unchanged.
+    ``command_costs`` and ``session_costs`` stay aggregator-driven.
+    Their existing shapes are per-Interaction / per-session lists keyed
+    on ``interaction_id`` / ``session_id`` and carry per-row fields
+    (``prompt_preview``, ``timestamp``, ``models_used``, ``tools_used``,
+    ``steps``, ``had_error``) that the (day, project_id, command_name)
+    ``command_mart`` rollup cannot reconstruct — the grain throws them
+    away on ingest. ``command_mart_for_project`` returns sums over
+    ``command_name``, not per-Interaction rows; extending the helper
+    cannot recover what the grain doesn't store. A future mart at
+    (project_id, interaction_id) grain could power this overlay; until
+    then the aggregator's ``_CommandCostCollector`` is the only source
+    of the per-Interaction shape the frontend (`CommandCostList`,
+    typed against `CommandCost[]`) consumes. The route's ``trends``
+    block also stays on the aggregator path because the period split
+    (current vs prior) needs interaction-level correlations the daily
+    mart can't see by itself. Returns the same dict object (mutated)
+    so the caller's payload assembly stays unchanged.
+
+    The ``command_mart`` IS populated by the ETL pipeline and read by
+    ``reports/optimize.py``'s pattern early-exits + the CLI
+    ``stackunderflow report`` command — see
+    ``store/mart_queries.command_mart_for_project``. It just isn't a
+    drop-in source for THIS route's response shape.
     """
     daily_rows = mart_queries.daily_for_project(conn, project_id=project_id)
     if not daily_rows:
