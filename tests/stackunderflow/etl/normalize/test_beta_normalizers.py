@@ -743,3 +743,133 @@ def test_beta_normalizer_malformed_raw_json_does_not_raise(
     for ev in events:
         # If anything was yielded, it should still be canonical-shape.
         _assert_canonical_event_shape(ev, provider=scenario.provider_key)
+
+
+# ── pricing-coverage regression tests ───────────────────────────────────
+#
+# Once the beta-normalizer pricing sweep landed (HANDOFF follow-up #3),
+# representative beta-provider model ids became first-class members of
+# the canonical RATE_CARD. These tests lock in that coverage so future
+# refactors can't silently drop a vendor's rates and leave the
+# normalizer stamping `cost_source='unknown'` again.
+#
+# Providers that already deterministically stamp `estimated` (cursor_agent,
+# kiro) are excluded — their cost_source is independent of rate-card
+# coverage by design. Discovery-only stubs (codeium) are also excluded.
+
+# Providers whose fixture models we have now covered with first-party
+# rate-card entries. The list is intentionally explicit so adding a new
+# beta provider doesn't accidentally tighten this contract by parametrize
+# expansion alone.
+_RATE_CARD_COVERED = (
+    "opencode",       # fixture: claude-sonnet-4-5-20250929
+    "qwen",           # fixture: qwen-coder-plus
+    "gemini",         # fixture: gemini-1.5-pro
+    "copilot",        # fixture: claude-sonnet-4-5-20250929
+    "continue",       # fixture: claude-sonnet-4-5-20250929
+    "droid",          # fixture: claude-sonnet-4-5-20250929
+    "openclaw",       # fixture: claude-sonnet-4-5-20250929
+    "pi",             # fixture: gpt-5
+    "kilocode",       # fixture: claude-sonnet-4-5-20250929
+    "roocode",        # fixture: claude-sonnet-4-5-20250929
+)
+
+
+@pytest.mark.parametrize("provider", _RATE_CARD_COVERED)
+def test_beta_normalizer_fixture_emits_rate_card_cost_source(
+    provider: str, tmp_path: Path,
+) -> None:
+    """Real-shape fixture → ``cost_source`` is never ``"unknown"``.
+
+    Locks in HANDOFF follow-up #3 — every beta normalizer that emits a
+    model id known to the canonical RATE_CARD must stamp ``rate_card``
+    (or ``estimated`` for copilot's input-fallback path). A regression
+    that drops a vendor from ``_CANONICAL_IDS`` or breaks the
+    provider→pricer routing in ``normalize/base.py`` shows up here as a
+    failure on at least one event.
+    """
+    scenario = SCENARIOS[provider]
+    adapter = scenario.build_adapter(tmp_path)
+    events = _events_via_pipeline(
+        adapter,
+        normalizer_key=scenario.provider_key,
+        provider_value=scenario.provider_key,
+    )
+    assert events, f"{provider}: fixture pipeline yielded no events"
+    cost_sources = {ev["cost_source"] for ev in events}
+    assert COST_SOURCE_UNKNOWN not in cost_sources, (
+        f"{provider}: at least one event still stamps "
+        f"cost_source='unknown' — RATE_CARD entry missing or pricer "
+        f"routing broken. Got {cost_sources!r}."
+    )
+    # At least one event should hit the canonical rate-card path
+    # (rules out an accidental all-estimated fallback for non-estimating
+    # providers).
+    assert COST_SOURCE_RATE_CARD in cost_sources, (
+        f"{provider}: no event stamped 'rate_card'; got {cost_sources!r}"
+    )
+
+
+# Representative (model_id, provider_key) pairs for the beta vendors whose
+# rates were added in this sweep. Each pair is a model that genuine users
+# encounter in the wild and that the normalizer must NOT stamp as
+# ``unknown`` going forward.
+_RATE_CARD_REPRESENTATIVE_MODELS: tuple[tuple[str, str], ...] = (
+    # Qwen family
+    ("qwen-max", "qwen"),
+    ("qwen-max-longcontext", "qwen"),
+    ("qwen-plus", "qwen"),
+    ("qwen-turbo", "qwen"),
+    ("qwen-coder", "qwen"),
+    ("qwen-coder-plus", "qwen"),
+    ("qwen3-coder", "qwen"),
+    ("qwen-auto", "qwen"),
+    # Gemini family
+    ("gemini-2.5-pro", "gemini"),
+    ("gemini-2.5-flash", "gemini"),
+    ("gemini-2.5-flash-lite", "gemini"),
+    ("gemini-1.5-pro", "gemini"),
+    ("gemini-1.5-flash", "gemini"),
+    ("gemini-3.0-pro", "gemini"),
+    ("gemini-3.1-pro", "gemini"),
+    ("gemini-auto", "gemini"),
+    # Un-dated Anthropic alias used by Kiro-style normalisation
+    ("claude-3-5-sonnet", "openclaw"),
+)
+
+
+@pytest.mark.parametrize(
+    ("model_id", "provider"), _RATE_CARD_REPRESENTATIVE_MODELS,
+)
+def test_beta_model_id_in_canonical_rate_card(
+    model_id: str, provider: str,
+) -> None:
+    """``model_id`` is a member of RATE_CARD with non-zero rates.
+
+    The normalizer's ``cost_source`` decision is driven by
+    ``model in RATE_CARD``. This locks in that the rate-card sweep keeps
+    every representative beta model present with usable rates so
+    downstream marts never see ``cost_source='unknown'`` for these ids.
+    """
+    from stackunderflow.infra.costs import RATE_CARD, get_model_pricing
+
+    assert model_id in RATE_CARD, (
+        f"{model_id}: missing from RATE_CARD (expected for {provider})"
+    )
+    entry = RATE_CARD[model_id]
+    assert entry is not None, f"{model_id}: RATE_CARD entry is None"
+    # Input + output rates must be strictly positive; cache rates can be
+    # 0.0 for providers (Qwen, Gemini, OpenAI) that don't bill writes.
+    assert entry["input_cost_per_token"] > 0.0, (
+        f"{model_id}: input_cost_per_token is non-positive"
+    )
+    assert entry["output_cost_per_token"] > 0.0, (
+        f"{model_id}: output_cost_per_token is non-positive"
+    )
+
+    # And ``get_model_pricing`` should route the same way (this catches
+    # ``_provider_for_model`` regressions where a model lands in
+    # RATE_CARD but gets priced against the wrong pricer).
+    pricing = get_model_pricing(model_id)
+    assert pricing is not None, f"{model_id}: get_model_pricing returned None"
+    assert pricing["input_cost_per_token"] == entry["input_cost_per_token"]

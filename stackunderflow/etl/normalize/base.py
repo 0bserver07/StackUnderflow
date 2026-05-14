@@ -181,19 +181,33 @@ class Normalizer(ABC):
 # ── helpers ─────────────────────────────────────────────────────────
 
 # Internal: map StackUnderflow's provider_name (the ``projects.provider``
-# / ``Normalizer.provider_name`` value) to the pricer-side provider key
-# (``"anthropic"`` / ``"openai"``). Anything else is treated as
-# Anthropic-shape so cost lookups don't raise — the pricer's overlay /
-# canonicalize path returns 0 for unknown models.
+# / ``Normalizer.provider_name`` value) to the pricer-side provider key.
+# Anything not listed falls back to ``"anthropic"`` so cost lookups don't
+# raise — the Anthropic pricer's family heuristic returns conservative
+# rates for unknown ids. Beta providers each route to their own pricer
+# (which may itself delegate by model-id prefix, e.g. cline / copilot).
 _PROVIDER_TO_PRICER = {
     "claude": "anthropic",
     "anthropic": "anthropic",
     "codex": "openai",
     "openai": "openai",
     "cursor": "anthropic",  # Cursor uses Anthropic + OpenAI mix; default to Anthropic rates
-    "cline": "anthropic",   # Cline runs against Anthropic API directly
-    "kilocode": "anthropic",
-    "roocode": "anthropic",
+    "cline": "cline",       # Cline pricer routes by vendor prefix
+    "kilocode": "kilocode",
+    "roocode": "roocode",
+    "opencode": "opencode",
+    "cursor-agent": "cursor-agent",
+    "cursor_agent": "cursor-agent",  # registry key uses underscore
+    "qwen": "qwen",
+    "gemini": "gemini",
+    "copilot": "copilot",
+    "codeium": "codeium",
+    "continue": "continue",
+    "droid": "droid",
+    "kiro": "kiro",
+    "openclaw": "openclaw",
+    "pi": "pi",
+    "omp": "pi",
 }
 
 

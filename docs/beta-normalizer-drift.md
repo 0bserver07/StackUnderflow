@@ -18,8 +18,8 @@ fixture mirrors the on-disk layout documented in the catalog spec.
 |---|---|---|
 | `cursor_agent` | ✅ matches spec | Always-estimated path; 2 events from JSONL fixture; cost_source=`estimated` exclusively. |
 | `opencode` | ✅ matches spec | SQLite session/message/part schema honoured; reasoning correctly folded into `output_tokens`; cache.{read,write} mapped to canonical 4-key shape. |
-| `qwen` | ✅ matches spec (cosmetic) | Token math correct (`promptTokenCount - cachedContentTokenCount`, thoughts folded into output). cost_source=`unknown` because the default fixture model `qwen-coder-plus` is not in the canonical RATE_CARD — that's a pricing-table coverage question, not a normalizer drift. |
-| `gemini` | ✅ matches spec (cosmetic) | Same shape as qwen — math correct, cost_source=`unknown` because `gemini-1.5-pro` isn't in RATE_CARD. Pricing-table issue, not normalizer drift. |
+| `qwen` | ✅ matches spec | Token math correct (`promptTokenCount - cachedContentTokenCount`, thoughts folded into output). Previously stamped `unknown`; **resolved 2026-05-13** — the canonical RATE_CARD now covers the full Qwen family (max, plus, turbo, coder, coder-plus, qwen3-coder, auto). |
+| `gemini` | ✅ matches spec | Same shape as qwen — math correct. Previously stamped `unknown`; **resolved 2026-05-13** — RATE_CARD now covers gemini-2.5-pro/flash/flash-lite, 1.5-pro/flash, the 3.x forward-looking placeholders, and gemini-auto. |
 | `copilot` | ⚠️ minor drift → **fixed** | See "Copilot model-priority swap" below. |
 | `codeium` | ✅ matches spec | Discovery-only stub yields zero records, normalizer registered as a no-op generator. Confirmed end-to-end. |
 | `continue` | ✅ matches spec | Schema-introspection (`_sniff_schema`) correctly identifies `sessions` + `messages` tables; rate_card cost_source emitted. |
@@ -110,25 +110,35 @@ priority order:
 
 ## Notes on `cost_source=unknown` for qwen / gemini
 
-The qwen and gemini fixtures use real model ids (`qwen-coder-plus`,
-`gemini-1.5-pro`) that are **not** in the canonical
-`stackunderflow.infra.costs.RATE_CARD`. Per the normalizer's contract
-(`infra/costs.compute_cost`):
-
-> Cost is computed once. When the model has no rate-card entry, the
-> normalizer stamps `cost_source='unknown'`, but the pricer still emits
-> a non-zero `cost_usd` from its family-heuristic fallback.
-
-End-to-end results confirm this:
+**Resolved 2026-05-13.** The qwen and gemini fixtures previously stamped
+`cost_source='unknown'` because their real model ids (`qwen-coder-plus`,
+`gemini-1.5-pro`) were not members of the canonical
+`stackunderflow.infra.costs.RATE_CARD`. The pricing sweep extended
+`_CANONICAL_IDS` with the full Qwen and Gemini families (and added an
+un-dated `claude-3-5-sonnet` alias for Kiro-style normalisation):
 
 ```
-qwen:    cost=0.01554 USD, cost_source=unknown   (qwen-coder-plus → Anthropic family fallback)
-gemini:  cost=0.03147 USD, cost_source=unknown   (gemini-1.5-pro  → Anthropic family fallback)
+qwen:    cost=0.00274 USD, cost_source=rate_card  (qwen-coder-plus → QwenPricer)
+gemini:  cost=0.00832 USD, cost_source=rate_card  (gemini-1.5-pro  → GeminiPricer)
 ```
 
-This is **expected behaviour** under the current spec. Adding
-qwen/gemini families to RATE_CARD is a separate (orthogonal) work item
-in `stackunderflow/infra/providers/`, not a normalizer drift.
+The fix also corrects the normalizer-side provider→pricer routing in
+`stackunderflow/etl/normalize/base.py::_PROVIDER_TO_PRICER` so that
+beta-normalizer rows price against their own provider's rate table
+instead of falling through to Anthropic's (which would have invented
+roughly 3-4× the correct dollar figure even after RATE_CARD membership
+was satisfied).
+
+Regression tests in `tests/stackunderflow/etl/normalize/test_beta_normalizers.py`:
+
+- `test_beta_normalizer_fixture_emits_rate_card_cost_source` — every
+  fixture-backed beta normalizer (opencode, qwen, gemini, copilot,
+  continue, droid, openclaw, pi, kilocode, roocode) yields at least one
+  `cost_source='rate_card'` event and zero `'unknown'` events.
+- `test_beta_model_id_in_canonical_rate_card` — every representative
+  model id (the 16 qwen + gemini variants plus the un-dated
+  claude-3-5-sonnet alias) is present in `RATE_CARD` with strictly
+  positive input + output rates.
 
 ---
 

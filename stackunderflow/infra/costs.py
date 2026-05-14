@@ -123,16 +123,43 @@ _CANONICAL_IDS = [
     "claude-opus-4-20250514", "claude-sonnet-4-20250514",
     "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
+    # Un-dated Anthropic aliases — emitted by adapters that normalize
+    # vendor-shape model ids (e.g. Kiro's ``claude.3.5.sonnet`` →
+    # ``claude-3-5-sonnet``). The Anthropic pricer's family heuristic
+    # matches these via hyphen-split token set.
+    "claude-3-5-sonnet",
     # OpenAI Codex + base GPT families
     "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",
     "gpt-5.4", "gpt-5", "gpt-5-mini",
     "gpt-4o", "gpt-4o-mini", "gpt-4.1",
+    # Qwen (Alibaba DashScope) — rates in ``providers/qwen.py``
+    "qwen-max", "qwen-max-longcontext",
+    "qwen-plus", "qwen-turbo",
+    "qwen-coder", "qwen-coder-plus", "qwen3-coder",
+    "qwen-auto",
+    # Gemini (Google AI for Developers) — rates in ``providers/gemini.py``
+    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "gemini-1.5-pro", "gemini-1.5-flash",
+    "gemini-3.0-pro", "gemini-3.1-pro",
+    "gemini-auto",
 ]
 
 
 def _provider_for_model(model: str) -> str:
-    """Best-effort guess for the legacy single-arg helpers below."""
+    """Best-effort guess for the legacy single-arg helpers below.
+
+    Routing rules (case-insensitive on the lowered id):
+
+    * ``qwen-*``    → qwen pricer
+    * ``gemini-*``  → gemini pricer
+    * ``codex-*`` / contains ``gpt`` or ``codex`` → openai pricer
+    * ``claude-*``  → anthropic pricer (also the default fallback)
+    """
     lowered = model.lower()
+    if lowered.startswith("qwen") or lowered == "qwen-auto":
+        return "qwen"
+    if lowered.startswith("gemini") or lowered == "gemini-auto":
+        return "gemini"
     if "claude" in lowered:
         return "anthropic"
     if "gpt" in lowered or "codex" in lowered:
