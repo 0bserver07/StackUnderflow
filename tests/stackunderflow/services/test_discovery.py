@@ -701,28 +701,31 @@ class TestClassifyOutcome:
             (1, "assistant", "", _edit_blob()),
             (2, "user", "thanks, that worked perfectly!"),
         )
-        outcome, evidence, mid = _classify_outcome(rows, 0)
+        outcome, evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "worked"
         assert mid == 2
         assert "worked" in evidence.lower()
+        assert confidence >= 0.8  # explicit phrase
 
     def test_negative_keyword_failed(self):
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "user", "no, that broke the build"),
         )
-        outcome, _evidence, mid = _classify_outcome(rows, 0)
+        outcome, _evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "failed"
         assert mid == 2
+        assert confidence >= 0.8
 
     def test_revert_keyword_reverted(self):
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "user", "actually, undo that change"),
         )
-        outcome, _evidence, mid = _classify_outcome(rows, 0)
+        outcome, _evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "reverted"
         assert mid == 2
+        assert confidence >= 0.8
 
     def test_agent_git_reset_is_reverted(self):
         rows = _rows(
@@ -730,32 +733,41 @@ class TestClassifyOutcome:
             (2, "assistant", "", _bash_blob("git reset --hard HEAD~1")),
             (3, "user", "ok thanks"),
         )
-        outcome, evidence, mid = _classify_outcome(rows, 0)
+        outcome, evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "reverted"
         assert mid == 2
         assert "git reset" in evidence
+        # Tool-call revert: lower than explicit user phrase but still strong.
+        assert 0.4 <= confidence < 0.8
 
     def test_agent_git_revert_is_reverted(self):
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "assistant", "", _bash_blob("git revert abc1234 --no-edit")),
         )
-        outcome, _evidence, _mid = _classify_outcome(rows, 0)
+        outcome, _evidence, _mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "reverted"
+        assert 0.4 <= confidence < 0.8
 
-    def test_silence_after_action_is_worked(self):
+    def test_silence_after_action_is_low_confidence_worked(self):
+        # Backward-compat: the outcome label is still "worked" so existing
+        # consumers see no string-shape change. The new behaviour is the
+        # *low* confidence — the default 0.5 threshold drops these rows in
+        # find_sessions_where_action_worked. See
+        # TestFindSessionsWhereActionWorked.test_silence_session_filtered.
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "assistant", "Done — applied the edit."),
         )
-        outcome, evidence, mid = _classify_outcome(rows, 0)
+        outcome, evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "worked"
         assert mid == 2  # the last message of the session
         assert "no user complaint" in evidence
+        assert confidence < 0.5  # below the default surface threshold
 
-    def test_tool_only_followups_walk_further_then_worked(self):
+    def test_tool_only_followups_walk_further_then_low_confidence(self):
         # Empty-content user messages are tool results — skipped — so we
-        # "walk further" and land on silence ⇒ worked.
+        # "walk further" and land on silence ⇒ low-confidence worked.
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "user", ""),               # tool_result
@@ -763,16 +775,18 @@ class TestClassifyOutcome:
             (4, "user", ""),               # tool_result
             (5, "assistant", "tests pass"),
         )
-        outcome, _evidence, mid = _classify_outcome(rows, 0)
+        outcome, _evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "worked"
         assert mid == 5
+        assert confidence < 0.5
 
     def test_last_message_is_uncertain(self):
         rows = _rows((1, "assistant", "", _edit_blob()))
-        outcome, evidence, mid = _classify_outcome(rows, 0)
+        outcome, evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "uncertain"
         assert mid == 1
         assert "last recorded turn" in evidence
+        assert confidence == 0.0
 
     def test_neutral_followups_exhaust_window_then_uncertain(self):
         rows = _rows(
@@ -784,16 +798,19 @@ class TestClassifyOutcome:
             (6, "user", "how about typing?"),
             (7, "user", "thanks that worked"),   # beyond the 5-turn window
         )
-        outcome, _evidence, _mid = _classify_outcome(rows, 0)
+        outcome, _evidence, _mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "uncertain"
+        assert confidence == 0.0
 
     def test_no_problem_is_not_a_complaint(self):
         rows = _rows(
             (1, "assistant", "", _edit_blob()),
             (2, "user", "no problem, looks good!"),
         )
-        outcome, _evidence, _mid = _classify_outcome(rows, 0)
+        outcome, _evidence, _mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "worked"
+        # "looks good" is explicit positive → high confidence.
+        assert confidence >= 0.8
 
     def test_sidechain_after_action_is_transparent(self):
         # A Task sub-agent runs (and even reverts!) right after the edit;
@@ -804,9 +821,10 @@ class TestClassifyOutcome:
             (3, "user", "sub-agent output", "[]", 1),                 # sidechain
             (4, "user", "perfect, thanks"),                           # parent
         )
-        outcome, _evidence, mid = _classify_outcome(rows, 0)
+        outcome, _evidence, mid, confidence = _classify_outcome(rows, 0)
         assert outcome == "worked"
         assert mid == 4
+        assert confidence >= 0.8
 
     def test_lookahead_param_respected(self):
         rows = _rows(
@@ -858,16 +876,28 @@ class TestFindSessionsWhereActionWorked:
         assert [m.session_id for m in out] == ["s"]
         assert out[0].outcome == "worked"
 
-    def test_silence_session_counts_as_worked(self, tmp_path):
+    def test_silence_session_filtered_by_default_min_confidence(self, tmp_path):
+        # Old behaviour over-claimed: a session that simply ended without a
+        # complaint was confidently surfaced as "worked". The new default
+        # confidence threshold (0.5) filters out these low-confidence rows
+        # because their confidence is 0.3. Power-users can opt back in via
+        # ``min_confidence=0.0``.
         conn = _make_conn(tmp_path)
         _seed_outcome_session(conn, session_id="quiet", turns=[
             ("assistant", "", _edit_blob()),
             ("assistant", "All set."),
         ])
         conn.commit()
-        out = find_sessions_where_action_worked(conn, action="Edit")
+        # Default threshold → silence is filtered out.
+        assert find_sessions_where_action_worked(conn, action="Edit") == []
+        # Power-user opt-in → silence resurfaces (legacy behaviour).
+        out = find_sessions_where_action_worked(
+            conn, action="Edit", min_confidence=0.0,
+        )
         assert [m.session_id for m in out] == ["quiet"]
+        assert out[0].outcome == "worked"
         assert "no user complaint" in out[0].outcome_evidence
+        assert out[0].outcome_confidence < 0.5
 
     def test_uncertain_session_excluded(self, tmp_path):
         conn = _make_conn(tmp_path)
@@ -1058,6 +1088,165 @@ class TestFindFailureModesForFile:
         assert find_failure_modes_for_file(conn, "/x/cost.py") == []
 
 
+# ── outcome-confidence adversarial cases ────────────────────────────────────
+#
+# Scenarios chosen against the old "silence ⇒ worked" heuristic. The new
+# confidence ladder rates them as:
+#
+# * explicit user phrase within the lookahead window      → 0.8 (kept)
+# * agent revert tool-call on the same file               → 0.5 (kept)
+# * "no signal at all but session continued"              → 0.3 (filtered)
+# * anchor was already the last recorded turn             → 0.0 (filtered)
+#
+# Each case is a real false-positive (or hard-to-distinguish positive) the
+# old code mishandled. The tests pin the per-row confidence AND the
+# default-threshold filtering behaviour so a future tuning pass can't
+# silently regress either.
+
+
+class TestOutcomeConfidenceAdversarial:
+    def test_session_ends_without_followup_is_filtered(self, tmp_path):
+        # Old behaviour: confidently surfaced as "worked".
+        # New behaviour: confidence 0.3, filtered by default 0.5 threshold.
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="quiet", turns=[
+            ("assistant", "", _edit_blob()),
+            ("assistant", "Done."),
+        ])
+        conn.commit()
+        assert find_sessions_where_action_worked(conn, action="Edit") == []
+        # Lower the threshold below 0.3 → the row resurfaces.
+        out = find_sessions_where_action_worked(
+            conn, action="Edit", min_confidence=0.0,
+        )
+        assert [m.session_id for m in out] == ["quiet"]
+        assert out[0].outcome == "worked"
+        assert out[0].outcome_confidence < 0.5
+
+    def test_unrelated_ok_two_turns_later_is_not_confirmation(self, tmp_path):
+        # User says "ok" two turns later about an unrelated follow-up
+        # question; "ok" is NOT in the positive vocabulary, so this row
+        # exhausts the lookahead window with no signal → uncertain (0.0).
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="ambiguous", turns=[
+            ("assistant", "", _edit_blob()),
+            ("user", "what about the linter config?"),
+            ("user", "ok"),
+        ])
+        conn.commit()
+        assert find_sessions_where_action_worked(conn, action="Edit") == []
+        # Even with min_confidence=0.0 the outcome is "uncertain", not
+        # "worked", so the rolled-down threshold still filters it.
+        out = find_sessions_where_action_worked(
+            conn, action="Edit", min_confidence=0.0,
+        )
+        assert out == []
+
+    def test_immediate_thanks_is_high_confidence_worked(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="ok", turns=[
+            ("assistant", "", _edit_blob()),
+            ("user", "thanks!"),
+        ])
+        conn.commit()
+        out = find_sessions_where_action_worked(conn, action="Edit")
+        assert [m.session_id for m in out] == ["ok"]
+        assert out[0].outcome == "worked"
+        assert out[0].outcome_confidence >= 0.8
+
+    def test_explicit_failure_is_high_confidence(self, tmp_path):
+        # "that broke X" is in the negative vocab → failed at 0.8 → kept
+        # by the default failure-modes threshold of 0.5.
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="broke", turns=[
+            ("assistant", "", _edit_blob("/x/cost.py")),
+            ("user", "no, that broke the cost endpoint"),
+        ])
+        conn.commit()
+        out = find_failure_modes_for_file(conn, "/x/cost.py")
+        assert [m.session_id for m in out] == ["broke"]
+        assert out[0].outcome == "failed"
+        assert out[0].outcome_confidence >= 0.8
+
+    def test_agent_git_revert_on_same_file_is_mid_confidence_reverted(
+        self, tmp_path,
+    ):
+        # Action was an edit; the next assistant turn ran `git revert` on
+        # the same file → "reverted" at confidence 0.5 → kept by default.
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="undone", turns=[
+            ("assistant", "", _edit_blob("/x/cost.py")),
+            ("assistant", "", _bash_blob("git revert -n HEAD -- x/cost.py")),
+        ])
+        conn.commit()
+        out = find_failure_modes_for_file(conn, "/x/cost.py")
+        assert [m.session_id for m in out] == ["undone"]
+        assert out[0].outcome == "reverted"
+        assert 0.4 <= out[0].outcome_confidence < 0.8
+
+    def test_works_now_after_explicit_retest_is_high_confidence(self, tmp_path):
+        # Three user turns of neutral context-gathering, then an explicit
+        # positive on the 4th turn — within the default lookahead of 5.
+        # Old code would have returned "uncertain" (the 5 turns include
+        # the action's anchor); new code reaches the positive phrase and
+        # surfaces it at confidence 0.8.
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="late", turns=[
+            ("assistant", "", _edit_blob()),
+            ("user", "let me re-run the tests"),
+            ("user", "what command was that again?"),
+            ("user", "ok one sec"),
+            ("user", "works now, tests pass"),
+        ])
+        conn.commit()
+        out = find_sessions_where_action_worked(conn, action="Edit")
+        assert [m.session_id for m in out] == ["late"]
+        assert out[0].outcome == "worked"
+        assert out[0].outcome_confidence >= 0.8
+
+    def test_min_confidence_arg_clamps_to_unit_interval(self, tmp_path):
+        # Out-of-range values clamp into [0, 1] instead of raising — the
+        # service is a permissive read-side. Verified by passing -0.5
+        # (→ 0.0, accept anything) and 2.0 (→ 1.0, accept only
+        # deterministic events; transcript fallback never reaches that
+        # confidence in this codebase).
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="ok", turns=[
+            ("assistant", "", _edit_blob()),
+            ("user", "thanks"),
+        ])
+        conn.commit()
+        # min_confidence = -0.5 → 0.0; even silence would pass, "thanks"
+        # certainly does.
+        out_lo = find_sessions_where_action_worked(
+            conn, action="Edit", min_confidence=-0.5,
+        )
+        assert [m.session_id for m in out_lo] == ["ok"]
+        # min_confidence = 2.0 → 1.0; no transcript-fallback row clears
+        # 1.0 (reserved for the captured_events deterministic path).
+        out_hi = find_sessions_where_action_worked(
+            conn, action="Edit", min_confidence=2.0,
+        )
+        assert out_hi == []
+
+    def test_outcome_confidence_present_in_to_dict(self, tmp_path):
+        # JSON contract: outcome_confidence is always in the rendered
+        # match dict so a programmatic consumer can filter regardless of
+        # the CLI flag.
+        conn = _make_conn(tmp_path)
+        _seed_outcome_session(conn, session_id="ok", turns=[
+            ("assistant", "", _edit_blob()),
+            ("user", "perfect, ship it"),
+        ])
+        conn.commit()
+        out = find_sessions_where_action_worked(conn, action="Edit")
+        assert len(out) == 1
+        d = out[0].to_dict()
+        assert "outcome_confidence" in d
+        assert isinstance(d["outcome_confidence"], float)
+        assert d["outcome_confidence"] >= 0.8
+        # Round-trips through JSON.
+        json.dumps(d)
 
 
 def _telemetry_rows(conn):

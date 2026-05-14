@@ -41,6 +41,7 @@ __all__ = [
     "SessionMatch",
     "OutcomeMatch",
     "BudgetedResult",
+    "DEFAULT_MIN_OUTCOME_CONFIDENCE",
     "find_sessions_in_path",
     "find_sessions_touching_file",
     "search_past_decisions",
@@ -83,21 +84,37 @@ class SessionMatch:
 class OutcomeMatch(SessionMatch):
     """A discovery match annotated with an inferred outcome.
 
-    Extends :class:`SessionMatch` with three fields that say whether the
-    matched action *worked*, and the evidence for that judgement. The
-    inherited ``snippet`` stays ``None`` for outcome queries — the
-    evidence string carries the relevant excerpt instead.
+    Extends :class:`SessionMatch` with four fields that say whether the
+    matched action *worked*, the evidence for that judgement, and a
+    confidence score for the judgement. The inherited ``snippet`` stays
+    ``None`` for outcome queries — the evidence string carries the
+    relevant excerpt instead.
 
     ``outcome`` is one of:
 
-    * ``"worked"``    — a following user turn confirmed success, or the
-      session continued/ended with no revert and no complaint.
+    * ``"worked"``    — a following user turn explicitly confirmed
+      success (an in-vocabulary positive phrase), or — at lower
+      confidence — the session continued/ended with no revert and no
+      complaint.
     * ``"failed"``    — a following user turn reported it broke / was
-      wrong / wasn't what was asked.
+      wrong / wasn't what was asked (or emitted a negative emoji).
     * ``"reverted"``  — the change was undone (the user asked, or the
-      agent ran ``git revert`` / ``git reset --hard`` / ``git checkout --``).
+      agent ran ``git revert`` / ``git reset --hard`` / ``git checkout --``
+      / ``git restore``).
     * ``"uncertain"`` — the action was the last recorded turn, or the
       follow-up turns gave no clear signal.
+
+    ``outcome_confidence`` is in ``[0.0, 1.0]``:
+
+    * ``1.0`` — deterministic flag from the ``captured_events`` table
+      (future hook integration; not assigned by the transcript fallback).
+    * ``0.8`` — explicit in-vocabulary success/failure/revert phrase
+      from a user turn within the lookahead window.
+    * ``0.5`` — agent revert tool-call (e.g. ``git revert`` on the same
+      file) — strong but slightly weaker than an explicit user statement.
+    * ``0.3`` — "no complaint before session ended" — surface heuristic
+      that over-claims and is filtered out by the default 0.5 threshold.
+    * ``0.0`` — no signal at all (anchor was the session's last turn).
 
     The new fields are keyword-only so they can follow ``SessionMatch``'s
     defaulted ``snippet`` without dataclass field-ordering complaints.
@@ -106,6 +123,7 @@ class OutcomeMatch(SessionMatch):
     outcome: str            # "worked" | "failed" | "reverted" | "uncertain"
     outcome_evidence: str   # short human-readable justification + msg ref
     outcome_msg_id: int     # id of the message that established the outcome
+    outcome_confidence: float = 0.0  # [0.0, 1.0]; see class docstring
 
 
 @dataclass(frozen=True)
@@ -1018,34 +1036,66 @@ def search_past_decisions(
 # case-insensitively on word boundaries (so bare ``no`` doesn't fire on
 # "another" / "node" / "notes"); ``revert`` wins over ``negative`` wins
 # over ``positive`` when more than one class matches a message.
+#
+# A user-turn match against any of these phrases counts as an *explicit*
+# signal — see ``_OUTCOME_CONF_EXPLICIT`` in :func:`_classify_outcome`.
+# Silence in the same window is treated separately and earns a much lower
+# confidence score so callers can filter it out.
 OUTCOME_KEYWORDS: dict[str, tuple[str, ...]] = {
     "revert": (
         "undo", "undo that", "undo it",
         "revert", "revert that", "revert it",
         "roll back", "rollback", "roll that back",
         "take that back", "back it out", "back that out",
+        "try again", "try a different",
         "git revert", "git reset --hard", "git checkout --",
     ),
     "negative": (
         "no", "nope",
         "that broke", "you broke", "broke it", "broke the build", "broke the tests",
+        "broke", "broken",
         "still broken", "still failing", "still fails", "still errors",
         "doesn't work", "does not work", "didn't work", "did not work",
         "not working", "isn't working", "won't work", "wont work", "stopped working",
+        "failing", "tests fail", "test failed", "build failed",
         "wrong", "that's wrong", "thats wrong", "incorrect",
+        "mistake", "error",
         "not what i asked", "not what i wanted", "not what i meant",
         "that's not right", "thats not right", "that's not it", "thats not it",
         "no good", "doesn't help", "didn't help",
+        "regression", "regressed",
+        "❌", "👎",
     ),
     "positive": (
-        "thanks", "thank you", "thx",
+        "thanks", "thank you", "thx", "ty",
         "that worked", "it worked", "works now", "working now",
         "that works", "it works", "works great", "works perfectly",
+        "tests pass", "tests passed", "tests passing", "passes",
+        "fixed", "solved",
         "perfect", "nice", "great", "awesome", "excellent",
         "ship it", "lgtm", "looks good", "looks great", "love it",
         "exactly right", "that's it", "thats it", "nailed it",
+        "correct", "+1",
+        "👍", "🎉", "✅", "✓",
     ),
 }
+
+# The confidence we attribute to each signal kind. Kept as module
+# constants so tests can assert against them and a future tuning pass
+# can shift one without grepping the body of ``_classify_outcome``.
+_OUTCOME_CONF_DETERMINISTIC = 1.0  # captured_events flag (reserved)
+_OUTCOME_CONF_EXPLICIT = 0.8       # in-vocabulary phrase from a user turn
+_OUTCOME_CONF_TOOL_REVERT = 0.5    # agent ran a git revert / reset / restore
+_OUTCOME_CONF_SILENCE = 0.3        # "no complaint before session ended"
+_OUTCOME_CONF_NONE = 0.0           # anchor was the last recorded turn
+
+# Default minimum confidence for the two public outcome functions.
+# Surface a confirmed outcome only when we have explicit or tool-level
+# evidence (≥ 0.5). The 0.3 "silence ⇒ worked" rows stay in the data but
+# are filtered out by default so the discovery commands stop pretending
+# every quiet session was a success. Power-users opt back in with
+# ``--min-confidence 0.3`` / ``min_confidence=0.3``.
+DEFAULT_MIN_OUTCOME_CONFIDENCE = 0.5
 
 # Benign ``no <noun>`` bigrams — "no problem", "no worries" etc. are not
 # complaints, so a bare-``no`` negative match immediately followed by one
@@ -1077,12 +1127,21 @@ _OUTCOME_LOOKAHEAD = 5
 
 
 def _compile_keyword_re(words: tuple[str, ...]) -> re.Pattern[str]:
-    """Build a word-boundary alternation regex, longest phrase first."""
+    """Build an alternation regex, longest phrase first.
+
+    Phrases that start or end with a word character get a ``\\b`` boundary
+    on that side (so bare ``no`` doesn't fire on "another" / "node"). The
+    boundary is dropped for emoji and punctuation tokens (``❌`` / ``+1``)
+    where ``\\b`` would never match in Python's regex.
+    """
     parts = sorted({w.strip() for w in words if w.strip()}, key=len, reverse=True)
-    return re.compile(
-        r"\b(?:" + "|".join(re.escape(p) for p in parts) + r")\b",
-        re.IGNORECASE,
-    )
+    alts: list[str] = []
+    for p in parts:
+        body = re.escape(p)
+        left = r"\b" if p[0].isalnum() else ""
+        right = r"\b" if p[-1].isalnum() else ""
+        alts.append(left + body + right)
+    return re.compile("(?:" + "|".join(alts) + ")", re.IGNORECASE)
 
 
 _KW_RE: dict[str, re.Pattern[str]] = {
@@ -1167,7 +1226,7 @@ def _classify_outcome(
     messages: Sequence[Any],
     anchor_idx: int,
     lookahead: int = _OUTCOME_LOOKAHEAD,
-) -> tuple[str, str, int]:
+) -> tuple[str, str, int, float]:
     """Infer the outcome of the action at ``messages[anchor_idx]``.
 
     ``messages`` must be the session's rows in conversation order (sorted
@@ -1177,8 +1236,22 @@ def _classify_outcome(
     speak for the parent session), and look at up to ``lookahead`` real
     user turns plus any agent revert command in between.
 
-    Returns ``(outcome, evidence, outcome_msg_id)``. ``outcome`` is one of
-    ``"worked"`` / ``"failed"`` / ``"reverted"`` / ``"uncertain"``.
+    Returns ``(outcome, evidence, outcome_msg_id, outcome_confidence)``.
+    ``outcome`` is one of ``"worked"`` / ``"failed"`` / ``"reverted"`` /
+    ``"uncertain"``. ``outcome_confidence`` is in ``[0.0, 1.0]`` — see the
+    :class:`OutcomeMatch` docstring for the rubric.
+
+    Confidence ladder (transcript fallback only — deterministic 1.0 is
+    reserved for ``captured_events``):
+
+    * explicit in-vocabulary user phrase ⇒ ``_OUTCOME_CONF_EXPLICIT``
+      (currently 0.8)
+    * agent revert tool call (``git revert`` / ``reset`` / ``restore``)
+      ⇒ ``_OUTCOME_CONF_TOOL_REVERT`` (0.5)
+    * session continued / ended with no signal ⇒
+      ``_OUTCOME_CONF_SILENCE`` (0.3) for the ``"worked"`` reading,
+      ``_OUTCOME_CONF_NONE`` (0.0) when the anchor was already the last
+      turn.
     """
     anchor_id = int(_row_value(messages[anchor_idx], "id", 0) or 0)
 
@@ -1188,6 +1261,7 @@ def _classify_outcome(
             "uncertain",
             "action is the last recorded turn in the session — no follow-up to judge",
             anchor_id,
+            _OUTCOME_CONF_NONE,
         )
 
     user_turns_seen = 0
@@ -1202,6 +1276,7 @@ def _classify_outcome(
                     "reverted",
                     f"agent ran `{_trim_inline(cmd, 120)}` after the action",
                     mid,
+                    _OUTCOME_CONF_TOOL_REVERT,
                 )
             continue
         if role != "user":
@@ -1219,30 +1294,39 @@ def _classify_outcome(
             continue
         excerpt = _trim_inline(text, 160)
         if klass == "revert":
-            return ("reverted", f"user wrote: '{excerpt}'", mid)
+            return ("reverted", f"user wrote: '{excerpt}'", mid, _OUTCOME_CONF_EXPLICIT)
         if klass == "negative":
-            return ("failed", f"user wrote: '{excerpt}'", mid)
-        return ("worked", f"user wrote: '{excerpt}'", mid)
+            return ("failed", f"user wrote: '{excerpt}'", mid, _OUTCOME_CONF_EXPLICIT)
+        return ("worked", f"user wrote: '{excerpt}'", mid, _OUTCOME_CONF_EXPLICIT)
 
     # Window exhausted (or session ended) with no explicit signal.
     if user_turns_seen == 0:
         # The session continued — more agent work, tool calls, maybe a
-        # sub-agent — but the user never came back to complain or ask for
-        # a revert. Treat that silence as acceptance.
+        # sub-agent — but the user never came back to complain or ask
+        # for a revert. The old heuristic called that "worked"
+        # confidently; we still return ``"worked"`` for backward
+        # compatibility but stamp it with ``_OUTCOME_CONF_SILENCE`` so
+        # callers filter it out by default.
         return (
             "worked",
             "session continued after the action with no user complaint or revert",
             int(_row_value(messages[-1], "id", anchor_id) or anchor_id),
+            _OUTCOME_CONF_SILENCE,
         )
     return (
         "uncertain",
         f"{user_turns_seen} follow-up user turn(s) but none confirmed or rejected the action",
         last_user_id,
+        _OUTCOME_CONF_NONE,
     )
 
 
 def _row_to_outcome_match(
-    row: sqlite3.Row, outcome: str, evidence: str, outcome_msg_id: int
+    row: sqlite3.Row,
+    outcome: str,
+    evidence: str,
+    outcome_msg_id: int,
+    outcome_confidence: float = 0.0,
 ) -> OutcomeMatch:
     return OutcomeMatch(
         session_id=row["session_id"],
@@ -1257,6 +1341,7 @@ def _row_to_outcome_match(
         outcome=outcome,
         outcome_evidence=evidence,
         outcome_msg_id=int(outcome_msg_id),
+        outcome_confidence=float(outcome_confidence),
     )
 
 
@@ -1266,6 +1351,7 @@ def _outcome_matches_for(
     *,
     wanted_outcomes: set[str],
     limit: int,
+    min_confidence: float = DEFAULT_MIN_OUTCOME_CONFIDENCE,
 ) -> list[OutcomeMatch]:
     """Back half shared by the two outcome functions.
 
@@ -1274,8 +1360,9 @@ def _outcome_matches_for(
     each session — newest ``last_ts`` first — we pull the rows from the
     anchor's ``seq`` onward, classify the outcome (the first row is the
     anchor), and keep the session when ``outcome`` is in
-    ``wanted_outcomes``. ``limit`` (> 0) caps the count and lets us stop
-    loading early once we've got enough.
+    ``wanted_outcomes`` *and* ``outcome_confidence >= min_confidence``.
+    ``limit`` (> 0) caps the count and lets us stop loading early once
+    we've got enough.
     """
     if not anchor_seq_by_fk:
         return []
@@ -1297,10 +1384,14 @@ def _outcome_matches_for(
         ).fetchall()
         if not msg_rows:
             continue
-        outcome, evidence, msg_id = _classify_outcome(msg_rows, 0)
+        outcome, evidence, msg_id, confidence = _classify_outcome(msg_rows, 0)
         if outcome not in wanted_outcomes:
             continue
-        out.append(_row_to_outcome_match(meta, outcome, evidence, msg_id))
+        if confidence < min_confidence:
+            continue
+        out.append(
+            _row_to_outcome_match(meta, outcome, evidence, msg_id, confidence),
+        )
         if limit and limit > 0 and len(out) >= limit:
             break
     return out
@@ -1314,6 +1405,7 @@ def find_sessions_where_action_worked(
     file_path: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float = DEFAULT_MIN_OUTCOME_CONFIDENCE,
 ) -> list[OutcomeMatch]:
     """Sessions where ``action`` was performed and the next user turn confirmed success.
 
@@ -1326,7 +1418,11 @@ def find_sessions_where_action_worked(
     For each candidate session, the *last* message matching ``action`` is
     the anchor; the outcome is inferred by walking forward from it (see
     :func:`_classify_outcome`). Only sessions whose inferred outcome is
-    ``"worked"`` are returned, sorted by ``last_ts`` DESC.
+    ``"worked"`` AND whose ``outcome_confidence >= min_confidence`` are
+    returned, sorted by ``last_ts`` DESC. Default ``min_confidence`` is
+    ``0.5`` — explicit-phrase confirmations clear it, "silence ⇒ worked"
+    rows (confidence 0.3) do not. Pass ``0.0`` to restore the old
+    "anything that didn't break is a success" behaviour.
 
     Parameters
     ----------
@@ -1345,10 +1441,15 @@ def find_sessions_where_action_worked(
         :func:`parse_since` accepts. Raises ``ValueError`` if malformed.
     limit:
         Max rows returned. Negative or zero means no limit.
+    min_confidence:
+        Minimum ``outcome_confidence`` for a row to be returned. Defaults
+        to :data:`DEFAULT_MIN_OUTCOME_CONFIDENCE` (``0.5``). Clamped into
+        ``[0.0, 1.0]``.
     """
     _ensure_row_factory(conn)
     if not action or not action.strip():
         return []
+    min_confidence = max(0.0, min(1.0, float(min_confidence)))
     needle = action.strip()
     since_iso = parse_since(since)
 
@@ -1388,6 +1489,7 @@ def find_sessions_where_action_worked(
 
     return _outcome_matches_for(
         conn, anchor_seq_by_fk, wanted_outcomes={"worked"}, limit=limit,
+        min_confidence=min_confidence,
     )
 
 
@@ -1397,6 +1499,7 @@ def find_failure_modes_for_file(
     *,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float = DEFAULT_MIN_OUTCOME_CONFIDENCE,
 ) -> list[OutcomeMatch]:
     """Sessions where editing ``file_path`` led to a follow-up correction.
 
@@ -1404,8 +1507,12 @@ def find_failure_modes_for_file(
     MultiEdit / NotebookEdit tool call whose arguments reference
     ``file_path``. The anchor is the *last* such edit; the outcome is
     inferred forward from it. Sessions whose inferred outcome is
-    ``"failed"`` or ``"reverted"`` are returned, sorted by ``last_ts``
-    DESC — i.e. "here's where touching this file went wrong, and why".
+    ``"failed"`` or ``"reverted"`` AND whose ``outcome_confidence >=
+    min_confidence`` are returned, sorted by ``last_ts`` DESC — i.e.
+    "here's where touching this file went wrong, and why". Default
+    ``min_confidence`` is ``0.5`` — both ``failed`` (explicit phrase,
+    confidence 0.8) and ``reverted`` (explicit phrase 0.8 or agent
+    revert tool call 0.5) clear it.
 
     Parameters
     ----------
@@ -1418,10 +1525,15 @@ def find_failure_modes_for_file(
         :func:`parse_since`. Raises ``ValueError`` if malformed.
     limit:
         Max rows returned. Negative or zero means no limit.
+    min_confidence:
+        Minimum ``outcome_confidence`` for a row to be returned. Defaults
+        to :data:`DEFAULT_MIN_OUTCOME_CONFIDENCE` (``0.5``). Clamped into
+        ``[0.0, 1.0]``.
     """
     _ensure_row_factory(conn)
     resolved = _resolve_input_path(file_path)
     since_iso = parse_since(since)
+    min_confidence = max(0.0, min(1.0, float(min_confidence)))
 
     where = ["m.tools_json LIKE ?"]
     params: list[Any] = [f"%{resolved}%"]
@@ -1449,6 +1561,7 @@ def find_failure_modes_for_file(
 
     return _outcome_matches_for(
         conn, anchor_seq_by_fk, wanted_outcomes={"failed", "reverted"}, limit=limit,
+        min_confidence=min_confidence,
     )
 
 

@@ -89,6 +89,7 @@ def _outcome_match(
     outcome: str = "worked",
     outcome_evidence: str = "user wrote: 'thanks, that worked'",
     outcome_msg_id: int = 42,
+    outcome_confidence: float = 0.8,
     cost_usd: float = 0.123456789,
 ) -> discovery.OutcomeMatch:
     return discovery.OutcomeMatch(
@@ -104,6 +105,7 @@ def _outcome_match(
         outcome=outcome,
         outcome_evidence=outcome_evidence,
         outcome_msg_id=outcome_msg_id,
+        outcome_confidence=outcome_confidence,
     )
 
 
@@ -200,19 +202,23 @@ class _RecordingDiscovery:
 
     def _find_sessions_where_action_worked(
         self, conn, *, action, project=None, file_path=None, since=None, limit=20,
+        min_confidence=discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE,
     ) -> list[discovery.SessionMatch]:
         self.find_sessions_where_action_worked_calls.append({
             "conn": conn, "action": action, "project": project,
             "file_path": file_path, "since": since, "limit": limit,
+            "min_confidence": min_confidence,
         })
         self._maybe_raise()
         return list(self.returns)
 
     def _find_failure_modes_for_file(
         self, conn, file_path, *, since=None, limit=20,
+        min_confidence=discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE,
     ) -> list[discovery.SessionMatch]:
         self.find_failure_modes_for_file_calls.append({
             "conn": conn, "file_path": file_path, "since": since, "limit": limit,
+            "min_confidence": min_confidence,
         })
         self._maybe_raise()
         return list(self.returns)
@@ -593,6 +599,7 @@ def test_outcome_match_rendered_with_outcome_keys(
         _outcome_match(
             session_id="s-A", outcome="worked",
             outcome_evidence="user wrote: 'perfect'", outcome_msg_id=99,
+            outcome_confidence=0.8,
             cost_usd=0.123456789,
         ),
     ]
@@ -601,12 +608,13 @@ def test_outcome_match_rendered_with_outcome_keys(
     assert set(row.keys()) == {
         "session_id", "project_slug", "project_path", "provider",
         "first_ts", "last_ts", "message_count", "cost_usd", "snippet",
-        "outcome", "outcome_evidence", "outcome_msg_id",
+        "outcome", "outcome_evidence", "outcome_msg_id", "outcome_confidence",
     }
     assert row["session_id"] == "s-A"
     assert row["outcome"] == "worked"
     assert row["outcome_evidence"] == "user wrote: 'perfect'"
     assert row["outcome_msg_id"] == 99
+    assert row["outcome_confidence"] == 0.8
     assert row["cost_usd"] == round(0.123456789, 6)
     assert row["snippet"] is None
 
@@ -624,6 +632,40 @@ def test_outcome_tools_validate_inputs(
         mcp_server.find_failure_modes_for_file_impl(file_path="")
     with pytest.raises(ValueError, match="limit"):
         mcp_server.find_failure_modes_for_file_impl(file_path="/x/y.py", limit=-1)
+
+
+def test_outcome_min_confidence_plumbing(
+    empty_store: Path, discovery_stub: _RecordingDiscovery,
+) -> None:
+    # None → service default (0.5).
+    mcp_server.find_sessions_where_action_worked_impl(action="Edit")
+    assert (
+        discovery_stub.find_sessions_where_action_worked_calls[-1]["min_confidence"]
+        == 0.5
+    )
+    # Explicit value passes through.
+    mcp_server.find_sessions_where_action_worked_impl(
+        action="Edit", min_confidence=0.3,
+    )
+    assert (
+        discovery_stub.find_sessions_where_action_worked_calls[-1]["min_confidence"]
+        == 0.3
+    )
+    # Out-of-range values clamp into [0, 1].
+    mcp_server.find_failure_modes_for_file_impl(
+        file_path="/x/y.py", min_confidence=-1.0,
+    )
+    assert (
+        discovery_stub.find_failure_modes_for_file_calls[-1]["min_confidence"]
+        == 0.0
+    )
+    mcp_server.find_failure_modes_for_file_impl(
+        file_path="/x/y.py", min_confidence=5.0,
+    )
+    assert (
+        discovery_stub.find_failure_modes_for_file_calls[-1]["min_confidence"]
+        == 1.0
+    )
 
 
 # ── tool registration ──────────────────────────────────────────────────────
