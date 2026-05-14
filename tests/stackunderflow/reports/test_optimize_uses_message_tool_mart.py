@@ -270,6 +270,147 @@ def test_empty_mart_falls_through_to_raw_scan(tmp_path):
     assert len(findings) == 1 and findings[0].pattern_id == "junk_reads"
 
 
+def test_low_read_edit_parity_mart_vs_raw_scan(tmp_path):
+    """Same exploration-only session → identical finding via mart and via raw scan.
+
+    Raw-scan counts Read names off ``tools_json`` (one increment per
+    name occurrence); the mart counts one row per call. The seed below
+    keeps the two equivalent — one ``tools_json: ["Read"]`` per
+    assistant message, one mart row per message — so the per-session
+    Read total matches across paths.
+    """
+    n_reads = LOW_READ_EDIT_READ_FLOOR + 3
+
+    # ── A) raw-scan path ──
+    raw_conn = _connect(tmp_path / "raw.db")
+    raw_conn.execute("INSERT INTO sessions (id, project_id, session_id) VALUES (1, 1, 'sess-explore')")
+    for i in range(n_reads):
+        # Raw-scan path keys on `tools_json` — list every Read by name.
+        raw_conn.execute(
+            "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+            " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
+            " content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid) "
+            "VALUES (1, ?, '2026-04-10T10:00:00Z', 'assistant', 'claude-sonnet-4-6', "
+            " 0, 0, 0, 0, '', '[\"Read\"]', '{}', 0, ?, NULL)",
+            (i, f"u{i}"),
+        )
+    raw_findings = _detect_low_read_edit_ratio(raw_conn, scope=_april_scope())
+
+    # ── B) mart path ──
+    mart_conn = _connect(tmp_path / "mart.db")
+    for i in range(n_reads):
+        _insert_mt(mart_conn, message_id=10 + i, tool_name="Read",
+                   file_path=f"/f{i}", session_id="sess-explore")
+    mart_findings = _detect_low_read_edit_ratio(mart_conn, scope=_april_scope())
+
+    assert len(raw_findings) == len(mart_findings) == 1
+    assert raw_findings[0].pattern_id == mart_findings[0].pattern_id == "low_read_edit_ratio"
+    assert raw_findings[0].affected_count == mart_findings[0].affected_count == 1
+    assert raw_findings[0].severity == mart_findings[0].severity
+    # Both report exactly the same Read total — n_reads — even though
+    # ``session_fk`` differs (int vs string). The waste estimate is a
+    # pure function of that total.
+    assert raw_findings[0].estimated_waste_tokens == mart_findings[0].estimated_waste_tokens
+
+
+def test_ghost_agents_parity_mart_vs_raw_scan(tmp_path, monkeypatch):
+    """Same registered-agent set + spawn pattern → identical ghost set.
+
+    Raw-scan substring-matches ``"subagent_type":"<name>"`` against
+    every ``raw_json`` whose ``tools_json`` mentions ``Task``; the mart
+    SELECTs DISTINCT ``file_path`` from ``Task`` rows. Both should
+    bucket the *same* agent as ghosted.
+    """
+    agents_root = tmp_path / "agents"
+    monkeypatch.setattr(
+        "stackunderflow.reports.optimize._registered_agents",
+        lambda: [
+            ("alpha", agents_root / "alpha.md"),
+            ("beta", agents_root / "beta.md"),
+            ("gamma", agents_root / "gamma.md"),
+        ],
+    )
+
+    # ── A) raw-scan path: ``alpha`` and ``beta`` invoked; ``gamma`` ghost ──
+    raw_conn = _connect(tmp_path / "raw.db")
+    raw_conn.execute("INSERT INTO sessions (id, project_id, session_id) VALUES (1, 1, 'sess-A')")
+    raw_conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
+        " content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid) "
+        "VALUES (1, 0, '2026-04-10T10:00:00Z', 'assistant', 'claude-sonnet-4-6', "
+        " 0, 0, 0, 0, '', '[\"Task\"]', ?, 0, 'u1', NULL)",
+        (json.dumps({"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Task", "input": {"subagent_type": "alpha"}},
+            {"type": "tool_use", "name": "Task", "input": {"subagent_type": "beta"}},
+        ]}}),),
+    )
+    raw_findings = _detect_ghost_agents(raw_conn, scope=_april_scope())
+
+    # ── B) mart path: same Task spawns recorded in message_tool_mart ──
+    mart_conn = _connect(tmp_path / "mart.db")
+    _insert_mt(mart_conn, message_id=100, tool_name="Task", file_path="alpha", call_index=0)
+    _insert_mt(mart_conn, message_id=100, tool_name="Task", file_path="beta", call_index=1)
+    mart_findings = _detect_ghost_agents(mart_conn, scope=_april_scope())
+
+    assert len(raw_findings) == len(mart_findings) == 1
+    raw_names = {a["name"] for a in raw_findings[0].details["agents"]}
+    mart_names = {a["name"] for a in mart_findings[0].details["agents"]}
+    assert raw_names == mart_names == {"gamma"}
+    assert raw_findings[0].affected_count == mart_findings[0].affected_count == 1
+    assert raw_findings[0].severity == mart_findings[0].severity
+
+
+def test_bash_output_parity_mart_vs_raw_scan(tmp_path, monkeypatch):
+    """Same oversized Bash result → identical finding via mart and via raw scan.
+
+    The raw-scan path sizes the *following* user message's
+    ``content_text`` as a proxy for the tool result; the mart path uses
+    the ``byte_count`` it pre-computed off the ``tool_result`` block. We
+    lower the threshold to make the test cheap, but the underlying
+    detection has to agree — both paths should fire.
+    """
+    monkeypatch.setattr(
+        "stackunderflow.reports.optimize.BASH_OUTPUT_BYTES_THRESHOLD", 50,
+    )
+    big_text = "x" * 100  # 100 bytes — clears the 50-byte test threshold
+
+    # ── A) raw-scan path ──
+    raw_conn = _connect(tmp_path / "raw.db")
+    raw_conn.execute("INSERT INTO sessions (id, project_id, session_id) VALUES (1, 1, 'sess-A')")
+    raw_conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
+        " content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid) "
+        "VALUES (1, 0, '2026-04-10T10:00:00Z', 'assistant', 'claude-sonnet-4-6', "
+        " 0, 0, 0, 0, '', '[\"Bash\"]', ?, 0, 'u1', NULL)",
+        (json.dumps({"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+        ]}}),),
+    )
+    raw_conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, "
+        " content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid) "
+        "VALUES (1, 1, '2026-04-10T10:01:00Z', 'user', 'claude-sonnet-4-6', "
+        " 0, 0, 0, 0, ?, '[]', '{}', 0, 'u2', NULL)",
+        (big_text,),
+    )
+    raw_findings = _detect_bash_output_limits(raw_conn, scope=_april_scope())
+
+    # ── B) mart path: one Bash row whose byte_count clears the threshold ──
+    mart_conn = _connect(tmp_path / "mart.db")
+    _insert_mt(mart_conn, message_id=100, tool_name="Bash", byte_count=100)
+    mart_findings = _detect_bash_output_limits(mart_conn, scope=_april_scope())
+
+    assert len(raw_findings) == len(mart_findings) == 1
+    assert raw_findings[0].pattern_id == mart_findings[0].pattern_id == "bash_output_limits"
+    assert raw_findings[0].affected_count == mart_findings[0].affected_count == 1
+    assert raw_findings[0].severity == mart_findings[0].severity
+    # Both paths read 100 bytes for the one oversized call → identical estimate.
+    assert raw_findings[0].estimated_waste_tokens == mart_findings[0].estimated_waste_tokens
+
+
 def test_all_detectors_no_crash_on_empty_store(tmp_path, monkeypatch):
     """Empty store (no messages, no mart) → every detector returns []."""
     conn = _connect(tmp_path / "store.db")
@@ -278,3 +419,62 @@ def test_all_detectors_no_crash_on_empty_store(tmp_path, monkeypatch):
     assert _detect_bash_output_limits(conn, scope=_april_scope()) == []
     assert _detect_low_read_edit_ratio(conn, scope=_april_scope()) == []
     assert _detect_ghost_agents(conn, scope=_april_scope()) == []
+
+
+# ── all 4 detectors bypass raw_json when mart is populated ──────────────
+
+
+def test_all_detectors_skip_raw_json_when_mart_populated(tmp_path, monkeypatch):
+    """When ``message_tool_mart`` has rows, none of the 4 migrated detectors
+    fall back to the raw ``messages`` scan.
+
+    Locks in the v011 migration contract: the mart fully *replaces* the
+    raw-json parse for ``junk_reads``, ``bash_output_limits``,
+    ``low_read_edit_ratio`` and ``ghost_agents``. We seed the mart with
+    the exact rows each detector needs, leave ``messages`` empty, and
+    confirm every detector still emits its finding — proving the mart
+    path is self-sufficient (a raw-scan path that depended on
+    ``messages`` would emit nothing here).
+    """
+    conn = _connect(tmp_path / "store.db")
+    monkeypatch.setattr(
+        "stackunderflow.reports.optimize._registered_agents",
+        lambda: [
+            ("registered", tmp_path / "registered.md"),
+            ("ghosty", tmp_path / "ghosty.md"),
+        ],
+    )
+
+    # junk_reads — same file Read JUNK_READ_REPEAT_THRESHOLD times.
+    for i in range(JUNK_READ_REPEAT_THRESHOLD):
+        _insert_mt(conn, message_id=100 + i, tool_name="Read", file_path="/repo/hot.py")
+
+    # low_read_edit — sess-explore has many Reads, zero Edits.
+    for i in range(LOW_READ_EDIT_READ_FLOOR + 2):
+        _insert_mt(conn, message_id=200 + i, tool_name="Read",
+                   file_path=f"/f{i}", session_id="sess-explore")
+
+    # bash_output_limits — oversized Bash byte_count.
+    _insert_mt(conn, message_id=300, tool_name="Bash",
+               byte_count=optimize_mod.BASH_OUTPUT_BYTES_THRESHOLD + 1,
+               session_id="sess-bash")
+
+    # ghost_agents — only ``registered`` was invoked via Task; ``ghosty`` wasn't.
+    _insert_mt(conn, message_id=400, tool_name="Task", file_path="registered",
+               session_id="sess-ghost")
+
+    # ── precondition: no messages rows ──
+    assert conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"] == 0
+
+    # ── all 4 detectors still fire — proving they're mart-only when populated ──
+    jr = _detect_junk_reads(conn, scope=_april_scope())
+    le = _detect_low_read_edit_ratio(conn, scope=_april_scope())
+    bo = _detect_bash_output_limits(conn, scope=_april_scope())
+    ga = _detect_ghost_agents(conn, scope=_april_scope())
+
+    assert len(jr) == 1 and jr[0].pattern_id == "junk_reads"
+    assert len(le) == 1 and le[0].pattern_id == "low_read_edit_ratio"
+    assert len(bo) == 1 and bo[0].pattern_id == "bash_output_limits"
+    assert len(ga) == 1 and ga[0].pattern_id == "ghost_agents"
+    # ``ghosty`` is the only un-invoked registered agent.
+    assert {a["name"] for a in ga[0].details["agents"]} == {"ghosty"}
