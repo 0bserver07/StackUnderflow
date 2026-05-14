@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `optimize` detectors lock in full `message_tool_mart` migration
+
+Closes HANDOFF follow-up #2. The four per-message detectors in `stackunderflow/reports/optimize.py` (`junk_reads`, `bash_output_limits`, `low_read_edit_ratio`, `ghost_agents`) gained their `message_tool_mart` fast paths in v011 (post-v0.7 round, commit `c861709`) — when the mart is populated, each detector reads its signal off the indexed mart instead of re-parsing `messages.raw_json` across every monthly partition. This release adds parity tests that prove the mart and raw-scan paths produce byte-equivalent findings on the same fixture data, plus a side-by-side perf benchmark (`bench_optimize_mart.py`) for regression tracking.
+
+Empty-mart fallback is preserved unchanged: when `message_tool_mart` has zero rows (fresh install, no backfill yet) the detectors fall through to the original raw-`messages` scan path so users without an applied ETL pipeline keep working.
+
+- **Parity tests** in `tests/stackunderflow/reports/test_optimize_uses_message_tool_mart.py` — 4 new tests, one per detector. Each seeds a separate store for each path (raw `messages` rows for the fallback, `message_tool_mart` rows for the mart path) and asserts `pattern_id`, `affected_count`, `severity`, and `estimated_waste_tokens` match. The `bash_output_limits` test patches the byte threshold down to 50 to keep fixture size cheap. Plus a fifth test (`test_all_detectors_skip_raw_json_when_mart_populated`) that seeds *only* the mart (zero `messages` rows) and verifies every detector still fires — proving the mart path is self-sufficient when populated.
+- **Perf bench** `bench_optimize_mart.py` (repo root, ignored by tests). Runs each detector twice on a side-loaded copy of the user's store: once with `message_tool_mart` populated, once with it emptied (plus `tool_mart` emptied so the Wave 5 short-circuit doesn't intercept). On a real-store-shape DB (78,763 mart rows, 247,278 messages across 14 monthly partitions), the speedups land at `junk_reads` 270×, `bash_output_limits` 1242×, `low_read_edit` 490×, `ghost_agents` 822× — all well above the 10× target. The numbers also confirm the mart path is **more precise** for `bash_output_limits`: the raw scan sized the whole following user-message `content_text` as the tool result (over-counts when a turn carries multiple tool results), while the mart's `byte_count` is the matched-by-`tool_use_id` size of the actual `tool_result` block.
+
+No production-code change required — the migration shipped in v011. This release locks the contract in with tests and a reproducible perf measurement.
+
 ## [0.7.1] - 2026-05-13
 
 ### Added — `init --install-skills` flag for the shipped SKILL.md files
