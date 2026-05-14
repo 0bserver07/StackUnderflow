@@ -12,8 +12,9 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
-import numpy as np
 import pytest
+
+np = pytest.importorskip("numpy")
 
 from stackunderflow.services import discovery_embeddings as emb
 from stackunderflow.store import db, schema

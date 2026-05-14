@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import numpy as np
 import pytest
+
+np = pytest.importorskip("numpy")
 
 from stackunderflow.services import discovery_embeddings
 from stackunderflow.services.discovery import (
