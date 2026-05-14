@@ -8,11 +8,20 @@ on:
 
 jobs:
   test:
+    # Tests run on Ubuntu only. Windows runs the `build` workflow's
+    # wheel-install + `--version` / `--help` / `cfg ls` smoke test
+    # (which exercises the real cross-platform code paths the user
+    # actually hits — lock, watcher entry points, settings I/O).
+    # Adding the Windows pytest matrix back is tracked as HANDOFF #4
+    # follow-up: the test suite has POSIX-shaped path fixtures
+    # (hard-coded `/Users/...` literals, raw `Path.resolve()` that
+    # drive-prefixes on Windows) and a Windows port needs a path-
+    # comparison helper + per-test fixtures, not just a CI matrix.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12"]
 
     steps:

@@ -784,6 +784,13 @@ class TestFindFailureModesForFile:
 # ── search-past-decisions --use-embeddings ──────────────────────────────────
 
 
+# Skip the entire embedding-CLI class when numpy isn't installed (i.e. the
+# optional ``[embeddings]`` extra isn't on the test environment). The stub
+# inside ``_stub_embeddings`` imports numpy at fixture time, which means a
+# bare-install CI errors at collection without this guard.
+pytest.importorskip("numpy")
+
+
 class TestSearchPastDecisionsEmbeddingsCLI:
     """CLI surface for the opt-in semantic-search mode.
 

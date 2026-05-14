@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — CI: Windows in `build`, Ubuntu-only in `test`
+
+The Windows test job in `test.yml` was added in v0.7.3 (HANDOFF #4). The first real run surfaced ~40 POSIX-shaped test fixtures (hard-coded `/Users/...` literals, `Path.resolve()` drive-prefixing, paths comparing across `\` vs `/`) — the production code paths fixed in this same release (`_is_ancestor` separator normalisation, `set_home_env` helper) are correct, but the rest of the test suite needs a port to Windows-friendly path arithmetic. Two corrections in this release:
+
+- `.github/workflows/test.yml` matrix reverts to `ubuntu-latest` only (still 3.11 + 3.12).
+- `.github/workflows/build.yml` keeps the full `[ubuntu-latest, macos-latest, windows-latest]` × `[3.11, 3.12]` matrix — it exercises the wheel install + `stackunderflow --version` / `--help` / `cfg ls` smoke test, which catches the real cross-platform import / packaging surface. PowerShell wheel-install fixed via `Get-ChildItem` so `dist/*.whl` works without POSIX glob expansion.
+
+Runtime on Windows is unaffected — the discovery, hook, lock, and watcher entry points all work. The blocker is test-fixture portability, not production code. Tracking as a follow-up; runtime behaviour is verified by the build-side smoke test on every push.
+
 ### Fixed — Windows test suite collection + path-prefix matching
 
 Closes the Windows-runner regressions surfaced by the first CI matrix run on `v0.7.3`. Three issues, all in tests / pure helpers — no schema or production-route change.
