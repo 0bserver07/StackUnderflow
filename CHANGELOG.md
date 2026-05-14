@@ -35,6 +35,22 @@ The MCP server (`stackunderflow/mcp/server.py`) goes from 3 tools to 8: `session
 
 ---
 
+### Added — beta normalizer pricing coverage
+
+Closes HANDOFF follow-up #3. Every beta normalizer that emits a known
+upstream model id now resolves through the canonical
+`stackunderflow.infra.costs.RATE_CARD` and stamps `cost_source='rate_card'`
+on its events instead of falling back to `'unknown'`.
+
+- **17 new entries in `_CANONICAL_IDS` (`stackunderflow/infra/costs.py`).**
+  Qwen family (8): `qwen-max`, `qwen-max-longcontext`, `qwen-plus`, `qwen-turbo`, `qwen-coder`, `qwen-coder-plus`, `qwen3-coder`, `qwen-auto`. Gemini family (8): `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-1.5-pro`, `gemini-1.5-flash`, `gemini-3.0-pro`, `gemini-3.1-pro`, `gemini-auto`. Plus the un-dated alias `claude-3-5-sonnet` (emitted by Kiro-style adapters that normalise `claude.3.5.sonnet` → `claude-3-5-sonnet`). Rates come from the matching provider pricer (`infra/providers/qwen.py`, `infra/providers/gemini.py`, `infra/providers/anthropic.py`) — no new dollar figures invented; existing tables are now reachable through `RATE_CARD`.
+- **`_provider_for_model` routes the legacy single-arg helpers correctly.** Previously every non-Claude/non-GPT id fell through to the Anthropic Sonnet fallback (e.g. `get_model_pricing("qwen-coder-plus")` returned Sonnet rates). The function now recognises `qwen-*` and `gemini-*` prefixes and dispatches to the right pricer.
+- **`stackunderflow/etl/normalize/base.py::_PROVIDER_TO_PRICER`** gains entries for every registered normalizer key so beta-shape rows price against their own provider's table. Without this fix a `qwen-coder-plus` row priced via the Anthropic pricer would have over-counted by roughly 3–4× even after RATE_CARD membership was satisfied (input rate $3/M vs $1.20/M, output $15/M vs $3.60/M).
+- **2 new test classes in `tests/stackunderflow/etl/normalize/test_beta_normalizers.py` (+27 cases).** `test_beta_normalizer_fixture_emits_rate_card_cost_source` walks each fixture-backed beta normalizer (10 cases) and asserts at least one `rate_card` event and zero `unknown` events. `test_beta_model_id_in_canonical_rate_card` confirms every representative beta model id (17 cases) is present in `RATE_CARD` with strictly positive input + output rates and that `get_model_pricing(model_id)` round-trips the same rates.
+- **`docs/beta-normalizer-drift.md`** marks the qwen / gemini `cost_source=unknown` notes as resolved.
+
+---
+
 ### Added — Wave 5 ETL follow-ups (5 features)
 
 The five HANDOFF follow-ups deferred from v0.7.0 all land together: lower-grain marts unblock the per-tool/per-command cost paths, the `POST /api/etl/backfill` route closes the dashboard's 404 fallback, all 13 beta normalizers are validated against real-shape fixtures, the watcher gets a single-instance lock, and the messages table moves behind a monthly-partitioned UNION view. Migration v007 (lower-grain marts) and v008 (messages partitioning) both ship; the maintainer applies v008 to the real `~/.stackunderflow/store.db` manually per the documented rollout.
