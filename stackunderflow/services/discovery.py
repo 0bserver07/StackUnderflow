@@ -254,18 +254,38 @@ def _project_fs_path(stored_path: str | None, slug: str) -> str:
     return decode_slug_to_path(slug)
 
 
+def _normalize_path(p: str) -> str:
+    """Return a comparable canonical form for a filesystem path.
+
+    Normalises both POSIX and Windows-style separators to ``/`` and
+    strips trailing separators so ``_is_ancestor`` can do a single
+    prefix check. On Windows, the original case is preserved (we do
+    not lowercase because the on-disk project path may have been
+    persisted with a specific case from the source adapter).
+
+    Pure string arithmetic — no filesystem access.
+    """
+    if not p:
+        return p
+    # Replace OS-specific separator with ``/`` so the prefix check
+    # works regardless of which side of the comparison was produced
+    # on which OS. Trailing separators stripped so ``/foo`` and
+    # ``/foo/`` compare equal.
+    return p.replace("\\", "/").rstrip("/")
+
+
 def _is_ancestor(ancestor: str, descendant: str) -> bool:
     """True if ``ancestor`` is ``descendant`` itself or a directory
     ancestor of it.
 
-    Pure path arithmetic — no filesystem access. Compares on resolved
-    POSIX strings; a trailing ``/`` boundary check keeps
-    ``/foo/bar`` from matching ``/foo/barbecue``.
+    Pure path arithmetic — no filesystem access. Normalises separators
+    (``\\`` → ``/``) before comparing so a Windows-style query path
+    can match a POSIX-style stored project path.
     """
     if not ancestor or not descendant:
         return False
-    a = ancestor.rstrip("/")
-    d = descendant.rstrip("/")
+    a = _normalize_path(ancestor)
+    d = _normalize_path(descendant)
     if a == d:
         return True
     return d.startswith(a + "/")
@@ -277,6 +297,13 @@ def _resolve_input_path(path: str | Path) -> str:
     ``Path.resolve(strict=False)`` works whether or not the path
     exists on disk — we want this because tests / agents may query
     paths that have been deleted or never existed locally.
+
+    On Windows, an input like ``/Users/yad/dev/foo`` (POSIX-shaped)
+    gets prepended with the current drive (``C:\\Users\\yad\\dev\\foo``)
+    by ``resolve()``. We keep the resolved form because that's the
+    canonical local interpretation, and the comparison in
+    ``_is_ancestor`` normalises separators on both sides so a stored
+    POSIX-shaped project path still matches.
     """
     return str(Path(path).expanduser().resolve(strict=False))
 

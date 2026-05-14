@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Windows test suite collection + path-prefix matching
+
+Closes the Windows-runner regressions surfaced by the first CI matrix run on `v0.7.3`. Three issues, all in tests / pure helpers — no schema or production-route change.
+
+- **HOME → USERPROFILE shim**. Four test modules (`test_claude.py`, `test_claude_teams.py`, `test_server.py`, `test_cli.py`) monkey-patched `HOME` to redirect `Path.home()` at a `tmp_path`. On Windows, `Path.home()` reads `USERPROFILE` (with `HOMEDRIVE` + `HOMEPATH` fallbacks), so the monkey-patch was inert and the tests touched the real user profile. New `tests/conftest.py` exposes `set_home_env(monkeypatch, home)` which sets all three vars; the eight call sites switched over.
+- **`_is_ancestor` separator normalisation**. `stackunderflow/services/discovery.py:_is_ancestor` compared paths with a hard-coded `/`. A query path like `/Users/yad/dev/foo/src` resolves through `Path.resolve()` on Windows to `C:\Users\yad\dev\foo\src` — the `_` prefix check then never matched. The helper now normalises `\\` → `/` on both sides before comparing so a Windows-resolved query still matches a POSIX-shaped stored project path. The behaviour on macOS / Linux is unchanged (no-op normalisation).
+- **Embedding test collection without numpy**. The two embedding test files imported `numpy as np` at module top. numpy ships transitively with `pip install stackunderflow[embeddings]` — not with the base install. CI without the extra errored at collection because the imports raised before pytest could even discover the tests. Fixed by `np = pytest.importorskip("numpy")` ahead of the rest of the imports; the source module already lazy-imports correctly.
+
+### Changed — `yield` / `qa` / `tags` tabs drop the `beta: true` flag
+
+Three tab entries in `stackunderflow-ui/src/pages/ProjectDashboard.tsx` (`yield`, `qa`, `tags`) lose `beta: true`. These features have been in stackunderflow since v0.6.x — ~2 weeks of real-store use — and the beta pill no longer signals anything an observer can act on. All three components already have their own `EmptyState` for the no-data case (verified in `YieldTab.tsx`, `QATab.tsx`, `TagsTab.tsx`), so empty-store users still get a sensible surface. The `BetaBadge` render in `ProjectDashboard.tsx` is conditional on `tab.beta === true`, so dropping the prop makes it cleanly inert.
+
 ## [0.7.3] - 2026-05-14
 
 ### Added — Playback v2 frontend: file-browser-at-time-T side panel

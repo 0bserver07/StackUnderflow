@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import set_home_env
+
 from stackunderflow.adapters import claude_teams as ct
 from stackunderflow.store import db, schema
 
@@ -391,7 +393,7 @@ def test_claude_adapter_exposes_materialize_metadata(tmp_path: Path, monkeypatch
     from stackunderflow.adapters.claude import ClaudeAdapter
 
     # Point HOME at a tmp dir with no ~/.claude — the hook must be a clean no-op.
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home_env(monkeypatch, tmp_path)
     conn = _conn(tmp_path / "store-home")
     ClaudeAdapter().materialize_metadata(conn)  # must not raise
     assert conn.execute("SELECT COUNT(*) FROM agent_teams").fetchone()[0] == 0

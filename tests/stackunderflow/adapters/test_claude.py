@@ -5,12 +5,13 @@ from pathlib import Path
 import pytest
 
 from stackunderflow.adapters.claude import ClaudeAdapter
+from tests.conftest import set_home_env
 from tests.stackunderflow.adapters.contract import AdapterContract
 
 
 @pytest.fixture
 def fake_home(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home_env(monkeypatch, tmp_path)
     return tmp_path
 
 

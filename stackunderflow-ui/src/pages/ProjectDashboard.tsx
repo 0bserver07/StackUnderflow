@@ -67,13 +67,13 @@ const TABS: readonly Tab[] = [
   // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
   // and Commands. Both call dedicated /api/compare and /api/yield routes.
   { id: 'compare', label: 'Compare', icon: IconScale },
-  { id: 'yield', label: 'Yield', icon: IconGitBranch, beta: true },
+  { id: 'yield', label: 'Yield', icon: IconGitBranch },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
-  { id: 'qa', label: 'Q&A', icon: IconHelpCircle, beta: true },
+  { id: 'qa', label: 'Q&A', icon: IconHelpCircle },
   { id: 'bookmarks', label: 'Bookmarks', icon: IconBookmark },
-  { id: 'tags', label: 'Tags', icon: IconTag, beta: true },
+  { id: 'tags', label: 'Tags', icon: IconTag },
 ] as const
 
 type TabId = typeof TABS[number]['id']

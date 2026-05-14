@@ -11,6 +11,8 @@ import pytest
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.conftest import set_home_env  # noqa: E402
+
 
 class TestServerImports:
     """Test that server modules can be imported without errors."""
@@ -66,7 +68,7 @@ class TestServerEndpointStructure:
         cold = tmp_path / ".stackunderflow" / "cache"
         cold.mkdir(parents=True)
         (cold / "stale.json").write_text("{}")
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / ".stackunderflow" / "store.db")
 
         from stackunderflow.adapters import registered
@@ -186,7 +188,7 @@ class TestRefreshAllProjects:
         from stackunderflow.server import refresh_all_projects
 
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
 
         with patch("stackunderflow.routes.data.run_ingest", return_value={}) as mock_ingest:
             result = await refresh_all_projects({})
@@ -205,7 +207,7 @@ class TestRefreshAllProjects:
         from stackunderflow.server import refresh_all_projects
 
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
 
         with patch("stackunderflow.routes.data.run_ingest", return_value={"claude": 5}):
             result = await refresh_all_projects({})
@@ -222,7 +224,7 @@ class TestRefreshAllProjects:
         from stackunderflow.server import refresh_all_projects
 
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
 
         with patch("stackunderflow.routes.data.run_ingest", side_effect=RuntimeError("db error")):
             try:
@@ -238,7 +240,7 @@ class TestRefreshAllProjects:
         from stackunderflow.server import refresh_all_projects
 
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
 
         with patch("stackunderflow.routes.data.run_ingest", return_value={}):
             result = await refresh_all_projects({})

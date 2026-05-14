@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from stackunderflow.cli import cli
 from stackunderflow.settings import Settings
+from tests.conftest import set_home_env
 
 
 def _patch_settings_dir(tmpdir: Path):
@@ -155,7 +156,7 @@ class TestCLICommands:
         from click.testing import CliRunner
         from stackunderflow.cli import cli
 
-        monkeypatch.setenv("HOME", str(tmp_path))
+        set_home_env(monkeypatch, tmp_path)
         monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
 
         runner = CliRunner()
