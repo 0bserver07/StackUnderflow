@@ -1476,6 +1476,7 @@ def _emit_sessions(
     fmt: str,
     title: str,
     show_snippet: bool = False,
+    show_outcome_confidence: bool = False,
 ) -> None:
     """Render a discovery result (``BudgetedResult`` or bare list).
 
@@ -1487,6 +1488,12 @@ def _emit_sessions(
     ``_more_available`` appear only when the budget actually dropped
     rows. The text branch appends a one-line tail marker in that same
     case.
+
+    ``show_outcome_confidence`` (text-format only) controls whether
+    ``OutcomeMatch`` rows show their ``outcome_confidence`` score after
+    the outcome label. JSON output always carries the score (via
+    :meth:`OutcomeMatch.to_dict`) so a programmatic consumer can filter
+    on it regardless of this flag.
     """
     # Duck-type: ``BudgetedResult`` has these attrs; a bare list doesn't.
     sessions = getattr(result, "sessions", result)
@@ -1531,7 +1538,12 @@ def _emit_sessions(
             evidence = getattr(m, "outcome_evidence", "")
             if len(evidence) > 200:
                 evidence = evidence[:197] + "…"
-            click.echo(f"      → {outcome}: {evidence}")
+            label = outcome
+            if show_outcome_confidence:
+                conf = getattr(m, "outcome_confidence", None)
+                if conf is not None:
+                    label = f"{outcome} (confidence {float(conf):.2f})"
+            click.echo(f"      → {label}: {evidence}")
         if show_snippet and m.snippet:
             snippet_line = m.snippet
             if len(snippet_line) > 200:
@@ -1710,6 +1722,14 @@ def search_past_decisions_cmd(
                    "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
 @click.option("--limit", type=int, default=20, show_default=True,
               help="Max sessions to return.")
+@click.option("--min-confidence", "min_confidence", type=float, default=None,
+              help="Minimum outcome confidence in [0.0, 1.0]. Default 0.5 — "
+                   "explicit-phrase confirmations clear it, 'silence ⇒ worked' "
+                   "rows (0.3) do not. Pass 0.0 to restore the legacy "
+                   "anything-that-didn't-break-is-a-success behaviour.")
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Append outcome_confidence to each row in text output. "
+                   "(JSON always carries it.)")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
               show_default=True, help="Output format.")
 def find_sessions_where_action_worked_cmd(
@@ -1718,6 +1738,8 @@ def find_sessions_where_action_worked_cmd(
     file_path: str | None,
     since: str | None,
     limit: int,
+    min_confidence: float | None,
+    verbose: bool,
     fmt: str,
 ):
     """List sessions where ACTION was performed and the next user turn confirmed it worked.
@@ -1726,28 +1748,44 @@ def find_sessions_where_action_worked_cmd(
     so it can be a tool name ("Edit"), a file fragment ("cost.py"), or a
     phrase from the conversation ("add caching"). For each session the
     *last* matching message is the anchor; the outcome is inferred from
-    the following user turns (an explicit "thanks"/"that worked", or no
-    revert and no complaint before the session ended). Pair with
-    ``find-failure-modes-for-file`` to see where an edit went wrong.
+    the following user turns (an explicit "thanks"/"that worked", an
+    agent revert command, or — at lower confidence — no signal at all
+    before the session ended). Each row carries an ``outcome_confidence``
+    in [0.0, 1.0]; rows below ``--min-confidence`` (default 0.5) are
+    filtered out. Pair with ``find-failure-modes-for-file`` to see where
+    an edit went wrong.
     """
-    from stackunderflow.services.discovery import find_sessions_where_action_worked
+    from stackunderflow.services.discovery import (
+        DEFAULT_MIN_OUTCOME_CONFIDENCE,
+        find_sessions_where_action_worked,
+    )
+
+    threshold = (
+        DEFAULT_MIN_OUTCOME_CONFIDENCE if min_confidence is None
+        else float(min_confidence)
+    )
 
     conn = _open_store()
     try:
         try:
             matches = find_sessions_where_action_worked(
                 conn, action=action, project=project, file_path=file_path,
-                since=since, limit=limit,
+                since=since, limit=limit, min_confidence=threshold,
             )
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--since") from exc
     finally:
         conn.close()
 
+    # Power-users who set --min-confidence explicitly (or -v) get the
+    # score appended to text rows. The JSON branch always emits it via
+    # OutcomeMatch.to_dict() so consumers can filter further if they want.
+    show_confidence = bool(verbose) or (min_confidence is not None)
     _emit_sessions(
         matches,
         fmt=fmt,
         title=f"Sessions where {action!r} worked",
+        show_outcome_confidence=show_confidence,
     )
 
 
@@ -1758,12 +1796,22 @@ def find_sessions_where_action_worked_cmd(
                    "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
 @click.option("--limit", type=int, default=20, show_default=True,
               help="Max sessions to return.")
+@click.option("--min-confidence", "min_confidence", type=float, default=None,
+              help="Minimum outcome confidence in [0.0, 1.0]. Default 0.5; "
+                   "both explicit-phrase complaints (0.8) and agent revert "
+                   "tool calls (0.5) clear it. Pass 0.0 to include lower-"
+                   "confidence inferences.")
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Append outcome_confidence to each row in text output. "
+                   "(JSON always carries it.)")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
               show_default=True, help="Output format.")
 def find_failure_modes_for_file_cmd(
     file: str,
     since: str | None,
     limit: int,
+    min_confidence: float | None,
+    verbose: bool,
     fmt: str,
 ):
     """List sessions where editing FILE led to a follow-up correction.
@@ -1771,27 +1819,39 @@ def find_failure_modes_for_file_cmd(
     Surfaces the sessions where a past edit to FILE was followed by the
     user reporting it broke, the agent reverting it (``git revert`` /
     ``git reset --hard`` / ``git checkout --``), or a complaint — each
-    with the evidence (the triggering message). The companion of
+    with the evidence (the triggering message) plus an
+    ``outcome_confidence`` in [0.0, 1.0]. Rows below ``--min-confidence``
+    (default 0.5) are filtered out. The companion of
     ``find-sessions-where-action-worked``: use this to learn why an edit
     went wrong, that one to learn how a successful change was done.
     """
-    from stackunderflow.services.discovery import find_failure_modes_for_file
+    from stackunderflow.services.discovery import (
+        DEFAULT_MIN_OUTCOME_CONFIDENCE,
+        find_failure_modes_for_file,
+    )
+
+    threshold = (
+        DEFAULT_MIN_OUTCOME_CONFIDENCE if min_confidence is None
+        else float(min_confidence)
+    )
 
     conn = _open_store()
     try:
         try:
             matches = find_failure_modes_for_file(
-                conn, file, since=since, limit=limit,
+                conn, file, since=since, limit=limit, min_confidence=threshold,
             )
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--since") from exc
     finally:
         conn.close()
 
+    show_confidence = bool(verbose) or (min_confidence is not None)
     _emit_sessions(
         matches,
         fmt=fmt,
         title=f"Failure modes for {file}",
+        show_outcome_confidence=show_confidence,
     )
 
 

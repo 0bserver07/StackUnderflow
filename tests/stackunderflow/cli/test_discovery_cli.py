@@ -644,6 +644,85 @@ class TestFindSessionsWhereActionWorked:
         )
         assert r.exit_code != 0
 
+    def test_silence_session_filtered_by_default(self, tmp_path, monkeypatch):
+        # Session ends without explicit confirmation → confidence 0.3 →
+        # filtered out by the new default 0.5 threshold. Old behaviour:
+        # always surfaced. Verified at the CLI surface, not just the
+        # service.
+        store_db = tmp_path / "store.db"
+        _seed_outcome_store(store_db, session_id="quiet", turns=[
+            ("assistant", "applied edit", _EDIT_COST),
+            ("assistant", "All done."),
+        ])
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-where-action-worked", "cost.py", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        assert json.loads(r.output) == {"sessions": []}
+
+    def test_min_confidence_zero_resurfaces_silence(self, tmp_path, monkeypatch):
+        # The legacy "anything that didn't break" reading is one
+        # ``--min-confidence 0.0`` away.
+        store_db = tmp_path / "store.db"
+        _seed_outcome_store(store_db, session_id="quiet", turns=[
+            ("assistant", "applied edit", _EDIT_COST),
+            ("assistant", "All done."),
+        ])
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-where-action-worked", "cost.py",
+             "--min-confidence", "0.0", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert len(body["sessions"]) == 1
+        assert body["sessions"][0]["session_id"] == "quiet"
+        assert body["sessions"][0]["outcome_confidence"] < 0.5
+
+    def test_outcome_confidence_in_json_output(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_outcome_store(store_db, session_id="ok", turns=[
+            ("assistant", "applied edit", _EDIT_COST),
+            ("user", "perfect, ship it"),
+        ])
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-where-action-worked", "cost.py", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["sessions"][0]["outcome_confidence"] >= 0.8
+
+    def test_verbose_flag_shows_confidence_in_text(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_outcome_store(store_db, session_id="ok", turns=[
+            ("assistant", "applied edit", _EDIT_COST),
+            ("user", "thanks, that worked!"),
+        ])
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["find-sessions-where-action-worked", "cost.py", "-v"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        assert "confidence" in r.output
+        # Without -v the confidence is not in the text output.
+        r2 = _invoke(
+            runner,
+            ["find-sessions-where-action-worked", "cost.py"],
+            store_db, monkeypatch,
+        )
+        assert r2.exit_code == 0, r2.output
+        assert "confidence" not in r2.output
+
 
 class TestFindFailureModesForFile:
     def test_text_format_shows_failure(self, tmp_path, monkeypatch):

@@ -423,8 +423,9 @@ def _match_to_dict(m: _discovery.SessionMatch) -> dict:
     """Render a SessionMatch (or OutcomeMatch) as the JSON dict the surface emits.
 
     Plain ``SessionMatch`` rows keep the original 9-key shape; an
-    ``OutcomeMatch`` additionally carries ``outcome``, ``outcome_evidence``
-    and ``outcome_msg_id`` (the contract the outcome-aware tools document).
+    ``OutcomeMatch`` additionally carries ``outcome``,
+    ``outcome_evidence``, ``outcome_msg_id`` and ``outcome_confidence``
+    (the contract the outcome-aware tools document).
     """
     out = {
         "session_id": m.session_id,
@@ -441,6 +442,7 @@ def _match_to_dict(m: _discovery.SessionMatch) -> dict:
         out["outcome"] = m.outcome
         out["outcome_evidence"] = m.outcome_evidence
         out["outcome_msg_id"] = int(m.outcome_msg_id)
+        out["outcome_confidence"] = round(float(m.outcome_confidence), 4)
     return out
 
 
@@ -569,12 +571,24 @@ def search_past_decisions_impl(
         return _budgeted_payload(result)
 
 
+def _validate_min_confidence(min_confidence: float | None) -> float:
+    """Default to :data:`_discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE`; clamp."""
+    if min_confidence is None:
+        return _discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE
+    try:
+        value = float(min_confidence)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("min_confidence must be a number in [0.0, 1.0]") from exc
+    return max(0.0, min(1.0, value))
+
+
 def find_sessions_where_action_worked_impl(
     action: str,
     project: str | None = None,
     file_path: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float | None = None,
     *,
     conn=None,
 ) -> dict:
@@ -582,13 +596,14 @@ def find_sessions_where_action_worked_impl(
     _validate_limit(limit)
     if not isinstance(action, str) or not action.strip():
         raise ValueError("action must be a non-empty string")
+    threshold = _validate_min_confidence(min_confidence)
     file_resolved = _resolve_user_path(file_path) if file_path else None
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
         matches = _discovery.find_sessions_where_action_worked(
             c, action=action, project=project, file_path=file_resolved,
-            since=since, limit=limit,
+            since=since, limit=limit, min_confidence=threshold,
         )
         return {"sessions": [_match_to_dict(m) for m in matches]}
 
@@ -597,17 +612,19 @@ def find_failure_modes_for_file_impl(
     file_path: str,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float | None = None,
     *,
     conn=None,
 ) -> dict:
     """Implementation behind the ``find_failure_modes_for_file`` MCP tool."""
     _validate_limit(limit)
     resolved = _resolve_user_path(file_path)
+    threshold = _validate_min_confidence(min_confidence)
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
         matches = _discovery.find_failure_modes_for_file(
-            c, resolved, since=since, limit=limit,
+            c, resolved, since=since, limit=limit, min_confidence=threshold,
         )
         return {"sessions": [_match_to_dict(m) for m in matches]}
 
@@ -857,16 +874,18 @@ def find_sessions_where_action_worked(
     file_path: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float | None = None,
 ) -> dict:
     """Discover prior sessions where an action was performed *and it worked*.
 
     Use this when you're about to do something and want a proven recipe:
     it returns past sessions where ``action`` was carried out and the
-    next user turn confirmed success (an explicit "thanks"/"that worked",
-    or simply no revert and no complaint before the session ended). Each
-    result carries the evidence — the message that established the
-    outcome — so you can open it with ``session_query`` and copy what
-    worked.
+    follow-up turns confirmed success (an explicit "thanks"/"that
+    worked" — or, at lower confidence, no complaint and no revert before
+    the session ended). Each result carries the evidence and an
+    ``outcome_confidence`` score in [0.0, 1.0]; rows below
+    ``min_confidence`` (default 0.5) are filtered out so silence is no
+    longer mistaken for success.
 
     This is the positive-signal counterpart to
     ``find_failure_modes_for_file``: use *that* one to learn why a
@@ -890,17 +909,22 @@ def find_sessions_where_action_worked(
             (default) = all time.
         limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
             Default 20. Must be a positive integer.
+        min_confidence: Minimum ``outcome_confidence`` for a row to be
+            returned. ``None`` (default) → ``0.5``. Pass ``0.0`` to
+            include lower-confidence inferences (e.g. "no complaint
+            before session ended"). Clamped into ``[0.0, 1.0]``.
 
     Returns:
         ``{"sessions": [<match>, ...]}`` where each match has the keys of
         ``find_sessions_in_path`` plus ``outcome`` (always ``"worked"``
-        here), ``outcome_evidence`` (a short justification), and
-        ``outcome_msg_id`` (the message that established it). Empty list
-        if the store is missing or nothing matched.
+        here), ``outcome_evidence`` (a short justification),
+        ``outcome_msg_id`` (the message that established it) and
+        ``outcome_confidence`` (a float in ``[0.0, 1.0]``). Empty list if
+        the store is missing or nothing matched.
     """
     return find_sessions_where_action_worked_impl(
         action=action, project=project, file_path=file_path,
-        since=since, limit=limit,
+        since=since, limit=limit, min_confidence=min_confidence,
     )
 
 
@@ -909,6 +933,7 @@ def find_failure_modes_for_file(
     file_path: str,
     since: str | None = None,
     limit: int = 20,
+    min_confidence: float | None = None,
 ) -> dict:
     """Discover prior sessions where editing a file led to a follow-up correction.
 
@@ -916,8 +941,10 @@ def find_failure_modes_for_file(
     past sessions where an edit to ``file_path`` was followed by the user
     saying it broke, the agent reverting it (``git revert`` / ``git reset
     --hard`` / ``git checkout --``), or a complaint — each with the
-    evidence (the triggering message). Read those sessions with
-    ``session_query`` to learn the trap before you fall into it.
+    evidence (the triggering message) plus an ``outcome_confidence`` in
+    [0.0, 1.0]. Rows below ``min_confidence`` (default 0.5) are filtered
+    out. Read the surfaced sessions with ``session_query`` to learn the
+    trap before you fall into it.
 
     This is the negative-signal counterpart to
     ``find_sessions_where_action_worked``: use *this* one to learn why an
@@ -933,16 +960,21 @@ def find_failure_modes_for_file(
             (default) = all time.
         limit: Maximum sessions to return. Sorted by ``last_ts`` DESC.
             Default 20. Must be a positive integer.
+        min_confidence: Minimum ``outcome_confidence`` for a row to be
+            returned. ``None`` (default) → ``0.5``. Pass ``0.0`` to
+            include lower-confidence inferences. Clamped into ``[0.0,
+            1.0]``.
 
     Returns:
         ``{"sessions": [<match>, ...]}`` where each match has the keys of
         ``find_sessions_in_path`` plus ``outcome`` (``"failed"`` or
-        ``"reverted"``), ``outcome_evidence``, and ``outcome_msg_id``.
-        Empty list if the store is missing or no edit to the file led to
-        a correction.
+        ``"reverted"``), ``outcome_evidence``, ``outcome_msg_id`` and
+        ``outcome_confidence``. Empty list if the store is missing or no
+        edit to the file led to a correction.
     """
     return find_failure_modes_for_file_impl(
         file_path=file_path, since=since, limit=limit,
+        min_confidence=min_confidence,
     )
 
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — outcome-aware discovery gains a confidence score + tighter heuristic (HANDOFF #9)
+
+Closes HANDOFF follow-up #9. The transcript-fallback heuristic behind `find-sessions-where-action-worked` / `find-failure-modes-for-file` was too permissive: any session that simply ended without an explicit complaint was confidently surfaced as "worked". The fix is a confidence score on every `OutcomeMatch` plus a default filter on it.
+
+- **`OutcomeMatch.outcome_confidence: float` in `[0.0, 1.0]`.** Additive; the existing `outcome` field (`"worked"` / `"failed"` / `"reverted"` / `"uncertain"`) keeps its string-shape contract. New rubric: `1.0` reserved for the `captured_events` deterministic path (future hook integration); `0.8` for an explicit in-vocabulary user phrase within the lookahead window; `0.5` for an agent revert tool call (`git revert` / `git reset --hard` / `git checkout --` / `git restore`) on the same file; `0.3` for "session continued or ended with no signal" (the old too-permissive case); `0.0` when the anchor was already the last recorded turn.
+- **Default `min_confidence=0.5` filter on both service functions** (`stackunderflow.services.discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE`). Rows below the threshold stay in the database but are filtered out at the surface so silence is no longer mistaken for success. Power-users can opt back into the legacy reading with `min_confidence=0.0`.
+- **CLI `--min-confidence` + `--verbose / -v` flags** on both `find-sessions-where-action-worked` and `find-failure-modes-for-file`. `--format json` always carries the `outcome_confidence` field; the text-format branch shows it inline only when `-v` or an explicit `--min-confidence` was passed (keeps the human-facing default tidy).
+- **MCP tools gain a `min_confidence` arg** (`None` → service default; out-of-range values clamp into `[0, 1]`). The two outcome-tool dicts now always carry `outcome_confidence` so an MCP-side consumer can filter further regardless of the server's threshold.
+- **Expanded signal vocabulary.** Negative: `broke` / `broken` / `failing` / `mistake` / `error` / `regression` / `❌` / `👎`. Positive: `tests pass(ing)` / `fixed` / `solved` / `correct` / `+1` / `👍` / `🎉` / `✅` / `✓`. Revert: `try again` / `try a different`. Keyword regex builder now drops the `\b` boundary on tokens that start or end with a non-word character so emoji and `+1` actually match.
+- **8 new adversarial tests** (`TestOutcomeConfidenceAdversarial` in `tests/stackunderflow/services/test_discovery.py`) pin the per-row confidence at each ladder step and the default-threshold filter behaviour. The existing classify-outcome tests update to unpack the 4-tuple `(outcome, evidence, msg_id, confidence)` return.
+
+No schema migration; the change is pure code over the same `messages` view.
+
 ## [0.7.1] - 2026-05-13
 
 ### Added — `init --install-skills` flag for the shipped SKILL.md files
