@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — `/api/cost-data` `command_costs` block stays aggregator-driven
+
+HANDOFF §"What's left" #5 asked whether the `command_costs` block in `/api/cost-data` could be migrated to read from `command_mart` (mirroring the Wave 5 `tool_costs` migration). Investigation confirmed the shape mismatch the HANDOFF flagged is structural, not stale: the aggregator emits a list of per-Interaction rows (`interaction_id`, `session_id`, `prompt_preview`, `timestamp`, `tools_used`, `steps`, `models_used`, `had_error`, `cost`, `tokens`) keyed off the user prompt that triggered each turn; the `command_mart` grain `(day, project_id, command_name)` rolls those up by slash-command and discards the per-Interaction fields the frontend's `CommandCostList` consumer reads (`stackunderflow-ui/src/types/analytics.ts §CommandCost`). `command_mart_for_project` returns `{command_name, event_count, cost_usd, tokens_in, tokens_out, session_count}` — useful for the `reports/optimize.py` early-exits + CLI `report` command, NOT a drop-in source for the route's response shape. Extending the helper cannot recover what the mart grain doesn't store.
+
+No route changes. The in-code comment in `stackunderflow/routes/cost.py:_overlay_mart_rollups` is expanded to spell out the structural reason; three new tests under `tests/stackunderflow/routes/test_cost_command_mart_overlay.py` lock in the behaviour — `command_costs` passes through aggregator output verbatim whether the mart is populated or empty, and the mart helper's rollup shape (no per-Interaction fields) is asserted explicitly. A future per-Interaction-grain mart (e.g. `interaction_mart`) could power this overlay; the tests will need updating then.
+
 ## [0.7.1] - 2026-05-13
 
 ### Added — `init --install-skills` flag for the shipped SKILL.md files
