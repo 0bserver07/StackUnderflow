@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-14
+
 ### Changed — CI: Windows in `build`, Ubuntu-only in `test`
 
 The Windows test job in `test.yml` was added in v0.7.3 (HANDOFF #4). The first real run surfaced ~40 POSIX-shaped test fixtures (hard-coded `/Users/...` literals, `Path.resolve()` drive-prefixing, paths comparing across `\` vs `/`) — the production code paths fixed in this same release (`_is_ancestor` separator normalisation, `set_home_env` helper) are correct, but the rest of the test suite needs a port to Windows-friendly path arithmetic. Two corrections in this release:
