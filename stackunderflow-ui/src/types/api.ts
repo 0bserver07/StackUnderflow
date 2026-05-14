@@ -900,3 +900,39 @@ export interface ProjectTimelineResponse {
   truncated: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Playback v2 — virtual-filesystem reconstruction at a point in time.
+// ``GET /api/playback/{session_id}/fs?at=<iso>&paths=<csv>&include_content=…``
+// replays Read/Write/Edit/MultiEdit/NotebookEdit calls up to ``at`` and
+// returns the per-file state. See stackunderflow/services/playback_fs.py.
+// ---------------------------------------------------------------------------
+
+export interface PlaybackFsFileEntry {
+  /** Reconstructed file content. Omitted when `include_content=false`. */
+  content?: string
+  /** UTF-8 byte length of the reconstructed content. */
+  byte_count: number
+  /** Timestamp of the tool call that last touched this file (<= snapshot). */
+  last_modified_ts: string | null
+  /** Ordered "Tool#N" labels of every replayed operation, e.g. `Read#0, Edit#0`. */
+  operations_applied: string[]
+  /**
+   * `true` when we observed a Read or Write that fully seeded the content
+   * before any Edit. `false` when reconstruction is from edit deltas only
+   * (no prior snapshot of the file body).
+   */
+  reconstruction_complete: boolean
+}
+
+export interface PlaybackFsSnapshotResponse {
+  session_id: string
+  /** The cutoff timestamp echoed back (whatever the caller passed). */
+  snapshot_ts: string
+  files: Record<string, PlaybackFsFileEntry>
+  /**
+   * Human-readable notes about partial reconstructions or skipped edits
+   * (e.g. "Edit#3 old_string did not match — substitution skipped").
+   */
+  warnings: string[]
+}
+
