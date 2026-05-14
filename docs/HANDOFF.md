@@ -152,7 +152,7 @@ stackunderflow-ui/    # React dashboard (Vite); output → ../stackunderflow/sta
     pages/           # Overview, ProjectDashboard, Settings (Settings has the "Backfill now" button wired to POST /api/etl/backfill)
     components/
       common/         FilterBar, EtlStatusBadge (shows backfill / failure state), ExportButton, ...
-      dashboard/      one Tab per top-level view (Overview/Sessions/Cost/Compare/Yield/Playback*/Agents*/...; * = beta-flagged)
+      dashboard/      one Tab per top-level view (Overview/Sessions/Cost/Compare/Yield*/Commands/Messages/Search/Q&A*/Bookmarks/Tags*/Sessions/Agents/Playback; * = beta-flagged)
       cost/           # Cost-tab widgets including CostByProviderCard
       analytics/, charts/, layout/, qa/
     services/        # API client (incl. EtlBackfillInProgressError) + format/currency/filters/providerStyle/navigation helpers
@@ -414,10 +414,10 @@ The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store no
 | 5 | ~~`command_costs` → `command_mart`.~~ **Closed (verified infeasible)** — the aggregator's per-Interaction shape carries 7 fields the `(day, project, command_name)` mart grain throws away on ingest. Locked the aggregator path with tests in `test_cost_command_mart_overlay.py`. A future per-Interaction-grain mart could revisit this. | — |
 | 6 | Beta normalizer fixtures (`tests/fixtures/beta_normalizers/`) are synthetic-but-spec-accurate per the codeburn catalog. They don't replace real-world parity — that needs actual session data per provider on the maintainer's machine, which most beta providers don't have. The defensive empty/malformed coverage from v0.6.1 + the spec-shape coverage from Wave 5 catch the structural failure modes; the next "Cursor v3 conversationId-in-the-key" still needs real local data. | low (no concrete bug today) |
 | 7 | ~~`stackunderflow init --install-skills`.~~ **Closed in v0.7.1.** | — |
-| 8 | Playback v2 — the v1 surface (`/api/playback/*` + the Playback tab) is event-stream-only; v2 (virtual-filesystem reconstruction at a point in time) is sketched but not built. Beta-flagged today. | low (v1 covers the immediate need) |
+| 8 | Playback v2 — the v1 surface (`/api/playback/*` + the Playback tab) is event-stream-only; v2 (virtual-filesystem reconstruction at a point in time) is sketched but not built. | low (v1 covers the immediate need) |
 | 9 | ~~Outcome inference quality.~~ **Closed in v0.7.2** — confidence ladder (0.0 / 0.3 / 0.5 / 0.8 / 1.0), default `min_confidence=0.5` filters silence-as-worked false positives. 8 adversarial tests lock the contract. | — |
 | 10 | Discovery search is plain `LIKE` substring — no embeddings / fuzzy. A spec-noted "opt-in `--use-llm` refinement pass" for `skills generate` and a semantic search mode for `search-past-decisions` are both candidates if the substring matcher proves too brittle in practice. | low (substring works for distinctive keywords) |
-| 11 | Drop beta flag on Playback + Agents dashboard tabs once empty-state UX is verified against the now-populated real store. | low (UX polish) |
+| 11 | ~~Drop beta flag on Playback + Agents dashboard tabs once empty-state UX is verified against the now-populated real store.~~ **Closed** — `beta: true` removed from both tab definitions in `stackunderflow-ui/src/pages/ProjectDashboard.tsx`. Both tabs already carry their own `EmptyState` components for the no-data case (AgentsTab: "No agent teams yet"; PlaybackTab: "No tool calls yet in this project"), so empty-store users still get a sensible surface. | — |
 
 ---
 
@@ -477,10 +477,9 @@ The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store no
 ## What I'd do next if I had a week
 
 1. **Spec 06 — backup / sync service.** Separate package, BYO mode (S3 / R2 / MinIO), client-side encrypted, opt-in. Name TBD (`cairn` rejected; placeholder `stackunderflow-backup`). The local store is the only source of truth today; this gives users a portable second copy without phoning home to a central service. Live in a separate repo per the spec.
-2. **Playback v2 — virtual-filesystem reconstruction at a point in time.** v1 is event-stream-only and beta-flagged. v2 reconstructs the state of every file the agent touched at any timestamp, so users can "rewind" a session and see what the working tree looked like mid-task. Closes follow-up #8.
+2. **Playback v2 — virtual-filesystem reconstruction at a point in time.** v1 is event-stream-only. v2 reconstructs the state of every file the agent touched at any timestamp, so users can "rewind" a session and see what the working tree looked like mid-task. Closes follow-up #8.
 3. **Cross-platform CI matrix.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
-4. **Drop the beta flag on Playback + Agents dashboard tabs.** Real-store data is now live and populated; verify the empty-state UX and the data-rich UX both look right. Closes follow-up #11.
-5. **Discovery semantic-search mode (`--use-embeddings`).** Opt-in re-ranker that runs after the substring filter and brings up sessions that talk about the same idea in different words. Closes follow-up #10 — only do this if substring search proves brittle in practice.
+4. **Discovery semantic-search mode (`--use-embeddings`).** Opt-in re-ranker that runs after the substring filter and brings up sessions that talk about the same idea in different words. Closes follow-up #10 — only do this if substring search proves brittle in practice.
 
 ---
 
