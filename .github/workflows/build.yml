@@ -43,9 +43,17 @@ jobs:
     - name: Build package
       run: python -m build
     
-    - name: Install package
+    - name: Install package (POSIX)
+      if: runner.os != 'Windows'
+      run: pip install dist/*.whl
+
+    - name: Install package (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        pip install dist/*.whl
+        # PowerShell does not expand `dist/*.whl` the way POSIX shells do.
+        $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+        pip install $wheel.FullName
     
     - name: Test CLI commands
       run: |
