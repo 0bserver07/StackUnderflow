@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-13
+
 ### Added — `init --install-skills` flag for the shipped SKILL.md files
 
 `stackunderflow init` gains three new flags that automate the install of the three static skills shipped under `stackunderflow/skills/` (`check-prior-work`, `find-related-sessions`, `recall-past-decisions`) — closes the manual `cp -r stackunderflow/skills/* ~/.claude/skills/` step that `docs/skills.md` previously documented as the only install path.
