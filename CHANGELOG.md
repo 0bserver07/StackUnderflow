@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.2] - 2026-05-13
+### Changed — Playback + Agents tabs drop the beta flag
+
+Closes HANDOFF follow-up #11. Both `playback` and `agents` tab entries in `stackunderflow-ui/src/pages/ProjectDashboard.tsx` drop `beta: true`. With v013 applied across the maintainer's real store and the `agent_teams` + `playback` routes returning populated bodies, the "beta" pill no longer signalled anything an observer could act on — it just suggested instability where there was none.
+
+The empty-data path is unchanged: when a store has no captured agent teams or no tool-call-bearing sessions, the tabs render their own `EmptyState` components ("No agent teams yet" / "No tool calls yet in this project") rather than the beta-feature gate. The shared `BetaBadge` component still serves the remaining beta-flagged tabs (`yield`, `qa`, `tags`); the badge render in `ProjectDashboard.tsx` is conditional on `tab.beta === true`, so dropping the prop makes it cleanly inert for these two without orphan styling.
+
+No backend or migration change — this is a frontend-only flag drop. Frontend tests (110) + typecheck + build clean.
 
 ### Changed — `optimize` detectors lock in full `message_tool_mart` migration
 

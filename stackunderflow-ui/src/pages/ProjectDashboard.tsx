@@ -58,10 +58,11 @@ type Tab = {
 const TABS: readonly Tab[] = [
   { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
   { id: 'sessions', label: 'Sessions', icon: IconFolders },
-  { id: 'agents', label: 'Agents', icon: IconHierarchy3, beta: true },
-  // Playback slots between Sessions and Cost (same band as Agents), beta-flagged
-  // until the empty-state UX is verified against real data — see spec 10.
-  { id: 'playback', label: 'Playback', icon: IconHistory, beta: true },
+  { id: 'agents', label: 'Agents', icon: IconHierarchy3 },
+  // Playback slots between Sessions and Cost (same band as Agents). Both
+  // tabs handle the empty-data case via their own EmptyState components —
+  // see PlaybackTab.tsx and AgentsTab.tsx.
+  { id: 'playback', label: 'Playback', icon: IconHistory },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
   // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
   // and Commands. Both call dedicated /api/compare and /api/yield routes.
