@@ -62,6 +62,12 @@ Frankfurter and cached for 24h; if a fetch fails, the API falls back to USD with
 | GET | `/api/context-budget` | Context Budget |
 | GET | `/api/etl/status` | ETL pipeline |
 | POST | `/api/etl/backfill` | ETL pipeline |
+| GET | `/api/playback/{session_id}` | Playback |
+| GET | `/api/playback/project/{slug}` | Playback |
+| GET | `/api/playback/{session_id}/fs` | Playback |
+| GET | `/api/agent-teams` | Agent teams |
+| GET | `/api/agent-teams/{session_id}` | Agent teams |
+| GET | `/api/agent-teams/{session_id}/agent/{agent_session_id}` | Agent teams |
 | GET | `/api/tool-distribution` | Cost analytics |
 | GET | `/api/cfg` | Settings |
 | GET | `/api/cfg/currencies` | Settings |
@@ -1881,3 +1887,99 @@ empty state rather than 500ing.
 **Status codes:** `200` success; `400` no project selected and no
 `log_path` provided; `404` project not in store
 (run `POST /api/refresh` first).
+
+
+---
+
+## Playback
+
+The Playback tab on the dashboard scrubs through a session's tool calls
+in order. Two routes back the event-stream view; a third reconstructs
+the working filesystem at any timestamp.
+
+### GET /api/playback/{session_id}
+
+Ordered tool-call event stream for one session.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `tool_filter` | string | `null` | Comma-separated exact tool names (`Edit,Write`) to keep |
+| `limit` | int | `1000` | Cap at 10000 |
+| `include_payload` | bool | `true` | Include 200-char payload excerpts on each event |
+
+**Response**
+
+```json
+{
+  "session_id": "abc…",
+  "events": [
+    {"ts": "2026-05-13T11:55:00Z", "tool": "Edit", "file_path": "main.py", "msg_id": 1234, "payload": "…"}
+  ],
+  "total": 1,
+  "truncated": false
+}
+```
+
+Returns 404 when the session id isn't in the store. Returns 200 with
+`events: []` when the session exists but issued no tool calls.
+
+### GET /api/playback/project/{project_slug}
+
+Cross-session timeline for one project. Same response shape, with each
+event carrying its own `session_id`.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `since` | string | `7d` | Relative (`7d` / `24h`) or ISO timestamp |
+| `tool_filter` | string | `null` | Comma-separated exact tool names |
+| `limit` | int | `2000` | Cap at 20000 |
+| `include_payload` | bool | `false` | Default off — project-wide streams are large |
+
+### GET /api/playback/{session_id}/fs
+
+**Virtual-filesystem reconstruction at a point in time.** Replays the
+session's `Read` / `Write` / `Edit` / `MultiEdit` / `NotebookEdit` tool
+calls up to `at` and returns the reconstructed content of every file
+the session touched.
+
+**Query parameters**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `at` | string | required | ISO-8601 timestamp; only operations with `ts <= at` are replayed |
+| `paths` | string | `null` | Comma-separated relative paths; restrict the response to these files |
+| `include_content` | bool | `true` | When `false`, omits the `content` field (file list + metadata only) |
+
+**Response**
+
+```json
+{
+  "session_id": "abc…",
+  "snapshot_ts": "2026-05-13T12:00:00Z",
+  "files": {
+    "src/main.py": {
+      "content": "def main():\n    …\n",
+      "byte_count": 1234,
+      "last_modified_ts": "2026-05-13T11:55:00Z",
+      "operations_applied": ["Read#0", "Edit#0", "Edit#1"],
+      "reconstruction_complete": true
+    }
+  },
+  "warnings": [
+    "src/main.py: Edit#3 old_string did not match — substitution skipped"
+  ]
+}
+```
+
+**Reconstruction semantics:**
+- **Read** seeds the initial content. The Claude Code `cat -n`-style line-number prefix is stripped so subsequent Edits match the raw bytes.
+- **Write** replaces full content; `reconstruction_complete` becomes `true` from this point regardless of prior state.
+- **Edit** / **MultiEdit** substitute `old_string → new_string`. An Edit without a prior Read records the `new_string` as best-effort content with `reconstruction_complete = false` and a warning. An Edit whose `old_string` doesn't match the current content is skipped (warning fired, prior state preserved).
+- **NotebookEdit** accumulates a JSON `{cell_id: source}` map keyed by cell id. Never marks `reconstruction_complete = true` because the full notebook tree is unobservable from edits alone.
+- `replace_all` on Edit / per-MultiEdit sub-edit is honoured.
+
+**Status codes:** `200` success (including the "session exists but issued no FS-touching tool calls" case → `files: {}`); `404` unknown session id; `422` unparseable `at`.
