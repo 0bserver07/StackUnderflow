@@ -87,6 +87,15 @@ See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source
 - **Full-text search** across every ingested message. Filter by date / model / role.
 - **Q&A pair extraction** — heuristic detection of question/answer pairs with resolution status (`resolved` / `looped` / `abandoned`).
 - **Auto-tagging** — sessions get tagged by language, framework, topic, intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`).
+
+### Playback (time-travel)
+- **Event-stream timeline** — scrub through every tool call a session made, in order, with payload excerpts.
+- **Virtual-FS reconstruction** (v0.7.3+) — at any timestamp in the scrub, see the reconstructed content of every file the session touched. Replays Read / Write / Edit / MultiEdit / NotebookEdit calls; marks partial reconstructions where no initial Read was seen.
+
+### Self-referential discovery (for coding agents)
+- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI + MCP tools that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** (`pip install stackunderflow[embeddings]`) re-ranks by cosine similarity with a local sentence-transformers model.
+- **`find-sessions-where-action-worked` / `find-failure-modes-for-file`** — outcome-aware variants. Returns sessions whose subsequent turns confirmed (or contradicted) the action, with a confidence score so silence isn't mistaken for success.
+- **`skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files. Project-scoped by default.
 - **Bookmarks** — pin conversations you want to find later.
 
 ### Real-time sync
