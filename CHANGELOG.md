@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Windows runner in the CI test + build matrices (HANDOFF #4)
+
+Both `.github/workflows/test.yml` and `.github/workflows/build.yml` gained a `windows-latest` slot alongside the existing Ubuntu (test, build) and macOS (build) runners; both matrices now run Python 3.11 + 3.12 across every OS. `fail-fast: false` on each matrix so a single-OS failure doesn't mask the others. The change exercises the `msvcrt.locking()` branch of `stackunderflow/etl/lock.py` and the Windows path of the `watchfiles`-backed watcher on real Windows runners for the first time — these code paths were written defensively for the v007 single-watcher lock spec but had no real-Windows execution until now.
+
+Cross-platform test-marker housekeeping: the 10 `tests/stackunderflow/adapters/test_<provider>_defensive.py` files all carry a `test_permission_denied_*` case that fences on `chmod(0o000)`. NTFS ignores Unix permission bits and the chmod is a no-op on Windows, so the permission-denied path under test is unreachable there — every file gains a `_SKIP_CHMOD = _IS_ROOT or sys.platform == "win32"` guard on those tests (the existing `_IS_ROOT` branch is preserved so root-CI is still honoured). The single `test_symlink_target_rejected` case in `tests/stackunderflow/cli/test_export.py` skips on Windows because `os.symlink` there requires Developer Mode or admin — the underlying export-safety contract is exercised by the other `tests/stackunderflow/cli/test_export.py` cases that the symlink case complements.
+
+Known-gap: the **lock contention** path in `tests/stackunderflow/etl/test_lock.py::TestAcquireRelease::test_second_acquire_in_same_process_returns_none` relies on `msvcrt.locking(LK_NBLCK)` honouring per-(fd, inode) advisory locks within a single process — this is true on every Windows version we expect to run on, but the in-process-second-acquire-returns-None contract is what the CI run will *actually* validate for the first time. If Windows kernels surface anything subtler (e.g. blocking even with `LK_NBLCK` against a fd from the same process), follow-up #4 stays open with a `xfail` until we adapt the test.
+
 ## [0.7.2] - 2026-05-13
 
 ### Changed — `optimize` detectors lock in full `message_tool_mart` migration

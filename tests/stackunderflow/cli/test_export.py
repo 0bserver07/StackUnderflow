@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import os
+import sys
 
 import pytest
 from click.testing import CliRunner
@@ -340,6 +341,10 @@ class TestSafeWrite:
         assert "preexisting content" not in out.read_text()
         assert "date,provider" in out.read_text()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="os.symlink on Windows requires Developer Mode or admin privileges",
+    )
     def test_symlink_target_rejected(self, tmp_path, monkeypatch):
         store_db = _fixture_store(tmp_path)
         target = tmp_path / "real.csv"

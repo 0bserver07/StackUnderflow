@@ -9,6 +9,7 @@ focus on actively malformed states.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,10 @@ from stackunderflow.adapters.codeium import CodeiumAdapter
 
 
 _IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# Windows ignores Unix file permissions; chmod(0o000) is a no-op on NTFS, so the
+# permission-denied path under test is unreachable there. Skip those tests on
+# Windows the same way we skip them when running as root on POSIX.
+_SKIP_CHMOD = _IS_ROOT or sys.platform == "win32"
 
 
 def test_missing_root_yields_nothing(tmp_path: Path) -> None:
@@ -57,7 +62,7 @@ def test_read_with_arbitrary_session_ref_yields_nothing(tmp_path: Path) -> None:
     assert list(adapter.read(fake_ref, since_offset=99999)) == []
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root bypasses chmod 000")
+@pytest.mark.skipif(_SKIP_CHMOD, reason="chmod 000 is a no-op on Windows / bypassed by root")
 def test_unreadable_root_does_not_raise(tmp_path: Path) -> None:
     root = tmp_path / ".codeium"
     root.mkdir()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,10 @@ from stackunderflow.adapters.continue_adapter import ContinueAdapter
 
 
 _IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# Windows ignores Unix file permissions; chmod(0o000) is a no-op on NTFS, so the
+# permission-denied path under test is unreachable there. Skip those tests on
+# Windows the same way we skip them when running as root on POSIX.
+_SKIP_CHMOD = _IS_ROOT or sys.platform == "win32"
 
 
 # ── missing / empty source ────────────────────────────────────────────
@@ -167,7 +172,7 @@ def test_message_with_garbage_content_field_does_not_raise(tmp_path: Path) -> No
 # ── permission denied ─────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root bypasses chmod 000")
+@pytest.mark.skipif(_SKIP_CHMOD, reason="chmod 000 is a no-op on Windows / bypassed by root")
 def test_permission_denied_db_does_not_raise(tmp_path: Path) -> None:
     root = tmp_path / ".continue"
     root.mkdir()
