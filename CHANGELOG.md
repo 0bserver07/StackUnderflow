@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-13
+
 ### Changed — `optimize` detectors lock in full `message_tool_mart` migration
 
 Closes HANDOFF follow-up #2. The four per-message detectors in `stackunderflow/reports/optimize.py` (`junk_reads`, `bash_output_limits`, `low_read_edit_ratio`, `ghost_agents`) gained their `message_tool_mart` fast paths in v011 (post-v0.7 round, commit `c861709`) — when the mart is populated, each detector reads its signal off the indexed mart instead of re-parsing `messages.raw_json` across every monthly partition. This release adds parity tests that prove the mart and raw-scan paths produce byte-equivalent findings on the same fixture data, plus a side-by-side perf benchmark (`bench_optimize_mart.py`) for regression tracking.
