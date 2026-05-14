@@ -81,6 +81,19 @@ class ClinePricer(ProviderPricer):
             target = suffix if vendor == "openai" else lowered
             return self._openai.rates_for(self._openai.canonicalize(target))
 
+        # ``cline-auto`` — the Cline adapter's default when the
+        # ``<model>`` tag is missing from the first user message. Real
+        # Cline tasks targeting that fallback typically end up on the
+        # user's configured Anthropic key (per cline.bot's default
+        # configuration), so peg the auto-selector to Sonnet 4.x rates
+        # rather than leaving the dollar figure at $0. ESTIMATED in the
+        # sense that we don't know the actual engine, but the rate is
+        # Anthropic's published Sonnet number.
+        if canonical == "cline-auto":
+            return self._anthropic.rates_for(
+                self._anthropic.canonicalize("claude-sonnet-4-5")
+            )
+
         # Unknown vendor — let the caller observe a missing rate rather
         # than mispricing against an arbitrary table.
         return None

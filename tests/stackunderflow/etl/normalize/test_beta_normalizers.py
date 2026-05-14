@@ -832,9 +832,20 @@ _RATE_CARD_REPRESENTATIVE_MODELS: tuple[tuple[str, str], ...] = (
     ("gemini-1.5-flash", "gemini"),
     ("gemini-3.0-pro", "gemini"),
     ("gemini-3.1-pro", "gemini"),
+    # Gemini 3 preview ids — pricing-fixes-round2
+    ("gemini-3-pro-preview", "gemini"),
+    ("gemini-3.1-pro-preview", "gemini"),
+    ("gemini-3-flash-preview", "gemini"),
     ("gemini-auto", "gemini"),
     # Un-dated Anthropic alias used by Kiro-style normalisation
     ("claude-3-5-sonnet", "openclaw"),
+    # pricing-fixes-round2: opus 4.7, GLM-5 family, autoselectors
+    ("claude-opus-4-7", "openclaw"),
+    ("glm-5", "openclaw"),
+    ("glm-5.1", "openclaw"),
+    ("composer-1", "cursor"),
+    ("droid-auto", "droid"),
+    ("cline-auto", "cline"),
 )
 
 

@@ -57,17 +57,20 @@ from .openai import OpenAIPricer
 # definitive per-token pricing.
 _SONNET_TIER: tuple[float, float, float, float] = (3.0, 15.0, 3.75, 0.30)
 
+# Composer 1 — Cursor's published rate for the original Composer model
+# (Cursor models & pricing page, retrieved 2026-05-13): $1.25/M input,
+# $10.00/M output. Cache-write/cache-read multipliers match Anthropic's
+# convention since the underlying Composer 1 caches behave per the
+# Anthropic shape. Cite: cursor.com/docs/models-and-pricing.
+_COMPOSER_1_TIER: tuple[float, float, float, float] = (1.25, 10.00, 1.5625, 0.125)
+
 # Cursor-specific rate overrides keyed by canonical (lower-cased)
-# model id. Every entry is ESTIMATED; see module docstring for rationale.
-#
-# composer-1 / composer-2: Cursor's own agentic models. No published
-#   per-token rate as of 2026-04 — pegged to Anthropic Sonnet 4.x.
-# cursor-auto / cursor-fast / auto / fast: Cursor's autoselectors.
-#   We don't know which underlying engine ran; Sonnet-tier is the
-#   defensible mid-point so cost figures aren't $0.
+# model id. composer-1 has its own published number; composer-2 and the
+# auto/fast selectors stay at the Sonnet-tier ESTIMATE — Cursor hasn't
+# published a definitive per-token rate for those yet.
 _CURSOR_RATES: dict[str, tuple[float, float, float, float]] = {
-    "composer-1": _SONNET_TIER,  # ESTIMATED — Cursor-trained, no public rate card
-    "composer-2": _SONNET_TIER,  # ESTIMATED — Cursor-trained, no public rate card
+    "composer-1": _COMPOSER_1_TIER,  # Published — see _COMPOSER_1_TIER source note
+    "composer-2": _SONNET_TIER,      # ESTIMATED — Cursor-trained, no public rate card
     # ``canonicalize`` strips the ``cursor-`` prefix, so the bare label is
     # what ``rates_for`` actually sees. Keep both forms so a future caller
     # that bypasses canonicalize still hits a row.

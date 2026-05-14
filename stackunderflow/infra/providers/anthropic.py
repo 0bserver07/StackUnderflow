@@ -16,6 +16,7 @@ from .base import ProviderPricer
 
 
 class _Family(Enum):
+    OPUS_47 = auto()
     OPUS_46 = auto()
     SONNET_46 = auto()
     OPUS_45 = auto()
@@ -28,11 +29,22 @@ class _Family(Enum):
     OPUS_3 = auto()
     SONNET_3 = auto()
     HAIKU_3 = auto()
+    # ZhipuAI GLM models surfaced behind a Claude-shape proxy (provider=claude
+    # in our store). Routed through this pricer because the wire format is
+    # Anthropic-compatible; rates differ per ZhipuAI's published numbers.
+    GLM_5 = auto()
+    GLM_51 = auto()
 
 
 # (input $/M, output $/M, cache-write $/M, cache-read $/M).
 # cache-write at 1.25× input is the Anthropic billing convention.
+#
+# Opus 4.7 — Anthropic's May 2026 list price is $5/$25 with $6.25 5m-cache
+# write and $0.50 cache read. Source: platform.claude.com/docs/en/about-claude/pricing
+# (the same /MTok rates apply across the full 1M-token context window per
+# Anthropic's long-context pricing note — no separate -1m variant).
 _RATES: dict[_Family, tuple[float, float, float, float]] = {
+    _Family.OPUS_47:   (5.0,   25.0,  6.25,  0.50),
     _Family.OPUS_46:   (15.0,  75.0,  18.75, 1.50),
     _Family.SONNET_46: (3.0,   15.0,  3.75,  0.30),
     _Family.OPUS_45:   (15.0,  75.0,  18.75, 1.50),
@@ -45,6 +57,16 @@ _RATES: dict[_Family, tuple[float, float, float, float]] = {
     _Family.OPUS_3:    (15.0,  75.0,  18.75, 1.50),
     _Family.SONNET_3:  (3.0,   15.0,  3.75,  0.30),
     _Family.HAIKU_3:   (0.25,  1.25,  0.30,  0.03),
+    # GLM-5 — ZhipuAI / Z.ai published rate as of May 2026:
+    # $1.00 / $3.20 per MTok input / output. Cache-write / cache-read
+    # match Anthropic's 1.25× / 0.10× convention since GLM is consumed
+    # through Anthropic-shape proxies in our store and the proxy applies
+    # the same cache discount multipliers when surfacing usage. Source:
+    # docs.z.ai/guides/overview/pricing (retrieved 2026-05-13).
+    _Family.GLM_5:     (1.00,  3.20,  1.25,  0.10),
+    # GLM-5.1 — ZhipuAI list price as of May 2026: $1.40 / $4.40 per MTok
+    # input / output (source: docs.z.ai/guides/overview/pricing).
+    _Family.GLM_51:    (1.40,  4.40,  1.75,  0.14),
 }
 
 _FALLBACK = _Family.SONNET_35
@@ -56,6 +78,7 @@ _FALLBACK = _Family.SONNET_35
 # because Anthropic charges cache traffic at the same rate regardless of
 # service_tier.
 _OPUS_FAMILIES: frozenset[_Family] = frozenset({
+    _Family.OPUS_47,
     _Family.OPUS_46,
     _Family.OPUS_45,
     _Family.OPUS_4,
@@ -147,7 +170,24 @@ class AnthropicPricer(ProviderPricer):
         has_opus = "opus" in parts
         has_sonnet = "sonnet" in parts
         has_haiku = "haiku" in parts
+        has_glm = "glm" in parts
 
+        # ZhipuAI GLM models — checked first so they don't fall through to
+        # the Claude family heuristic and get mispriced at Sonnet rates.
+        # Order matters: 5.1 token-split contains both "5" and "1"; the
+        # narrower match wins.
+        if has_glm:
+            if "5" in parts and "1" in parts:
+                return _Family.GLM_51
+            if "5" in parts:
+                return _Family.GLM_5
+
+        # Opus 4.7 — narrower than the bare "4 + opus" rule below, so it
+        # MUST come first. The token-split for "claude-opus-4-7" gives
+        # parts {"claude", "opus", "4", "7"}; the Opus 4 branch would
+        # otherwise swallow it with the old (15/75) rates.
+        if "7" in parts and "4" in parts and has_opus:
+            return _Family.OPUS_47
         if "6" in parts and "4" in parts:
             if has_opus:
                 return _Family.OPUS_46

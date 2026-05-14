@@ -37,6 +37,13 @@ from .base import ProviderPricer
 
 
 # (input $/M, output $/M, cache-write $/M, cache-read $/M).
+#
+# Gemini 3 preview ids (gemini-3-pro-preview / gemini-3.1-pro-preview /
+# gemini-3-flash-preview) — Google AI for Developers list price as of
+# May 2026: $2.00/$12.00 per MTok input/output for Pro (≤200K context),
+# $0.30/$2.50 for Flash. Source: ai.google.dev/gemini-api/docs/pricing
+# (cross-referenced against pricepertoken.com 2026-05-13 snapshot for
+# the preview ids that don't appear in the standard rate-card table).
 _RATES: dict[str, tuple[float, float, float, float]] = {
     # Gemini 2.5 family (current production, ≤200K input tier)
     "gemini-2.5-pro":         (1.25,  10.00, 0.0, 0.31),
@@ -45,10 +52,16 @@ _RATES: dict[str, tuple[float, float, float, float]] = {
     # Gemini 1.5 family (legacy but still queryable)
     "gemini-1.5-pro":         (1.25,  5.00,  0.0, 0.3125),
     "gemini-1.5-flash":       (0.075, 0.30,  0.0, 0.01875),
-    # Forward-looking placeholders — rates pegged to 2.5-pro until
-    # Google publishes definitive numbers (see module docstring).
-    "gemini-3.1-pro":         (1.25,  10.00, 0.0, 0.31),
-    "gemini-3.0-pro":         (1.25,  10.00, 0.0, 0.31),
+    # Gemini 3 family — preview ids the Gemini CLI emits today.
+    # Google's published $2/$12 (≤200K context) Pro rate; $0.30/$2.50
+    # Flash. The non-preview "gemini-3.0-pro" / "gemini-3.1-pro" entries
+    # are forward-looking placeholders that match these rates so a swap
+    # to the GA id post-deprecation is a no-op on cost.
+    "gemini-3.1-pro":         (2.00,  12.00, 0.0, 0.50),
+    "gemini-3.0-pro":         (2.00,  12.00, 0.0, 0.50),
+    "gemini-3-pro-preview":   (2.00,  12.00, 0.0, 0.50),
+    "gemini-3.1-pro-preview": (2.00,  12.00, 0.0, 0.50),
+    "gemini-3-flash-preview": (0.30,  2.50,  0.0, 0.075),
     # Adapter default
     "gemini-auto":            (1.25,  10.00, 0.0, 0.31),
 }

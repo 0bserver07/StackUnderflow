@@ -37,6 +37,65 @@ Closes HANDOFF follow-up #9. The transcript-fallback heuristic behind `find-sess
 
 No schema migration; the change is pure code over the same `messages` view.
 
+### Fixed — cost-coverage gaps after the v0.7.1 sweep (pricing-fixes-round2)
+
+Closes the residual 21% `cost_source='unknown'` rate the v0.7.1 pricing sweep
+left behind. On a 150,843-event real-store-shape copy the unknown count drops
+from **31,859 → 0** after a force re-derive (`stackunderflow etl backfill --force`).
+
+- **`claude-opus-4-7` (30,988 events, 97% of the residual)** — adds a dedicated
+  `_Family.OPUS_47` to the Anthropic pricer with the published rate of
+  $5 input / $25 output / $6.25 5m-cache-write / $0.50 cache-read per MTok
+  (source: `platform.claude.com/docs/en/about-claude/pricing`). The token-set
+  `_identify` heuristic now checks the 4-7 combination before the bare 4+opus
+  branch so the model no longer falls into the legacy Opus 4 ($15/$75) family.
+  The 1M context window is included at the same per-token rate per Anthropic's
+  long-context note — no separate `-1m` variant. Opus 4.7 joins the fast-mode
+  `_OPUS_FAMILIES` set so `service_tier='priority'` records still get the 6×
+  input/output multiplier.
+- **Gemini 3 preview ids (158 events)** — `gemini-3-pro-preview`,
+  `gemini-3.1-pro-preview`, and `gemini-3-flash-preview` (the ids the Gemini
+  CLI actually emits) are added to the Gemini pricer's rate table and to
+  `_CANONICAL_IDS`. Pro previews use Google's $2/$12 published rate (≤200K
+  context tier); Flash uses $0.30/$2.50. The forward-looking `gemini-3.0-pro` /
+  `gemini-3.1-pro` placeholders are updated to the same number so a
+  preview-to-GA id swap is a no-op on cost. Source:
+  `ai.google.dev/gemini-api/docs/pricing`.
+- **Cursor `composer-1` (220 events)** — the v0.7.1 sweep pegged Cursor's own
+  Composer line at the Sonnet-tier estimate ($3/$15); Cursor has since
+  published Composer 1's own rate of $1.25/$10 (`cursor.com/docs/models-and-pricing`,
+  retrieved 2026-05-13). The cursor pricer's `_CURSOR_RATES` table is updated
+  and `composer-1` joins `_CANONICAL_IDS` so the normalizer stamps `rate_card`
+  instead of `unknown`. `composer-2` stays at the Sonnet-tier estimate
+  (Cursor hasn't published it).
+- **`droid-auto` (104) and `cline-auto` (103)** — the adapter-default
+  placeholders that get emitted when Droid/Cline session settings don't carry
+  a concrete model id. Both pricers now route their `*-auto` form to
+  Anthropic's published Sonnet 4.5 rate ($3/$15) — both tools default to the
+  user's Anthropic key in real-world setups — instead of returning `None →
+  $0`. Both ids are in `_CANONICAL_IDS` for the `rate_card` stamp.
+- **ZhipuAI GLM-5 / GLM-5.1 (42 events under `provider=claude`)** — surfaced
+  through a Claude-shape proxy. Two new families (`_Family.GLM_5` /
+  `_Family.GLM_51`) with ZhipuAI's published rates: $1.00/$3.20 for GLM-5,
+  $1.40/$4.40 for GLM-5.1 (source: `docs.z.ai/guides/overview/pricing`,
+  retrieved 2026-05-13). The Anthropic pricer's `_identify` heuristic detects
+  `glm` in the hyphen-split token set and prefers the narrower 5.1 match over
+  the bare 5 match. The legacy fallback path that priced unknown ids at
+  Sonnet 3.5 rates ($3/$15) is bypassed for these specific ids — GLM-5 is
+  meaningfully cheaper and the dollar figure now reflects that.
+
+`_provider_for_model` (the legacy single-arg router) gains rules for
+`composer-*` / `cursor-*` → cursor, `droid-auto` → droid, `cline-auto` → cline,
+and `glm-*` → anthropic so the back-compat helpers route correctly for the new
+ids. Regression tests (one per family) lock in `cost_source='rate_card'` at the
+normalizer level for `gemini-2.5-pro`, `gemini-3-pro-preview`, `claude-opus-4-7`,
+`glm-5`, `glm-5.1`, `composer-1`, `droid-auto`, `cline-auto`; the existing
+`_RATE_CARD_REPRESENTATIVE_MODELS` parameterised test in
+`tests/stackunderflow/etl/normalize/test_beta_normalizers.py` is extended to
+cover every new id. Files changed: `stackunderflow/infra/costs.py`,
+`stackunderflow/infra/providers/{anthropic,cline,cursor,droid,gemini}.py`
+plus seven test files.
+
 ## [0.7.1] - 2026-05-13
 
 ### Added — `init --install-skills` flag for the shipped SKILL.md files

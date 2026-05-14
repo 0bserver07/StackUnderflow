@@ -49,3 +49,17 @@ def test_registry_resolves_droid_provider() -> None:
     p = get_pricer("droid")
     assert isinstance(p, DroidPricer)
     assert get_pricer("droid") is p
+
+
+def test_droid_auto_routes_to_sonnet_45() -> None:
+    """``droid-auto`` (adapter default) pegs to Sonnet 4.5 rates.
+
+    Was returning ``None`` → $0; the v0.7.1 sweep didn't address the
+    autoselector default that 104 events in the live store carry.
+    """
+    droid = DroidPricer()
+    anth = AnthropicPricer()
+    droid_rates = droid.rates_for(droid.canonicalize("droid-auto"))
+    expected = anth.rates_for(anth.canonicalize("claude-sonnet-4-5"))
+    assert droid_rates is not None
+    assert droid_rates == expected
