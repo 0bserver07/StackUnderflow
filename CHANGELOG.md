@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-14
+
 ### Added — Playback v2 frontend: file-browser-at-time-T side panel
 
 Closes HANDOFF follow-up #8 (frontend half — backend landed earlier this release). The Playback tab gains a "File browser at this moment" side panel that lives alongside the event-stream scrubber. As the user scrubs through tool calls, the panel reconstructs the state of every file the session touched up to the current scrubber timestamp by calling `GET /api/playback/{session}/fs?at=<iso>` and rendering the response.
