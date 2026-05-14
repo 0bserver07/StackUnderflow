@@ -40,6 +40,7 @@ import EmptyState from '../common/EmptyState'
 import PlaybackScrubber from './PlaybackScrubber'
 import PlaybackEventList from './PlaybackEventList'
 import PlaybackEventDetail from './PlaybackEventDetail'
+import PlaybackFsPanel from './PlaybackFsPanel'
 import { FILTER_CHIP_TOOLS } from './playbackColors'
 import type { JsonlFile } from '../../types/api'
 
@@ -81,6 +82,10 @@ export default function PlaybackTab({ projectName }: PlaybackTabProps) {
   const [toolFilter, setToolFilter] = useState<Set<string>>(new Set())
   const [playing, setPlaying] = useState(false)
   const [speedMult, setSpeedMult] = useState(1)
+  // v2 — file-browser side panel. Default open; the toggle is in the panel
+  // header and the tab controls row. The panel itself debounces fetches as
+  // the user scrubs, so toggling has no impact on the event-stream perf.
+  const [fsPanelOpen, setFsPanelOpen] = useState(true)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const firstChipRef = useRef<HTMLButtonElement | null>(null)
@@ -440,13 +445,21 @@ export default function PlaybackTab({ projectName }: PlaybackTabProps) {
         <>
           <PlaybackScrubber events={filteredEvents} currentIndex={currentIndex} onSeek={seekTo} />
 
-          {/* ── list + detail ── */}
+          {/* ── list + detail (+ FS side panel when open) ── */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
             <div className="lg:col-span-5">
               <PlaybackEventList events={filteredEvents} currentIndex={currentIndex} onSelect={seekTo} />
             </div>
-            <div className="lg:col-span-7">
+            <div className="lg:col-span-7 space-y-4">
               <PlaybackEventDetail event={currentEvent} />
+              {selectedSession && (
+                <PlaybackFsPanel
+                  sessionId={selectedSession}
+                  at={currentEvent?.ts ?? null}
+                  open={fsPanelOpen}
+                  onToggle={() => setFsPanelOpen((o) => !o)}
+                />
+              )}
             </div>
           </div>
         </>

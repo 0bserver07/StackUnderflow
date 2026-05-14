@@ -27,6 +27,7 @@ import type {
   AgentTeamTranscriptResponse,
   PlaybackResponse,
   ProjectTimelineResponse,
+  PlaybackFsSnapshotResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -670,6 +671,65 @@ export async function getProjectTimeline(
   if (q?.since) params.set('since', q.since)
   const qs = params.toString()
   return fetchJson(`${BASE}/playback/project/${encodeURIComponent(projectSlug)}${qs ? `?${qs}` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// Playback v2 — virtual-filesystem reconstruction at a point in time.
+//
+//   * GET /api/playback/{session}/fs?at=<iso>&paths=<csv>&include_content=…
+//
+// 404 → unknown session; 422 → unparseable `at`; 200 + `files: {}` → the
+// session exists but issued no file-touching tool calls before `at`.
+//
+// `include_content=false` returns metadata only (byte counts + operation
+// labels) without the file bodies, which is useful when scrubbing rapidly.
+// See stackunderflow/services/playback_fs.py.
+// ---------------------------------------------------------------------------
+
+export interface PlaybackFsQuery {
+  /** Cutoff timestamp (ISO-8601 / RFC-3339). Required by the backend. */
+  at: string
+  /** Restrict to a subset of file paths (relative to the session cwd). */
+  paths?: string[]
+  /** When false, the response omits `content` (metadata-only). Default true. */
+  includeContent?: boolean
+}
+
+/**
+ * Sentinel thrown when the backend says `at` couldn't be parsed (422). The
+ * panel surfaces this with a "Bad timestamp" warning rather than the generic
+ * "Failed to load…" message.
+ */
+export class PlaybackFsBadTimestampError extends Error {
+  constructor(detail: string) {
+    super(`Unparseable timestamp: ${detail}`)
+    this.name = 'PlaybackFsBadTimestampError'
+  }
+}
+
+export async function getPlaybackFsSnapshot(
+  sessionId: string,
+  q: PlaybackFsQuery,
+): Promise<PlaybackFsSnapshotResponse> {
+  const params = new URLSearchParams({ at: q.at })
+  if (q.paths && q.paths.length > 0) {
+    params.set('paths', q.paths.join(','))
+  }
+  if (typeof q.includeContent === 'boolean') {
+    params.set('include_content', q.includeContent ? 'true' : 'false')
+  }
+  const res = await fetch(
+    `${BASE}/playback/${encodeURIComponent(sessionId)}/fs?${params.toString()}`,
+  )
+  if (res.status === 422) {
+    const body = await res.text().catch(() => '')
+    throw new PlaybackFsBadTimestampError(body || q.at)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
+  }
+  return res.json()
 }
 
 // ---------------------------------------------------------------------------
