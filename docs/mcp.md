@@ -146,6 +146,8 @@ search_past_decisions(
     since: str | None = None,
     limit: int = 20,
     context_budget: int | None = None,
+    use_embeddings: bool = False,
+    embed_model: str | None = None,
 ) -> dict
 ```
 
@@ -158,6 +160,8 @@ Free-text (substring) search across past session transcripts and tool-call argum
 | `since` | `None` | Only messages newer than this. `None` = all time. |
 | `limit` | `20` | Hard cap on sessions returned. Must be positive. |
 | `context_budget` | `None` | As above. |
+| `use_embeddings` | `False` | Re-rank substring-matched candidates by sentence-transformers cosine similarity. Requires `pip install stackunderflow[embeddings]`. Each result gains an `embedding_score` in `[0, 1]`. |
+| `embed_model` | `None` | Override the sentence-transformers model id. `None` = `STACKUNDERFLOW_EMBED_MODEL` env or `sentence-transformers/all-MiniLM-L6-v2`. Ignored when `use_embeddings=False`. |
 
 ## Outcome tools
 
@@ -281,7 +285,7 @@ When a discovery tool surfaces a session it passively records that (`loaded_coun
 
 - **`tool_calls` shape is Claude-format.** The `tool_calls` field on each `session_query` row decodes Anthropic's `tool_use` blocks (`{name, args}`). Non-claude providers (codex, cursor, …) have different raw shapes; the `tools` list (just names) is populated correctly for every provider, but the per-call `args` summary is empty for non-claude rows. This is unchanged from v0.6 — fixing it requires per-adapter raw-payload extraction.
 - **`kind="errors"` records have empty `content_preview`.** The error-detection heuristic correctly finds `tool_result` blocks flagged `is_error` (or with error-like text), but `content_preview` is sourced from `messages.content_text`, which doesn't include nested tool-result text. Future polish: surface the matched error string into the preview.
-- **Discovery search is substring, not semantic.** `search_past_decisions` (and `find_sessions_where_action_worked`'s `action`) match plain `LIKE` substrings against message text — no embeddings, no fuzzy matching. A phrase that's worded differently in the transcript won't match. Pick distinctive keywords.
+- **Discovery search is substring by default.** `search_past_decisions` (and `find_sessions_where_action_worked`'s `action`) match plain `LIKE` substrings against message text. A phrase that's worded differently in the transcript won't match — pick distinctive keywords. For semantic re-ranking, `search_past_decisions` accepts `use_embeddings=True`; that path requires the optional `pip install stackunderflow[embeddings]` extra (sentence-transformers) and re-ranks the substring-matched candidate set by cosine similarity. It still won't widen the set, so a query with zero substring hits returns zero rows whether or not embeddings are on.
 - **Outcome inference is heuristic without hooks.** `find_sessions_where_action_worked` / `find_failure_modes_for_file` read the deterministic `captured_events` table when it's populated (run `stackunderflow hooks install`), but on hook-less installs they fall back to inferring the outcome from the following user turns — "no complaint before the session ended" can be a false positive.
 - **No streaming.** Each tool returns a fully-materialised list. Fine for sane `limit` values; not appropriate for "scan everything I've ever done."
 - **No auth.** Anyone with stdio access has full read of your local store. Tools live in the same trust boundary as your shell.

@@ -779,3 +779,121 @@ class TestFindFailureModesForFile:
         # find-failure-modes-for-file has no --context-budget flag, so its
         # JSON output carries no budget-accounting keys.
         assert json.loads(r.output) == {"sessions": []}
+
+
+# ── search-past-decisions --use-embeddings ──────────────────────────────────
+
+
+class TestSearchPastDecisionsEmbeddingsCLI:
+    """CLI surface for the opt-in semantic-search mode.
+
+    The full re-rank semantics are covered by the unit tests under
+    ``services/test_search_past_decisions_embeddings.py``; these tests
+    pin the *CLI* contract — the flag exists, JSON output carries
+    ``embedding_score``, text output appends ``cos=…``, and a missing
+    optional dep exits cleanly with the install hint.
+    """
+
+    def _stub_embeddings(self, monkeypatch):
+        """Install a tiny deterministic stub for ``load_model``."""
+        import numpy as np
+
+        from stackunderflow.services import discovery_embeddings
+
+        class _Stub:
+            DIM = 4
+
+            def encode(self, texts, **_kw):
+                out = np.zeros((len(texts), self.DIM), dtype=np.float32)
+                for i, t in enumerate(texts):
+                    if "watcher" in t.lower() or "sqlite" in t.lower():
+                        out[i] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                    else:
+                        out[i] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+                return out
+
+        discovery_embeddings._MODEL_CACHE.clear()
+        monkeypatch.setattr(
+            discovery_embeddings, "load_model", lambda _name: _Stub(),
+        )
+
+    def test_json_output_carries_embedding_score(self, tmp_path, monkeypatch):
+        self._stub_embeddings(monkeypatch)
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["search-past-decisions", "sqlite",
+             "--use-embeddings", "--embed-model", "stub",
+             "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["sessions"]
+        s = body["sessions"][0]
+        assert "embedding_score" in s
+        assert 0.0 <= s["embedding_score"] <= 1.0
+
+    def test_text_output_appends_cos(self, tmp_path, monkeypatch):
+        self._stub_embeddings(monkeypatch)
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["search-past-decisions", "sqlite",
+             "--use-embeddings", "--embed-model", "stub"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        # The text renderer appends "cos=X.XX" to the headline.
+        assert "cos=" in r.output
+
+    def test_missing_optional_dep_exits_with_hint(self, tmp_path, monkeypatch):
+        from stackunderflow.services import discovery_embeddings
+
+        def _no_st():
+            raise discovery_embeddings.MissingEmbeddingsDependencyError()
+        monkeypatch.setattr(
+            discovery_embeddings, "_require_sentence_transformers", _no_st,
+        )
+
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["search-past-decisions", "sqlite", "--use-embeddings"],
+            store_db, monkeypatch,
+        )
+        # Non-zero exit code with the install hint in the output (stderr
+        # collapses into Click's combined output).
+        assert r.exit_code != 0
+        assert "pip install stackunderflow[embeddings]" in r.output
+
+    def test_default_off_does_not_load_model(self, tmp_path, monkeypatch):
+        """Sanity check: without the flag, no model load is attempted."""
+        from stackunderflow.services import discovery_embeddings
+
+        def _explode(_name):
+            raise AssertionError(
+                "load_model should never be called without --use-embeddings"
+            )
+        discovery_embeddings._MODEL_CACHE.clear()
+        monkeypatch.setattr(discovery_embeddings, "load_model", _explode)
+
+        store_db = tmp_path / "store.db"
+        _seed_with_data(store_db)
+        runner = CliRunner()
+        r = _invoke(
+            runner,
+            ["search-past-decisions", "sqlite", "--format", "json"],
+            store_db, monkeypatch,
+        )
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        # No embedding_score on substring-mode rows.
+        for s in body["sessions"]:
+            assert "embedding_score" not in s

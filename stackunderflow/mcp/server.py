@@ -425,7 +425,11 @@ def _match_to_dict(m: _discovery.SessionMatch) -> dict:
     Plain ``SessionMatch`` rows keep the original 9-key shape; an
     ``OutcomeMatch`` additionally carries ``outcome``,
     ``outcome_evidence``, ``outcome_msg_id`` and ``outcome_confidence``
-    (the contract the outcome-aware tools document).
+    (the contract the outcome-aware tools document). A semantic-search
+    call (``use_embeddings=True`` on ``search_past_decisions``) adds an
+    ``embedding_score`` in ``[0, 1]``; the key is omitted on plain
+    substring rows so the original shape is unchanged for callers that
+    don't opt in.
     """
     out = {
         "session_id": m.session_id,
@@ -438,6 +442,8 @@ def _match_to_dict(m: _discovery.SessionMatch) -> dict:
         "cost_usd": round(float(m.cost_usd), 6),
         "snippet": m.snippet,
     }
+    if getattr(m, "embedding_score", None) is not None:
+        out["embedding_score"] = round(float(m.embedding_score), 4)
     if isinstance(m, _discovery.OutcomeMatch):
         out["outcome"] = m.outcome
         out["outcome_evidence"] = m.outcome_evidence
@@ -553,10 +559,20 @@ def search_past_decisions_impl(
     since: str | None = None,
     limit: int = 20,
     context_budget: int | None = None,
+    use_embeddings: bool = False,
+    embed_model: str | None = None,
     *,
     conn=None,
 ) -> dict:
-    """Implementation behind the ``search_past_decisions`` MCP tool."""
+    """Implementation behind the ``search_past_decisions`` MCP tool.
+
+    ``use_embeddings=True`` re-ranks the substring-filter results by
+    sentence-transformers cosine similarity. Requires the optional
+    ``stackunderflow[embeddings]`` extra; without it the call raises
+    :class:`discovery_embeddings.MissingEmbeddingsDependencyError` —
+    surfaced here as a ``ValueError`` so an MCP client sees a clean
+    JSON-RPC error response rather than a server-side traceback.
+    """
     _validate_limit(limit)
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must be a non-empty string")
@@ -564,10 +580,18 @@ def search_past_decisions_impl(
     with store_reader._maybe_conn(conn) as c:
         if c is None:
             return {"sessions": []}
-        result = _discovery.search_past_decisions(
-            c, query, project=project, since=since, limit=limit,
-            context_budget=budget,
-        )
+        try:
+            result = _discovery.search_past_decisions(
+                c, query, project=project, since=since, limit=limit,
+                context_budget=budget,
+                use_embeddings=use_embeddings,
+                model_name=embed_model,
+            )
+        except ImportError as exc:
+            # ``MissingEmbeddingsDependencyError`` subclasses ImportError.
+            # The original install-hint message is preserved as the
+            # ValueError payload so MCP clients see something actionable.
+            raise ValueError(str(exc)) from exc
         return _budgeted_payload(result)
 
 
@@ -822,6 +846,8 @@ def search_past_decisions(
     since: str | None = None,
     limit: int = 20,
     context_budget: int | None = None,
+    use_embeddings: bool = False,
+    embed_model: str | None = None,
 ) -> dict:
     """Free-text search across past session transcripts.
 
@@ -852,18 +878,32 @@ def search_past_decisions(
             density, packed greedily). ``None`` (default) = server
             default (env ``STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS`` or
             2000); ``0`` disables it.
+        use_embeddings: When ``True``, re-rank the substring-matched
+            candidate set by sentence-transformers cosine similarity
+            against ``query``. Each result gains an ``embedding_score``
+            in ``[0, 1]``. Requires the optional
+            ``stackunderflow[embeddings]`` extra — without it the call
+            errors out with the install hint. Default ``False`` keeps
+            the original LIKE-density ranking.
+        embed_model: Override the sentence-transformers model id.
+            ``None`` (default) = ``STACKUNDERFLOW_EMBED_MODEL`` env var
+            or ``sentence-transformers/all-MiniLM-L6-v2``. Ignored when
+            ``use_embeddings`` is ``False``.
 
     Returns:
         ``{"sessions": [<match>, ...], "_budget_used_tokens": N,
         "_budget_max_tokens": M}`` with the same match keys as
         ``find_sessions_in_path`` (plus ``_truncated`` / ``_more_available``
         when the budget dropped rows). The ``snippet`` field carries a
-        short excerpt around the match where available. Empty ``sessions``
-        list if the store is missing or no matches are found.
+        short excerpt around the match where available; an
+        ``embedding_score`` field appears on each row when
+        ``use_embeddings=True``. Empty ``sessions`` list if the store
+        is missing or no matches are found.
     """
     return search_past_decisions_impl(
         query=query, project=project, since=since, limit=limit,
         context_budget=context_budget,
+        use_embeddings=use_embeddings, embed_model=embed_model,
     )
 
 

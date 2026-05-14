@@ -1236,6 +1236,8 @@ Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
 | `--since` | TEXT | (all time) | Filter to messages newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
 | `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
 | `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
+| `--use-embeddings` | FLAG | off | Re-rank substring matches by local sentence-transformers cosine similarity (requires `pip install stackunderflow[embeddings]`) |
+| `--embed-model` | TEXT | env or `all-MiniLM-L6-v2` | Override the sentence-transformers model id; ignored without `--use-embeddings` |
 | `--format` | `text\|json` | text | Output format |
 
 **Example:**
@@ -1249,6 +1251,34 @@ Past decisions matching 'watchfiles inotify'  (1 session(s))
       … "watchfiles is Rust-backed and cross-platform; raw inotify would mean a separate macOS path…"
 
 $ stackunderflow search-past-decisions "auth middleware" --project -Users-you-dev-api --format json
+```
+
+**Semantic search (opt-in).** Plain substring matching misses phrases that
+were worded differently in the transcript. Install
+`pip install stackunderflow[embeddings]` (adds sentence-transformers) and
+pass `--use-embeddings` to re-rank the substring-matched candidate set
+by cosine similarity against the query. The substring filter still runs
+first — `--use-embeddings` only re-orders the set, never widens it. JSON
+output gains an `embedding_score` in `[0, 1]`; text output appends
+`cos=X.XX` to each session headline. Model defaults to
+`sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim) and is loaded
+lazily on the first call; override via the `STACKUNDERFLOW_EMBED_MODEL`
+env var or `--embed-model`. Per-message vectors are cached in
+`discovery_embeddings` (added by migration v014) so repeat queries
+against the same candidate set are a SELECT, not a recompute.
+
+```
+$ pip install 'stackunderflow[embeddings]'
+$ stackunderflow search-past-decisions "watcher behind a flag" --use-embeddings
+Past decisions matching 'watcher behind a flag'  (2 session(s))
+
+  [claude] def456abc789…  2026-04-25T09:11:33  msgs=64  $0.8800  cos=0.87
+      -Users-you-dev-app  /Users/you/dev/app
+      … "we decided to ship the watcher behind a flag for the rollout…"
+
+  [claude] aaa111bbb222…  2026-04-19T15:02:11  msgs=22  $0.1200  cos=0.51
+      -Users-you-dev-app  /Users/you/dev/app
+      … "the file watcher behind the etl service occasionally drops events…"
 ```
 
 ### `stackunderflow find-sessions-where-action-worked`

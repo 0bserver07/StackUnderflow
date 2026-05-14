@@ -1477,6 +1477,7 @@ def _emit_sessions(
     title: str,
     show_snippet: bool = False,
     show_outcome_confidence: bool = False,
+    show_embedding_score: bool = False,
 ) -> None:
     """Render a discovery result (``BudgetedResult`` or bare list).
 
@@ -1494,6 +1495,11 @@ def _emit_sessions(
     the outcome label. JSON output always carries the score (via
     :meth:`OutcomeMatch.to_dict`) so a programmatic consumer can filter
     on it regardless of this flag.
+
+    ``show_embedding_score`` (text-format only) appends ``cos=X.XX`` to
+    each row's headline so a human running ``--use-embeddings`` can see
+    why the rank came out the way it did. JSON output carries the score
+    on its own ``embedding_score`` key when present.
     """
     # Duck-type: ``BudgetedResult`` has these attrs; a bare list doesn't.
     sessions = getattr(result, "sessions", result)
@@ -1528,6 +1534,10 @@ def _emit_sessions(
             f"{m.last_ts[:19] if m.last_ts else '(no ts)'}  "
             f"msgs={m.message_count}  ${m.cost_usd:.4f}"
         )
+        if show_embedding_score:
+            score = getattr(m, "embedding_score", None)
+            if score is not None:
+                head += f"  cos={float(score):.2f}"
         click.echo(head)
         sub = f"      {m.project_slug}  {m.project_path}"
         click.echo(sub)
@@ -1669,6 +1679,17 @@ def find_sessions_touching_file_cmd(
               help="Token budget for the output (ranked + greedily packed). "
                    "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
                    "Pass 0 to disable.")
+@click.option("--use-embeddings", "use_embeddings", is_flag=True, default=False,
+              help="Re-rank substring matches by local sentence-transformers "
+                   "embeddings (cosine similarity). Requires the optional "
+                   "`stackunderflow[embeddings]` extra. The substring filter "
+                   "still runs first; embeddings only re-rank the candidate "
+                   "set. Each JSON row gains an `embedding_score` in [0, 1].")
+@click.option("--embed-model", "embed_model", default=None,
+              help="Override the embedding model (sentence-transformers id). "
+                   "Default: STACKUNDERFLOW_EMBED_MODEL or "
+                   "sentence-transformers/all-MiniLM-L6-v2. Ignored without "
+                   "--use-embeddings.")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
               show_default=True, help="Output format.")
 def search_past_decisions_cmd(
@@ -1677,10 +1698,19 @@ def search_past_decisions_cmd(
     since: str | None,
     limit: int,
     context_budget: int | None,
+    use_embeddings: bool,
+    embed_model: str | None,
     fmt: str,
 ):
     """Substring-search QUERY across past message content; return matching sessions."""
     from stackunderflow.services.discovery import search_past_decisions
+
+    # Lazy import — only used when the user passes --use-embeddings, and
+    # even then only for catching the missing-extra error here at the
+    # surface so the user sees a clean exit instead of a bare traceback.
+    from stackunderflow.services.discovery_embeddings import (
+        MissingEmbeddingsDependencyError,
+    )
 
     budget = _resolve_context_budget(context_budget)
     conn = _open_store()
@@ -1689,9 +1719,17 @@ def search_past_decisions_cmd(
             result = search_past_decisions(
                 conn, query, project=project, since=since, limit=limit,
                 context_budget=budget,
+                use_embeddings=use_embeddings,
+                model_name=embed_model,
             )
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--since") from exc
+        except MissingEmbeddingsDependencyError as exc:
+            # ``raise SystemExit`` here (not click.UsageError) so the
+            # exit message matches the install hint verbatim — Click's
+            # error formatter prepends "Usage: ..." which would bury
+            # the actionable line under boilerplate.
+            raise SystemExit(str(exc)) from exc
     finally:
         conn.close()
 
@@ -1700,6 +1738,7 @@ def search_past_decisions_cmd(
         fmt=fmt,
         title=f"Past decisions matching {query!r}",
         show_snippet=True,
+        show_embedding_score=use_embeddings,
     )
 
 

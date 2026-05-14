@@ -64,6 +64,13 @@ class SessionMatch:
     ``snippet`` is only populated by ``search_past_decisions`` (the only
     query whose contract includes a content excerpt). The other two
     discovery functions leave it ``None``.
+
+    ``embedding_score`` is only populated by ``search_past_decisions``
+    when called with ``use_embeddings=True``; it carries the cosine
+    similarity between the query and the message that contributed the
+    snippet, mapped to ``[0, 1]``. ``None`` when semantic mode is off
+    (the default) so the JSON contract for substring-mode callers is
+    unchanged.
     """
 
     session_id: str
@@ -75,9 +82,19 @@ class SessionMatch:
     message_count: int
     cost_usd: float
     snippet: str | None = None
+    embedding_score: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Serialise to a JSON-friendly dict.
+
+        ``embedding_score`` is dropped when ``None`` so substring-mode
+        callers see the original 9-key shape; only semantic-mode results
+        carry the extra field.
+        """
+        out = asdict(self)
+        if out.get("embedding_score") is None:
+            out.pop("embedding_score", None)
+        return out
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -284,7 +301,11 @@ _SESSION_FROM = (
 )
 
 
-def _row_to_match(row: sqlite3.Row, snippet: str | None = None) -> SessionMatch:
+def _row_to_match(
+    row: sqlite3.Row,
+    snippet: str | None = None,
+    embedding_score: float | None = None,
+) -> SessionMatch:
     return SessionMatch(
         session_id=row["session_id"],
         project_slug=row["project_slug"],
@@ -295,6 +316,7 @@ def _row_to_match(row: sqlite3.Row, snippet: str | None = None) -> SessionMatch:
         message_count=int(row["message_count"] or 0),
         cost_usd=float(row["cost_usd"] or 0.0),
         snippet=snippet,
+        embedding_score=embedding_score,
     )
 
 
@@ -889,15 +911,72 @@ def _relevance_decisions(
     return _rel
 
 
+def _relevance_embeddings(m: SessionMatch) -> float:
+    """Relevance term for ``use_embeddings=True``.
+
+    Reads the cosine-similarity score already attached to the match
+    (mapped to ``[0, 1]`` at compute time). Returns ``0.0`` for any
+    match whose score wasn't computed — encoder failure on a specific
+    message, orphan row whose session id couldn't be resolved, etc.
+    Those rows sink to the bottom of the rank but stay in the surface
+    so the agent can still see them.
+    """
+    score = m.embedding_score
+    if score is None:
+        return 0.0
+    return max(0.0, min(1.0, float(score)))
+
+
+def _compute_embedding_scores(
+    conn: sqlite3.Connection,
+    *,
+    query: str,
+    mid_by_sfk: dict[int, int],
+    model_name: str | None = None,
+) -> dict[int, float]:
+    """Embed query + first-hit messages, return ``{session_fk: cosine}``.
+
+    Lazy-imports :mod:`stackunderflow.services.discovery_embeddings` so
+    a discovery call with ``use_embeddings=False`` never pays the
+    sentence-transformers / torch import cost. Any failure inside the
+    embedding pipeline propagates out — the caller (CLI / MCP) is
+    responsible for catching
+    :class:`discovery_embeddings.MissingEmbeddingsDependencyError` and
+    converting it into a clean error surface.
+
+    Returns an empty dict when ``mid_by_sfk`` is empty (nothing to
+    score) — short-circuits before the model load.
+    """
+    if not mid_by_sfk:
+        return {}
+    from stackunderflow.services import discovery_embeddings as _emb
+
+    resolved_model = _emb.resolve_model_name(model_name)
+    message_ids = list(mid_by_sfk.values())
+
+    candidate_vectors = _emb.compute_or_load(
+        conn, message_ids=message_ids, model_name=resolved_model,
+    )
+    query_vector = _emb.embed_query(query, resolved_model)
+    score_by_mid = _emb.score_against_query(query_vector, candidate_vectors)
+
+    return {
+        sfk: score_by_mid.get(mid, 0.0)
+        for sfk, mid in mid_by_sfk.items()
+    }
+
+
 @overload
 def search_past_decisions(
     conn: sqlite3.Connection, query: str, *, project: str | None = ...,
     since: str | None = ..., limit: int = ..., context_budget: None = ...,
+    use_embeddings: bool = ..., model_name: str | None = ...,
 ) -> list[SessionMatch]: ...
 @overload
 def search_past_decisions(
     conn: sqlite3.Connection, query: str, *, project: str | None = ...,
     since: str | None = ..., limit: int = ..., context_budget: int,
+    use_embeddings: bool = ..., model_name: str | None = ...,
 ) -> BudgetedResult: ...
 def search_past_decisions(
     conn: sqlite3.Connection,
@@ -907,6 +986,8 @@ def search_past_decisions(
     since: str | None = None,
     limit: int = 20,
     context_budget: int | None = None,
+    use_embeddings: bool = False,
+    model_name: str | None = None,
 ) -> list[SessionMatch] | BudgetedResult:
     """Substring search over ``messages.content_text``.
 
@@ -935,6 +1016,22 @@ def search_past_decisions(
         int → the ``limit``-capped rows are re-ranked (recency + cost +
         LIKE-match density) and packed greedily into a
         :class:`BudgetedResult`.
+    use_embeddings:
+        When ``True``, the LIKE-density relevance term in the rank
+        function is **replaced** by a sentence-transformers cosine
+        similarity score between the query and the first matching
+        message per session (mapped to ``[0, 1]``). Each returned
+        ``SessionMatch`` carries the score on its ``embedding_score``
+        field. The substring filter still runs first — embeddings only
+        re-rank the candidate set; they never widen it. Requires the
+        ``stackunderflow[embeddings]`` extra; raises
+        :class:`stackunderflow.services.discovery_embeddings.MissingEmbeddingsDependencyError`
+        otherwise.
+    model_name:
+        Override the embedding model. ``None`` (default) →
+        ``STACKUNDERFLOW_EMBED_MODEL`` env var, or
+        ``sentence-transformers/all-MiniLM-L6-v2``. Ignored when
+        ``use_embeddings`` is ``False``.
     """
     _ensure_row_factory(conn)
     if not query or not query.strip():
@@ -960,11 +1057,16 @@ def search_past_decisions(
     # We need (a) one row per session for the SessionMatch, plus (b)
     # the first matching content_text per session for snippet
     # generation, plus (c) total needle occurrences per session for the
-    # relevance term. SQLite's window functions would solve this in one
-    # query but we keep the SQL portable: pull (session_fk, session_id,
-    # content_text) hits sorted by timestamp DESC and fold in Python.
+    # relevance term, plus (d) — under ``use_embeddings`` — the
+    # message id behind that first-hit content_text so embeddings can
+    # be computed at the message grain (the unique key on the
+    # embedding cache). SQLite's window functions would solve this in
+    # one query but we keep the SQL portable: pull
+    # ``(message_id, session_fk, session_id, content_text)`` hits sorted
+    # by timestamp DESC and fold in Python.
     hit_rows = conn.execute(
-        "SELECT m.session_fk AS sfk, s.session_id AS sid, m.content_text AS content_text "  # noqa: S608 — where_extra is built from fixed clauses + parameter placeholders
+        "SELECT m.id AS mid, m.session_fk AS sfk, s.session_id AS sid, "  # noqa: S608 — where_extra is built from fixed clauses + parameter placeholders
+        "m.content_text AS content_text "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
         "JOIN projects p ON p.id = s.project_id "
@@ -975,6 +1077,10 @@ def search_past_decisions(
 
     needle_lower = needle.lower()
     snippet_by_sfk: dict[int, str | None] = {}
+    # first-hit message_id per session_fk — drives the embedding compute
+    # when ``use_embeddings`` is set (one row per session, not one per
+    # raw needle hit).
+    first_mid_by_sfk: dict[int, int] = {}
     occ_by_sid: dict[str, int] = {}
     for hr in hit_rows:
         sfk = int(hr["sfk"])
@@ -983,8 +1089,30 @@ def search_past_decisions(
         if sfk in snippet_by_sfk:
             continue
         snippet_by_sfk[sfk] = _build_snippet(content, needle)
+        first_mid_by_sfk[sfk] = int(hr["mid"])
 
-    rank_fn = _build_rank_fn(_relevance_decisions(occ_by_sid))
+    # Compute embedding scores up-front so they can both populate the
+    # ``embedding_score`` field on each match AND replace the LIKE-
+    # density signal in the rank fn. ``score_by_sfk`` maps session_fk
+    # → cosine in [0, 1]. Empty when ``use_embeddings`` is False.
+    score_by_sfk: dict[int, float] = {}
+    if use_embeddings and first_mid_by_sfk:
+        score_by_sfk = _compute_embedding_scores(
+            conn,
+            query=needle,
+            mid_by_sfk=first_mid_by_sfk,
+            model_name=model_name,
+        )
+
+    if use_embeddings:
+        # Replace the LIKE-density relevance term with the cosine score
+        # carried on each match. The fallback when ``embedding_score``
+        # is None (orphan rows, encoder failure on one message) is 0.0
+        # — that row sinks to the bottom of the rank but stays in the
+        # surface so the agent can still see it.
+        rank_fn = _build_rank_fn(_relevance_embeddings)
+    else:
+        rank_fn = _build_rank_fn(_relevance_decisions(occ_by_sid))
 
     if not snippet_by_sfk:
         if context_budget is not None:
@@ -1006,7 +1134,15 @@ def search_past_decisions(
     # constraint, never a way to see past ``--limit``).
     out: list[SessionMatch] = []
     for r in rows:
-        out.append(_row_to_match(r, snippet=snippet_by_sfk.get(int(r["session_fk"]))))
+        sfk = int(r["session_fk"])
+        emb_score = score_by_sfk.get(sfk) if use_embeddings else None
+        out.append(
+            _row_to_match(
+                r,
+                snippet=snippet_by_sfk.get(sfk),
+                embedding_score=emb_score,
+            )
+        )
         if limit and limit > 0 and len(out) >= limit:
             break
     _record_loaded(conn, "search_past_decisions", out)

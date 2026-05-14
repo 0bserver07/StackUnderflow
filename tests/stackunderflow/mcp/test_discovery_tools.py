@@ -192,10 +192,12 @@ class _RecordingDiscovery:
 
     def _search_past_decisions(
         self, conn, query, *, project=None, since=None, limit=20, context_budget=None,
+        use_embeddings=False, model_name=None,
     ):
         self.search_past_decisions_calls.append(
             {"conn": conn, "query": query, "project": project, "since": since,
-             "limit": limit, "context_budget": context_budget},
+             "limit": limit, "context_budget": context_budget,
+             "use_embeddings": use_embeddings, "model_name": model_name},
         )
         self._maybe_raise()
         return self._wrap(context_budget)
