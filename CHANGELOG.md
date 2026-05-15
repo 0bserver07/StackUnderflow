@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-15
+
 ### Fixed — CLI report cost commands (today / month / status / report) now read from usage_events
 
 `stackunderflow/reports/aggregate.py:build_report` was recomputing cost out of `messages.input_tokens` / `output_tokens` + `messages.model` via `compute_cost(...)` on every call. That path missed the v0.7.2 pricing additions (`claude-opus-4-7`, `glm-5`, `composer-1`, `droid-auto`), dropped the `speed='fast'` priority-tier 6× multiplier on rows whose canonical model alias did not round-trip through the live pricer, and did not reproduce the 1/N attribution contract the marts encode. On a real store the symptom was a ~6× under-count: `stackunderflow status` reported `month: $502.53 (21575 msg)` for May 2026 against a true `SUM(usage_events.cost_usd) = $3072.74 (12972 events)` for the same window; `stackunderflow today` returned `$0 / 0 sessions` whenever the day-window straddled events whose model alias had drifted.
