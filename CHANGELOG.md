@@ -38,6 +38,28 @@ The right-side overlay chat drawer (`ChatDrawer`) is promoted to a permanent **d
 - **Docs**: new `docs/meta-agent.md` (catalogue, wire format, privacy, model recommendations, cookbook). `README.md` "Search, Q&A, tags" section gains a "Meta agent" sub-section. `docs/HANDOFF.md` architecture map adds the new route + service entries.
 - **Removed**: legacy `ChatDrawer.tsx` + the plain-chat `ChatInterface.tsx` / `ChatMessageList.tsx` / `ChatMessageBubble.tsx`. The backend `/ollama-api/{path:path}` proxy in `routes/misc.py` is unchanged — the new chat goes through the meta-agent route, but the proxy stays so model-listing (`/api/tags`) and any legacy clients keep working.
 
+### Added — `--ingest` / `--auto-ingest` on read-only data commands
+
+The eight read-only data commands (`status`, `today`, `month`, `report`, `compare`, `yield`, `optimize`, `export`) now accept two flags that force a fresh ingest pass before the command's query runs.
+
+- **`--ingest`** (default off). Synchronously runs the same path the server's lifespan uses: `stackunderflow.ingest.run_ingest(conn, registered())` followed by `stackunderflow.etl.backfill.backfill(conn, force=False)`. Use when `stackunderflow start` is not running in another terminal and you need authoritative numbers right now.
+- **`--auto-ingest / --no-auto-ingest`** (default on). When the store's newest `usage_events.ts` is older than 6 hours, the command prints `[stale data — ingesting...]` to stderr and runs the same pass. `--no-auto-ingest` disables the staleness path entirely (scripts that prefer predictable latency). Empty stores are *not* considered stale — refusing to walk every adapter root on a fresh install unless the user passes `--ingest` explicitly.
+
+Shared helper at `stackunderflow/cli_helpers/ingest.py`: `ensure_fresh(conn, *, force, auto, notify)` + `is_stale(conn, *, threshold_hours, now)`. Pure-Python, synchronous, no FastAPI / background threads.
+
+### Added — `docs/backup.md` and `docs/chat.md`
+
+Two documentation files for features that shipped earlier but had no long-form docs.
+
+- **`docs/backup.md`** covers the `stackunderflow backup create / list / restore / auto` command tree: rsync `--link-dest` hard-link efficiency, exclude list (`debug/`, `plugins/`, `cache/`, …), the `~/.stackunderflow/backups/<ts>[-label]/` directory layout, restore semantics, the macOS launchd auto-backup integration, and the privacy model.
+- **`docs/chat.md`** covers the Ollama-backed chat sidebar: prerequisites (`ollama serve` on `localhost:11434`), the `/api/ollama-api/{path:path}` proxy route, the model dropdown UX, the streaming flow, and the local-only privacy model.
+
+`README.md` mentions both in "What it does"; `docs/cli-reference.md` cross-references `docs/backup.md` and adds a "Reading freshness" section that documents `--ingest` / `--auto-ingest` once and references it from every affected command's option table.
+
+### Changed — HANDOFF marks spec 06 (backup) as closed
+
+The "What I'd do next" entry for spec 06 (local backup) was overdue: the `stackunderflow backup` surface has been functional for several releases. Updated the HANDOFF note to point at `docs/backup.md` and `stackunderflow/cli.py` instead of describing it as future work. Off-machine sync remains deliberately out of scope — users pipe the local snapshot through their preferred tool. HANDOFF also now documents the `/api/ollama-api/{path:path}` route under the `routes/` map, lists `cli_helpers/` in the package layout, and adds a `~/.stackunderflow/` state-directory layout that names `backups/` + `backup.log`.
+
 ## [0.7.4] - 2026-05-14
 
 ### Changed — CI: Windows in `build`, Ubuntu-only in `test`

@@ -262,6 +262,42 @@ roots, architectural rationale, and known limitations.
 
 ## Report Commands
 
+### Reading freshness (`--ingest` / `--auto-ingest`)
+
+The eight read-only data commands listed in this section
+(`status`, `today`, `month`, `report`, `compare`, `yield`,
+`optimize`, `export`) all read from the SQLite store at
+`~/.stackunderflow/store.db`. That store is normally kept fresh by
+the filesystem watcher that `stackunderflow start` spawns. When
+`start` is not running, the store reflects whatever the last
+watcher snapshot wrote — which can be hours or days stale.
+
+Two flags control how much the read commands try to refresh the
+store before they run:
+
+| Flag | Default | Behaviour |
+|---|---|---|
+| `--ingest` | off | Force a fresh ingest + incremental backfill pass before the command's query. Use when `stackunderflow start` is not running and you need authoritative numbers right now. |
+| `--auto-ingest / --no-auto-ingest` | `--auto-ingest` (on) | Refresh automatically when the store's newest event is older than 6 hours. A one-line `[stale data — ingesting...]` notice goes to stderr. Disable with `--no-auto-ingest` (e.g. inside scripts that don't want surprise latency). |
+
+`--ingest` overrides `--no-auto-ingest`: an explicit force always
+runs the pass. The refresh runs **synchronously** in the CLI's
+lifetime — it blocks the command until the pass completes.
+
+The refresh path is identical to the one
+`stackunderflow start` runs at boot: enumerate every registered
+adapter, ingest new bytes via the per-file watermark, then call
+`backfill(conn, force=False)` to materialise any newly-inserted
+messages into `usage_events` and refresh the mart watermarks.
+
+When the `start` server is running in another terminal it owns the
+watcher lock. The CLI ingest path runs anyway — it shares the same
+ETL transactions and `INSERT OR IGNORE` dedup, so concurrent passes
+do not corrupt the store, though the second pass will see most rows
+as already-ingested.
+
+---
+
 ### `stackunderflow status`
 
 Compact one-liner showing today's and this month's cost and message counts.
@@ -274,6 +310,8 @@ Usage: stackunderflow status [OPTIONS]
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--format` | `text\|json` | text | Output format |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Example:**
 
@@ -305,6 +343,8 @@ Usage: stackunderflow today [OPTIONS]
 | `--format` | `text\|json` | text | Output format |
 | `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Example:**
 
@@ -337,6 +377,8 @@ Usage: stackunderflow month [OPTIONS]
 | `--format` | `text\|json` | text | Output format |
 | `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Example:**
 
@@ -371,6 +413,8 @@ Usage: stackunderflow report [OPTIONS]
 | `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
 | `--provider` | `all\|claude\|codex\|cursor\|opencode\|pi\|copilot` | `all` | Provider filter (only `claude` and `all` supported today) |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 Valid period strings: `today`, `7days`, `30days`, `month`, `all`. Any other value exits with
 code 1 and prints `Unknown period`.
@@ -414,6 +458,8 @@ Usage: stackunderflow export [OPTIONS]
 | `--project` | TEXT | (all) | Include only this project slug (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project slug (repeatable) |
 | `--force` | flag | false | Overwrite the output file if it already exists |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **CSV layout.** Each period section starts with a `# period: <label>`
 comment row, followed by the daily-rows header
@@ -472,6 +518,8 @@ Usage: stackunderflow optimize [OPTIONS]
 | `--format` | `text\|json` | text | Output format |
 | `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Examples:**
 
@@ -505,6 +553,8 @@ Usage: stackunderflow compare [OPTIONS]
 | `--provider` | TEXT | (all) | Filter by provider id (`claude`, `codex`, `cursor`, …) |
 | `--project` | TEXT | (all) | Restrict to this project slug (repeatable) |
 | `--format` | `text\|json` | text | Output format |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Metrics:**
 
@@ -583,6 +633,8 @@ Usage: stackunderflow yield [OPTIONS]
 | `-p, --period` | TEXT | `month` | Period: `today`, `week`, `month`, `all`, `7days`, `30days` |
 | `--project` | TEXT | (all) | Filter by project slug (repeatable) |
 | `--format` | `text\|json` | text | Output format |
+| `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
+| `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
 **Examples:**
 
@@ -1486,6 +1538,11 @@ Usage: stackunderflow discovery demote-uncited [OPTIONS]
 ---
 
 ## Backup Commands
+
+Long-form discussion of the snapshot directory layout, the rsync
+`--link-dest` hard-link contract, restore semantics, and the macOS
+launchd auto-backup integration lives in
+[docs/backup.md](backup.md).
 
 ### `stackunderflow backup create`
 

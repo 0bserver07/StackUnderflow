@@ -72,6 +72,15 @@ Source-of-truth state lives at `~/.stackunderflow/store.db` (SQLite). The dashbo
 
 The watcher (`stackunderflow/etl/watcher.py`) ties the layers together: filesystem change → adapter.read() → writer inserts messages → normalizer inserts events → refresh_all_marts() advances watermarks. End-to-end ~400 ms. A `fcntl`/`msvcrt` single-instance lock at `~/.stackunderflow/server.lock` (see `etl/lock.py`) means a second `stackunderflow start` against the same store still serves HTTP but doesn't run the watcher; `--no-lock` / `STACKUNDERFLOW_DISABLE_LOCK=1` skips it.
 
+State directory layout (`~/.stackunderflow/`):
+
+- `store.db` — SQLite source of truth (canonical data; do not touch without a backup)
+- `cache/` — disk side of the TieredCache (rebuildable; `--fresh` wipes it)
+- `server.lock` — watcher single-instance lock
+- `config.json` — user settings (descriptor-resolved via `settings.py`)
+- `backups/<ts>[-label]/` — `stackunderflow backup create` snapshots of `~/.claude/`, rsync-hard-linked against the previous snapshot (see `docs/backup.md`)
+- `backup.log` — launchd auto-backup stdout/stderr
+
 ---
 
 ## Package layout
@@ -130,6 +139,10 @@ stackunderflow/
     cfg.py compare.py context_budget.py cost.py data.py etl.py
     export.py optimize.py plan.py projects.py sessions.py yield_route.py
     bookmarks.py commands.py misc.py qa.py search.py tags.py
+    # misc.py also exposes /api/ollama-api/{path:path} — a thin httpx
+    # pass-through to a local Ollama daemon (default upstream
+    # http://localhost:11434). Powers the dashboard's chat sidebar
+    # (stackunderflow-ui/src/components/layout/ChatDrawer.tsx).
     playback.py agent_teams.py                                                # ← post-v0.7
     meta_agent.py                                                             # ← post-v0.7.4 — NDJSON tool-calling loop driving the right-docked sidebar
   services/          # compare, plans, yield_tracker, pricing, search, qa, tags, bookmarks
@@ -148,6 +161,8 @@ stackunderflow/
     db.py types.py
     migrations/      # v001 → v013 (v005 + v008 are .py, rest are .sql)
   cli.py server.py deps.py settings.py __version__.py
+  cli_helpers/       # CLI-only helpers separated from cli.py
+    ingest.py        # ensure_fresh() + is_stale() — read-only data commands' --ingest path
 
 stackunderflow-ui/    # React dashboard (Vite); output → ../stackunderflow/static/react/
   src/
@@ -480,7 +495,7 @@ The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store no
 
 ## What I'd do next if I had a week
 
-1. **Spec 06 — backup / sync service.** Separate package, BYO mode (S3 / R2 / MinIO), client-side encrypted, opt-in. Name TBD (`cairn` rejected; placeholder `stackunderflow-backup`). The local store is the only source of truth today; this gives users a portable second copy without phoning home to a central service. Live in a separate repo per the spec.
+1. **Spec 06 — backup / sync service. CLOSED — shipped as `stackunderflow backup`.** The local rsync-`--link-dest` snapshot path (`backup create / list / restore / auto`, macOS launchd integration) covers the original spec's local-incremental requirement. Snapshots land at `~/.stackunderflow/backups/<ts>[-label]/`. Off-machine sync / encrypted remote storage is deliberately not part of this surface — users who need that pipe the local snapshot through their preferred tool (tar + cloud, restic, borg). See `docs/backup.md` and `stackunderflow/cli.py` around `backup_group`.
 2. **Cross-platform CI matrix.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
 3. **Discovery semantic-search mode (`--use-embeddings`).** Opt-in re-ranker that runs after the substring filter and brings up sessions that talk about the same idea in different words. Closes follow-up #10 — only do this if substring search proves brittle in practice.
 
