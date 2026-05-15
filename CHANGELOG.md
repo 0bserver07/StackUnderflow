@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — CLI report cost commands (today / month / status / report) now read from usage_events
+
+`stackunderflow/reports/aggregate.py:build_report` was recomputing cost out of `messages.input_tokens` / `output_tokens` + `messages.model` via `compute_cost(...)` on every call. That path missed the v0.7.2 pricing additions (`claude-opus-4-7`, `glm-5`, `composer-1`, `droid-auto`), dropped the `speed='fast'` priority-tier 6× multiplier on rows whose canonical model alias did not round-trip through the live pricer, and did not reproduce the 1/N attribution contract the marts encode. On a real store the symptom was a ~6× under-count: `stackunderflow status` reported `month: $502.53 (21575 msg)` for May 2026 against a true `SUM(usage_events.cost_usd) = $3072.74 (12972 events)` for the same window; `stackunderflow today` returned `$0 / 0 sessions` whenever the day-window straddled events whose model alias had drifted.
+
+`build_report` now reads stored `usage_events.cost_usd` — the normalised, attributed value written once on ingest — and sums it per project slug + counts distinct `session_id` for the session column. One pass for cost / message count; one pass for the session count; same indexed shape every existing route already uses. The function signature and return shape are byte-identical (`{scope_label, total_cost, total_messages, total_sessions, by_project}`), so the four CLI commands that funnel through it (`today`, `month`, `status`, `report`) and the `_resolve_period_spend` helper that backs `stackunderflow plan show` all pick up the fix without changes at the call site.
+
+The legacy `messages`-based path is kept as the empty-`usage_events` fallback so a fresh install (pre-`stackunderflow backfill`) still produces a report. The gate matches the empty-mart pattern the routes use: existence check on `usage_events` plus a one-row probe (`SELECT 1 FROM usage_events LIMIT 1`); only when the table is absent or empty does the aggregator fall back to `cross_project_daily_totals` + `compute_cost`. Tests lock both paths: a `_seed_usage_event` helper seeds rows directly into `usage_events` and asserts `total_cost == SUM(cost_usd)` to within $0.01; a paired test seeds messages without events and asserts the legacy fallback still produces non-zero rollups; a mixed-store test pins that when both tables have rows, `usage_events.cost_usd` wins (7 new tests, suite goes from 2428 → 2435 fast tests).
+
 ## [0.7.4] - 2026-05-14
 
 ### Changed — CI: Windows in `build`, Ubuntu-only in `test`
