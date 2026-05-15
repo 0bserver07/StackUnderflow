@@ -940,6 +940,56 @@ def _open_store():
     return conn
 
 
+# ── ingest-on-read helpers ───────────────────────────────────────────────────
+#
+# Read-only data commands (``status``, ``today``, ``month``, ``report``,
+# ``compare``, ``yield``, ``optimize``, ``export``) reflect whatever the
+# last watcher snapshot left in the store. When ``stackunderflow start``
+# is not running, that can be days stale. ``--ingest`` forces a fresh
+# pass; ``--auto-ingest`` (default on) does it only when the store's
+# newest event is older than the staleness threshold. The shared logic
+# lives in :mod:`stackunderflow.cli_helpers.ingest`.
+
+def _ingest_options(fn):
+    """Decorator: attach ``--ingest`` / ``--auto-ingest`` to a data command."""
+    fn = click.option(
+        "--auto-ingest/--no-auto-ingest",
+        "auto_ingest",
+        default=True,
+        help=(
+            "Refresh the store automatically when its newest event is "
+            "older than the staleness threshold. Default on. Disable "
+            "with --no-auto-ingest."
+        ),
+    )(fn)
+    fn = click.option(
+        "--ingest",
+        "do_ingest",
+        is_flag=True,
+        default=False,
+        help=(
+            "Force a fresh ingest+backfill pass before running the "
+            "command. Useful when 'stackunderflow start' is not active."
+        ),
+    )(fn)
+    return fn
+
+
+def _maybe_refresh_store(
+    conn,
+    *,
+    do_ingest: bool,
+    auto_ingest: bool,
+) -> None:
+    """Bridge from the CLI flags to ``cli_helpers.ingest.ensure_fresh``.
+
+    Kept here so the command bodies stay one-liners; the actual logic
+    is in :func:`stackunderflow.cli_helpers.ingest.ensure_fresh`.
+    """
+    from stackunderflow.cli_helpers.ingest import ensure_fresh
+    ensure_fresh(conn, force=do_ingest, auto=auto_ingest)
+
+
 @cli.command("report")
 @click.option("-p", "--period", default="7days",
               help="Period: today, 7days, 30days, month, all")
@@ -951,7 +1001,16 @@ def _open_store():
               help="Exclude these project dir names (repeatable)")
 @click.option("--provider", type=click.Choice(["all", "claude", "codex", "cursor", "opencode", "pi", "copilot"]),
               default="all", help="Provider (only 'claude' and 'all' supported today)")
-def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...], provider: str):
+@_ingest_options
+def report_cmd(
+    period: str,
+    fmt: str,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    provider: str,
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """Dashboard-style summary over a date range."""
     try:
         scope = parse_period(period)
@@ -960,6 +1019,7 @@ def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
     _ = provider  # stub: wired in Plan C
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         report = build_report(
             conn,
             scope=scope,
@@ -975,11 +1035,19 @@ def report_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
 @click.option("--project", "include", multiple=True)
 @click.option("--exclude", "exclude", multiple=True)
-def today_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+@_ingest_options
+def today_cmd(
+    fmt: str,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """Today's usage."""
     scope = parse_period("today")
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         report = build_report(conn, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
     finally:
         conn.close()
@@ -990,11 +1058,19 @@ def today_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
 @click.option("--project", "include", multiple=True)
 @click.option("--exclude", "exclude", multiple=True)
-def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+@_ingest_options
+def month_cmd(
+    fmt: str,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """This month's usage."""
     scope = parse_period("month")
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         report = build_report(conn, scope=scope, include=list(include) or None, exclude=list(exclude) or None)
     finally:
         conn.close()
@@ -1003,10 +1079,12 @@ def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
 
 @cli.command("status")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
-def status_cmd(fmt: str):
+@_ingest_options
+def status_cmd(fmt: str, do_ingest: bool, auto_ingest: bool):
     """Compact one-liner: today + month cost and message counts."""
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         today = build_report(conn, scope=parse_period("today"), include=None, exclude=None)
         month = build_report(conn, scope=parse_period("month"), include=None, exclude=None)
     finally:
@@ -1059,6 +1137,7 @@ _EXPORT_PERIODS = ("today", "week", "month", "all")
     "--force", is_flag=True,
     help="Overwrite the output file if it already exists.",
 )
+@_ingest_options
 def export_cmd(
     fmt: str,
     output: str,
@@ -1067,6 +1146,8 @@ def export_cmd(
     include: tuple[str, ...],
     exclude: tuple[str, ...],
     force: bool,
+    do_ingest: bool,
+    auto_ingest: bool,
 ):
     """Export aggregated usage data to a CSV or JSON file.
 
@@ -1080,6 +1161,7 @@ def export_cmd(
 
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         try:
             text, _content_type, _suggested = run_export(
                 conn,
@@ -1107,7 +1189,15 @@ def export_cmd(
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text")
 @click.option("--project", "include", multiple=True)
 @click.option("--exclude", "exclude", multiple=True)
-def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
+@_ingest_options
+def optimize_cmd(
+    period: str,
+    fmt: str,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """Find wasted spend: looped Q&A pairs plus seven structural waste patterns.
 
     The legacy ``waste`` block lists projects where the assistant had to
@@ -1122,6 +1212,7 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
         raise click.ClickException(str(e)) from e
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         waste = find_waste(
             conn,
             scope=scope,
@@ -1196,7 +1287,15 @@ _COMPARE_PERIODS = ("today", "week", "month", "all")
     default="text",
     help="Output format.",
 )
-def compare_cmd(period: str, provider: str | None, project: tuple[str, ...], fmt: str):
+@_ingest_options
+def compare_cmd(
+    period: str,
+    provider: str | None,
+    project: tuple[str, ...],
+    fmt: str,
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """Compare per-model metrics side-by-side over a window.
 
     Renders one row per model with sessions, calls, one-shot %, retry
@@ -1208,6 +1307,7 @@ def compare_cmd(period: str, provider: str | None, project: tuple[str, ...], fmt
 
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         payload = build_compare_payload(
             conn,
             period=period,
@@ -1297,7 +1397,14 @@ _YIELD_PERIODS = ("today", "week", "month", "all", "7days", "30days")
     default="text",
     help="Output format.",
 )
-def yield_cmd(period: str, include: tuple[str, ...], fmt: str):
+@_ingest_options
+def yield_cmd(
+    period: str,
+    include: tuple[str, ...],
+    fmt: str,
+    do_ingest: bool,
+    auto_ingest: bool,
+):
     """Yield analysis: productive vs reverted vs abandoned sessions.
 
     Cross-references each session's cwd with the git commit history of that
@@ -1318,6 +1425,7 @@ def yield_cmd(period: str, include: tuple[str, ...], fmt: str):
     project_filter = list(include) or None
     conn = _open_store()
     try:
+        _maybe_refresh_store(conn, do_ingest=do_ingest, auto_ingest=auto_ingest)
         entries = compute_yield(conn, period=period, project_filter=project_filter)
     finally:
         conn.close()
