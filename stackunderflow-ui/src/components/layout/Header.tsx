@@ -204,7 +204,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
       {/* Theme Toggle */}
       <ThemeToggle />
 
-      {/* Chat Toggle */}
+      {/* Meta-Agent Toggle */}
       <button
         onClick={onToggleChat}
         className={`p-1.5 rounded ${
@@ -212,7 +212,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
             ? 'bg-indigo-600 text-white'
             : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800'
         }`}
-        title="Toggle Ollama Chat"
+        title="Toggle Ask StackUnderflow"
       >
         <IconMessageChatbot size={18} />
       </button>

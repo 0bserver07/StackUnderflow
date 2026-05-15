@@ -15,6 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The legacy `messages`-based path is kept as the empty-`usage_events` fallback so a fresh install (pre-`stackunderflow backfill`) still produces a report. The gate matches the empty-mart pattern the routes use: existence check on `usage_events` plus a one-row probe (`SELECT 1 FROM usage_events LIMIT 1`); only when the table is absent or empty does the aggregator fall back to `cross_project_daily_totals` + `compute_cost`. Tests lock both paths: a `_seed_usage_event` helper seeds rows directly into `usage_events` and asserts `total_cost == SUM(cost_usd)` to within $0.01; a paired test seeds messages without events and asserts the legacy fallback still produces non-zero rollups; a mixed-store test pins that when both tables have rows, `usage_events.cost_usd` wins (7 new tests, suite goes from 2428 → 2435 fast tests).
 
+### Added — meta-agent sidebar with backend tool-calling
+
+The right-side overlay chat drawer (`ChatDrawer`) is promoted to a permanent **docked right column** ("Ask StackUnderflow"). The chat now drives a tool-calling loop against a local Ollama model that can read from the same SQLite store the dashboard reads — turning the sidebar into a meta-agent that answers grounded questions about the user's own sessions, projects, costs, and file activity.
+
+- **New route**: `POST /api/meta-agent/chat` streams `application/x-ndjson` events (`token` / `tool_call` / `tool_result` / `error` / `done`). On each turn the route calls `http://localhost:11434/api/chat` with the tool catalogue; if the model emits a `tool_calls` array the route executes each one against the local store, appends `role: "tool"` results, and re-calls Ollama. Hard cap at `MAX_TOOL_HOPS = 5` keeps misbehaving models from runaway-looping.
+- **New service**: `stackunderflow/services/meta_agent.py` defines the tool catalogue (7 tools — see below) and the executor dispatcher. Every tool wraps an existing read-only service; results are JSON-safe `ToolResult` records capped at ~4 KB so a noisy payload can't blow the LLM context window.
+- **Tool catalogue** (all read-only):
+  - `search_past_decisions(query, limit?, project?, since?)` — substring search across transcripts.
+  - `find_sessions_in_path(path, since?, limit?)` — sessions whose project root is `path` or an ancestor.
+  - `find_sessions_touching_file(file, mode?, limit?)` — sessions where the path appears in tool args or content.
+  - `get_project_summary(slug?)` — flat rollup for one project (sessions / messages / cost / first-last activity).
+  - `get_cost_summary(period?, limit?)` — cross-project cost roll-up over `today|7days|30days|month|all`.
+  - `get_session_playback(session_id, at?)` — files touched by a session up to a cutoff (metadata only — file bodies are never inlined).
+  - `list_recent_sessions(project?, limit?)` — most-recently-active sessions.
+  - Catalogue endpoint: `GET /api/meta-agent/tools` returns the static JSON-schema array plus `max_hops`.
+- **Promoted layout**: `ChatDrawer` (overlay) → `MetaAgentSidebar` (docked column). Expanded on viewports `>= 1280px`; collapses to an icon rail at `>= 768px`; hides entirely below `768px` and the header chat button summons a fullscreen overlay instead. The expanded / collapsed state persists in `localStorage.stackunderflow_metaAgentSidebar`.
+- **Tool-call surface**: each `tool_call` event renders as an inline `<details>`-style block above the next assistant bubble. Default collapsed with a one-line summary (`tool_name · 124ms · ok · 7 matches`); expand to see the raw args + result as pretty-printed JSON. Long blobs are right-side-truncated to a 4 KB hard cap.
+- **Model heuristic**: when the picked Ollama model's name doesn't match a known tools-capable family (`qwen2.5-coder`, `llama3.2`, `llama3.1`, `firefunction`, `command-r`, `mistral-nemo`, `mistral-large`, `mixtral`), the composer renders an amber warning pill so the user knows tool execution may silently no-op. Plain chat still works.
+- **Privacy**: nothing leaves the machine. The route opens HTTP only to `localhost:11434` (Ollama); all tool executors read from `~/.stackunderflow/store.db`. There is no fallback to a remote LLM — if Ollama is down the first NDJSON event is `{"type": "error"}` and the sidebar surfaces a banner.
+- **Tests**: +22 backend (`tests/stackunderflow/routes/test_meta_agent_route.py` — tool dispatch contract, unknown-tool clean-error, 4 KB truncation, request-validation, mocked Ollama for the streaming wire format incl. tool-call loop + hop-cap + 5xx propagation), +17 frontend (`stackunderflow-ui/tests/services/meta-agent.test.ts` — NDJSON parser, chunk re-assembly, tool-summary helpers, viewport-state resolver). 2428 → 2450 fast / 135 → 152 frontend.
+- **Docs**: new `docs/meta-agent.md` (catalogue, wire format, privacy, model recommendations, cookbook). `README.md` "Search, Q&A, tags" section gains a "Meta agent" sub-section. `docs/HANDOFF.md` architecture map adds the new route + service entries.
+- **Removed**: legacy `ChatDrawer.tsx` + the plain-chat `ChatInterface.tsx` / `ChatMessageList.tsx` / `ChatMessageBubble.tsx`. The backend `/ollama-api/{path:path}` proxy in `routes/misc.py` is unchanged — the new chat goes through the meta-agent route, but the proxy stays so model-listing (`/api/tags`) and any legacy clients keep working.
+
 ## [0.7.4] - 2026-05-14
 
 ### Changed — CI: Windows in `build`, Ubuntu-only in `test`
