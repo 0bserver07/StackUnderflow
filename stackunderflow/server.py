@@ -27,6 +27,7 @@ from stackunderflow.routes import (
     cost,
     data,
     etl,
+    meta_agent,
     misc,
     optimize,
     plan,
@@ -244,6 +245,7 @@ app.include_router(cfg.router)
 app.include_router(etl.router)
 app.include_router(agent_teams.router)
 app.include_router(playback.router)
+app.include_router(meta_agent.router)
 
 
 

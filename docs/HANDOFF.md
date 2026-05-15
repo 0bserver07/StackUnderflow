@@ -126,17 +126,19 @@ stackunderflow/
     server.py        # FastMCP server; 8 tools — session_query/list_sessions/list_projects + 3 discovery + 2 outcome  ← +5 post-v0.7
     store_reader.py  # Read-only store helpers shared with the MCP server
   reports/           # CLI report renderers (text/json/csv) + optimize patterns (mart-backed detectors via message_tool_mart)
-  routes/            # FastAPI routes (one file per concern, 16 of them)
+  routes/            # FastAPI routes (one file per concern, 17 of them)
     cfg.py compare.py context_budget.py cost.py data.py etl.py
     export.py optimize.py plan.py projects.py sessions.py yield_route.py
     bookmarks.py commands.py misc.py qa.py search.py tags.py
     playback.py agent_teams.py                                                # ← post-v0.7
+    meta_agent.py                                                             # ← post-v0.7.4 — NDJSON tool-calling loop driving the right-docked sidebar
   services/          # compare, plans, yield_tracker, pricing, search, qa, tags, bookmarks
     discovery.py     # discovery / outcome queries (shared by CLI + MCP); SessionMatch/OutcomeMatch/BudgetedResult; pack_within_budget   ← post-v0.7
     discovery_telemetry.py  # loaded_count/cited_count recording + demote-uncited sweep                                                   ← post-v0.7
     skill_synth.py   # mine the store for project workflow patterns → auto-* SKILL.md files                                               ← post-v0.7
     playback.py      # per-session / per-project tool-call timeline (read-side over messages.raw_json + captured_events)                   ← post-v0.7
     agent_teams.py   # Claude Code agent-team graph — v013-JOIN-backed, falls back to is_sidechain/raw_json heuristic                      ← post-v0.7
+    meta_agent.py    # backend tool catalogue + dispatcher for the meta-agent sidebar; 7 read-only tools; 4 KB per-result cap              ← post-v0.7.4
   skills/                                                         ← post-v0.7 — static SKILL.md files shipped with the package
     check-prior-work/  find-related-sessions/  recall-past-decisions/   # one SKILL.md each
   store/
@@ -179,6 +181,7 @@ docs/
 | v0.7.1 | 2026-05-13 | Wave 5 ETL follow-ups (tool_mart + command_mart v007, POST /api/etl/backfill, watcher single-instance lock, messages_YYYYMM partitioning v008, 13 beta normalizers validated, 1 copilot drift fix); the post-v0.7 spec round (5 CLI + 5 MCP discovery tools + token-budgeted output + outcome-aware discovery, auto-generated `skills generate/list/clean` + 3 shipped static SKILL.md, `discovery_telemetry` v009, opt-in lifecycle hooks + `captured_events` v010, `message_tool_mart` v011, `tool_mart.calls_total` v012, multi-agent FS recognition + agent-teams routes + Agents tab v013, per-session playback timeline + Playback tab); `init --install-skills` flag; beta-normalizer pricing coverage |
 | v0.7.2 | 2026-05-13 | Pricing fixes round 2 (`claude-opus-4-7` + GLM-5* + `composer-1` + `droid-auto` / `cline-auto` + `gemini-3-*-preview`; `_PROVIDER_TO_PRICER` bug fix that had been overcounting non-Anthropic beta providers 3-4×); outcome-aware discovery `outcome_confidence` ladder + default `min_confidence=0.5`; optimize detector parity tests + perf bench locking the v011 `message_tool_mart` migration; `/api/cost-data` `command_costs` structural-mismatch lock-in tests; HANDOFF +45 fast tests |
 | v0.7.3 | 2026-05-14 | Playback v2 — virtual-filesystem reconstruction at a point in time (`GET /api/playback/{session}/fs?at=<iso>` route + file-browser side panel on Playback tab); opt-in semantic search for `search-past-decisions` (`--use-embeddings`, sentence-transformers + all-MiniLM-L6-v2, v014 `discovery_embeddings` pull-through cache); Windows runner in the CI test + build matrices; `beta: true` dropped from Playback + Agents tabs. Schema `CURRENT_VERSION = 14` |
+| post-v0.7.4 (unreleased) | 2026-05-15 | Meta-agent sidebar — the right-side overlay `ChatDrawer` becomes a permanent docked column ("Ask StackUnderflow"). New `POST /api/meta-agent/chat` NDJSON streaming route drives an Ollama tool-calling loop against a 7-tool catalogue (search-past-decisions, find-sessions-in-path, find-sessions-touching-file, get-project-summary, get-cost-summary, get-session-playback, list-recent-sessions). 5-hop tool cap, 4 KB per-result truncation, local-only (no remote LLM fallback). See `docs/meta-agent.md` |
 
 ---
 
