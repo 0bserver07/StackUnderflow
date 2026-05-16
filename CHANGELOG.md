@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-16
+
+Patch release: five real-data audit fixes shipping together. Run on a real 95-session / 374-Task-call project, 5 dashboard tabs were broken or unusably slow — these are the fixes.
+
+### Fixed — Agents tab synthesised "teams" from unrelated projects (project-scoping bug)
+
+The v013-fallback `_list_team_sessions_scan` returned every session in any project that had a sidechain message anywhere. SutroYaro has 0 sidechain but 374 `Task` tool calls; the tab returned 10 unrelated sessions from `mycelium-ecosystem` and `ComedyCatalouge`. Replaced with a real per-project `Task` / `Agent` tool-call detector that surfaces one row per parent session ranked by sub-agent invocation count. Indexed v013 path also gains an `_indexed_teams_match_project` guard so a globally-populated `agent_teams` table doesn't suppress the fallback for projects with no v013 rows. The route now accepts `?project=<slug>` and the AgentsTab passes the active project's slug.
+
 ### Fixed — /api/yield route timeout on real-store-shape projects
 
 `/api/yield` (and the underlying `services.yield_tracker.compute_yield`) was timing out at 15 s on a real store with ~95 sessions in a single project (~250 K messages, ~150 K usage events). cProfile pinned 87 % of the time to `subprocess.run` — the v1 pipeline issued **one `git rev-parse` per session plus up to four further `git` invocations per *classified* session** (`git log` window, `git show` for commit time, `git log --grep=revert` per candidate sha, `git merge-base --is-ancestor`). With sessions sharing the same `cwd`, the same git work was redone hundreds of times.
