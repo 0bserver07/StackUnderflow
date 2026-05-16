@@ -286,22 +286,121 @@ def _agent_summary_for_session(
 def list_team_sessions(
     conn: sqlite3.Connection, *, limit: int = 50, project_slug: str | None = None
 ) -> list[TeamSummary]:
-    """List recent teams (one row per lead session that spawned sub-agents).
+    """List sessions whose work involved sub-agents.
 
-    Uses the materialised ``agent_teams`` table when populated (a single
-    indexed JOIN), otherwise falls back to the ``messages.is_sidechain``
-    heuristic. Returns at most ``limit`` rows ordered by most recent
-    activity. When ``project_slug`` is set, only teams whose lead
-    session lives in that project are returned (per-project Agents-tab
-    scoping). Empty store → empty list.
+    Three detection paths, tried in order:
+
+    1. **Indexed v013 path** — `agent_teams` table materialised from
+       ``~/.claude/teams/`` artefacts. Most accurate when present.
+    2. **Sidechain path** — `messages.is_sidechain = 1` rows indicate
+       Claude Code spawned an inline sub-agent within the same session
+       file. Treats each lead session as a team.
+    3. **Task-tool path** — for stores without sidechain (the common
+       case), look for `Task` / `Agent` tool calls in `tools_json`.
+       A session that called Task N times spawned N sub-agents; we
+       roll those up into one row per parent session.
+
+    When ``project_slug`` is set, every path narrows to that project
+    only — never returns sessions from sibling projects.
     """
-    if _indexed_teams_available(conn):
+    if _indexed_teams_available(conn) and _indexed_teams_match_project(
+        conn, project_slug=project_slug
+    ):
         return _list_team_sessions_indexed(
             conn, limit=limit, project_slug=project_slug,
         )
-    return _list_team_sessions_scan(
+    sidechain_results = _list_team_sessions_scan(
         conn, limit=limit, project_slug=project_slug,
     )
+    if sidechain_results:
+        return sidechain_results
+    return _list_team_sessions_task_tool(
+        conn, limit=limit, project_slug=project_slug,
+    )
+
+
+def _indexed_teams_match_project(
+    conn: sqlite3.Connection, *, project_slug: str | None
+) -> bool:
+    """True when the indexed path has rows for the requested project.
+
+    Without this, an empty-for-this-project but populated-globally
+    `agent_teams` table would return nothing; we want to fall through
+    to the sidechain / Task-tool path in that case.
+    """
+    if project_slug is None:
+        return True
+    row = conn.execute(
+        """
+        SELECT 1 FROM agent_teams t
+        JOIN projects p ON p.id = t.project_id
+        WHERE p.slug = ? LIMIT 1
+        """,
+        (project_slug,),
+    ).fetchone()
+    return row is not None
+
+
+def _list_team_sessions_task_tool(
+    conn: sqlite3.Connection, *, limit: int, project_slug: str | None = None
+) -> list[TeamSummary]:
+    """List sessions whose `tools_json` contains `Task` or `Agent`.
+
+    For stores where Claude Code uses inline `Task` tool calls (no
+    sidechain, no `~/.claude/teams/`). Each Task call spawns a
+    sub-agent that runs and returns within the same session — the
+    cost is already attributed to the parent. We surface one row per
+    parent session with the count of sub-agent invocations rolled up.
+    """
+    where = ""
+    params: list = []
+    if project_slug:
+        where = "AND p.slug = ?"
+        params.append(project_slug)
+    params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT
+          s.id            AS session_fk,
+          s.session_id,
+          s.first_ts,
+          s.last_ts,
+          s.message_count AS lead_msgs,
+          p.slug          AS project_slug,
+          p.display_name  AS project_display_name,
+          SUM(CASE
+            WHEN m.tools_json LIKE '%"Task"%' OR m.tools_json LIKE '%"Agent"%'
+            THEN 1 ELSE 0 END) AS subagent_call_count
+        FROM sessions s
+        JOIN projects p ON p.id = s.project_id
+        JOIN messages m ON m.session_fk = s.id
+        WHERE 1=1 {where}
+        GROUP BY s.id, s.session_id, s.first_ts, s.last_ts,
+                 s.message_count, p.slug, p.display_name
+        HAVING subagent_call_count > 0
+        ORDER BY subagent_call_count DESC, s.last_ts DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        TeamSummary(
+            session_id=r["session_id"],
+            project_slug=r["project_slug"],
+            project_display_name=r["project_display_name"],
+            team_name=None,
+            first_ts=r["first_ts"],
+            last_ts=r["last_ts"],
+            agent_count=int(r["subagent_call_count"] or 0),
+            sub_agent_message_count=0,
+            lead_message_count=int(r["lead_msgs"] or 0),
+            description=(
+                f"{int(r['subagent_call_count'])} Task/Agent sub-agent invocations "
+                "(inline within parent session)"
+            ),
+        )
+        for r in rows
+    ]
 
 
 def _list_team_sessions_indexed(
