@@ -39,6 +39,7 @@ Every tool is a thin wrapper over an existing read-only service. Results are cap
 | `get_project_summary(slug?)` | direct SQL rollup against `projects` + `sessions` + `messages` | "What's the state of this project?" |
 | `get_cost_summary(period?, limit?)` | `reports.aggregate.build_report` | "What did I spend this month?" |
 | `get_session_playback(session_id, at?)` | `services.playback_fs.reconstruct_fs_at` | "What did the agent change in session X?" |
+| `get_burn_projection()` | `services.burn.build_projection` + `services.plans.compute_usage` | "Will I overrun this month?" |
 | `list_recent_sessions(project?, limit?)` | direct SQL on `sessions` + `projects` | "What did I work on lately?" |
 
 When a tool returns over the budget the result is trimmed (longest list-typed fields are halved repeatedly), and an `_truncated: true` marker tells the model the response was cut.
@@ -77,6 +78,7 @@ A few questions the meta-agent handles well:
 * *"Did I ever fix a flaky test in `tests/stackunderflow/etl/`?"* → calls `find_sessions_in_path(path="tests/stackunderflow/etl", since="180d")` and summarises matches.
 * *"Show me what the agent changed in session ab123..."* → calls `get_session_playback(session_id="ab123...")` and lists the touched files.
 * *"Have I ever dealt with stripe webhooks before?"* → calls `search_past_decisions(query="stripe webhooks")` and surfaces snippets from the matching sessions.
+* *"Will I overrun my Claude plan this month?"* → calls `get_burn_projection()` and quotes the projected month-end / days-to-limit / alert text.
 
 ## Extending the catalogue
 

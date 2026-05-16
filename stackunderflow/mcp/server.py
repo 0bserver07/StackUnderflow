@@ -633,6 +633,28 @@ def find_sessions_where_action_worked_impl(
         return {"sessions": [_match_to_dict(m) for m in matches]}
 
 
+def get_burn_projection_impl(*, conn=None) -> dict:
+    """Implementation behind the ``get_burn_projection`` MCP tool.
+
+    Returns the same shape the meta-agent emits — a flat dict carrying
+    plan + period + used + projected + alert. When no plan is set, the
+    response is ``{"plan_set": False, "hint": ...}`` so an MCP client
+    can suggest the right command without parsing nested fields.
+    """
+    from stackunderflow.services import meta_agent
+
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {
+                "plan_set": False,
+                "hint": (
+                    "Store unavailable. Run ``stackunderflow start`` once to "
+                    "ingest, then ``stackunderflow plan set claude-pro``."
+                ),
+            }
+        return meta_agent._exec_get_burn_projection(c, {})
+
+
 def find_failure_modes_for_file_impl(
     file_path: str,
     since: str | None = None,
@@ -1235,6 +1257,41 @@ def file_risk(path: str, since: str | None = None) -> dict:
         contract. ``recent_session_ids`` is capped at 5 ids.
     """
     return file_risk_impl(path=path, since=since)
+
+
+# ── burn projector v2 (Spec 17) ────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_burn_projection() -> dict:
+    """Project month-end spend against the user's plan budget.
+
+    Use this to answer "will I overrun this month?" — returns the
+    active plan, the current period's used / budget / remaining, the
+    projected month-end total, the daily burn rate, the projection
+    method (``"linear"`` or ``"weighted-7d"``), the estimated days
+    until the plan limit at the current burn, the configured alert
+    thresholds (default ``50``/``75``/``90``%), and the highest one
+    crossed (or ``null``).
+
+    The projection method auto-picks: with at least 3 days of recorded
+    spend, the weighted-7d exponential average is used (decays at
+    0.85/day so recent activity dominates and weekends fade); below
+    that threshold it falls back to the v1 linear running mean. The
+    ``daily_burn_usd`` field shows the rate the projection actually
+    used, so a caller can sanity-check the math.
+
+    Returns:
+        Dict with keys: ``plan_set`` (always present), ``hint`` (when
+        ``plan_set=False``), or — when a plan is configured —
+        ``plan``, ``period_start``, ``period_end``, ``days_so_far``,
+        ``days_in_period``, ``used_usd``, ``remaining_usd``,
+        ``pct_used``, ``status`` (``"ok"``/``"warn"``/``"over"``),
+        ``projected_month_end_usd``, ``projection_method``,
+        ``daily_burn_usd``, ``days_to_limit``, ``thresholds``,
+        ``crossed_threshold``, ``alert``.
+    """
+    return get_burn_projection_impl()
 
 
 def main() -> None:

@@ -209,6 +209,89 @@ def test_session_query_skips_missing_roots(tmp_path: Path) -> None:
     assert out == []
 
 
+# ── burn projector v2: get_burn_projection ─────────────────────────────────
+
+
+def test_get_burn_projection_no_store_returns_hint(tmp_path: Path, monkeypatch) -> None:
+    """When the store doesn't exist the MCP tool returns an actionable hint."""
+    from unittest.mock import patch
+
+    import stackunderflow.deps as deps
+    monkeypatch.setattr(deps, "store_path", tmp_path / "nope.db")
+
+    app_dir = tmp_path / ".su"
+    app_dir.mkdir()
+    cfg = app_dir / "cfg.json"
+    with (
+        patch("stackunderflow.settings._APP_DIR", app_dir),
+        patch("stackunderflow.settings._CFG_FILE", cfg),
+    ):
+        result = mcp_server.get_burn_projection_impl()
+    assert result["plan_set"] is False
+    assert "stackunderflow plan set" in result["hint"]
+
+
+def test_get_burn_projection_no_plan_returns_hint(tmp_path: Path, monkeypatch) -> None:
+    """Store exists but no plan configured → still surfaces the hint cleanly."""
+    from unittest.mock import patch
+
+    import stackunderflow.deps as deps
+    from stackunderflow.store import db as store_db
+    from stackunderflow.store import schema
+
+    db_path = tmp_path / "store.db"
+    conn = store_db.connect(db_path)
+    schema.apply(conn)
+    conn.close()
+    monkeypatch.setattr(deps, "store_path", db_path)
+
+    app_dir = tmp_path / ".su"
+    app_dir.mkdir()
+    cfg = app_dir / "cfg.json"
+    with (
+        patch("stackunderflow.settings._APP_DIR", app_dir),
+        patch("stackunderflow.settings._CFG_FILE", cfg),
+    ):
+        result = mcp_server.get_burn_projection_impl()
+    assert result["plan_set"] is False
+    assert "stackunderflow plan set" in result["hint"]
+
+
+def test_get_burn_projection_with_plan_returns_full_block(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With a configured plan the MCP tool returns the full projection dict."""
+    from unittest.mock import patch
+
+    import stackunderflow.deps as deps
+    from stackunderflow.services import plans as plans_mod
+    from stackunderflow.store import db as store_db
+    from stackunderflow.store import schema
+
+    db_path = tmp_path / "store.db"
+    conn = store_db.connect(db_path)
+    schema.apply(conn)
+    conn.close()
+    monkeypatch.setattr(deps, "store_path", db_path)
+
+    app_dir = tmp_path / ".su"
+    app_dir.mkdir()
+    cfg = app_dir / "cfg.json"
+    with (
+        patch("stackunderflow.settings._APP_DIR", app_dir),
+        patch("stackunderflow.settings._CFG_FILE", cfg),
+    ):
+        plans_mod.set_plan("claude-pro")
+        result = mcp_server.get_burn_projection_impl()
+    assert result["plan_set"] is True
+    assert result["plan"]["name"] == "claude-pro"
+    assert result["plan"]["monthly_usd"] == 20.0
+    # Empty store → 0 spend, linear projection, no alert.
+    assert result["used_usd"] == 0.0
+    assert result["projection_method"] == "linear"
+    assert result["alert"] is None
+
+
 def test_tool_args_summary_truncates_long_strings(fake_agent_home: Path) -> None:
     """Long tool-input strings should be truncated in the summary."""
     long_cmd = "x" * 500

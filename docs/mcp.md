@@ -16,6 +16,7 @@ Eight tools, all backed by the unified StackUnderflow store at `~/.stackunderflo
 | `search_past_decisions` | "Which session was that decision / design discussion in?" — free-text search across transcripts. |
 | `find_sessions_where_action_worked` | "Show me a prior session where this was done *and it worked*" — proven recipe with the confirming message as evidence. |
 | `find_failure_modes_for_file` | "What went wrong last time someone edited this file?" — past edits that led to a revert or complaint. |
+| `get_burn_projection` | "Will I overrun my plan this month?" — month-end forecast against the configured plan budget. |
 
 The store covers every adapter that's been ingested: `claude`, `codex`, `cursor`, `cline`, plus any beta-enabled providers (`droid`, `kiro`, `openclaw`, `pi`/`omp`, `copilot`, `kilocode`, `roocode`, `opencode`, `cursor-agent`, `gemini`, `qwen`, …). One MCP query sees them all.
 
@@ -206,6 +207,22 @@ Sessions where editing `file_path` led to a follow-up correction — the user re
 | `file_path` | — | Absolute or working-dir-relative file path; `~`-expanded and resolved. Must be non-empty. |
 | `since` | `None` | Only sessions whose edit is newer than this. `None` = all time. |
 | `limit` | `20` | Max sessions returned, sorted by `last_ts` DESC. Must be positive. |
+
+### `get_burn_projection`
+
+```python
+get_burn_projection() -> dict
+```
+
+Project month-end spend against the user's plan budget — the MCP-side answer to "will I overrun this month?". Mirrors the `projection` block on `GET /api/plan` and the JSON output of `stackunderflow plan show --format json`.
+
+When no plan is configured the call returns `{"plan_set": False, "hint": "...stackunderflow plan set..."}` so an MCP client can suggest the right command without parsing nested fields. With a plan set, the response carries the active plan, the current period's `used_usd` / `remaining_usd` / `pct_used` / `status`, the `projected_month_end_usd` total, the daily `daily_burn_usd` rate the projection used, the `projection_method` (`"linear"` or `"weighted-7d"`), the `days_to_limit` at the current burn (or `null`), the configured `thresholds` (default `[50, 75, 90]`), the highest one crossed (or `null`), and a human-readable `alert` string (or `null`).
+
+The projection auto-picks `"weighted-7d"` once the period has at least 3 non-zero daily samples (decay 0.85/day so recent activity dominates and weekends fade); otherwise — or when the recent 7-day window is all zero against an otherwise non-empty period (stale-store case) — it falls back to `"linear"` and surfaces `projection_method: "linear"` so the cause is visible.
+
+| Arg | Default | Meaning |
+|---|---|---|
+| (none) | — | Reads the active plan from settings; the period window resolves automatically. |
 
 ## Install
 

@@ -30,7 +30,6 @@ from stackunderflow.routes.meta_agent import router as meta_router
 from stackunderflow.services import meta_agent as meta_service
 from stackunderflow.store import db, schema
 
-
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
 
@@ -294,6 +293,79 @@ def test_execute_tool_string_args_parsed_as_json(app_client):
     assert result.data["query"] == "pipeline"
 
 
+def test_execute_tool_get_burn_projection_no_plan(app_client, tmp_path, monkeypatch):
+    """Without a configured plan the tool returns an actionable hint, not an error."""
+    # Isolate settings so a stray real-user config doesn't leak in.
+    from unittest.mock import patch as _patch
+
+    app_dir = tmp_path / ".su"
+    app_dir.mkdir()
+    cfg = app_dir / "cfg.json"
+    _, store_db = app_client
+    conn = db.connect(store_db)
+    try:
+        with (
+            _patch("stackunderflow.settings._APP_DIR", app_dir),
+            _patch("stackunderflow.settings._CFG_FILE", cfg),
+        ):
+            result = meta_service.execute_tool(conn, "get_burn_projection", {})
+    finally:
+        conn.close()
+    # No plan → ok=True (it's a successful call), ``plan_set=False``.
+    assert result.ok is True
+    assert result.data["plan_set"] is False
+    assert "stackunderflow plan set" in result.data["hint"]
+
+
+def test_execute_tool_get_burn_projection_with_plan(app_client, tmp_path):
+    """With a plan set the tool returns the structured projection block."""
+    from unittest.mock import patch as _patch
+
+    app_dir = tmp_path / ".su"
+    app_dir.mkdir()
+    cfg = app_dir / "cfg.json"
+    _, store_db = app_client
+    conn = db.connect(store_db)
+    try:
+        with (
+            _patch("stackunderflow.settings._APP_DIR", app_dir),
+            _patch("stackunderflow.settings._CFG_FILE", cfg),
+        ):
+            from stackunderflow.services import plans as plans_mod
+            plans_mod.set_plan("claude-pro")
+            result = meta_service.execute_tool(conn, "get_burn_projection", {})
+    finally:
+        conn.close()
+    assert result.ok is True
+    assert result.data["plan_set"] is True
+    assert result.data["plan"]["name"] == "claude-pro"
+    assert result.data["plan"]["monthly_usd"] == 20.0
+    # All projection keys present.
+    for key in (
+        "period_start", "period_end", "days_so_far", "days_in_period",
+        "used_usd", "remaining_usd", "pct_used", "status",
+        "projected_month_end_usd", "projection_method",
+        "daily_burn_usd", "days_to_limit", "thresholds",
+        "crossed_threshold", "alert",
+    ):
+        assert key in result.data
+    assert result.data["projection_method"] in ("linear", "weighted-7d")
+    assert result.data["thresholds"] == [50, 75, 90]
+
+
+def test_burn_projection_in_tool_catalog():
+    """The tool catalogue advertises the new tool under the OpenAI function shape."""
+    names = {t["function"]["name"] for t in meta_service.TOOL_CATALOG}
+    assert "get_burn_projection" in names
+    entry = next(
+        t for t in meta_service.TOOL_CATALOG
+        if t["function"]["name"] == "get_burn_projection"
+    )
+    assert entry["function"]["parameters"]["type"] == "object"
+    # No required args — the LLM can call it with `{}`.
+    assert entry["function"]["parameters"]["required"] == []
+
+
 def test_truncate_caps_large_payloads():
     """A tool result that exceeds the 4 KB budget gets trimmed but kept JSON-safe."""
     # Build a dict whose serialised form is well over the budget. The
@@ -429,7 +501,7 @@ class _FakeOllamaClient:
         self._scripted = scripted
         self._post_count = 0
 
-    async def __aenter__(self) -> "_FakeOllamaClient":
+    async def __aenter__(self) -> _FakeOllamaClient:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:

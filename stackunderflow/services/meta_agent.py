@@ -344,6 +344,28 @@ TOOL_CATALOG: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_burn_projection",
+            "description": (
+                "Project month-end spend against the user's plan and tell them "
+                "if they're tracking to overrun. Returns the active plan, the "
+                "current period's used / budget / remaining, the projected "
+                "month-end total, the daily burn rate that fed the projection, "
+                "the projection method (``linear`` or ``weighted-7d``), the "
+                "estimated days until the plan limit at current burn, and "
+                "(when crossed) the highest alert threshold. Use this for "
+                "'will I overrun this month?' / 'how am I tracking on Claude "
+                "Pro?' style questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_recent_sessions",
             "description": (
                 "Return the most recently active sessions across the store. Use "
@@ -745,6 +767,100 @@ def _exec_get_file_risk(
         return {"error": f"invalid since: {exc}"}
 
 
+def _exec_get_burn_projection(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Reach into the plan + burn services and shape the result for the LLM.
+
+    Reads the active plan from settings; runs the same period-window
+    resolution and per-day-cost slice the HTTP route does, but folded
+    into a flat dict so the LLM can quote a number without parsing
+    nested blocks. When no plan is set, returns an actionable hint
+    rather than an error so the model can suggest the right command.
+    """
+    from stackunderflow.services import burn
+    from stackunderflow.services import plans as plans_mod
+    from stackunderflow.settings import Settings
+
+    plan = plans_mod.get_active_plan()
+    if plan is None:
+        return {
+            "plan_set": False,
+            "hint": "No plan is configured. Run: stackunderflow plan set claude-pro",
+        }
+
+    window = plans_mod.compute_usage(plan, 0.0)
+
+    # Reuse the same per-day query the HTTP route uses so the projection
+    # numbers match between surfaces. We pass the connection directly so we
+    # don't open a second handle on the store. The half-open upper bound
+    # ``upper`` matches what ``_spend_daily_window`` does on the route side
+    # (date-after-period_end at 00:00:00, so the SUM picks up the full last
+    # day of the window).
+    from datetime import date as _date
+
+    since_iso = window["period_start"] + "T00:00:00"
+    until_d = _date.fromisoformat(window["period_end"])
+    upper = _date.fromordinal(until_d.toordinal() + 1).isoformat() + "T00:00:00"
+
+    rows = conn.execute(
+        "SELECT substr(ts, 1, 10) AS day, SUM(cost_usd) AS cost "
+        "FROM usage_events WHERE ts >= ? AND ts < ? "
+        "GROUP BY day ORDER BY day",
+        (since_iso, upper),
+    ).fetchall()
+    by_day = {
+        (r["day"] if isinstance(r, sqlite3.Row) else r[0]): float(
+            (r["cost"] if isinstance(r, sqlite3.Row) else r[1]) or 0.0
+        )
+        for r in rows
+    }
+    used = round(sum(by_day.values()), 6)
+    usage = plans_mod.compute_usage(plan, used)
+
+    today = _date.today()
+    last_day = min(_date.fromisoformat(window["period_end"]), today)
+    cursor = _date.fromisoformat(window["period_start"])
+    daily: list[float] = []
+    while cursor <= last_day:
+        daily.append(by_day.get(cursor.isoformat(), 0.0))
+        cursor = _date.fromordinal(cursor.toordinal() + 1)
+
+    thresholds = Settings().get("plan_alert_thresholds") or list(burn.DEFAULT_THRESHOLDS)
+    projection = burn.build_projection(
+        daily_costs=daily,
+        used=used,
+        budget=plan.monthly_usd,
+        days_so_far=usage["days_so_far"],
+        days_in_period=usage["days_in_period"],
+        thresholds=thresholds,
+    )
+
+    return {
+        "plan_set": True,
+        "plan": {
+            "name": plan.name,
+            "monthly_usd": round(plan.monthly_usd, 4),
+            "reset_day": plan.reset_day,
+        },
+        "period_start": usage["period_start"],
+        "period_end": usage["period_end"],
+        "days_so_far": usage["days_so_far"],
+        "days_in_period": usage["days_in_period"],
+        "used_usd": round(usage["used"], 4),
+        "remaining_usd": round(usage["remaining"], 4),
+        "pct_used": round(usage["pct"], 2),
+        "status": usage["status"],
+        "projected_month_end_usd": round(projection["projected_month_end_usd"], 4),
+        "projection_method": projection["projection_method"],
+        "daily_burn_usd": round(projection["daily_burn_usd"], 4),
+        "days_to_limit": projection["days_to_limit"],
+        "thresholds": projection["thresholds"],
+        "crossed_threshold": projection["crossed_threshold"],
+        "alert": projection["alert"],
+    }
+
+
 def _exec_list_recent_sessions(
     conn: sqlite3.Connection, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -842,6 +958,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_project_summary": _exec_get_project_summary,
     "get_cost_summary": _exec_get_cost_summary,
     "get_session_playback": _exec_get_session_playback,
+    "get_burn_projection": _exec_get_burn_projection,
     "list_recent_sessions": _exec_list_recent_sessions,
     "recommend_skills": _exec_recommend_skills,
     "recommend_mode": _exec_recommend_mode,

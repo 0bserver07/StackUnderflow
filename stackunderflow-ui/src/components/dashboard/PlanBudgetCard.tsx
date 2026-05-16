@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { IconCreditCard, IconCalendarStats } from '@tabler/icons-react'
+import { IconCreditCard, IconCalendarStats, IconAlertTriangle } from '@tabler/icons-react'
 import { getPlan } from '../../services/api'
-import type { PlanUsage } from '../../types/api'
+import type { PlanProjection, PlanUsage } from '../../types/api'
 import Badge from '../common/Badge'
 import { formatCost } from '../../services/format'
 import { useCurrency } from '../../services/currency'
@@ -29,6 +29,36 @@ function statusBarColor(status: PlanUsage['status']): string {
   return 'bg-green-500'
 }
 
+/**
+ * Map a projection's alert / status to the amber-vs-red colour the
+ * forecast banner uses. Burn-projector v2 surfaces alerts at
+ * configurable thresholds (50 / 75 / 90 by default) so we want a
+ * graduated palette rather than reusing the binary status colour:
+ *
+ *  - over budget (`crossed_threshold >= 100` or status === 'over') → red
+ *  - any other crossed threshold → amber
+ *  - no alert → no banner (caller handles null)
+ */
+function forecastBannerStyle(
+  status: PlanUsage['status'],
+  projection: PlanProjection,
+): { bg: string; text: string; border: string } {
+  const isRed =
+    status === 'over' || (projection.crossed_threshold ?? 0) >= 100
+  if (isRed) {
+    return {
+      bg: 'bg-red-50 dark:bg-red-950/30',
+      text: 'text-red-800 dark:text-red-300',
+      border: 'border-red-200 dark:border-red-900',
+    }
+  }
+  return {
+    bg: 'bg-amber-50 dark:bg-amber-950/30',
+    text: 'text-amber-800 dark:text-amber-300',
+    border: 'border-amber-200 dark:border-amber-900',
+  }
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -49,9 +79,17 @@ export default function PlanBudgetCard() {
   if (isLoading || !data || !data.plan || !data.usage) return null
 
   const { plan, usage } = data
+  // Burn-projector v2 — `projection` is optional on the response type so
+  // older servers (pre-v0.8.x) keep working. When absent we fall back to
+  // the legacy `usage.projected` number for the Projected detail cell.
+  const projection = data.projection ?? null
   // Clamp to [0, 100] so the bar doesn't overflow the rail when usage is
   // 120% of budget — the badge already says "over" in that case.
   const barPct = Math.min(100, Math.max(0, usage.pct))
+  const projectedAmount = projection?.projected_month_end_usd ?? usage.projected
+  const banner = projection?.alert
+    ? forecastBannerStyle(usage.status, projection)
+    : null
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
@@ -108,8 +146,13 @@ export default function PlanBudgetCard() {
         <div>
           <div className="text-[10px] uppercase tracking-wider text-gray-500">Projected</div>
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100 tabular-nums">
-            {formatCost(usage.projected, currency)}
+            {formatCost(projectedAmount, currency)}
           </div>
+          {projection && (
+            <div className="text-[10px] text-gray-400 mt-0.5">
+              {projection.projection_method === 'weighted-7d' ? 'weighted 7d' : 'linear'}
+            </div>
+          )}
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-gray-500">Budget</div>
@@ -118,6 +161,43 @@ export default function PlanBudgetCard() {
           </div>
         </div>
       </div>
+
+      {/* Burn-projector v2 — daily-burn + days-to-limit strip. Renders only
+       * when the route returned a `projection` block and there's something
+       * substantive to show (a daily burn rate or a "days to limit" hint).
+       * Older servers (pre-v0.8.x) won't ship `projection` so the strip
+       * stays hidden — the legacy detail row above keeps the card useful.
+       */}
+      {projection && (projection.daily_burn_usd > 0 || projection.days_to_limit !== null) && (
+        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between text-xs text-gray-500">
+          <span>
+            <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+              {formatCost(projection.daily_burn_usd, currency)}
+            </span>{' '}
+            / day burn
+          </span>
+          {projection.days_to_limit !== null && (
+            <span className="tabular-nums">
+              ~{projection.days_to_limit} day{projection.days_to_limit === 1 ? '' : 's'} to limit
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Alert banner — surfaced only when the projection module produced
+       * a string. Threshold-crossed and projected-overrun share the same
+       * banner slot; the priority is encoded server-side so we just render
+       * whatever the route returned.
+       */}
+      {projection?.alert && banner && (
+        <div
+          className={`mt-3 px-3 py-2 rounded-md border text-xs flex items-center gap-2 ${banner.bg} ${banner.text} ${banner.border}`}
+          role="status"
+        >
+          <IconAlertTriangle size={14} className="flex-shrink-0" />
+          <span>{projection.alert}</span>
+        </div>
+      )}
     </div>
   )
 }

@@ -57,12 +57,16 @@ class _Opt:
             # Defensive: a corrupt config (wrong type) falls back to default.
             if isinstance(self.default, dict) and not isinstance(value, dict):
                 return dict(self.default)
+            if isinstance(self.default, list) and not isinstance(value, list):
+                return list(self.default)
             return value
 
         # 3. built-in default — return a fresh copy for mutable types so
         # callers can't accidentally mutate the class-level default.
         if isinstance(self.default, dict):
             return dict(self.default)
+        if isinstance(self.default, list):
+            return list(self.default)
         return self.default
 
     def _cast(self, raw: str) -> Any:
@@ -129,6 +133,12 @@ class Settings:
     plan_name                    = _Opt(None,  None)
     plan_monthly_usd             = _Opt(None,  None)
     plan_reset_day               = _Opt(1,     None)
+    # Burn-projector v2 alert thresholds — list of integer percentages
+    # of the plan budget at which the CLI / route / UI surface a banner
+    # ("Crossed 50% of plan budget"). Defaults to 50 / 75 / 90; manage via
+    # ``stackunderflow plan thresholds set``. File-only — a JSON list is
+    # awkward to express through an env var.
+    plan_alert_thresholds        = _Opt([50, 75, 90], None)
     # Discovery output token budget — the three discovery commands
     # (``find-sessions-in-path`` / ``find-sessions-touching-file`` /
     # ``search-past-decisions``) rank their results and pack greedily
