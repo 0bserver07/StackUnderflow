@@ -42,10 +42,12 @@ interface RoiPoint {
   ratio: number
 }
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
+function formatNumber(n: number | null | undefined): string {
+  if (!Number.isFinite(n)) return '0'
+  const v = n as number
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`
+  return v.toLocaleString()
 }
 
 import { formatCost } from '../../services/format'

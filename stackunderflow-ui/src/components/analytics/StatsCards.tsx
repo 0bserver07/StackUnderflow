@@ -17,15 +17,12 @@ interface StatsCardsProps {
   stats: DashboardStats
 }
 
-function formatNumber(n: number): string {
-  return n.toLocaleString()
-}
-
-import { formatCost, formatModelName } from '../../services/format'
+import { formatCost, formatNumber, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 
-function formatPercent(value: number): string {
-  return `${value.toFixed(1)}%`
+function formatPercent(value: number | null | undefined): string {
+  if (!Number.isFinite(value)) return '0.0%'
+  return `${(value as number).toFixed(1)}%`
 }
 
 function daysSince(isoTimestamp: string | undefined): number | null {

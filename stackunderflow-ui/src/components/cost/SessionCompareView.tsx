@@ -68,8 +68,9 @@ import { formatCost } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import type { CurrencyInfo } from '../../types/api'
 
-function formatNumber(n: number): string {
-  return Math.round(n).toLocaleString()
+function formatNumber(n: number | null | undefined): string {
+  if (!Number.isFinite(n)) return '0'
+  return Math.round(n as number).toLocaleString()
 }
 
 function formatDuration(seconds: number): string {

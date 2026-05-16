@@ -36,10 +36,12 @@ interface OverviewTabProps {
   stats: DashboardStats
 }
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toLocaleString()
+function formatNumber(n: number | null | undefined): string {
+  if (!Number.isFinite(n)) return '0'
+  const v = n as number
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
+  return v.toLocaleString()
 }
 
 /**
