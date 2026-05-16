@@ -1220,3 +1220,31 @@ def project_mart_messages_summary_totals(
         "total": int(row.get("total_messages", 0) or 0),
         "total_sessions": int(row.get("total_sessions", 0) or 0),
     }
+
+
+def tool_mart_distinct_tool_names_in_window(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    name_prefix: str | None = None,
+) -> list[str]:
+    """Return distinct ``tool_name`` values from ``tool_mart`` in a day window.
+
+    Empty mart → empty list (caller falls back to the raw-messages scan).
+    The ``name_prefix`` filter is bound parametrically as an SQL LIKE
+    pattern (caller passes ``"mcp__"`` to get only MCP tool calls — the
+    convention is ``mcp__<server>__<tool>``).
+
+    Used by ``optimize._detect_unused_mcp_servers`` to skip the ~1.3s
+    ``tools_json`` parse on stores with a populated ``tool_mart``.
+    """
+    if not _table_exists(conn, "tool_mart"):
+        return []
+    sql = "SELECT DISTINCT tool_name FROM tool_mart WHERE 1 = 1"
+    params: list[Any] = []
+    if name_prefix:
+        sql += " AND tool_name LIKE ?"
+        params.append(f"{name_prefix}%")
+    sql, params = _push_day_window(sql, params, since_iso, until_iso, col="day")
+    return [r[0] for r in conn.execute(sql, params).fetchall() if r[0]]

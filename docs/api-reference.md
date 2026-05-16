@@ -280,6 +280,9 @@ Full statistics object for the current project, computed via the pipeline
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `timezone_offset` | int | `0` | Minutes offset from UTC for daily bucketing |
+| `days` | int | `90` | Cap `daily_stats` to the most recent N calendar days. Pass `0` to disable the cap. |
+| `include` | repeated string | (none) | Repeated query param — return only the named top-level blocks (e.g. `?include=overview&include=models`). `currency` always passes through. |
+| `details` | bool | `false` | When `false`, strip the heaviest per-row lists (`user_interactions.command_details`, `errors.assistant_details`, `errors.error_details`, top-level `session_costs` / `command_costs` / etc). On large stores this drops the payload from ~4 MB to <100 KB while keeping every key present (empty list/dict where stripped). Set `true` to opt back into the legacy full-body response. |
 
 **Response** — the top-level statistics dict (same as the `statistics` key in `/api/dashboard-data`).
 Key nested sections include `overview`, `tools`, `sessions`, `daily_usage`, `models`, `costs`.
@@ -1649,6 +1652,7 @@ Same surface as `stackunderflow optimize`.
 | `period` | string | `30days` | One of `today`, `7days`, `30days`, `month`, `all`. Unknown values return 400. |
 | `project` | string (repeatable) | — | Narrow project scope to these slugs |
 | `exclude` | string (repeatable) | — | Drop these project slugs |
+| `force` | bool | `false` | Bypass the in-process response cache for this call. The result is still written back to the cache. |
 
 **Response**
 
@@ -1677,9 +1681,28 @@ Same surface as `stackunderflow optimize`.
         "lookback_days": 30
       }
     }
-  ]
+  ],
+  "warnings": [
+    {
+      "code": "mart_empty",
+      "level": "info",
+      "message": "message_tool_mart is empty — optimize detectors are running on the raw messages table and will be slower. Backfill via the ETL pipeline for the fast path."
+    }
+  ],
+  "cache": "miss"
 }
 ```
+
+**Field notes (new)**
+
+- `warnings` — list of advisory hints. Currently the only emitted code
+  is `mart_empty`, raised when `message_tool_mart` has no rows so the
+  detectors are running the slow raw-`messages` fallback path.
+- `cache` — `"hit"` when the response came from the in-process cache,
+  `"miss"` on a fresh compute. The cache is keyed on
+  `(period, project, exclude, store.db mtime)` and self-invalidates
+  whenever an ingest run bumps the store mtime; `/api/refresh` also
+  drops it eagerly.
 
 **Field notes**
 

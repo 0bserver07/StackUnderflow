@@ -91,9 +91,105 @@ def _reindex_services(log_path: str, messages: list[dict]) -> None:
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
+# ── /api/stats payload trimming ───────────────────────────────────────────────
+
+# Heavy per-row arrays that dominate the response body on real stores.
+# On the maintainer's chimera project these accounted for >90% of a 4 MB
+# response: 2.65 MB for ``user_interactions.command_details`` (one entry
+# per user command), 1.2 MB for ``errors.assistant_details`` (one entry
+# per assistant message), plus the outlier / error_details tails. We
+# strip them by default and re-include only when ``details=true`` so the
+# legacy "full body" contract is still reachable.
+_HEAVY_NESTED_LISTS: tuple[tuple[str, str], ...] = (
+    ("errors", "assistant_details"),
+    ("errors", "error_details"),
+    ("user_interactions", "command_details"),
+    ("user_interactions", "tool_count_distribution"),
+)
+
+_HEAVY_TOP_LEVEL_LISTS: tuple[str, ...] = (
+    "session_costs",
+    "command_costs",
+    "session_efficiency",
+    "retry_signals",
+)
+
+
+def _strip_heavy_blocks(stats: dict) -> None:
+    """In-place — clear the heaviest per-row lists from a stats dict.
+
+    The keys stay (shape-stable contract — clients can still introspect
+    ``stats["errors"]["assistant_details"]``) but the value becomes an
+    empty list / dict. Top-level lists (``session_costs`` etc) are emptied
+    too so the dashboard's lightweight cards still find their key without
+    paying for the full per-session walk.
+    """
+    for parent, child in _HEAVY_NESTED_LISTS:
+        section = stats.get(parent)
+        if isinstance(section, dict) and child in section:
+            cur = section[child]
+            section[child] = [] if isinstance(cur, list) else {}
+    for k in _HEAVY_TOP_LEVEL_LISTS:
+        cur = stats.get(k)
+        if isinstance(cur, list):
+            stats[k] = []
+    # Outliers: cap each list at 10 entries (was 156 + 288 on chimera).
+    out = stats.get("outliers")
+    if isinstance(out, dict):
+        for k in ("high_tool_commands", "high_step_commands"):
+            v = out.get(k)
+            if isinstance(v, list) and len(v) > 10:
+                out[k] = v[:10]
+
+
+def _cap_daily_stats(stats: dict, days: int) -> None:
+    """In-place — cap ``daily_stats`` to the last ``days`` calendar entries.
+
+    ``daily_stats`` is a date-keyed dict (``"YYYY-MM-DD" → {...}``) from
+    the aggregator. We sort the keys and keep the most recent ``days``.
+    """
+    ds = stats.get("daily_stats")
+    if not isinstance(ds, dict) or days <= 0:
+        return
+    if len(ds) <= days:
+        return
+    keep = sorted(ds.keys())[-days:]
+    stats["daily_stats"] = {k: ds[k] for k in keep}
+
+
+def _filter_includes(stats: dict, include: set[str]) -> dict:
+    """Return a copy of ``stats`` keeping only keys named in ``include``.
+
+    ``currency`` always passes through (UI needs it for any cost block).
+    Unknown names in ``include`` are silently ignored.
+    """
+    out = {k: v for k, v in stats.items() if k in include or k == "currency"}
+    return out
+
+
 @router.get("/api/stats")
-async def get_stats(timezone_offset: int = 0):
-    """Get statistics for the current project."""
+async def get_stats(
+    timezone_offset: int = 0,
+    days: int | None = None,
+    include: Annotated[list[str] | None, Query()] = None,
+    details: bool = False,
+):
+    """Get statistics for the current project.
+
+    Args:
+        timezone_offset: Browser timezone offset for daily bucketing.
+        days: Cap ``daily_stats`` to the most recent ``days`` calendar
+            entries (default 90). Pass ``0`` to disable the cap.
+        include: Repeated query param — return only the named top-level
+            blocks (e.g. ``?include=overview&include=models``). When omitted
+            every block is returned. ``currency`` always passes through.
+        details: When false (default), strip the heaviest per-row lists
+            (``user_interactions.command_details``,
+            ``errors.assistant_details``, ``errors.error_details``,
+            ``session_costs``, ``command_costs``, etc). On real stores
+            this drops the payload from ~4 MB to ~150 KB. Set ``true``
+            to opt back into the legacy "full body" response.
+    """
     log_path = _require_project()
     t0 = time.time()
     conn = db.connect(deps.store_path)
@@ -103,11 +199,26 @@ async def get_stats(timezone_offset: int = 0):
     finally:
         conn.close()
     deps.logger.debug(f"stats [store] {(time.time()-t0)*1000:.1f}ms")
+
+    if isinstance(stats, dict):
+        # Cap daily_stats — default 90 days, ``days=0`` disables.
+        cap_days = 90 if days is None else max(0, days)
+        if cap_days > 0:
+            _cap_daily_stats(stats, cap_days)
+        if not details:
+            _strip_heavy_blocks(stats)
+
     currency = active_currency_payload()
     if currency["rate_from_usd"] != 1.0:
         _convert_in_place(stats, currency["rate_from_usd"])
     if isinstance(stats, dict):
         stats["currency"] = currency
+
+    if include:
+        wanted = {s.strip() for s in include if s and s.strip()}
+        if wanted and isinstance(stats, dict):
+            stats = _filter_includes(stats, wanted)
+
     return stats
 
 
@@ -455,6 +566,15 @@ async def refresh_data(request: dict):
 
     if new_msgs:
         invalidate_dashboard_cache(slug)
+        # Optimize cache is keyed on store mtime so it'd self-invalidate
+        # on the next read, but a fresh ingest is a good time to drop it
+        # eagerly — keeps the next /api/optimize from racing the mtime
+        # bump on a filesystem that hasn't flushed yet.
+        try:
+            from stackunderflow.routes.optimize import invalidate_optimize_cache
+            invalidate_optimize_cache()
+        except ImportError:
+            pass  # optimize route not registered (test environments)
         conn2 = db.connect(deps.store_path)
         try:
             row = queries.get_project(conn2, slug=slug)
@@ -494,6 +614,11 @@ async def refresh_all_projects(request: dict):
     total_new = sum(counts.values())
     if total_new:
         invalidate_dashboard_cache()
+        try:
+            from stackunderflow.routes.optimize import invalidate_optimize_cache
+            invalidate_optimize_cache()
+        except ImportError:
+            pass  # optimize route not registered (test environments)
     ms = int((time.time() - t0) * 1000)
     return JSONResponse({
         "status": "success",
