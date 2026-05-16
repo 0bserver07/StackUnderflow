@@ -936,3 +936,84 @@ export interface PlaybackFsSnapshotResponse {
   warnings: string[]
 }
 
+// ---------------------------------------------------------------------------
+// Live observability — Spec 13. Mirrors stackunderflow/services/live.py and
+// the SSE wire format in stackunderflow/routes/live.py.
+// ---------------------------------------------------------------------------
+
+export interface LiveBurnSnapshot {
+  window_minutes: number
+  window_cost: number
+  per_minute: number
+  per_hour: number
+  today_cost: number
+  month_to_date: number
+  projected_month_end: number
+  ts: string
+}
+
+export interface LiveToolLatency {
+  tool_name: string
+  samples: number
+  p50: number
+  p95: number
+  p99: number
+}
+
+export interface LiveWatermarks {
+  event_id: number
+  tool_call_id: number
+}
+
+/** "running" mirrors the etl/status assembler: true / false / "unknown". */
+export type LiveWatcherRunning = boolean | 'unknown'
+
+export interface LiveWatcherStatus {
+  running: LiveWatcherRunning
+}
+
+export interface LiveStatsResponse {
+  burn: LiveBurnSnapshot
+  tool_latency: LiveToolLatency[]
+  watermarks: LiveWatermarks
+  watcher: LiveWatcherStatus
+}
+
+/** SSE event payloads — one per `event:` name the route emits. */
+export interface LiveEventRowPayload {
+  id: number
+  ts: string
+  project_id: number
+  session_id: string
+  model: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_create_tokens: number
+  cost_source: string
+  project_slug: string | null
+  project_name: string | null
+}
+
+export interface LiveToolCallRowPayload {
+  id: number
+  ts: string
+  project_id: number
+  session_id: string
+  tool_name: string
+  file_path: string | null
+  byte_count: number | null
+  call_index: number
+  project_slug: string | null
+  project_name: string | null
+}
+
+export type LiveSseMessage =
+  | { type: 'ready'; ts: string;
+      payload: { watermarks: LiveWatermarks; watcher: LiveWatcherStatus;
+                 burn_interval_seconds: number } }
+  | { type: 'event'; ts: string; payload: LiveEventRowPayload }
+  | { type: 'tool_call'; ts: string; payload: LiveToolCallRowPayload }
+  | { type: 'burn_tick'; ts: string; payload: LiveBurnSnapshot }
+
