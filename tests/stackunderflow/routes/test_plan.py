@@ -246,3 +246,151 @@ class TestCurrencyConversion:
             assert usage["status"] == "ok"
             # Plan keeps the canonical USD amount under its key.
             assert body["plan"]["monthly_usd"] == 20.0
+
+
+# ── burn projector v2 ──────────────────────────────────────────────────────
+
+
+class TestProjectionBlock:
+    """The ``projection`` block on ``/api/plan`` mirrors ``services.burn``.
+
+    All these tests patch the spend rollups directly so the route's wiring
+    is exercised without a populated store; the math itself is covered in
+    ``test_burn.py``.
+    """
+
+    def test_no_plan_projection_is_null(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with p1, p2:
+            r = client.get("/api/plan")
+            assert r.status_code == 200
+            assert r.json()["projection"] is None
+
+    def test_projection_keys_present_with_plan(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with (
+            p1,
+            p2,
+            patch("stackunderflow.routes.plan._spend_in_window", return_value=5.0),
+            patch(
+                "stackunderflow.routes.plan._spend_daily_window",
+                return_value=[5.0],
+            ),
+        ):
+            plans_mod.set_plan("claude-pro")  # $20 budget
+            r = client.get("/api/plan")
+            assert r.status_code == 200
+            proj = r.json()["projection"]
+            assert proj is not None
+            for key in (
+                "projected_month_end_usd",
+                "projection_method",
+                "daily_burn_usd",
+                "days_to_limit",
+                "thresholds",
+                "crossed_threshold",
+                "alert",
+            ):
+                assert key in proj
+            assert proj["projection_method"] in ("linear", "weighted-7d")
+            # Single non-zero day → linear (below the 3-sample threshold).
+            assert proj["projection_method"] == "linear"
+            assert proj["thresholds"] == [50, 75, 90]
+
+    def test_weighted_method_with_three_days(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with (
+            p1,
+            p2,
+            patch("stackunderflow.routes.plan._spend_in_window", return_value=6.0),
+            patch(
+                "stackunderflow.routes.plan._spend_daily_window",
+                return_value=[1.0, 2.0, 3.0],
+            ),
+        ):
+            plans_mod.set_plan("claude-max")  # $200 budget
+            r = client.get("/api/plan")
+            proj = r.json()["projection"]
+            assert proj["projection_method"] == "weighted-7d"
+            # daily_burn > 0 with 3 non-zero samples
+            assert proj["daily_burn_usd"] > 0
+            # Far from any threshold on a $200 plan ($6 used = 3%) → no alert
+            assert proj["crossed_threshold"] is None
+            assert proj["alert"] is None
+
+    def test_alert_surfaces_when_threshold_crossed(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with (
+            p1,
+            p2,
+            patch("stackunderflow.routes.plan._spend_in_window", return_value=11.0),
+            patch(
+                "stackunderflow.routes.plan._spend_daily_window",
+                # Last day of the period — no projected overrun, just the
+                # threshold-crossed banner.
+                return_value=[11.0],
+            ),
+            patch(
+                "stackunderflow.services.plans.compute_usage",
+                wraps=plans_mod.compute_usage,
+            ) as wrapped,
+        ):
+            plans_mod.set_plan("claude-pro")  # $20 budget → 11/20 = 55%
+            r = client.get("/api/plan")
+            proj = r.json()["projection"]
+            # 55% > 50% threshold → 50 is the highest crossed.
+            assert proj["crossed_threshold"] == 50
+            # Alert text could be either "Crossed 50%" or the projected
+            # overrun depending on days-left, but must be non-null.
+            assert proj["alert"] is not None
+            wrapped.assert_called()
+
+    def test_custom_thresholds_propagate_via_settings(self, app_client, tmp_path):
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with (
+            p1,
+            p2,
+            patch("stackunderflow.routes.plan._spend_in_window", return_value=1.0),
+            patch(
+                "stackunderflow.routes.plan._spend_daily_window",
+                return_value=[1.0],
+            ),
+        ):
+            plans_mod.set_plan("claude-pro")
+            from stackunderflow.settings import Settings
+            Settings().persist("plan_alert_thresholds", [25, 60])
+
+            r = client.get("/api/plan")
+            assert r.json()["projection"]["thresholds"] == [25, 60]
+
+    def test_projection_currency_converts(self, app_client, tmp_path):
+        """`projected_month_end_usd` and `daily_burn_usd` must follow the rate."""
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        rate = 0.5
+        with (
+            p1,
+            p2,
+            patch(
+                "stackunderflow.routes.plan.active_currency_payload",
+                return_value={"code": "EUR", "symbol": "€", "rate_from_usd": rate},
+            ),
+            patch("stackunderflow.routes.plan._spend_in_window", return_value=10.0),
+            patch(
+                "stackunderflow.routes.plan._spend_daily_window",
+                # Single observation, last day → linear → daily_burn = $10.
+                return_value=[10.0],
+            ),
+        ):
+            plans_mod.set_plan("claude-pro")  # $20 USD
+            r = client.get("/api/plan")
+            proj = r.json()["projection"]
+            # daily_burn USD = 10 → EUR = 5.
+            assert proj["daily_burn_usd"] == pytest.approx(5.0)
+            # Dimensionless fields stay as-is.
+            assert proj["thresholds"] == [50, 75, 90]

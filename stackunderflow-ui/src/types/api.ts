@@ -652,9 +652,34 @@ export interface PlanUsage {
   days_in_period: number
 }
 
+/**
+ * Burn-projector v2 forecast block. Always present in the v0.8.x+
+ * `/api/plan` response when a plan is configured; null otherwise.
+ *
+ * `projection_method` is `"weighted-7d"` once the active period has
+ * accumulated at least 3 daily samples, else `"linear"`. Dollar fields
+ * are pre-converted to the active currency by the route, same as
+ * `usage.used` / `usage.budget` etc., so the UI uses `formatCost(...)`
+ * uniformly.
+ */
+export interface PlanProjection {
+  projected_month_end_usd: number
+  projection_method: 'linear' | 'weighted-7d'
+  daily_burn_usd: number
+  /** Calendar-days until cumulative spend hits the budget at current burn. */
+  days_to_limit: number | null
+  /** Sorted, deduped percentage thresholds (default [50, 75, 90]). */
+  thresholds: number[]
+  /** Highest configured threshold the user has met or exceeded; null if none. */
+  crossed_threshold: number | null
+  /** Human-readable banner string; null when no alert applies. */
+  alert: string | null
+}
+
 export interface PlanResponse {
   plan: Plan | null
   usage: PlanUsage | null
+  projection?: PlanProjection | null
 }
 
 /**

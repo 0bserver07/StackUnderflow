@@ -58,6 +58,9 @@ stackunderflow cfg model-alias ls [--json]
 stackunderflow plan show [--format text|json]
 stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]
 stackunderflow plan reset
+stackunderflow plan thresholds show [--format text|json]
+stackunderflow plan thresholds set N [N ...]
+stackunderflow plan thresholds reset
 
 # ETL pipeline
 stackunderflow etl backfill [--force]
@@ -958,8 +961,10 @@ Budget:        $20.00 / month  (resets day 1)
 Period:        2026-05-01 → 2026-05-31  (day 12 of 31)
 Used:          $12.50  (62.5% of budget)
 Remaining:     $7.50
-Projected:     $32.29  (linear, today's burn rate)
+Projected:     $32.29  (weighted-7d, $1.04/day burn)
+Days to limit: ~7 days at current burn
 Status:        ok
+Alert:         Crossed 50% of plan budget
 
 $ stackunderflow plan show --format json
 {
@@ -975,6 +980,15 @@ $ stackunderflow plan show --format json
     "period_end": "2026-05-31",
     "days_so_far": 12,
     "days_in_period": 31
+  },
+  "projection": {
+    "projected_month_end_usd": 32.29,
+    "projection_method": "weighted-7d",
+    "daily_burn_usd": 1.04,
+    "days_to_limit": 7,
+    "thresholds": [50, 75, 90],
+    "crossed_threshold": 50,
+    "alert": "Crossed 50% of plan budget"
   }
 }
 ```
@@ -987,7 +1001,21 @@ No plan set. Run: stackunderflow plan set claude-pro
 ```
 
 The same payload is exposed over HTTP at `GET /api/plan`. With no plan
-configured, the route returns `{"plan": null, "usage": null}`.
+configured, the route returns `{"plan": null, "usage": null, "projection": null}`.
+
+**Projection method.** Burn projector v2 auto-picks `weighted-7d` once the
+period has accumulated at least 3 non-zero daily samples; the weighted
+average decays at 0.85/day so recent activity dominates and weekends fade.
+Below that threshold (or when the last 7 days are all zero against an
+otherwise non-empty period — the stale-store case), the method falls back
+to `linear` (running mean over the period to date) and the response
+surfaces `projection_method: "linear"` so the cause is visible.
+
+**Alert thresholds.** Default to `50 / 75 / 90` percent of budget; override
+via `stackunderflow plan thresholds set N N N`. The CLI / route / UI
+surface a banner when the most-severe threshold crossed bumps up; a
+separate "projected to overrun" banner supersedes the threshold notice
+when the forecast exceeds the budget before the period ends.
 
 ---
 
@@ -1056,6 +1084,42 @@ Usage: stackunderflow plan reset
 ```
 $ stackunderflow plan reset
   plan cleared
+```
+
+---
+
+### `stackunderflow plan thresholds {show, set, reset}`
+
+Manage the burn-projector alert thresholds — the percentages of the plan
+budget at which the CLI / `/api/plan` / UI surface a banner. Defaults to
+`50 / 75 / 90`. Stored as a single settings key (`plan_alert_thresholds`)
+and managed exclusively through this subcommand — `cfg set` rejects the
+key with a hint pointing here.
+
+```
+Usage: stackunderflow plan thresholds {show, set, reset}
+```
+
+| Subcommand | Args | Description |
+|---|---|---|
+| `show` | `[--format text\|json]` | Print the active thresholds (default text) |
+| `set` | `N [N ...]` | Set thresholds (positional integers in `[1, 200]`) — deduped and sorted before write |
+| `reset` | (none) | Restore the built-in default `50 75 90` |
+
+**Examples:**
+
+```
+$ stackunderflow plan thresholds show
+  thresholds = 50%, 75%, 90%
+
+$ stackunderflow plan thresholds set 60 80 95
+  thresholds = 60%, 80%, 95%
+
+$ stackunderflow plan thresholds set 90 50 50 75
+  thresholds = 50%, 75%, 90%   # deduped + sorted
+
+$ stackunderflow plan thresholds reset
+  thresholds = 50%, 75%, 90%  (default)
 ```
 
 ---

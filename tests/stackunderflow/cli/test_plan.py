@@ -40,6 +40,11 @@ def _patch_spend(total_usd: float):
     return patch("stackunderflow.cli._resolve_period_spend", return_value=total_usd)
 
 
+def _patch_daily(daily: list[float]):
+    """Patch the CLI's per-day cost helper for burn-projector v2."""
+    return patch("stackunderflow.cli._resolve_period_daily_costs", return_value=daily)
+
+
 # ── plan set ────────────────────────────────────────────────────────────────
 
 class TestPlanSet:
@@ -164,7 +169,7 @@ class TestPlanShow:
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
             p1, p2 = _patch_settings_dir(Path(td))
-            with p1, p2, _patch_spend(5.0):
+            with p1, p2, _patch_spend(5.0), _patch_daily([5.0]):
                 runner.invoke(cli, ["plan", "set", "claude-pro"])
                 result = runner.invoke(cli, ["plan", "show"])
                 assert result.exit_code == 0, result.output
@@ -179,7 +184,7 @@ class TestPlanShow:
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
             p1, p2 = _patch_settings_dir(Path(td))
-            with p1, p2, _patch_spend(18.0):
+            with p1, p2, _patch_spend(18.0), _patch_daily([18.0]):
                 runner.invoke(cli, ["plan", "set", "claude-pro"])
                 result = runner.invoke(cli, ["plan", "show"])
                 assert result.exit_code == 0, result.output
@@ -189,7 +194,7 @@ class TestPlanShow:
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
             p1, p2 = _patch_settings_dir(Path(td))
-            with p1, p2, _patch_spend(50.0):
+            with p1, p2, _patch_spend(50.0), _patch_daily([50.0]):
                 runner.invoke(cli, ["plan", "set", "claude-pro"])
                 result = runner.invoke(cli, ["plan", "show"])
                 assert result.exit_code == 0, result.output
@@ -199,7 +204,7 @@ class TestPlanShow:
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
             p1, p2 = _patch_settings_dir(Path(td))
-            with p1, p2, _patch_spend(8.0):
+            with p1, p2, _patch_spend(8.0), _patch_daily([8.0]):
                 runner.invoke(cli, ["plan", "set", "claude-pro"])
                 result = runner.invoke(cli, ["plan", "show", "--format", "json"])
                 assert result.exit_code == 0, result.output
@@ -218,6 +223,155 @@ class TestPlanShow:
                 assert "projected_month_end" in u
                 assert "period_start" in u
                 assert "period_end" in u
+                # Burn-projector v2 — projection block must round-trip.
+                p = data["projection"]
+                assert "projected_month_end_usd" in p
+                assert "projection_method" in p
+                assert p["projection_method"] in ("linear", "weighted-7d")
+                assert "daily_burn_usd" in p
+                assert "thresholds" in p
+                assert p["thresholds"] == [50, 75, 90]
+                assert "crossed_threshold" in p
+                assert "alert" in p
+
+    def test_show_text_includes_projection_method(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2, _patch_spend(6.0), _patch_daily([1.0, 2.0, 3.0]):
+                runner.invoke(cli, ["plan", "set", "claude-max"])
+                result = runner.invoke(cli, ["plan", "show"])
+                assert result.exit_code == 0, result.output
+                # 3 non-zero days unlocks the weighted-7d method
+                assert "weighted-7d" in result.output
+                assert "burn" in result.output
+
+    def test_show_text_alert_when_threshold_crossed(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            # 11/20 = 55% > 50% threshold → alert line surfaces. Project
+            # the spend over a single non-zero day so the linear forecast
+            # is bounded and the threshold-crossed alert wins (vs. the
+            # "overrun forecast" banner).
+            with (
+                p1,
+                p2,
+                _patch_spend(11.0),
+                _patch_daily([0.0] * 29 + [11.0]),
+            ):
+                runner.invoke(cli, ["plan", "set", "claude-pro"])
+                result = runner.invoke(cli, ["plan", "show"])
+                assert result.exit_code == 0, result.output
+                assert "Alert:" in result.output
+
+
+# ── plan thresholds ─────────────────────────────────────────────────────────
+
+
+class TestPlanThresholds:
+    def test_show_default_thresholds(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(cli, ["plan", "thresholds", "show"])
+                assert result.exit_code == 0, result.output
+                assert "50%" in result.output
+                assert "75%" in result.output
+                assert "90%" in result.output
+
+    def test_show_default_thresholds_json(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "show", "--format", "json"]
+                )
+                assert result.exit_code == 0, result.output
+                data = json.loads(result.output)
+                assert data == {"thresholds": [50, 75, 90]}
+
+    def test_set_three_thresholds(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "set", "60", "85", "95"]
+                )
+                assert result.exit_code == 0, result.output
+                assert "60%" in result.output
+                assert "85%" in result.output
+                assert "95%" in result.output
+
+                # Round-trip via show.
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "show", "--format", "json"]
+                )
+                assert json.loads(result.output) == {"thresholds": [60, 85, 95]}
+
+    def test_set_thresholds_dedupes_and_sorts(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "set", "90", "50", "50", "75"]
+                )
+                assert result.exit_code == 0, result.output
+
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "show", "--format", "json"]
+                )
+                # Deduped ↑ sorted; settings persistence uses the canonical form.
+                assert json.loads(result.output) == {"thresholds": [50, 75, 90]}
+
+    def test_set_threshold_out_of_range_rejected(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(cli, ["plan", "thresholds", "set", "0"])
+                assert result.exit_code != 0
+                result = runner.invoke(cli, ["plan", "thresholds", "set", "201"])
+                assert result.exit_code != 0
+
+    def test_set_requires_at_least_one_value(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(cli, ["plan", "thresholds", "set"])
+                assert result.exit_code != 0
+
+    def test_reset_restores_default(self):
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                runner.invoke(cli, ["plan", "thresholds", "set", "10", "20"])
+                result = runner.invoke(cli, ["plan", "thresholds", "reset"])
+                assert result.exit_code == 0, result.output
+                assert "default" in result.output
+                # After reset, show emits the built-in [50, 75, 90].
+                result = runner.invoke(
+                    cli, ["plan", "thresholds", "show", "--format", "json"]
+                )
+                assert json.loads(result.output) == {"thresholds": [50, 75, 90]}
+
+    def test_cfg_set_plan_alert_thresholds_rejected(self):
+        """``cfg set plan_alert_thresholds`` must steer users to the dedicated cmd."""
+        runner = CliRunner()
+        with runner.isolated_filesystem() as td:
+            p1, p2 = _patch_settings_dir(Path(td))
+            with p1, p2:
+                result = runner.invoke(
+                    cli, ["cfg", "set", "plan_alert_thresholds", "50"]
+                )
+                assert result.exit_code != 0
+                assert "plan thresholds set" in result.output
 
 
 # ── plan reset ──────────────────────────────────────────────────────────────

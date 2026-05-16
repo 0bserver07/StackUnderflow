@@ -16,6 +16,11 @@ Response shape::
             "period_start", "period_end",
             "days_so_far", "days_in_period",
         } | null,
+        "projection": {
+            "projected_month_end_usd", "projection_method",
+            "daily_burn_usd", "days_to_limit",
+            "thresholds", "crossed_threshold", "alert",
+        } | null,
         "currency": {"code", "symbol", "rate_from_usd"},
     }
 
@@ -25,11 +30,18 @@ frontend can render an "add a plan" CTA without parsing fields. The
 it) and the dollar fields inside ``usage`` are pre-converted to that
 currency — same convention as ``/api/cost-data`` and ``/api/yield`` so a
 single ``formatCost(amount, currency)`` callsite renders correctly.
+
+The ``projection`` block (added in burn-projector v2) is the structured
+shape ``stackunderflow.services.burn.build_projection`` emits — the
+dollar fields ``projected_month_end_usd`` and ``daily_burn_usd`` are
+pre-converted to the active currency just like ``usage`` so the UI can
+``formatCost`` them with the same helper.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -37,7 +49,9 @@ import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.reports.aggregate import build_report
 from stackunderflow.reports.scope import Scope
+from stackunderflow.services import burn
 from stackunderflow.services import plans as plans_mod
+from stackunderflow.settings import Settings
 from stackunderflow.store import db, schema
 
 router = APIRouter()
@@ -65,6 +79,63 @@ def _spend_in_window(period_start: str, period_end: str) -> float:
     return float(report["total_cost"])
 
 
+def _spend_daily_window(
+    period_start: str,
+    period_end: str,
+    *,
+    store_path: Path | None = None,
+) -> list[float]:
+    """Per-day USD cost across every project, oldest-first.
+
+    Returns a list whose values align with the calendar days in
+    ``[period_start, period_end]``. Days with no recorded spend are
+    represented as ``0.0`` so the burn projector sees the *true* shape
+    of the user's activity (a quiet weekend should drag the weighted
+    average down, not be silently elided).
+
+    The query reuses the v0.7.2 ``usage_events`` mart whose
+    ``cost_usd`` is already attributed and rate-aware. We intentionally
+    don't fall back to the legacy ``messages`` path here — when the mart
+    is empty the route still returns ``[]`` and the burn projector
+    naturally degrades to "no data → linear projection of 0".
+    """
+    start_d = date.fromisoformat(period_start)
+    end_d = date.fromisoformat(period_end)
+    since = datetime.combine(start_d, datetime.min.time()).isoformat()
+    until = datetime.combine(end_d + timedelta(days=1), datetime.min.time()).isoformat()
+
+    path = store_path if store_path is not None else deps.store_path
+    conn = db.connect(path)
+    try:
+        schema.apply(conn)
+        # Probe — when the mart is empty the SUM returns no rows; we want
+        # an explicit zero-day list of length ``days_so_far`` so the
+        # weighted projection gets the right denominator.
+        rows = conn.execute(
+            "SELECT substr(ts, 1, 10) AS day, SUM(cost_usd) AS cost "
+            "FROM usage_events WHERE ts >= ? AND ts < ? "
+            "GROUP BY day ORDER BY day",
+            (since, until),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Build a date-keyed map so we can fill missing days with zero in
+    # one pass. Walk start_d → today (inclusive) so the list is
+    # oldest-first and aligned with ``daily_costs[-1]`` == today.
+    today = date.today()
+    last_day = min(end_d, today)
+    by_day = {r["day"] if hasattr(r, "keys") else r[0]: float(
+        (r["cost"] if hasattr(r, "keys") else r[1]) or 0.0
+    ) for r in rows}
+    out: list[float] = []
+    cursor = start_d
+    while cursor <= last_day:
+        out.append(by_day.get(cursor.isoformat(), 0.0))
+        cursor = date.fromordinal(cursor.toordinal() + 1)
+    return out
+
+
 @router.get("/api/plan")
 async def get_plan_status() -> dict:
     """Return the active plan and current usage, or ``{plan: null, usage: null}``."""
@@ -72,7 +143,12 @@ async def get_plan_status() -> dict:
 
     plan = plans_mod.get_active_plan()
     if plan is None:
-        return {"plan": None, "usage": None, "currency": currency}
+        return {
+            "plan": None,
+            "usage": None,
+            "projection": None,
+            "currency": currency,
+        }
 
     # First call resolves the period window; the ``used=0`` argument is a
     # throwaway — we re-call with the real number once we know which dates
@@ -80,6 +156,20 @@ async def get_plan_status() -> dict:
     window = plans_mod.compute_usage(plan, 0.0)
     used = _spend_in_window(window["period_start"], window["period_end"])
     usage = plans_mod.compute_usage(plan, used)
+
+    # Burn-projector v2: pull the per-day series so the weighted-7d
+    # projection has the right shape. ``build_projection`` is pure — it
+    # picks the method (linear vs weighted-7d) based on sample count.
+    daily = _spend_daily_window(usage["period_start"], usage["period_end"])
+    thresholds = Settings().get("plan_alert_thresholds") or list(burn.DEFAULT_THRESHOLDS)
+    projection_usd = burn.build_projection(
+        daily_costs=daily,
+        used=usage["used"],
+        budget=plan.monthly_usd,
+        days_so_far=usage["days_so_far"],
+        days_in_period=usage["days_in_period"],
+        thresholds=thresholds,
+    )
 
     # ``plan.monthly_usd`` is the canonical USD amount the user signed up for;
     # we emit it under the original key so callers and tests that pin to USD
@@ -103,6 +193,20 @@ async def get_plan_status() -> dict:
         "days_in_period": usage["days_in_period"],
     }
 
+    # Pre-convert the projection's dollar fields the same way usage is
+    # converted — UI calls ``formatCost(amount, currency)`` once and the
+    # right symbol falls out. ``thresholds`` / ``crossed_threshold`` /
+    # ``days_to_limit`` / ``projection_method`` are dimensionless.
+    projection_block = {
+        "projected_month_end_usd": projection_usd["projected_month_end_usd"] * rate,
+        "projection_method": projection_usd["projection_method"],
+        "daily_burn_usd": projection_usd["daily_burn_usd"] * rate,
+        "days_to_limit": projection_usd["days_to_limit"],
+        "thresholds": projection_usd["thresholds"],
+        "crossed_threshold": projection_usd["crossed_threshold"],
+        "alert": projection_usd["alert"],
+    }
+
     return {
         "plan": {
             "name": plan.name,
@@ -110,5 +214,6 @@ async def get_plan_status() -> dict:
             "reset_day": plan.reset_day,
         },
         "usage": usage_block,
+        "projection": projection_block,
         "currency": currency,
     }

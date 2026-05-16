@@ -1539,11 +1539,11 @@ reference for the per-class definitions.
 
 ### GET /api/plan
 
-Active plan + current usage against budget. Same payload as
-`stackunderflow plan show --format json`; see the CLI reference's
-"Plan Budget Commands" section for the field-by-field semantics.
-Status banding (`ok` / `warn` / `over`) and the linear `projected`
-month-end figure are computed identically to the CLI.
+Active plan + current usage against budget + burn-projector v2 forecast.
+Same payload as `stackunderflow plan show --format json`; see the CLI
+reference's "Plan Budget Commands" section for the field-by-field
+semantics. Status banding (`ok` / `warn` / `over`) is computed
+identically to the CLI.
 
 **Query parameters** — none.
 
@@ -1553,12 +1553,13 @@ month-end figure are computed identically to the CLI.
 {
   "plan": null,
   "usage": null,
+  "projection": null,
   "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
 }
 ```
 
-When no plan is set, both `plan` and `usage` are `null` so the frontend
-can render an "add a plan" CTA without parsing fields.
+When no plan is set, `plan` / `usage` / `projection` are all `null` so
+the frontend can render an "add a plan" CTA without parsing fields.
 
 **Response (plan configured)**
 
@@ -1581,6 +1582,15 @@ can render an "add a plan" CTA without parsing fields.
     "days_so_far": 12,
     "days_in_period": 31
   },
+  "projection": {
+    "projected_month_end_usd": 32.29,
+    "projection_method": "weighted-7d",
+    "daily_burn_usd": 1.04,
+    "days_to_limit": 7,
+    "thresholds": [50, 75, 90],
+    "crossed_threshold": 50,
+    "alert": "Crossed 50% of plan budget"
+  },
   "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
 }
 ```
@@ -1596,9 +1606,27 @@ can render an "add a plan" CTA without parsing fields.
 - `usage.pct` is dimensionless and computed pre-conversion so the
   status banding (`pct < 80 → ok`, `80 ≤ pct ≤ 100 → warn`,
   `pct > 100 → over`) is identical across currencies.
-- `usage.projected` is a **simple linear** extrapolation
-  (`used + daily_burn × days_left`) — read it as a directional signal,
-  not a forecast.
+- `usage.projected` is the legacy linear extrapolation kept for
+  backward compat; the burn-projector v2 number lives under
+  `projection.projected_month_end_usd` (which can use a smarter
+  weighted-7d average — see below).
+- `projection.projection_method` is `"weighted-7d"` once the period
+  has accumulated at least 3 non-zero daily samples (the weighted
+  average decays at 0.85/day so recent activity dominates), else
+  `"linear"`. Auto-falls back to `"linear"` when the recent 7-day
+  window collapses to $0 against an otherwise non-empty period
+  (stale-store case) so the forecast doesn't silently zero out.
+- `projection.daily_burn_usd` and `projection.projected_month_end_usd`
+  are pre-converted to the active currency, same as the `usage.*`
+  fields. `thresholds` / `crossed_threshold` / `days_to_limit` /
+  `projection_method` are dimensionless.
+- `projection.crossed_threshold` is the highest configured threshold
+  the user has met or exceeded (or `null`). `projection.alert` is a
+  human-readable banner string (or `null`); the "projected to overrun"
+  message supersedes a threshold-crossed message when the forecast
+  exceeds the budget before the period ends.
+- `projection.thresholds` echoes the active alert ladder (default
+  `[50, 75, 90]`; configurable via `stackunderflow plan thresholds set`).
 - `currency` is always present on both branches.
 
 **Status codes:** `200` always.

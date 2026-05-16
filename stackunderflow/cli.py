@@ -416,11 +416,17 @@ def cfg_set(key: str, value: str):
             param_hint="KEY",
         )
     if key.startswith("plan_"):
-        # Plan keys (``plan_name`` / ``plan_monthly_usd`` / ``plan_reset_day``)
-        # have inter-key invariants — manage via ``stackunderflow plan set``.
+        # Plan keys (``plan_name`` / ``plan_monthly_usd`` / ``plan_reset_day``
+        # / ``plan_alert_thresholds``) have inter-key invariants — manage via
+        # ``stackunderflow plan set`` and ``stackunderflow plan thresholds set``.
+        hint = (
+            "stackunderflow plan thresholds set 50 75 90"
+            if key == "plan_alert_thresholds"
+            else "stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]"
+        )
         raise click.BadParameter(
             f"'{key}' is part of the plan-budget settings group; "
-            f"use ``stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]`` instead.",
+            f"use ``{hint}`` instead.",
             param_hint="KEY",
         )
     parsed: Any = value
@@ -551,10 +557,38 @@ def _resolve_period_spend(period_start: str, period_end: str) -> float:
     return float(report["total_cost"])
 
 
+def _resolve_period_daily_costs(period_start: str, period_end: str) -> list[float]:
+    """Per-day USD cost across every project for the inclusive ``[start, end]`` window.
+
+    Returns a list of length ``days_so_far`` (or shorter if there's no spend
+    yet on the leading days). The list is **oldest-first** so the burn
+    projector can apply its decay weights with ``[-1]`` as today.
+
+    Used by ``stackunderflow plan show`` to feed the burn projector — the
+    plain ``total_cost`` rollup loses the per-day shape we need for a
+    weighted average.
+    """
+    from stackunderflow.routes.plan import _spend_daily_window
+
+    return _spend_daily_window(period_start, period_end, store_path=_open_store_path())
+
+
+def _open_store_path():
+    """Resolve the active store path the same way ``_open_store`` does.
+
+    Kept separate so the daily-cost helper above can pass it down to the
+    shared route-side reader without re-opening the connection here.
+    """
+    import stackunderflow.deps as deps
+
+    return deps.store_path
+
+
 @plan_group.command("show")
 @click.option("--format", "fmt", type=click.Choice(("text", "json")), default="text")
 def plan_show_cmd(fmt: str):
-    """Show the active plan and current usage against budget."""
+    """Show the active plan, current usage against budget, and burn projection."""
+    from stackunderflow.services import burn
     from stackunderflow.services import plans as plans_mod
 
     plan = plans_mod.get_active_plan()
@@ -569,6 +603,20 @@ def plan_show_cmd(fmt: str):
     used = _resolve_period_spend(usage["period_start"], usage["period_end"])
     usage = plans_mod.compute_usage(plan, used)
 
+    # Burn-projector v2 — pull the per-day series for the active window so
+    # the weighted-7d projection has the right shape; fall back to a single
+    # bucket on stores where the per-day query returns nothing.
+    daily = _resolve_period_daily_costs(usage["period_start"], usage["period_end"])
+    thresholds = Settings().get("plan_alert_thresholds") or list(burn.DEFAULT_THRESHOLDS)
+    projection = burn.build_projection(
+        daily_costs=daily,
+        used=used,
+        budget=plan.monthly_usd,
+        days_so_far=usage["days_so_far"],
+        days_in_period=usage["days_in_period"],
+        thresholds=thresholds,
+    )
+
     if fmt == "json":
         click.echo(json.dumps({
             "plan": {
@@ -577,6 +625,7 @@ def plan_show_cmd(fmt: str):
                 "reset_day": plan.reset_day,
             },
             "usage": usage,
+            "projection": projection,
         }, indent=2))
         return
 
@@ -587,8 +636,20 @@ def plan_show_cmd(fmt: str):
                f"(day {usage['days_so_far']} of {usage['days_in_period']})")
     click.echo(f"Used:          {_format_money(usage['used'])}  ({usage['pct']:.1f}% of budget)")
     click.echo(f"Remaining:     {_format_money(usage['remaining'])}")
-    click.echo(f"Projected:     {_format_money(usage['projected_month_end'])}  (linear, today's burn rate)")
+    click.echo(
+        f"Projected:     {_format_money(projection['projected_month_end_usd'])}  "
+        f"({projection['projection_method']}, "
+        f"{_format_money(projection['daily_burn_usd'])}/day burn)"
+    )
+    if projection["days_to_limit"] is not None:
+        click.echo(
+            f"Days to limit: ~{projection['days_to_limit']} "
+            f"day{'s' if projection['days_to_limit'] != 1 else ''} at current burn"
+        )
     click.secho(f"Status:        {usage['status']}", fg=status_color, bold=True)
+    if projection["alert"]:
+        alert_color = "red" if usage["status"] == "over" else "yellow"
+        click.secho(f"Alert:         {projection['alert']}", fg=alert_color, bold=True)
 
 
 @plan_group.command("set")
@@ -617,6 +678,60 @@ def plan_reset_cmd():
     from stackunderflow.services import plans as plans_mod
     plans_mod.reset_plan()
     click.echo("  plan cleared")
+
+
+# ── plan thresholds — burn-projector v2 ─────────────────────────────────────
+#
+# Alert thresholds are a separate noun from plan budgets so a user can keep
+# their preset plan amount unchanged while customising when the dashboard /
+# CLI raise a banner. ``stackunderflow plan thresholds set 50 75 90`` writes
+# a sorted, deduped list of integer percentages; ``stackunderflow plan
+# thresholds show`` echoes the current value (or the built-in default).
+
+@plan_group.group("thresholds")
+def plan_thresholds_group():
+    """Configure burn-projector alert thresholds (default 50% / 75% / 90%)."""
+
+
+@plan_thresholds_group.command("show")
+@click.option("--format", "fmt", type=click.Choice(("text", "json")), default="text")
+def plan_thresholds_show_cmd(fmt: str):
+    """Show the active alert thresholds."""
+    from stackunderflow.services import burn
+
+    raw = Settings().get("plan_alert_thresholds") or list(burn.DEFAULT_THRESHOLDS)
+    thresholds = sorted({int(t) for t in raw})
+
+    if fmt == "json":
+        click.echo(json.dumps({"thresholds": thresholds}, indent=2))
+        return
+    click.echo(f"  thresholds = {', '.join(f'{t}%' for t in thresholds)}")
+
+
+@plan_thresholds_group.command("set")
+@click.argument("values", nargs=-1, type=int, required=True)
+def plan_thresholds_set_cmd(values: tuple[int, ...]):
+    """Set the alert thresholds (positional integers in [1, 200])."""
+    cleaned: list[int] = []
+    for v in values:
+        if not (1 <= int(v) <= 200):
+            raise click.BadParameter(
+                f"threshold {v} must be an integer in [1, 200]",
+                param_hint="VALUES",
+            )
+        cleaned.append(int(v))
+    deduped = sorted(set(cleaned))
+    Settings().persist("plan_alert_thresholds", deduped)
+    click.echo(f"  thresholds = {', '.join(f'{t}%' for t in deduped)}")
+
+
+@plan_thresholds_group.command("reset")
+def plan_thresholds_reset_cmd():
+    """Restore the default thresholds (50% / 75% / 90%)."""
+    Settings().remove("plan_alert_thresholds")
+    from stackunderflow.services import burn
+    defaults = list(burn.DEFAULT_THRESHOLDS)
+    click.echo(f"  thresholds = {', '.join(f'{t}%' for t in defaults)}  (default)")
 
 
 # backward compat: `stackunderflow config show/set/unset`
