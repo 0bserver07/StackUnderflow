@@ -4,7 +4,7 @@ import type {
   JsonlFilesResponse,
   JsonlContentResponse,
   DashboardData,
-  Message,
+  MessagesPage,
   QAListResponse,
   SearchResponse,
   TagCloudResponse,
@@ -117,12 +117,24 @@ export async function getDashboardData(
 }
 
 // Messages
+//
+// `/api/messages` returns a paginated envelope (see backend
+// `MESSAGES_DEFAULT_PER_PAGE` = 100, max 500). Earlier releases returned
+// the full message list unbounded; on a 26K-message project that ballooned
+// the response to ~37 MB and OOMed the Messages tab. Callers now walk
+// pages explicitly via the `page` / `perPage` knobs.
+export interface MessagesQuery {
+  page?: number
+  perPage?: number
+}
+
 export async function getMessages(
-  limit?: number,
+  query?: MessagesQuery,
   filters?: FilterParams,
-): Promise<Message[]> {
+): Promise<MessagesPage> {
   const params = new URLSearchParams()
-  if (limit) params.set('limit', String(limit))
+  if (typeof query?.page === 'number') params.set('page', String(query.page))
+  if (typeof query?.perPage === 'number') params.set('per_page', String(query.perPage))
   buildFilterParams(params, filters)
   const qs = params.toString()
   return fetchJson(`${BASE}/messages${qs ? `?${qs}` : ''}`)

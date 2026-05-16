@@ -345,28 +345,78 @@ def _apply_currency_to_stats(stats: dict) -> dict:
     return scaled
 
 
+# `/api/messages` pagination knobs. Default + max chosen so that a 26K-message
+# project's default page lands under ~150 KB (was 37 MB unbounded — see
+# v0.7.x payload-cap bug). Callers that need everything (export, CSV) must
+# walk pages explicitly.
+MESSAGES_DEFAULT_PER_PAGE = 100
+MESSAGES_MAX_PER_PAGE = 500
+
+
+def _empty_messages_page(*, page: int, per_page: int) -> dict:
+    """Shape-stable empty envelope returned when a filter excludes the project."""
+    return {
+        "messages": [],
+        "total": 0,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": 0,
+        "start_index": 0,
+        "end_index": 0,
+    }
+
+
 @router.get("/api/messages")
 async def get_messages(
+    page: int = 1,
+    per_page: int = MESSAGES_DEFAULT_PER_PAGE,
     limit: int | None = None,
     timezone_offset: int = 0,
     provider: Annotated[list[str] | None, Query()] = None,
     model: Annotated[list[str] | None, Query()] = None,
 ):
-    """Get messages for the current project.
+    """Get a page of messages for the current project.
+
+    Returns a paginated envelope:
+
+        {messages, total, page, per_page, total_pages, start_index, end_index}
+
+    Default ``per_page`` is 100; the maximum is 500. Earlier releases
+    returned the full message list unbounded — on a 26K-message project
+    that ballooned the response to ~37 MB and OOMed the Messages tab.
+    Forcing pagination here caps the worst-case payload at ~750 KB.
 
     Args:
-        limit: Maximum number of messages to return.
+        page: 1-indexed page number. Out-of-range values are clamped.
+        per_page: Items per page. Clamped to ``[1, 500]``.
+        limit: Legacy alias preserved for one release — if set and the
+            caller didn't specify a custom ``per_page``, it caps
+            ``per_page`` (also clamped to ``[1, 500]``). New callers
+            should use ``page``/``per_page``.
         timezone_offset: Browser timezone offset.
         provider: Optional repeated query param scoping to those providers.
             The current project belongs to one provider, so an active filter
-            that excludes it returns an empty list.
+            that excludes it returns a shape-stable empty envelope.
         model: Optional repeated query param scoping by model id. Filtered
-            client-side after the messages list comes back from the store
-            (the messages table doesn't have a separate index on model and
-            this list is already loaded fully into memory at the API).
+            after the store read since the messages table has no model index.
     """
     log_path = _require_project()
     t0 = time.time()
+
+    # Clamp pagination knobs early so a malicious / accidental huge per_page
+    # doesn't slip past the default 500 cap. ``page`` is clamped after we know
+    # the total below — clamping it to 1 here is just the lower-bound guard.
+    if page < 1:
+        page = 1
+    # Backwards-compat: callers that still pass ``?limit=N`` get N as the
+    # per_page when they didn't specify their own ``per_page``. This keeps
+    # any in-flight clients working through one release.
+    if limit is not None and per_page == MESSAGES_DEFAULT_PER_PAGE:
+        per_page = limit
+    if per_page < 1:
+        per_page = 1
+    if per_page > MESSAGES_MAX_PER_PAGE:
+        per_page = MESSAGES_MAX_PER_PAGE
 
     provider_filter: set[str] | None = None
     if provider:
@@ -388,16 +438,22 @@ async def get_messages(
             slug = Path(log_path).name
             project_row = queries.get_project(conn, slug=slug)
             if project_row is not None and (project_row.provider or "").lower() not in provider_filter:
-                return []
-        messages = queries.get_project_messages(conn, project_id=project_id, limit=limit)
+                return _empty_messages_page(page=page, per_page=per_page)
+        # The store helper still loads every message — model filtering needs
+        # to run before pagination so the page indices align with the
+        # filtered list, not the raw one. The aggregator path is already
+        # the slow part on big projects; paginating after this is constant
+        # time. Long-term fix is a paginated SQL query at the store layer.
+        messages = queries.get_project_messages(conn, project_id=project_id)
     finally:
         conn.close()
 
     if model_filter is not None and messages:
         messages = [m for m in messages if (m.get("model") or "").lower() in model_filter]
 
+    page_payload = get_paginated_messages(messages, page=page, per_page=per_page)
     deps.logger.debug(f"messages [store] {(time.time()-t0)*1000:.1f}ms")
-    return messages
+    return page_payload
 
 
 @router.get("/api/messages/summary")
