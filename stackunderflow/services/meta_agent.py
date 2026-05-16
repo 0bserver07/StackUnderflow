@@ -436,6 +436,103 @@ TOOL_CATALOG: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_pr_outcomes",
+            "description": (
+                "List PR outcomes for a repo from the local store (Spec 20 "
+                "ingest). Returns the most recent PRs first, optionally "
+                "filtered by ``state`` (open/merged/closed) and a ``since`` "
+                "cutoff. Use this for 'what PRs landed in repo X?' / "
+                "'are there open PRs against this repo?' questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": (
+                            "GitHub / GitLab repo slug (``owner/repo``). "
+                            "Required — there is no implicit 'all repos' mode."
+                        ),
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": (
+                            "Optional state filter: ``open`` / ``merged`` / "
+                            "``closed``. Default: no filter."
+                        ),
+                        "enum": ["open", "merged", "closed"],
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "Optional cutoff. ``\"7d\"`` / ``\"30d\"`` / "
+                            "``\"24h\"`` or an ISO timestamp. Filters on "
+                            "``merged_at`` when present, falling back to "
+                            "row insert order."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows returned. Default 10.",
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ci_runs",
+            "description": (
+                "List CI runs from the local store (Spec 20 ingest). Filter "
+                "by ``commit_sha`` (every workflow run that touched a commit) "
+                "or ``status`` (success / failure / cancelled / in_progress / "
+                "pending / skipped). Use this for 'did CI pass on commit X?' "
+                "/ 'show me recent failures' questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "commit_sha": {
+                        "type": "string",
+                        "description": (
+                            "Optional commit SHA filter. Matches the "
+                            "``commit_sha`` column exactly (full SHA)."
+                        ),
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": (
+                            "Optional status filter."
+                        ),
+                        "enum": [
+                            "success", "failure", "cancelled",
+                            "in_progress", "pending", "skipped",
+                        ],
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": (
+                            "Optional ``owner/repo`` slug filter."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows returned. Default 10.",
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_file_risk",
             "description": (
                 "Risk summary for a file before you edit it: how many past "
@@ -948,6 +1045,127 @@ def _exec_recommend_skills(
     return payload
 
 
+def _exec_get_pr_outcomes(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Read the ``pr_outcomes`` table for one repo (Spec 20).
+
+    Mirrors the meta-agent contract — flat JSON dict, ``error`` key on
+    failure. Honours optional ``state`` and ``since`` filters; falls
+    back to ordering by ``id DESC`` when ``merged_at`` is null on a row.
+    """
+    from stackunderflow.services import discovery as _discovery
+
+    repo = str(args.get("repo") or "").strip()
+    if not repo:
+        return {"error": "repo is required"}
+    state = args.get("state")
+    since = args.get("since")
+    limit = int(args.get("limit") or 10)
+    limit = max(1, min(50, limit))
+
+    where = ["repo_slug = ?"]
+    params: list[Any] = [repo]
+    if state:
+        where.append("state = ?")
+        params.append(str(state))
+    if since:
+        try:
+            since_iso = _discovery.parse_since(str(since))
+        except ValueError as exc:
+            return {"error": f"invalid since: {exc}"}
+        if since_iso:
+            # Apply against merged_at when present; otherwise treat the
+            # row as in-window (open/closed PRs without a merge ts can
+            # still be relevant).
+            where.append("(merged_at IS NULL OR merged_at >= ?)")
+            params.append(since_iso)
+
+    rows = conn.execute(
+        "SELECT provider, repo_slug, pr_number, title, state, "
+        " merged_at, reverted_at, author "
+        "FROM pr_outcomes WHERE " + " AND ".join(where)
+        + " ORDER BY COALESCE(merged_at, '') DESC, id DESC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
+    return {
+        "repo": repo,
+        "state": state,
+        "since": since,
+        "count": len(rows),
+        "pr_outcomes": [
+            {
+                "provider": r["provider"],
+                "repo_slug": r["repo_slug"],
+                "pr_number": int(r["pr_number"]),
+                "title": r["title"],
+                "state": r["state"],
+                "merged_at": r["merged_at"],
+                "reverted_at": r["reverted_at"],
+                "author": r["author"],
+            }
+            for r in rows
+        ],
+    }
+
+
+def _exec_get_ci_runs(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Read the ``ci_runs`` table with optional filters (Spec 20).
+
+    All three filters are independent — a query with no filters returns
+    the most recent runs across the store. Ordered by ``completed_ts``
+    when present, falling back to ``started_ts``, then ``id DESC``.
+    """
+    commit_sha = args.get("commit_sha")
+    status = args.get("status")
+    repo = args.get("repo")
+    limit = int(args.get("limit") or 10)
+    limit = max(1, min(50, limit))
+
+    where: list[str] = []
+    params: list[Any] = []
+    if commit_sha:
+        where.append("commit_sha = ?")
+        params.append(str(commit_sha))
+    if status:
+        where.append("status = ?")
+        params.append(str(status))
+    if repo:
+        where.append("repo_slug = ?")
+        params.append(str(repo))
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = conn.execute(
+        "SELECT provider, repo_slug, run_id, commit_sha, status, "
+        " workflow_name, started_ts, completed_ts "
+        "FROM ci_runs"
+        + where_sql
+        + " ORDER BY COALESCE(completed_ts, started_ts, '') DESC, id DESC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
+    return {
+        "commit_sha": commit_sha,
+        "status": status,
+        "repo": repo,
+        "count": len(rows),
+        "ci_runs": [
+            {
+                "provider": r["provider"],
+                "repo_slug": r["repo_slug"],
+                "run_id": r["run_id"],
+                "commit_sha": r["commit_sha"],
+                "status": r["status"],
+                "workflow_name": r["workflow_name"],
+                "started_ts": r["started_ts"],
+                "completed_ts": r["completed_ts"],
+            }
+            for r in rows
+        ],
+    }
+
+
 # Dispatcher table — name → (conn, args) callable. Keeping this flat
 # (instead of dynamic getattr) makes the surface explicit: a new tool
 # has to be added in three places: catalogue, dispatcher, and tests.
@@ -963,6 +1181,8 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "recommend_skills": _exec_recommend_skills,
     "recommend_mode": _exec_recommend_mode,
     "get_file_risk": _exec_get_file_risk,
+    "get_pr_outcomes": _exec_get_pr_outcomes,
+    "get_ci_runs": _exec_get_ci_runs,
 }
 
 

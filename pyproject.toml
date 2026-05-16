@@ -144,6 +144,19 @@ ignore = [
 # keyword scan). The key name is part of the public payload — we suppress
 # the warning rather than rename a contract.
 "tests/stackunderflow/services/test_mode_recommender.py" = ["S105"]
+# PR / CI webhook ingest (Spec 20): ENV_*_SECRET constants are env var
+# *names*, not the secrets themselves. The S105 keyword scan flags any
+# variable name containing "secret"; ruff has no way to distinguish a
+# name-of-env-var from a literal credential.
+"stackunderflow/routes/webhooks.py" = ["S105"]
+# Meta-agent get_pr_outcomes / get_ci_runs build their WHERE clause from
+# a fixed list of column-name = ? skeletons; values are always
+# parameterised. Same posture as qa_service / search_service.
+"stackunderflow/services/meta_agent.py" = ["S608"]
+# Test fixtures pass throwaway tokens like "xyz" / "flag-token" /
+# "ghp_fake" as fixture arguments — these are not real credentials.
+"tests/stackunderflow/services/test_github_ingest.py" = ["S105", "S106"]
+"tests/stackunderflow/cli/test_ingest_cli.py" = ["S105", "S106"]
 
 
 [tool.pytest.ini_options]

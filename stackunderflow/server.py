@@ -38,6 +38,7 @@ from stackunderflow.routes import (
     search,
     sessions,
     tags,
+    webhooks,
     yield_route,
 )
 from stackunderflow.routes import (
@@ -248,6 +249,7 @@ app.include_router(agent_teams.router)
 app.include_router(playback.router)
 app.include_router(meta_agent.router)
 app.include_router(live.router)
+app.include_router(webhooks.router)
 
 
 
