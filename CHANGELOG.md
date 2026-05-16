@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-15
+
 ### Added — proactive skill recommender (spec 19 / issue #89)
 
 `stackunderflow recommend skills` (CLI) + `recommend_skills` (MCP + meta-agent) surface repeated workflow patterns the user could automate as a Claude Code skill — "you ran `pytest tests/ -q` 7 times across 7 sessions, want a skill?". The mining is delegated to `stackunderflow.services.skill_synth.synthesize_skills` (no second copy of the detectors); this is the *gate* (occurrence threshold) + the *surface* (read-only recommendation, never auto-write).
