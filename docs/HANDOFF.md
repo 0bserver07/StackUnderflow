@@ -447,17 +447,18 @@ The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store no
 3. `docs/skills.md` — the 3 static SKILL.md files + the `skills generate/list/clean` synthesis + the hard guardrails
 4. `docs/hooks.md` — the opt-in Claude Code lifecycle hooks (what's captured, the privacy model, the Windows status)
 5. `docs/specs/etl-architecture.md` — design contract for the pipeline
-6. `docs/specs/messages-partitioning.md` — v008 design + rollback + ops rollout (the doc the manual migration walk-through lives in)
-7. `docs/specs/agent-teams.md` — the multi-agent FS-recognition design (v013)
-8. `docs/beta-normalizer-drift.md` — per-provider verdicts from the Wave 5 normalizer audit
-9. `stackunderflow/services/discovery.py` — `SessionMatch` / `OutcomeMatch` / `BudgetedResult`, `pack_within_budget`, the 5 shared discovery / outcome query functions
-10. `stackunderflow/etl/normalize/base.py` + `stackunderflow/etl/marts/base.py` — `Normalizer` / `MartBuilder` ABCs
-11. `stackunderflow/etl/backfill.py` + `backfill_jobs.py` + `lock.py` + `watcher.py` — orchestrator, the backfill-job slot, the single-instance lock, the watchfiles dispatch
-12. `stackunderflow/store/migrations/v006_etl_layer.sql` … `v013_multi_agent_session_metadata.sql` — the schema progression (every migration header documents its own rationale)
-13. `stackunderflow/store/mart_queries.py` — every read helper used by routes
-14. `stackunderflow/ingest/writer.py` — partition routing helpers + the claude-teams materialize call
-15. Any `routes/*.py` for the JSON contracts the dashboard depends on (`playback.py` / `agent_teams.py` are the newest)
-16. `tests/stackunderflow/integration/` — e2e + perf regression — the most useful single dir to understand the whole pipeline at once
+6. `docs/specs/session-schema-v1.md` + `docs/specs/adapter-contract.md` — the on-disk schema published as a versioned spec other tools can target (pinned to `schema_version = 14`); the second covers the `SourceAdapter` Protocol for new integrations
+7. `docs/specs/messages-partitioning.md` — v008 design + rollback + ops rollout (the doc the manual migration walk-through lives in)
+8. `docs/specs/agent-teams.md` — the multi-agent FS-recognition design (v013)
+9. `docs/beta-normalizer-drift.md` — per-provider verdicts from the Wave 5 normalizer audit
+10. `stackunderflow/services/discovery.py` — `SessionMatch` / `OutcomeMatch` / `BudgetedResult`, `pack_within_budget`, the 5 shared discovery / outcome query functions
+11. `stackunderflow/etl/normalize/base.py` + `stackunderflow/etl/marts/base.py` — `Normalizer` / `MartBuilder` ABCs
+12. `stackunderflow/etl/backfill.py` + `backfill_jobs.py` + `lock.py` + `watcher.py` — orchestrator, the backfill-job slot, the single-instance lock, the watchfiles dispatch
+13. `stackunderflow/store/migrations/v006_etl_layer.sql` … `v013_multi_agent_session_metadata.sql` — the schema progression (every migration header documents its own rationale)
+14. `stackunderflow/store/mart_queries.py` — every read helper used by routes
+15. `stackunderflow/ingest/writer.py` — partition routing helpers + the claude-teams materialize call
+16. Any `routes/*.py` for the JSON contracts the dashboard depends on (`playback.py` / `agent_teams.py` are the newest)
+17. `tests/stackunderflow/integration/` — e2e + perf regression — the most useful single dir to understand the whole pipeline at once
 
 ---
 
