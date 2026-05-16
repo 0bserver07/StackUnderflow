@@ -653,6 +653,45 @@ def find_failure_modes_for_file_impl(
         return {"sessions": [_match_to_dict(m) for m in matches]}
 
 
+def recommend_skills_impl(
+    project: str | None = None,
+    threshold: int = 5,
+    window_days: int = 30,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``recommend_skills`` MCP tool.
+
+    Returns ``{"recommendations": [...], "project": ..., "threshold": ...,
+    "window_days": ..., "cache_status": ..., "filtered_already_installed": N}``.
+    Empty list when the store is missing, when ``project`` cannot be
+    resolved, or when no patterns clear the threshold.
+    """
+    if not isinstance(project, str) or not project.strip():
+        raise ValueError("project must be a non-empty string (a project slug)")
+    if not isinstance(threshold, int) or threshold < 1:
+        raise ValueError("threshold must be a positive integer")
+    if not isinstance(window_days, int) or window_days < 1:
+        raise ValueError("window_days must be a positive integer")
+
+    from stackunderflow.services import skill_recommender
+
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {
+                "recommendations": [],
+                "project": project,
+                "threshold": threshold,
+                "window_days": window_days,
+                "cache_status": "miss",
+                "filtered_already_installed": 0,
+            }
+        result = skill_recommender.recommend_skills(
+            c, project=project, threshold=threshold, window_days=window_days,
+        )
+        return result.to_dict()
+
+
 mcp = FastMCP("stackunderflow")
 
 
@@ -1015,6 +1054,54 @@ def find_failure_modes_for_file(
     return find_failure_modes_for_file_impl(
         file_path=file_path, since=since, limit=limit,
         min_confidence=min_confidence,
+    )
+
+
+@mcp.tool()
+def recommend_skills(
+    project: str,
+    threshold: int = 5,
+    window_days: int = 30,
+) -> dict:
+    """List repeated patterns the user could turn into a project skill.
+
+    Use this when the user asks "what should I automate?" or after a long
+    session of manual workflow repetition. The tool mines the local store
+    for patterns that have appeared in at least ``threshold`` distinct
+    sessions within the last ``window_days`` days and aren't already
+    installed as auto-generated skills under
+    ``<project>/.claude/skills/auto-*/`` or ``~/.claude/skills/``.
+
+    Recommendations are READ-ONLY. Each row carries an ``accept_command``
+    string — pasting (or asking the user to paste) that command is the
+    only way a skill ever gets written. The tool itself never modifies
+    the filesystem.
+
+    Args:
+        project: Project slug to scope to (e.g. ``"-Users-x-myproj"``).
+            Required — there is no implicit "all projects" mode.
+        threshold: Minimum distinct-session count a pattern must clear.
+            Default 5. Must be >= 1.
+        window_days: Lookback window in days. Default 30. Must be >= 1.
+
+    Returns:
+        ``{"recommendations": [<rec>, ...], "project": ...,
+        "threshold": ..., "window_days": ..., "generated_at": ...,
+        "cache_status": "hit"|"miss"|"bypassed",
+        "filtered_already_installed": N}``. Each ``<rec>`` has keys:
+        ``pattern_id`` (stable id for the accept-flow),
+        ``pattern_kind`` (``"canonical-test-command"`` / ``"avoids-X"`` /
+        ``"never-touches-paths"`` / ``"always-runs-X-after-Y"`` /
+        ``"uses-tool-flag-combo"``), ``suggested_skill_name``,
+        ``description``, ``occurrences``, ``sessions`` (top-3 example
+        session ids), ``last_seen_ts``, ``project_slug``,
+        ``suggested_skill_template`` (a pre-rendered ``SKILL.md`` body),
+        ``accept_command`` (the CLI invocation to install the skill).
+        Empty ``recommendations`` list when nothing clears the threshold
+        or the store is missing.
+    """
+    return recommend_skills_impl(
+        project=project, threshold=threshold, window_days=window_days,
     )
 
 

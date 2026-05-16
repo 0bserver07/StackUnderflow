@@ -333,6 +333,50 @@ TOOL_CATALOG: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_skills",
+            "description": (
+                "List repeated workflow patterns the user could turn into "
+                "auto-generated Claude Code skills. Mines the local store for "
+                "patterns appearing in ``threshold``+ distinct sessions within "
+                "``window_days`` and filters out anything they already have a "
+                "skill for. Read-only — each row carries an ``accept_command`` "
+                "the user can paste to install. Use for 'what should I "
+                "automate?' / 'any skill suggestions for this project?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Project slug to scope to. When omitted, the "
+                            "current project context is used if available; "
+                            "otherwise the call returns an error."
+                        ),
+                    },
+                    "threshold": {
+                        "type": "integer",
+                        "description": (
+                            "Minimum distinct sessions a pattern must clear. "
+                            "Default 5."
+                        ),
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                    "window_days": {
+                        "type": "integer",
+                        "description": "Lookback window in days. Default 30.",
+                        "minimum": 1,
+                        "maximum": 365,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -643,6 +687,48 @@ def _exec_list_recent_sessions(
     }
 
 
+def _exec_recommend_skills(
+    conn: sqlite3.Connection, args: dict[str, Any], *, current_slug: str | None = None
+) -> dict[str, Any]:
+    """Surface skill recommendations for the active project.
+
+    The slug resolution mirrors ``_exec_get_project_summary`` — explicit
+    ``project`` arg wins, otherwise we fall back to the route-supplied
+    ``current_slug``. Without either we return an error so the model
+    knows to ask the user which project to scan.
+    """
+    from stackunderflow.services import skill_recommender
+
+    project = args.get("project") or current_slug
+    if not project:
+        return {
+            "error": (
+                "project is required (no current project context). Pass "
+                "the project slug explicitly."
+            )
+        }
+    threshold = int(args.get("threshold") or 5)
+    window_days = int(args.get("window_days") or 30)
+    try:
+        result = skill_recommender.recommend_skills(
+            conn,
+            project=str(project),
+            threshold=max(1, min(50, threshold)),
+            window_days=max(1, min(365, window_days)),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    payload = result.to_dict()
+    # The full skill body can be large; the LLM only needs the headline
+    # fields to surface a recommendation. Drop the template body before
+    # truncation; the user can fetch the full text via the CLI.
+    payload["recommendations"] = [
+        {k: v for k, v in r.items() if k != "suggested_skill_template"}
+        for r in payload["recommendations"]
+    ]
+    return payload
+
+
 # Dispatcher table — name → (conn, args) callable. Keeping this flat
 # (instead of dynamic getattr) makes the surface explicit: a new tool
 # has to be added in three places: catalogue, dispatcher, and tests.
@@ -654,6 +740,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_cost_summary": _exec_get_cost_summary,
     "get_session_playback": _exec_get_session_playback,
     "list_recent_sessions": _exec_list_recent_sessions,
+    "recommend_skills": _exec_recommend_skills,
 }
 
 
@@ -698,7 +785,7 @@ def execute_tool(
             args = {}
 
         executor = _EXECUTORS[name]
-        if name == "get_project_summary":
+        if name in ("get_project_summary", "recommend_skills"):
             payload = executor(conn, args, current_slug=current_slug)
         else:
             payload = executor(conn, args)

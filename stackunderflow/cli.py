@@ -2193,6 +2193,95 @@ def skills_clean_cmd(scope, out_path, older_than, dry_run, assume_yes):
         click.echo("(preview — re-run with --yes to delete)")
 
 
+# ── proactive skill recommender (spec 19 / issue #89) ─────────────────────────
+#
+# The ``skills generate`` flow above is reactive — the user must remember
+# to invoke it. ``recommend skills`` is the proactive counterpart: it mines
+# the same patterns, then surfaces "you ran X N times — want a skill?"
+# without ever writing a SKILL.md (acceptance is always an explicit user
+# action). Filters out patterns the user already has skills for.
+
+
+@cli.group("recommend")
+def recommend_group():
+    """Proactive recommendations mined from your local session store.
+
+    Recommendations are read-only — accepting one is always a separate
+    explicit step (e.g. ``stackunderflow skills generate --pattern <id>``).
+    """
+
+
+@recommend_group.command("skills")
+@click.option("--project", default=None,
+              help="Project slug to scan. Default: the project the current "
+                   "directory belongs to.")
+@click.option("--threshold", type=click.IntRange(min=1), default=5, show_default=True,
+              help="A pattern must appear in this many distinct sessions.")
+@click.option("--window-days", type=click.IntRange(min=1), default=30, show_default=True,
+              help="Lookback window in days.")
+@click.option("--no-cache", is_flag=True,
+              help="Bypass the recommendation cache and re-mine.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def recommend_skills_cmd(project, threshold, window_days, no_cache, fmt):
+    """List patterns you've manually re-run that could become auto-skills.
+
+    Reads ``messages`` + on-disk skills to find workflow patterns above
+    ``--threshold`` occurrences that you don't yet have a skill for.
+    Acceptance is never automatic — each row carries an ``accept_command``
+    you can paste to install the skill.
+    """
+    from stackunderflow.services import skill_recommender
+
+    conn = _open_store()
+    try:
+        if not project:
+            project = _detect_cwd_project_slug(conn)
+            if not project:
+                raise click.UsageError(
+                    "could not infer a project for the current directory — "
+                    "pass --project SLUG (see `stackunderflow find-sessions-in-path .`)."
+                )
+        try:
+            result = skill_recommender.recommend_skills(
+                conn,
+                project=project,
+                threshold=threshold,
+                window_days=window_days,
+                use_cache=not no_cache,
+            )
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
+    recs = result.recommendations
+    if not recs:
+        msg = f"No skill recommendations for {project} above threshold {threshold}"
+        if result.filtered_already_installed:
+            msg += f" ({result.filtered_already_installed} pattern(s) already installed)"
+        click.echo(f"{msg}.")
+        return
+    cache_hint = " (cached)" if result.cache_status == "hit" else ""
+    click.echo(
+        f"Found {len(recs)} skill recommendation(s) for {project}{cache_hint}:"
+    )
+    for r in recs:
+        click.echo(f"  • {r.suggested_skill_name}  [{r.pattern_kind}]  "
+                   f"occurrences={r.occurrences}")
+        click.echo(f"      {r.description}")
+        click.echo(f"      accept: {r.accept_command}")
+    if result.filtered_already_installed:
+        click.echo(
+            f"({result.filtered_already_installed} pattern(s) already have "
+            f"installed skills — not re-recommended.)"
+        )
+
+
 # ── discovery citation-feedback telemetry ──────────────────────────────────
 #
 # The three discovery commands above passively record which sessions they

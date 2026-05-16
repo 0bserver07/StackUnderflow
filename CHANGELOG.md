@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — proactive skill recommender (spec 19 / issue #89)
+
+`stackunderflow recommend skills` (CLI) + `recommend_skills` (MCP + meta-agent) surface repeated workflow patterns the user could automate as a Claude Code skill — "you ran `pytest tests/ -q` 7 times across 7 sessions, want a skill?". The mining is delegated to `stackunderflow.services.skill_synth.synthesize_skills` (no second copy of the detectors); this is the *gate* (occurrence threshold) + the *surface* (read-only recommendation, never auto-write).
+
+- **New service**: `stackunderflow/services/skill_recommender.py` — `recommend_skills(conn, project, threshold=5, window_days=30)` returns a `RecommendationResult` with each row carrying `pattern_id`, `pattern_kind`, `occurrences`, the example session ids, a pre-rendered `suggested_skill_template` (full `SKILL.md`), and an `accept_command` the user pastes to install. Cache lives at `~/.stackunderflow/cache/skill_recommendations.json` with a 6-hour TTL; cache key is `(project, threshold, window_days)` so different parameters never share an entry.
+- **Already-installed filter**: before surfacing a recommendation we walk `<project>/.claude/skills/auto-*/` and `~/.claude/skills/`, collect every `pattern_id` from `auto_generated: true` SKILL.md frontmatter, and drop any candidate the user already has installed. Hand-authored skills (no `auto_generated: true`) are correctly ignored — the filter only suppresses our own prior emits.
+- **CLI**: `stackunderflow recommend skills [--project SLUG] [--threshold N] [--window-days D] [--no-cache] [--format text|json]` — auto-detects the project from the cwd when `--project` is omitted; no implicit "all projects" mode.
+- **MCP tool**: `recommend_skills(project, threshold?, window_days?)` returns the same payload over stdio.
+- **Meta-agent tool**: same name + signature; the dispatcher strips the heavy `suggested_skill_template` field before truncation so the LLM sees the headline rows without blowing the 4KB result budget.
+- **Out of scope (deferred)**: auto-applying recommendations without confirmation; LLM-assisted skill text generation; Overview-tab notification badge in the React dashboard.
+
+39 new tests (20 service, 7 CLI, 6 MCP, 6 meta-agent dispatch). All use `tmp_path` / in-memory stores; the real `~/.stackunderflow/store.db` and the real cache directory are never touched.
+
 ## [0.8.0] - 2026-05-15
 
 ### Fixed — CLI report cost commands (today / month / status / report) now read from usage_events
