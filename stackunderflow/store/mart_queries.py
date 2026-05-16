@@ -288,12 +288,15 @@ def daily_mart_to_overview(
 
 def daily_mart_by_day(
     rows: Sequence[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Group ``daily_mart`` rows by ``day`` → one entry per day.
+) -> dict[str, dict[str, Any]]:
+    """Group ``daily_mart`` rows by ``day`` → dict keyed by date.
 
-    Output shape matches the ``daily_stats`` / ``daily_costs`` arrays
-    the legacy aggregator emits: ``{date, cost, by_model, total_input,
-    total_output, total_cache_read, total_cache_create, message_count}``.
+    Output shape matches the legacy aggregator's ``_daily`` so the
+    frontend's ``Record<string, DailyData>`` type contract holds:
+    ``{messages, sessions, tokens: {input, output, cache_creation,
+    cache_read}, cost: {total, by_model}, user_commands,
+    interrupted_commands, interruption_rate, errors,
+    assistant_messages, error_rate}``.
     """
     by_day: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -303,27 +306,36 @@ def daily_mart_by_day(
         bucket = by_day.setdefault(
             day,
             {
-                "date": day,
-                "cost": 0.0,
-                "by_model": {},
-                "total_input": 0,
-                "total_output": 0,
-                "total_cache_read": 0,
-                "total_cache_create": 0,
-                "message_count": 0,
+                "messages": 0,
+                "sessions": 0,
+                "tokens": {
+                    "input": 0,
+                    "output": 0,
+                    "cache_creation": 0,
+                    "cache_read": 0,
+                },
+                "cost": {"total": 0.0, "by_model": {}},
+                "user_commands": 0,
+                "interrupted_commands": 0,
+                "interruption_rate": 0.0,
+                "errors": 0,
+                "assistant_messages": 0,
+                "error_rate": 0.0,
             },
         )
         cost = float(r.get("cost_usd", 0.0) or 0.0)
-        bucket["cost"] += cost
-        bucket["total_input"] += int(r.get("input_tokens", 0) or 0)
-        bucket["total_output"] += int(r.get("output_tokens", 0) or 0)
-        bucket["total_cache_read"] += int(r.get("cache_read", 0) or 0)
-        bucket["total_cache_create"] += int(r.get("cache_create", 0) or 0)
-        bucket["message_count"] += int(r.get("message_count", 0) or 0)
+        bucket["cost"]["total"] += cost
+        bucket["tokens"]["input"] += int(r.get("input_tokens", 0) or 0)
+        bucket["tokens"]["output"] += int(r.get("output_tokens", 0) or 0)
+        bucket["tokens"]["cache_read"] += int(r.get("cache_read", 0) or 0)
+        bucket["tokens"]["cache_creation"] += int(r.get("cache_create", 0) or 0)
+        bucket["messages"] += int(r.get("message_count", 0) or 0)
+        bucket["sessions"] += int(r.get("session_count", 0) or 0)
         model = r.get("model") or ""
         if model:
-            bucket["by_model"][model] = bucket["by_model"].get(model, 0.0) + cost
-    return [by_day[d] for d in sorted(by_day)]
+            existing = bucket["cost"]["by_model"].get(model, 0.0)
+            bucket["cost"]["by_model"][model] = existing + cost
+    return by_day
 
 
 def daily_mart_by_model(

@@ -101,10 +101,13 @@ async def test_dashboard_data_daily_stats_from_daily_mart(tmp_path, monkeypatch)
     data_route.invalidate_dashboard_cache()
     payload = await data_route.get_dashboard_data()
     daily = payload["statistics"]["daily_stats"]
-    days = sorted(d["date"] for d in daily)
-    assert days == ["2026-04-01", "2026-04-02"]
-    bucket_d2 = next(d for d in daily if d["date"] == "2026-04-02")
-    assert bucket_d2["cost"] == pytest.approx(0.4)
+    # daily_mart_by_day emits the legacy `Record<string, DailyData>` shape
+    # the frontend type contract (and the legacy aggregator) expects.
+    assert sorted(daily.keys()) == ["2026-04-01", "2026-04-02"]
+    bucket_d2 = daily["2026-04-02"]
+    assert bucket_d2["cost"]["total"] == pytest.approx(0.4)
+    assert bucket_d2["tokens"]["input"] == 200
+    assert bucket_d2["tokens"]["output"] == 100
 
 
 @pytest.mark.asyncio
