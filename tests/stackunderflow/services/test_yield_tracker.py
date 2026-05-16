@@ -200,14 +200,16 @@ def test_productive_when_unreverted_commit_lands(tmp_path, monkeypatch):
             if "--grep=" in joined:
                 # No revert subjects mention this commit.
                 return _FakeRun(returncode=0, stdout="")
+            # New format: ``<sha>|<committed_at>|<subject>`` per
+            # ``_bulk_git_log_window``. The commit is in the 24h window
+            # after the session and 1.5h post-start so age=1.5h.
             return _FakeRun(
                 returncode=0,
-                stdout=f"{full_sha}|feat: add yield tracker\n",
+                stdout=f"{full_sha}|2026-04-04T11:30:00+00:00|feat: add yield tracker\n",
             )
-        if sub == "show":
-            return _FakeRun(returncode=0, stdout="2026-04-04T11:30:00+00:00\n")
-        if sub == "merge-base":
-            return _FakeRun(returncode=0)  # reachable from HEAD = kept
+        if sub == "rev-list":
+            # HEAD reachability set — the candidate commit is reachable.
+            return _FakeRun(returncode=0, stdout=f"{full_sha}\n")
         return _FakeRun()
 
     monkeypatch.setattr(yield_tracker.subprocess, "run", _run)
@@ -265,17 +267,21 @@ def test_reverted_when_revert_log_exists(tmp_path, monkeypatch):
         if sub == "rev-parse":
             return _FakeRun(returncode=0)
         if sub == "log":
-            # First "log" call returns the candidate commit; subsequent
-            # "log --grep" call returns a hit so the commit looks reverted.
             joined = " ".join(args)
             if "--grep=" in joined:
+                # ``_bulk_revert_short_shas`` greps every revert subject
+                # in the repo; we hand back one with the candidate's
+                # short sha so the in-memory short-sha set picks it up.
                 revert_log_call["matched"] = True
                 return _FakeRun(returncode=0, stdout=f'Revert "feat: add thing" ({short})\n')
-            return _FakeRun(returncode=0, stdout=f"{full_sha}|feat: add thing\n")
-        if sub == "show":
-            return _FakeRun(returncode=0, stdout="2026-04-06T11:00:00+00:00\n")
-        if sub == "merge-base":
-            return _FakeRun(returncode=0)  # reachable but reverted by subject
+            # Windowed commit log — three-piece format.
+            return _FakeRun(
+                returncode=0,
+                stdout=f"{full_sha}|2026-04-06T11:00:00+00:00|feat: add thing\n",
+            )
+        if sub == "rev-list":
+            # Reachable from HEAD (so reverted-by-subject is the trip).
+            return _FakeRun(returncode=0, stdout=f"{full_sha}\n")
         return _FakeRun()
 
     monkeypatch.setattr(yield_tracker.subprocess, "run", _run)
@@ -287,7 +293,12 @@ def test_reverted_when_revert_log_exists(tmp_path, monkeypatch):
 
 
 def test_reverted_when_commit_unreachable(tmp_path, monkeypatch):
-    """No revert in subjects, but ``--is-ancestor`` returns 1 → reverted."""
+    """No revert in subjects, candidate sha not in HEAD's reachability set → reverted.
+
+    The ``rev-list HEAD`` call returns *some* commit (so HEAD is known to
+    git, ``head_known=True``) but doesn't include the candidate sha — the
+    workspace cache treats that as wiped/non-reachable.
+    """
     cwd = tmp_path / "repo"
     cwd.mkdir()
     conn = _open(tmp_path)
@@ -308,11 +319,13 @@ def test_reverted_when_commit_unreachable(tmp_path, monkeypatch):
             joined = " ".join(args)
             if "--grep=" in joined:
                 return _FakeRun(returncode=0, stdout="")  # no revert subject match
-            return _FakeRun(returncode=0, stdout=f"{full_sha}|wip\n")
-        if sub == "show":
-            return _FakeRun(returncode=0, stdout="2026-04-07T11:00:00+00:00\n")
-        if sub == "merge-base":
-            return _FakeRun(returncode=1)  # not reachable from HEAD
+            return _FakeRun(
+                returncode=0,
+                stdout=f"{full_sha}|2026-04-07T11:00:00+00:00|wip\n",
+            )
+        if sub == "rev-list":
+            # HEAD reachability set excludes the candidate.
+            return _FakeRun(returncode=0, stdout="cafebabecafebabecafebabecafebabecafebabe\n")
         return _FakeRun()
 
     monkeypatch.setattr(yield_tracker.subprocess, "run", _run)
