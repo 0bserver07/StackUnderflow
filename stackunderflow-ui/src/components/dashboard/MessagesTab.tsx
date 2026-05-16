@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { IconLoader2, IconX } from '@tabler/icons-react'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
+import { IconLoader2, IconX, IconChevronLeft, IconChevronRight } from '@tabler/icons-react'
 import type { DashboardData, Message } from '../../types/api'
 import type { Column } from '../common/DataTable'
 import DataTable from '../common/DataTable'
@@ -163,20 +163,34 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
 
   const { filters } = useFilters()
 
-  // Load ALL messages from the API. Filter set goes into the query key so
-  // toggling a chip refetches; the API helper splices the params onto the
-  // outbound URL so the route does the heavy lifting.
-  const { data: allMessages, isLoading, error } = useQuery({
-    queryKey: ['allMessages', projectName, filters.providers, filters.models],
-    queryFn: () => getMessages(undefined, {
-      providers: filters.providers,
-      models: filters.models,
-    }),
-    // Fall back to dashboard messages while loading
-    placeholderData: initialMessages,
+  // Server pagination — was unbounded; on a 26K-message project the route
+  // returned ~37 MB. We now fetch 500 messages per server page (the route's
+  // hard cap) and let DataTable do client-side pagination/sort/filter
+  // inside that window. The "Server page N of M" control above the table
+  // walks the project when it has more than 500 messages.
+  const SERVER_PAGE_SIZE = 500
+  const [serverPage, setServerPage] = useState(1)
+
+  // Reset to page 1 whenever the filter set changes so we never land on an
+  // out-of-range page after a chip toggle.
+  useEffect(() => {
+    setServerPage(1)
+  }, [filters.providers, filters.models])
+
+  // Fetch one server page at a time. `keepPreviousData` keeps the old page
+  // visible while the next one is in flight so the table doesn't blank.
+  const { data: pageData, isLoading, error } = useQuery({
+    queryKey: ['messagesPage', projectName, serverPage, SERVER_PAGE_SIZE, filters.providers, filters.models],
+    queryFn: () => getMessages(
+      { page: serverPage, perPage: SERVER_PAGE_SIZE },
+      { providers: filters.providers, models: filters.models },
+    ),
+    placeholderData: keepPreviousData,
   })
 
-  const messages = allMessages ?? initialMessages
+  const messages = pageData?.messages ?? initialMessages
+  const totalMessages = pageData?.total ?? initialMessages.length
+  const totalServerPages = pageData?.total_pages ?? 1
 
   // Apply filters
   const filteredMessages = useMemo(() => {
@@ -234,7 +248,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
     // Intentionally not in deps: we only want this on mount + once messages
     // are populated. `loadInteraction` already closes over `messages`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allMessages])
+  }, [pageData])
 
   // Subsequent navigations: NAV_EVENT fired by openInteraction(...)
   useEffect(() => {
@@ -408,17 +422,51 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
         />
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
           All Messages
           <span className="ml-2 text-xs text-gray-500 font-normal">
             {isLoading ? (
               <IconLoader2 size={12} className="inline animate-spin" />
             ) : (
-              <>{filteredMessages.length.toLocaleString()} of {messages.length.toLocaleString()}</>
+              <>
+                {filteredMessages.length.toLocaleString()} of {messages.length.toLocaleString()} on this page
+                {totalMessages > messages.length && (
+                  <> · {totalMessages.toLocaleString()} total</>
+                )}
+              </>
             )}
           </span>
         </h2>
+
+        {/* Server pagination — only shown when the project has more than
+            one server page (>500 messages). Visually distinct from the
+            DataTable's intra-page nav at the bottom. */}
+        {totalServerPages > 1 && (
+          <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+            <button
+              type="button"
+              onClick={() => setServerPage(p => Math.max(1, p - 1))}
+              disabled={serverPage <= 1 || isLoading}
+              className="inline-flex items-center gap-1 px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50"
+              aria-label="Previous server page"
+            >
+              <IconChevronLeft size={12} /> Prev
+            </button>
+            <span className="tabular-nums">
+              Server page {serverPage} of {totalServerPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setServerPage(p => Math.min(totalServerPages, p + 1))}
+              disabled={serverPage >= totalServerPages || isLoading}
+              className="inline-flex items-center gap-1 px-2 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50"
+              aria-label="Next server page"
+            >
+              Next <IconChevronRight size={12} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filter controls */}
