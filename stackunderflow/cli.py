@@ -2002,6 +2002,63 @@ def find_failure_modes_for_file_cmd(
     )
 
 
+# ── file-risk recommender (Spec 16) ─────────────────────────────────────────
+
+
+@cli.group("risk")
+def risk_group():
+    """Surface "this file has caused N reverts in M days" before editing it.
+
+    Read-only aggregator over the v0.7.2 outcome heuristic. No new
+    schema; counts are computed from existing
+    ``messages`` / ``sessions`` rows on each call.
+    """
+
+
+@risk_group.command("file")
+@click.argument("path", type=click.Path(file_okay=True, dir_okay=True))
+@click.option("--since", default=None,
+              help="Only sessions whose activity is newer than this. "
+                   "Accepts '7d', '1w', '1m', '24h', or an ISO date/datetime.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS),
+              default="text", show_default=True, help="Output format.")
+def risk_file_cmd(path: str, since: str | None, fmt: str):
+    """Risk summary for PATH: how many sessions reverted / failed / worked.
+
+    Counts distinct sessions classified by the v0.7.2 outcome heuristic.
+    ``recent_session_ids`` is the up-to-5 most recent failure-mode
+    sessions (reverted ∪ failed) for the file.
+    """
+    from stackunderflow.services.risk import file_risk_summary
+
+    conn = _open_store()
+    try:
+        try:
+            summary = file_risk_summary(conn, path, since=since)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--since") from exc
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(summary, indent=2))
+        return
+
+    click.echo(f"File risk for {summary['path']}")
+    if summary["since"]:
+        click.echo(f"  since: {summary['since']}")
+    click.echo("")
+    click.echo(f"  total sessions touching the file: {summary['total_sessions']}")
+    click.echo(f"  reverted:                         {summary['reverted']}")
+    click.echo(f"  failed:                           {summary['failed']}")
+    click.echo(f"  worked:                           {summary['worked']}")
+    if summary["recent_session_ids"]:
+        click.echo("")
+        click.echo("  recent failure-mode sessions:")
+        for sid in summary["recent_session_ids"]:
+            click.echo(f"    - {sid}")
+
+
 # ── auto-generated skills ─────────────────────────────────────────────────────
 #
 # Mine the local store for project-specific workflow patterns ("always run

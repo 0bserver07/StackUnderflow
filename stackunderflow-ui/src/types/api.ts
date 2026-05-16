@@ -907,6 +907,19 @@ export interface ProjectTimelineResponse {
 // returns the per-file state. See stackunderflow/services/playback_fs.py.
 // ---------------------------------------------------------------------------
 
+/**
+ * File-risk overlay (Spec 16). Only present when the file has at least one
+ * past failure-mode session (reverted or failed) — the route omits the
+ * `risk` block entirely on clean-history files so the badge column stays
+ * empty by default.
+ */
+export interface PlaybackFsFileRisk {
+  reverted_count: number
+  failed_count: number
+  worked_count: number
+  total_sessions: number
+}
+
 export interface PlaybackFsFileEntry {
   /** Reconstructed file content. Omitted when `include_content=false`. */
   content?: string
@@ -922,6 +935,8 @@ export interface PlaybackFsFileEntry {
    * (no prior snapshot of the file body).
    */
   reconstruction_complete: boolean
+  /** Risk badge data — see {@link PlaybackFsFileRisk}. Absent on clean-history files. */
+  risk?: PlaybackFsFileRisk
 }
 
 export interface PlaybackFsSnapshotResponse {

@@ -321,6 +321,11 @@ function FileTree({ groups, expanded, onToggleDir, selectedPath, onSelect }: Fil
                 {g.files.map((f) => {
                   const isSelected = f.path === selectedPath
                   const incomplete = !f.entry.reconstruction_complete
+                  const risk = f.entry.risk
+                  const showRiskBadge = !!risk && risk.reverted_count > 0
+                  const riskTooltip = risk
+                    ? `${risk.reverted_count} reverted, ${risk.failed_count} failed, ${risk.worked_count} worked over ${risk.total_sessions} sessions`
+                    : ''
                   return (
                     <li key={f.path} role="treeitem" aria-selected={isSelected}>
                       <button
@@ -340,6 +345,16 @@ function FileTree({ groups, expanded, onToggleDir, selectedPath, onSelect }: Fil
                         <span className="font-mono truncate flex-1" title={f.path}>
                           {f.basename}
                         </span>
+                        {showRiskBadge && (
+                          <span
+                            className="text-[10px] font-semibold tabular-nums px-1 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 flex-shrink-0"
+                            data-testid="playback-fs-risk-badge"
+                            title={riskTooltip}
+                            aria-label={`Risk: ${riskTooltip}`}
+                          >
+                            {risk!.reverted_count}↩
+                          </span>
+                        )}
                         {incomplete && (
                           <IconAlertTriangle
                             size={11}

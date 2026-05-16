@@ -28,6 +28,7 @@ success/failure flag) — no schema migration. See
 from __future__ import annotations
 
 import re
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
@@ -36,6 +37,7 @@ from fastapi.responses import JSONResponse
 import stackunderflow.deps as deps
 from stackunderflow.services import playback as playback_service
 from stackunderflow.services import playback_fs as playback_fs_service
+from stackunderflow.services import risk as risk_service
 from stackunderflow.store import db, queries, schema
 
 router = APIRouter()
@@ -96,6 +98,12 @@ async def get_session_fs_snapshot(
     ``include_content=false`` returns metadata only (sizes + which
     operations were applied) without the file bodies.
 
+    Each ``files[<path>]`` entry also carries a ``risk`` block when the
+    file has been reverted at least once in the past — see
+    :func:`stackunderflow.services.risk.file_risk_summary`. Files with
+    no failure-mode history have no ``risk`` key (the badge is rendered
+    only when the count is non-zero, so the metadata fetch stays small).
+
     * 404 — session not in store.
     * 422 — ``at`` couldn't be parsed.
     * 200 — ``files`` may be empty when the session exists but issued no
@@ -116,6 +124,25 @@ async def get_session_fs_snapshot(
             raise HTTPException(status_code=404, detail=str(e)) from e
         except playback_fs_service.FsReconstructionError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
+        # Per-file risk overlay. Cheap on a typical snapshot (≤ tens of
+        # files) and read-only against the same connection. Skip the
+        # call entirely when there are no files (keeps the trivial
+        # path free of needless work).
+        files = snapshot.get("files") or {}
+        for path in files:
+            try:
+                summary = risk_service.file_risk_summary(conn, path)
+            except (ValueError, sqlite3.DatabaseError):
+                # Best-effort: a malformed path or a flaky read should
+                # not fail the snapshot endpoint.
+                continue
+            if summary["reverted"] > 0 or summary["failed"] > 0:
+                files[path]["risk"] = {
+                    "reverted_count": summary["reverted"],
+                    "failed_count": summary["failed"],
+                    "worked_count": summary["worked"],
+                    "total_sessions": summary["total_sessions"],
+                }
     finally:
         conn.close()
     return JSONResponse(snapshot)

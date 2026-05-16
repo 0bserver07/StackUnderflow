@@ -252,3 +252,90 @@ def test_fs_snapshot_edit_without_read_surfaces_warning(app_client):
     ).json()
     assert body["files"]["v.py"]["reconstruction_complete"] is False
     assert any("no initial Read or Write" in w for w in body["warnings"])
+
+
+# ── risk overlay (Spec 16) ──────────────────────────────────────────────────
+
+
+def _seed_failing_history(store_db, *, file_path: str = "/x/cost.py") -> None:
+    """Seed a separate session that *failed* an edit on ``file_path``.
+
+    The risk overlay walks ``messages`` for the file's path; the past
+    failure-mode session does NOT need to be the current snapshot's
+    session — it just needs to exist in the store.
+    """
+    conn = db.connect(store_db)
+    pid_row = conn.execute(
+        "SELECT id FROM projects WHERE slug = 'p-fail'"
+    ).fetchone()
+    if pid_row is None:
+        pid = int(
+            conn.execute(
+                "INSERT INTO projects (provider, slug, display_name, "
+                " first_seen, last_modified) VALUES "
+                "('claude', 'p-fail', 'p-fail', 0.0, 1.0)"
+            ).lastrowid
+        )
+    else:
+        pid = int(pid_row["id"])
+    sfk = int(
+        conn.execute(
+            "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, "
+            " message_count) VALUES (?, 'past-fail', "
+            "'2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z', 2)",
+            (pid,),
+        ).lastrowid
+    )
+    edit_blob = json.dumps([
+        {"name": "Edit", "input": {"file_path": file_path}}
+    ])
+    for seq, (role, content_text, tools_json) in enumerate([
+        ("assistant", "", edit_blob),
+        ("user", "no, that broke the cost endpoint", "[]"),
+    ]):
+        conn.execute(
+            "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+            " input_tokens, output_tokens, cache_create_tokens, "
+            " cache_read_tokens, content_text, tools_json, raw_json, "
+            " is_sidechain) VALUES "
+            "(?, ?, '2026-04-01T00:00:00Z', ?, 'claude-sonnet-4-5', "
+            " 0, 0, 0, 0, ?, ?, '{}', 0)",
+            (sfk, seq, role, content_text, tools_json),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_fs_snapshot_emits_risk_block_when_file_has_history(app_client):
+    """Spec 16 — files with ≥ 1 reverted/failed past session get a ``risk`` overlay."""
+    client, store_db = app_client
+    file_path = "/x/cost.py"
+    _seed_failing_history(store_db, file_path=file_path)
+    # Now seed the *current* snapshot session that touches the same file.
+    _seed(store_db, session_id="now-sess", triples=[
+        ("Write", {"file_path": file_path, "content": "y = 2"}, "ok"),
+    ])
+    body = client.get(
+        "/api/playback/now-sess/fs", params={"at": _AT_LATE},
+    ).json()
+    assert file_path in body["files"]
+    risk = body["files"][file_path].get("risk")
+    assert risk is not None
+    assert risk["failed_count"] >= 1
+    assert set(risk) == {
+        "reverted_count", "failed_count", "worked_count", "total_sessions",
+    }
+
+
+def test_fs_snapshot_no_risk_block_on_clean_history(app_client):
+    """Files without any failure-mode history must NOT carry a ``risk`` key
+    (the badge is rendered conditionally on its presence)."""
+    client, store_db = app_client
+    _seed(store_db, session_id="clean-sess", triples=[
+        ("Write", {"file_path": "fresh.py", "content": "z = 0"}, "ok"),
+    ])
+    body = client.get(
+        "/api/playback/clean-sess/fs", params={"at": _AT_LATE},
+    ).json()
+    assert "fresh.py" in body["files"]
+    assert "risk" not in body["files"]["fresh.py"]

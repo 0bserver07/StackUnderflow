@@ -31,6 +31,7 @@ from stackunderflow.adapters.claude import ClaudeAdapter
 from stackunderflow.mcp import store_reader
 from stackunderflow.services import discovery as _discovery
 from stackunderflow.services import discovery_telemetry as _telemetry
+from stackunderflow.services import risk as _risk
 from stackunderflow.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -1016,6 +1017,62 @@ def find_failure_modes_for_file(
         file_path=file_path, since=since, limit=limit,
         min_confidence=min_confidence,
     )
+
+
+def file_risk_impl(
+    path: str,
+    since: str | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``file_risk`` MCP tool.
+
+    Resolves ``path`` against the user's filesystem (``~`` expanded,
+    relative paths against cwd), opens the store (or reuses ``conn``),
+    delegates to :func:`stackunderflow.services.risk.file_risk_summary`,
+    and returns the dict shape documented on
+    :func:`~stackunderflow.services.risk.file_risk_summary`.
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("path must be a non-empty string")
+    resolved = _resolve_user_path(path)
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {
+                "path": resolved,
+                "since": since,
+                "total_sessions": 0,
+                "reverted": 0,
+                "failed": 0,
+                "worked": 0,
+                "recent_session_ids": [],
+            }
+        return _risk.file_risk_summary(c, resolved, since=since)
+
+
+@mcp.tool()
+def file_risk(path: str, since: str | None = None) -> dict:
+    """Risk summary for a file: how many past sessions reverted / failed / worked.
+
+    Use BEFORE editing a file with a rocky history. Returns counts over
+    the v0.7.2 outcome heuristic plus up to five recent failure-mode
+    session ids — read those with ``session_query`` to learn the trap
+    before falling into it.
+
+    Args:
+        path: Absolute or working-directory-relative file path.
+            ``~`` is expanded and the path is resolved. Must be non-empty.
+        since: Filter to recent activity. Accepts ``"7d"``, ``"1w"``,
+            ``"1m"``, ``"24h"``, or an ISO-8601 date/timestamp. ``None``
+            (default) = all time.
+
+    Returns:
+        ``{path, since, total_sessions, reverted, failed, worked,
+        recent_session_ids}`` — see
+        :func:`stackunderflow.services.risk.file_risk_summary` for the
+        contract. ``recent_session_ids`` is capped at 5 ids.
+    """
+    return file_risk_impl(path=path, since=since)
 
 
 def main() -> None:
