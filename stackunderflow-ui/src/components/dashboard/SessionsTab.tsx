@@ -433,9 +433,9 @@ function ConversationMessage({
         <Icon size={14} className={style.color} />
         <span className={`text-xs font-medium ${style.color}`}>{style.label}</span>
         {model && <span className="text-[10px] text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded" title={model}>{formatModelName(model)}</span>}
-        {tokens && (
+        {tokens && (tokens.input != null || tokens.output != null) && (
           <span className="text-[10px] text-gray-600 dark:text-gray-400">
-            {tokens.input.toLocaleString()} in / {tokens.output.toLocaleString()} out
+            {(tokens.input ?? 0).toLocaleString()} in / {(tokens.output ?? 0).toLocaleString()} out
           </span>
         )}
         <span className="flex-1" />
