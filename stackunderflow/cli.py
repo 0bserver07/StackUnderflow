@@ -2725,6 +2725,81 @@ def hooks_run_cmd(hook_id: str, capture_content: bool):
     sys.exit(_run(hook_id, payload, capture_content=capture_content))
 
 
+# ── recommend (Spec 18 — heuristic v1 mode recommender) ────────────────────
+#
+# Pattern-match an incoming prompt against the user's own past sessions
+# and suggest the cheapest model that historically solved similar tasks.
+# Heuristic v1; the full benchmark engine is Spec 26 (issue #99).
+
+@cli.group("recommend")
+def recommend_group():
+    """Heuristic recommendations driven by your own past sessions."""
+
+
+@recommend_group.command("mode")
+@click.option("--prompt", "prompt", required=True,
+              help="The task prompt to score (text in quotes).")
+@click.option("--current-model", "current_model", default=None,
+              help="Model you'd otherwise route to. Drives the cost-delta.")
+@click.option("--no-cache", "no_cache", is_flag=True, default=False,
+              help="Skip the 24h cache (recompute from history).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+              show_default=True, help="Output format.")
+def recommend_mode_cmd(
+    prompt: str,
+    current_model: str | None,
+    no_cache: bool,
+    fmt: str,
+):
+    """Recommend the cheapest model that fits this task.
+
+    Uses your local session history (``~/.stackunderflow/store.db``) —
+    nothing leaves the machine. ``confidence == 0.0`` means "not enough
+    similar past sessions, no opinion".
+    """
+    from stackunderflow.services.mode_recommender import recommend
+
+    conn = _open_store()
+    try:
+        payload = recommend(
+            conn, prompt,
+            current_model=current_model,
+            use_cache=not no_cache,
+        )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    pick = payload.get("recommended_model") or "(none)"
+    confidence = float(payload.get("confidence") or 0.0)
+    delta = float(payload.get("cost_delta_usd") or 0.0)
+    similar = int(payload.get("similar_session_count") or 0)
+    cache_hit = bool(payload.get("cache_hit"))
+
+    click.echo(f"Recommended model:  {pick}")
+    if current_model:
+        click.echo(f"Current model:      {current_model}")
+    click.echo(f"Confidence:         {confidence:.2f}")
+    if delta > 0:
+        click.echo(f"Estimated savings:  ${delta:.4f}/session")
+    elif delta < 0:
+        click.echo(f"Estimated cost-up:  ${-delta:.4f}/session")
+    click.echo(f"Similar sessions:   {similar}")
+    if cache_hit:
+        click.echo("  (cache hit — re-run with --no-cache to recompute)")
+    rationale = payload.get("rationale")
+    if rationale:
+        click.echo(f"Why:                {rationale}")
+    evidence = payload.get("evidence_session_ids") or []
+    if evidence:
+        click.echo("Evidence sessions:")
+        for sid in evidence:
+            click.echo(f"  - {sid}")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:
