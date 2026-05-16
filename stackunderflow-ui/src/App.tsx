@@ -4,6 +4,7 @@ import Header from './components/layout/Header'
 import MetaAgentSidebar from './components/layout/MetaAgentSidebar'
 import Overview from './pages/Overview'
 import ProjectDashboard from './pages/ProjectDashboard'
+import Live from './pages/Live'
 import Settings from './pages/Settings'
 import { CurrencyProvider } from './services/currency'
 import { FiltersProvider } from './services/filters'
@@ -58,6 +59,7 @@ function AppLayout() {
         <main className="flex-1 overflow-auto min-w-0">
           <Routes>
             <Route path="/" element={<Overview />} />
+            <Route path="/live" element={<Live />} />
             <Route path="/project/:name" element={<ProjectDashboard />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

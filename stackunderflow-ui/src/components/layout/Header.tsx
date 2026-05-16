@@ -155,6 +155,16 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
         >
           Overview
         </Link>
+        <Link
+          to="/live"
+          className={`px-2.5 py-1 rounded text-xs font-medium ${
+            location.pathname === '/live'
+              ? 'bg-white dark:bg-gray-800 text-indigo-400'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100/70 dark:hover:bg-gray-800/50'
+          }`}
+        >
+          Live
+        </Link>
         {currentProject && (
           <Link
             to={`/project/${encodeURIComponent(currentProject)}`}
