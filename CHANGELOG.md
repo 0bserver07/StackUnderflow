@@ -30,6 +30,15 @@ Three call sites: `stackunderflow recommend mode --prompt "<text>" [--current-mo
 
 Heuristic v1 explicitly — the full benchmark engine is Spec 26 (issue #99). Read-only against `session_mart` and `messages.content_text`; never touches the live `usage_events` rows. Cost figures are pulled straight from `session_mart.cost_usd` (post-v0.8.0 cost-fix path) and never recomputed in this layer. 35 new tests cover feature extraction, hash stability, recommendation shape, cache miss/hit/TTL eviction, empty-store path, intent / band filter behaviour, and the MCP + meta-agent dispatcher round-trips. Suite goes from 2488 → 2523 fast tests.
 
+### Added — File-risk recommender (Spec 16)
+
+`stackunderflow risk file <path> [--since 30d] [--format text|json]` surfaces "this file has caused N reverts in M days" before an agent edits it. Aggregates the v0.7.2 outcome heuristic into four buckets per file (`total_sessions`, `reverted`, `failed`, `worked`) plus the five most-recent failure-mode session ids. Wired into:
+
+- **CLI** — `stackunderflow risk file <path>` (new `risk` group; text + JSON formats).
+- **MCP** — `file_risk(path, since)` tool registered on the FastMCP instance.
+- **Meta-agent** — `get_file_risk` entry in `services/meta_agent.py:TOOL_CATALOG`; the worst-case payload (5 ids + counts) is 465 bytes, well under the 4 KB tool-result cap.
+- **Frontend** — `/api/playback/{session_id}/fs` carries a per-file `risk` block when a file has any past failure-mode session; `PlaybackFsPanel` renders a small revert-count badge in the file tree on those rows. Read-only — no schema change required (the v0.7.2 outcome heuristic is query-time, so `session_mart` did not need a new column).
+
 ## [0.8.0] - 2026-05-15
 
 ### Fixed — CLI report cost commands (today / month / status / report) now read from usage_events

@@ -221,6 +221,64 @@ def test_execute_tool_session_playback_unknown_session(app_client):
     assert "session not found" in result.data["error"]
 
 
+def test_execute_tool_get_file_risk_returns_zero_buckets(app_client):
+    """Spec 16 — meta-agent tool should plumb through to the risk service."""
+    _, store_db = app_client
+    _seed_minimal(store_db)
+    conn = db.connect(store_db)
+    try:
+        result = meta_service.execute_tool(
+            conn, "get_file_risk", {"path": "/x/cost.py"}
+        )
+    finally:
+        conn.close()
+    assert result.ok is True
+    assert result.data["total_sessions"] == 0
+    assert result.data["reverted"] == 0
+    assert result.data["recent_session_ids"] == []
+    # The seven-key shape the catalogue contract advertises.
+    assert set(result.data) == {
+        "path", "since", "total_sessions",
+        "reverted", "failed", "worked", "recent_session_ids",
+    }
+
+
+def test_execute_tool_get_file_risk_requires_path(app_client):
+    _, store_db = app_client
+    conn = db.connect(store_db)
+    try:
+        result = meta_service.execute_tool(conn, "get_file_risk", {})
+    finally:
+        conn.close()
+    assert result.ok is False
+    assert "path is required" in result.data["error"]
+
+
+def test_execute_tool_get_file_risk_rejects_bad_since(app_client):
+    _, store_db = app_client
+    _seed_minimal(store_db)
+    conn = db.connect(store_db)
+    try:
+        result = meta_service.execute_tool(
+            conn, "get_file_risk",
+            {"path": "/x/cost.py", "since": "yesterday"},
+        )
+    finally:
+        conn.close()
+    assert result.ok is False
+    assert "invalid since" in result.data["error"]
+
+
+def test_get_file_risk_in_catalogue(app_client):
+    """The new tool must appear in TOOL_CATALOG so the LLM can pick it."""
+    assert "get_file_risk" in meta_service.tool_names()
+    entry = next(
+        t for t in meta_service.TOOL_CATALOG
+        if t["function"]["name"] == "get_file_risk"
+    )
+    assert entry["function"]["parameters"]["required"] == ["path"]
+
+
 def test_execute_tool_string_args_parsed_as_json(app_client):
     """Some Ollama models emit ``arguments`` as a JSON string. We accept either."""
     _, store_db = app_client

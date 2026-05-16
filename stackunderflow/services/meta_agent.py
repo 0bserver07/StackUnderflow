@@ -411,6 +411,41 @@ TOOL_CATALOG: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_file_risk",
+            "description": (
+                "Risk summary for a file before you edit it: how many past "
+                "sessions reverted / failed / worked. Returns counts plus up "
+                "to five recent failure-mode session ids. Read those with "
+                "``get_session_playback`` to learn the trap before falling "
+                "into it. Use whenever the user asks about a file with a "
+                "rocky history (\"have I broken cost.py before?\")."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute or working-directory-relative file "
+                            "path. ``~`` is expanded."
+                        ),
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "Optional cutoff. ``\"30d\"`` / ``\"7d\"`` / "
+                            "``\"24h\"`` or an ISO timestamp. Default: no "
+                            "cutoff."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 
@@ -691,6 +726,25 @@ def _exec_recommend_mode(
     )
 
 
+def _exec_get_file_risk(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    from stackunderflow.services import risk
+
+    path = str(args.get("path") or "")
+    if not path.strip():
+        return {"error": "path is required"}
+    since = args.get("since")
+    try:
+        return risk.file_risk_summary(
+            conn,
+            path,
+            since=str(since) if since else None,
+        )
+    except ValueError as exc:
+        return {"error": f"invalid since: {exc}"}
+
+
 def _exec_list_recent_sessions(
     conn: sqlite3.Connection, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -791,6 +845,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "list_recent_sessions": _exec_list_recent_sessions,
     "recommend_skills": _exec_recommend_skills,
     "recommend_mode": _exec_recommend_mode,
+    "get_file_risk": _exec_get_file_risk,
 }
 
 
