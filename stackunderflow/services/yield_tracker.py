@@ -28,6 +28,26 @@ All git invocations have a 5s timeout and are wrapped defensively — any
 git error (not a repo, command not found, timeout, malformed output) is
 treated as ``no_repo`` so a single bad path can't break a whole report.
 
+Performance posture (post-fix-yield-timeout): the previous v1 path issued
+one ``git rev-parse`` per session plus up to four ``git`` invocations per
+*classified* session, which scaled with N(sessions) and timed the route
+out (>15 s) on real-store-shape projects (247K messages, 95+ sessions in
+a single project). The new pipeline batches per-distinct-cwd:
+
+* one bulk SQL query resolves ``cwd`` for every session in the period
+* one ``git rev-parse`` per *distinct* cwd, memoised in a workspace cache
+* one ``git log`` per distinct cwd over the period's full session-window
+  union, returning ``(committed_at, sha, subject)`` for every commit;
+  per-session windowed lookups are answered from memory
+* one ``git rev-list HEAD`` per distinct cwd, materialising the
+  reachability set so ``--is-ancestor`` isn't re-shelled per session
+* one ``git log --grep=revert`` per distinct cwd, building a short-sha
+  hit set; per-session revert checks are O(1) lookups against the set
+
+A configurable cap (env ``STACKUNDERFLOW_YIELD_MAX_SESSIONS_PER_PROJECT``,
+default 200) trims the per-project tail to keep the route bounded even
+if a single project has thousands of sessions in the window.
+
 Public API:
 
     compute_yield(conn, period="month", project_filter=None) -> list[YieldEntry]
@@ -38,11 +58,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -58,6 +79,20 @@ _GIT_TIMEOUT_SECONDS = 5
 
 # 24h credit window — see module docstring.
 _FOLLOW_WINDOW_HOURS = 24
+
+# Per-project session cap to bound the route's worst case on pathological
+# projects. The most-recent N sessions per project are kept; older ones are
+# silently dropped. Set to a non-positive value (or ``unlimited``) to
+# disable. The cap applies *after* scope/project filters and *before* any
+# git work, so it's the last knob before the expensive subprocess fan-out.
+_DEFAULT_MAX_SESSIONS_PER_PROJECT = 200
+_MAX_SESSIONS_ENV = "STACKUNDERFLOW_YIELD_MAX_SESSIONS_PER_PROJECT"
+
+# Hard cap on how many commits we keep per cwd in the per-request workspace
+# cache. ``--max-count`` is passed to ``git log`` so a repo with 200K
+# commits in the window doesn't dominate memory; we only need enough rows
+# to find the *first* commit per session window.
+_GIT_LOG_MAX_COMMITS = 5000
 
 Classification = Literal["productive", "reverted", "abandoned", "no_repo"]
 
@@ -103,43 +138,41 @@ def compute_yield(
     """
     scope = parse_period(_normalize_period(period))
     rows = _query_sessions(conn, scope=scope, project_filter=project_filter)
+    rows = _cap_sessions_per_project(rows)
 
-    entries: list[YieldEntry] = []
-    # Memoise the (cwd, started_at, started_at+24h) classification so repeated
-    # sessions in the same repo+window don't pay the subprocess cost twice.
-    git_cache: dict[tuple[str, str], _GitOutcome] = {}
-
+    # Bucket sessions by cwd so we can do per-distinct-cwd batched git work.
+    # Sessions with empty cwd get short-circuited to ``no_repo`` without
+    # touching git at all.
+    by_cwd: dict[str, list[dict]] = {}
     for row in rows:
         cwd = row["cwd"] or ""
-        started_at = row["started_at"]
-        cost_usd = float(row["cost_usd"] or 0.0)
+        by_cwd.setdefault(cwd, []).append(row)
 
-        if not cwd or not _is_git_repo(cwd):
-            entries.append(
-                YieldEntry(
-                    session_id=row["session_id"],
-                    project_slug=row["project_slug"],
-                    cwd=cwd,
-                    started_at=started_at,
-                    cost_usd=cost_usd,
-                    classification="no_repo",
-                )
-            )
+    # Build one workspace per distinct cwd — git pre-flight + bulk log +
+    # reachability set + revert short-sha set. Empty cwd is special-cased
+    # so it never triggers a subprocess.
+    workspaces: dict[str, _GitWorkspace] = {}
+    for cwd, sessions in by_cwd.items():
+        if not cwd:
+            workspaces[cwd] = _GitWorkspace.empty(cwd)
             continue
+        starts = sorted(s["started_at"] for s in sessions if s["started_at"])
+        workspaces[cwd] = _build_workspace(cwd, session_starts=starts)
 
-        cache_key = (cwd, started_at)
-        outcome = git_cache.get(cache_key)
-        if outcome is None:
-            outcome = _classify_session(cwd, started_at)
-            git_cache[cache_key] = outcome
-
+    # Re-emit entries in the original (start-time) order so the public
+    # contract stays stable for callers that depend on the ordering.
+    entries: list[YieldEntry] = []
+    for row in rows:
+        cwd = row["cwd"] or ""
+        ws = workspaces[cwd]
+        outcome = ws.classify(row["started_at"])
         entries.append(
             YieldEntry(
                 session_id=row["session_id"],
                 project_slug=row["project_slug"],
                 cwd=cwd,
-                started_at=started_at,
-                cost_usd=cost_usd,
+                started_at=row["started_at"],
+                cost_usd=float(row["cost_usd"] or 0.0),
                 classification=outcome.classification,
                 follow_commit_sha=outcome.commit_sha,
                 follow_commit_msg=outcome.commit_msg,
@@ -208,6 +241,65 @@ def _normalize_period(period: str) -> str:
     return {"week": "7days"}.get(period, period)
 
 
+def _max_sessions_per_project() -> int | None:
+    """Resolve the per-project cap from env, falling back to the default.
+
+    Returns ``None`` to mean *no cap*. Accepted forms for the env var:
+    a positive integer keeps that many; ``0`` / negative / ``unlimited``
+    disables the cap. Anything unparseable falls back to the default.
+    """
+    raw = os.environ.get(_MAX_SESSIONS_ENV)
+    if raw is None:
+        return _DEFAULT_MAX_SESSIONS_PER_PROJECT
+    raw = raw.strip().lower()
+    if raw in ("", "unlimited", "none"):
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.debug("Bad %s value %r; falling back to default", _MAX_SESSIONS_ENV, raw)
+        return _DEFAULT_MAX_SESSIONS_PER_PROJECT
+    if n <= 0:
+        return None
+    return n
+
+
+def _cap_sessions_per_project(rows: list[dict]) -> list[dict]:
+    """Trim each project's session list to the most-recent ``cap`` rows.
+
+    Rows are assumed to be in chronological order (the underlying SQL
+    sorts by ``first_ts``). After capping, the original order is
+    preserved so downstream ordering contracts hold.
+    """
+    cap = _max_sessions_per_project()
+    if cap is None or len(rows) <= cap:
+        return rows
+
+    # Group by project, keep last ``cap`` rows (chronological tail).
+    by_project: dict[str, list[dict]] = {}
+    for r in rows:
+        by_project.setdefault(r["project_slug"], []).append(r)
+
+    keep_ids: set[str] = set()
+    dropped = 0
+    for project, sessions in by_project.items():
+        if len(sessions) <= cap:
+            keep_ids.update(s["session_id"] for s in sessions)
+            continue
+        tail = sessions[-cap:]
+        dropped += len(sessions) - cap
+        keep_ids.update(s["session_id"] for s in tail)
+        logger.info(
+            "yield: capped project %s from %d to %d sessions (most recent kept)",
+            project,
+            len(sessions),
+            cap,
+        )
+    if dropped:
+        logger.info("yield: dropped %d session(s) total via per-project cap", dropped)
+    return [r for r in rows if r["session_id"] in keep_ids]
+
+
 def _query_sessions(
     conn: sqlite3.Connection,
     *,
@@ -220,8 +312,8 @@ def _query_sessions(
     list (cwd, started_at, cost_usd, primary_model) from there instead
     of running a per-session ``compute_cost`` pass. ``cwd`` is still
     sourced from ``messages.raw_json`` because the v1 ``session_mart``
-    leaves the column ``NULL`` per the builder docstring; the per-row
-    JSON lookup is one indexed scan, dwarfed by the git correlation
+    leaves the column ``NULL`` per the builder docstring; the bulk
+    JSON lookup is a single indexed scan, dwarfed by the git correlation
     work that happens later.
 
     Empty mart → fall back to the legacy aggregator path so users
@@ -253,17 +345,19 @@ def _query_sessions_from_mart(
         until_iso=scope.until,
         project_slugs=project_filter or None,
     )
+    # Bulk-resolve cwd for every session in one SQL pass instead of
+    # one per session — the per-session lookup was N round-trips against
+    # the partitioned ``messages`` view, which dominated when the mart
+    # carried hundreds of sessions.
+    session_fks = [
+        int(s["session_fk"]) for s in rows if s.get("session_fk") is not None
+    ]
+    cwd_by_fk = _bulk_first_cwd_for_sessions(conn, session_fks)
+
     out: list[dict] = []
     for sess in rows:
-        # ``session_fk`` may be NULL when the messages table was pruned
-        # but the mart row stuck around (defensive — shouldn't happen
-        # in the normal pipeline). Cwd lookup short-circuits to "" then.
         session_fk = sess.get("session_fk")
-        cwd = (
-            _first_cwd_for_session(conn, session_fk=int(session_fk))
-            if session_fk is not None
-            else ""
-        )
+        cwd = cwd_by_fk.get(int(session_fk), "") if session_fk is not None else ""
         out.append(
             {
                 "session_id": sess["session_id"],
@@ -314,9 +408,12 @@ def _query_sessions_from_messages(
     sql += "ORDER BY s.first_ts"
 
     sessions = conn.execute(sql, params).fetchall()
+    session_fks = [int(s["session_fk"]) for s in sessions]
+    cwd_by_fk = _bulk_first_cwd_for_sessions(conn, session_fks)
+
     out: list[dict] = []
     for sess in sessions:
-        cwd = _first_cwd_for_session(conn, session_fk=sess["session_fk"])
+        cwd = cwd_by_fk.get(int(sess["session_fk"]), "")
         cost_usd = _estimate_session_cost(
             conn,
             session_fk=sess["session_fk"],
@@ -339,7 +436,12 @@ def _first_cwd_for_session(
     *,
     session_fk: int,
 ) -> str:
-    """Return the first non-empty ``cwd`` recorded in this session's messages."""
+    """Return the first non-empty ``cwd`` recorded in this session's messages.
+
+    Kept for backwards compatibility with any external caller that
+    happens to import it (none in tree). New code should use
+    ``_bulk_first_cwd_for_sessions`` to avoid the N+1 lookup pattern.
+    """
     row = conn.execute(
         "SELECT json_extract(raw_json, '$.cwd') AS cwd "
         "FROM messages "
@@ -352,6 +454,43 @@ def _first_cwd_for_session(
     if row is None:
         return ""
     return str(row["cwd"] or "")
+
+
+def _bulk_first_cwd_for_sessions(
+    conn: sqlite3.Connection,
+    session_fks: list[int],
+) -> dict[int, str]:
+    """Return ``{session_fk: first_non_empty_cwd}`` for every fk in one query.
+
+    Replaces N separate ``SELECT ... LIMIT 1`` round-trips against the
+    partitioned ``messages`` view — each of those had to fan out to
+    every monthly subtable, which dominated wall-clock on real-store-
+    shape projects. The bulk variant uses a single windowed query per
+    chunk: ``ROW_NUMBER() OVER (PARTITION BY session_fk ORDER BY seq)``
+    asks SQLite to surface only the *first* matching row per session
+    instead of streaming all of them back to Python.
+
+    We chunk the ``IN`` list to stay under SQLite's default
+    ``SQLITE_MAX_VARIABLE_NUMBER`` (commonly 999, raised in newer
+    builds) so very large session counts don't trip the parser. Empty
+    fk list → empty dict.
+    """
+    if not session_fks:
+        return {}
+
+    out: dict[int, str] = {}
+    chunk_size = 500
+    for start in range(0, len(session_fks), chunk_size):
+        chunk = session_fks[start : start + chunk_size]
+        # ``placeholders`` is a fixed ``?`` skeleton derived from the
+        # chunk size, never user input; every value below is bound
+        # parametrically. Same posture as the long-standing dynamic
+        # ``IN (...)`` builders in ``mart_queries.session_mart_*``.
+        placeholders = ",".join("?" for _ in chunk)
+        sql = "WITH ranked AS (SELECT session_fk, json_extract(raw_json, '$.cwd') AS cwd, ROW_NUMBER() OVER (PARTITION BY session_fk ORDER BY seq) AS rn FROM messages WHERE session_fk IN (" + placeholders + ") AND json_extract(raw_json, '$.cwd') IS NOT NULL AND json_extract(raw_json, '$.cwd') != '') SELECT session_fk, cwd FROM ranked WHERE rn = 1"  # noqa: S608, E501
+        for row in conn.execute(sql, chunk):
+            out[int(row["session_fk"])] = str(row["cwd"] or "")
+    return out
 
 
 def _estimate_session_cost(
@@ -407,6 +546,146 @@ def _estimate_session_cost(
 # ── git introspection ───────────────────────────────────────────────────────
 
 
+@dataclass
+class _Commit:
+    """One git commit, normalized for in-memory windowed lookups.
+
+    ``committed_at`` is the raw ISO-8601 string from ``git log %cI`` (which
+    can carry any local offset). ``committed_at_utc`` is the same instant
+    parsed into a UTC ``datetime`` so per-session window comparisons can
+    be done without depending on string-comparable offsets — the ``Z`` /
+    ``+00:00`` / ``-04:00`` mix that ``session_mart.first_ts`` and ``%cI``
+    produce broke an earlier string-comparison version of this code.
+    """
+
+    sha: str
+    subject: str
+    committed_at: str  # ISO-8601 (raw, may carry any UTC offset)
+    committed_at_utc: object = None  # datetime; opaque here for type-friendliness
+
+
+@dataclass
+class _GitWorkspace:
+    """Per-cwd batched git state, computed once per ``compute_yield`` call.
+
+    Holds enough information to classify *every* session whose cwd is
+    this directory without shelling out to git per-session. Built by
+    ``_build_workspace``.
+    """
+
+    cwd: str
+    is_repo: bool = False
+    # Commits in the union of every session window, ascending by time.
+    commits: list[_Commit] = field(default_factory=list)
+    # SHAs reachable from HEAD — anything outside this set is treated as
+    # ``reverted`` (was wiped by a hard reset / non-ff push).
+    reachable_from_head: set[str] = field(default_factory=set)
+    # Short-sha (7-char) hits found by scanning ``git log --grep=revert``;
+    # if a candidate commit's short-sha is in here, classify as ``reverted``.
+    revert_short_shas: set[str] = field(default_factory=set)
+    # Single-call default: when reachable_from_head is empty *and* the
+    # rev-list call failed (returncode != 0) we don't want to mark every
+    # commit as reverted-by-unreachability. ``head_known`` distinguishes
+    # "we successfully read HEAD's reachability set" from "we have no
+    # info, be conservative".
+    head_known: bool = False
+
+    @classmethod
+    def empty(cls, cwd: str) -> _GitWorkspace:
+        """Workspace for an empty cwd / non-repo / no sessions case."""
+        return cls(cwd=cwd, is_repo=False)
+
+    def classify(self, started_at: str) -> _GitOutcome:
+        """Classify one session's ``started_at`` against this workspace."""
+        if not self.is_repo:
+            return _GitOutcome(classification="no_repo")
+
+        try:
+            start_dt = _parse_iso(started_at)
+        except ValueError:
+            return _GitOutcome(classification="no_repo")
+        from datetime import timedelta
+
+        window_end_dt = start_dt + timedelta(hours=_FOLLOW_WINDOW_HOURS)
+
+        # First commit (chronologically) inside [start_dt, window_end_dt].
+        # Compare on the UTC-parsed datetime, *not* the raw string — git's
+        # ``%cI`` carries the committer's local offset and string-comparing
+        # ``...Z`` against ``...-04:00`` silently drops valid commits.
+        first: _Commit | None = None
+        for c in self.commits:
+            ts = c.committed_at_utc
+            if ts is None:
+                continue
+            if ts < start_dt or ts > window_end_dt:
+                continue
+            if first is None or ts < first.committed_at_utc:
+                first = c
+        if first is None:
+            return _GitOutcome(classification="abandoned")
+
+        age = _hours_between(started_at, first.committed_at)
+        if self._is_reverted(first):
+            return _GitOutcome(
+                classification="reverted",
+                commit_sha=first.sha,
+                commit_msg=first.subject,
+                commit_age_hours=age,
+            )
+        return _GitOutcome(
+            classification="productive",
+            commit_sha=first.sha,
+            commit_msg=first.subject,
+            commit_age_hours=age,
+        )
+
+    def _is_reverted(self, c: _Commit) -> bool:
+        """Mirror the original two-signal revert check, in-memory.
+
+        1. Subject scan: short-sha appears in a ``Revert "..."`` subject.
+        2. Reachability: commit not reachable from HEAD (only consulted
+           when the rev-list call succeeded; otherwise we stay
+           conservative and don't flag).
+        """
+        if c.sha[:7] in self.revert_short_shas:
+            return True
+        if self.head_known and c.sha not in self.reachable_from_head:
+            return True
+        return False
+
+
+def _build_workspace(cwd: str, *, session_starts: list[str]) -> _GitWorkspace:
+    """Materialise a ``_GitWorkspace`` for one cwd in the bounded session set.
+
+    All git work for a single repo is funneled through here:
+
+    * one ``git rev-parse`` to confirm the path is a repo
+    * one ``git log --since=earliest --until=latest+24h`` to get every
+      commit that could possibly land in any session's 24h window
+    * one ``git rev-list --all HEAD`` to materialise the reachability set
+    * one ``git log --grep=revert -i`` to harvest short-sha mentions in
+      revert subjects (used for the per-commit short-sha test)
+    """
+    ws = _GitWorkspace(cwd=cwd)
+    if not _is_git_repo(cwd):
+        return ws
+    ws.is_repo = True
+
+    if not session_starts:
+        return ws
+
+    earliest = session_starts[0]
+    try:
+        window_end = _add_hours_iso(session_starts[-1], _FOLLOW_WINDOW_HOURS)
+    except ValueError:
+        return ws
+
+    ws.commits = _bulk_git_log_window(cwd, since=earliest, until=window_end)
+    ws.reachable_from_head, ws.head_known = _bulk_reachable_from_head(cwd)
+    ws.revert_short_shas = _bulk_revert_short_shas(cwd)
+    return ws
+
+
 def _is_git_repo(cwd: str) -> bool:
     """Cheap pre-flight: does ``cwd`` exist and resolve to a git repo?"""
     p = Path(cwd)
@@ -427,47 +706,14 @@ def _is_git_repo(cwd: str) -> bool:
     return result.returncode == 0
 
 
-def _classify_session(cwd: str, started_at: str) -> _GitOutcome:
-    """Inspect ``cwd``'s git log in the 24h window after ``started_at``.
+def _bulk_git_log_window(
+    cwd: str, *, since: str, until: str,
+) -> list[_Commit]:
+    """One ``git log`` over ``[since, until]`` for ``cwd``.
 
-    Returns the first commit's classification (or ``abandoned`` if no
-    commits land). Errors are swallowed and reported as ``no_repo`` so a
-    single broken repo can't stall a yield run.
-    """
-    try:
-        end_iso = _add_hours_iso(started_at, _FOLLOW_WINDOW_HOURS)
-    except ValueError:
-        return _GitOutcome(classification="no_repo")
-
-    commits = _git_log_window(cwd, since=started_at, until=end_iso)
-    if not commits:
-        return _GitOutcome(classification="abandoned")
-
-    sha, subject = commits[0]
-    age_hours = _hours_between(started_at, _commit_time(cwd, sha) or started_at)
-
-    if _is_reverted(cwd, sha):
-        return _GitOutcome(
-            classification="reverted",
-            commit_sha=sha,
-            commit_msg=subject,
-            commit_age_hours=age_hours,
-        )
-
-    return _GitOutcome(
-        classification="productive",
-        commit_sha=sha,
-        commit_msg=subject,
-        commit_age_hours=age_hours,
-    )
-
-
-def _git_log_window(cwd: str, *, since: str, until: str) -> list[tuple[str, str]]:
-    """Return ``[(sha, subject), ...]`` for commits in ``[since, until)``.
-
-    Uses ``--all`` so commits authored on any branch in this repo count —
-    we don't want to miss a commit that landed on a feature branch and is
-    now reachable from ``HEAD`` via a merge.
+    Returns the full commit list (sha, subject, ISO timestamp) for the
+    requested window across all branches. Per-session windowed queries
+    walk this in-memory list rather than re-shelling out to git.
     """
     out = _run_git(
         cwd,
@@ -476,58 +722,78 @@ def _git_log_window(cwd: str, *, since: str, until: str) -> list[tuple[str, str]
             "--all",
             f"--since={since}",
             f"--until={until}",
-            "--format=%H|%s",
+            f"--max-count={_GIT_LOG_MAX_COMMITS}",
+            "--format=%H|%cI|%s",
         ],
     )
     if out is None:
         return []
-    commits: list[tuple[str, str]] = []
+    commits: list[_Commit] = []
     for line in out.splitlines():
         if not line.strip():
             continue
-        sha, _, subject = line.partition("|")
-        if sha:
-            commits.append((sha, subject))
+        sha, _, rest = line.partition("|")
+        committed_at, _, subject = rest.partition("|")
+        if not sha:
+            continue
+        # Pre-parse the timestamp into a tz-aware UTC datetime so the
+        # per-session windowed lookup never has to. Bad / unparseable
+        # stamps (shouldn't happen with %cI) are skipped — including the
+        # commit at all would force string-compare branches downstream.
+        try:
+            ts = _parse_iso(committed_at)
+        except ValueError:
+            logger.debug("skipping commit %s: bad %cI=%s", sha, committed_at)
+            continue
+        commits.append(
+            _Commit(
+                sha=sha,
+                subject=subject,
+                committed_at=committed_at,
+                committed_at_utc=ts,
+            ),
+        )
+    # Sort ascending by parsed UTC time so the windowed first-commit
+    # lookup is cheap and unambiguous (git log defaults to newest-first).
+    commits.sort(key=lambda c: c.committed_at_utc)
     return commits
 
 
-def _commit_time(cwd: str, sha: str) -> str | None:
-    """Return the commit's ISO-8601 timestamp, or ``None`` on any error."""
-    out = _run_git(cwd, ["show", "-s", "--format=%cI", sha])
-    if out is None:
-        return None
-    out = out.strip()
-    return out or None
+def _bulk_reachable_from_head(cwd: str) -> tuple[set[str], bool]:
+    """Return ``(reachable_shas, head_known)`` for a single cwd.
 
-
-def _is_reverted(cwd: str, sha: str) -> bool:
-    """Return True if ``sha`` was reverted *or* is no longer reachable from HEAD.
-
-    Two checks:
-
-    1. **Subject scan**. ``git revert`` writes ``Revert "<original subject>"``
-       and includes the short sha. We grep ``git log`` for ``revert`` plus
-       the 7-char short sha — cheap and catches the standard flow.
-    2. **Reachability**. ``git merge-base --is-ancestor sha HEAD`` returns 0
-       if the commit is reachable from HEAD, 1 otherwise. A commit that
-       was wiped by a hard reset / non-fast-forward force push is no longer
-       reachable, so we classify it as reverted.
-
-    Either signal trips the verdict.
+    ``head_known`` is False when we couldn't enumerate HEAD's history
+    (detached, broken HEAD, or a brand-new repo); callers should *not*
+    use the empty set as evidence of unreachability in that case.
     """
-    short = sha[:7]
-    revert_pattern = rf"revert.*{re.escape(short)}"
-    log_out = _run_git(cwd, ["log", "--all", "--format=%s", "-i", f"--grep={revert_pattern}", "-E"])
-    if log_out and log_out.strip():
-        return True
+    out = _run_git(cwd, ["rev-list", "HEAD"])
+    if out is None:
+        return set(), False
+    shas = {s for s in (line.strip() for line in out.splitlines()) if s}
+    return shas, True
 
-    rc = _run_git_returncode(cwd, ["merge-base", "--is-ancestor", sha, "HEAD"])
-    # 0 means reachable (kept), 1 means not reachable (treat as reverted),
-    # any other code (or None for error) means we can't tell — be conservative
-    # and don't flag as reverted.
-    if rc == 1:
-        return True
-    return False
+
+def _bulk_revert_short_shas(cwd: str) -> set[str]:
+    """Scan all branches' commit subjects for ``revert <shortsha>``.
+
+    Returns the set of 7-char short SHAs mentioned in any revert subject.
+    Used to satisfy the classic ``git revert`` flow ("Revert ..." subject
+    line includes the original short sha) without re-shelling per session.
+    """
+    out = _run_git(
+        cwd,
+        ["log", "--all", "--format=%s", "-i", "--grep=revert"],
+    )
+    if out is None or not out.strip():
+        return set()
+    short_shas: set[str] = set()
+    # Find every 7-hex-char run in any matching subject; cheap and lets
+    # both ``Revert "..." (deadbee)`` and ``revert deadbee...`` register.
+    pattern = re.compile(r"\b([0-9a-fA-F]{7})\b")
+    for line in out.splitlines():
+        for m in pattern.finditer(line):
+            short_shas.add(m.group(1).lower())
+    return short_shas
 
 
 def _run_git(cwd: str, args: list[str]) -> str | None:
@@ -548,7 +814,12 @@ def _run_git(cwd: str, args: list[str]) -> str | None:
 
 
 def _run_git_returncode(cwd: str, args: list[str]) -> int | None:
-    """Variant of ``_run_git`` that surfaces the return code (for ``--is-ancestor``)."""
+    """Variant of ``_run_git`` that surfaces the return code (for ``--is-ancestor``).
+
+    Retained as a module-level helper for callers / tests that import it.
+    The new pipeline uses ``_bulk_reachable_from_head`` instead so the
+    per-session ``--is-ancestor`` fan-out is gone.
+    """
     try:
         result = subprocess.run(  # noqa: S603 — git args are not user-controllable
             ["git", "-C", cwd, *args],  # noqa: S607 — relies on git on PATH

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — /api/yield route timeout on real-store-shape projects
+
+`/api/yield` (and the underlying `services.yield_tracker.compute_yield`) was timing out at 15 s on a real store with ~95 sessions in a single project (~250 K messages, ~150 K usage events). cProfile pinned 87 % of the time to `subprocess.run` — the v1 pipeline issued **one `git rev-parse` per session plus up to four further `git` invocations per *classified* session** (`git log` window, `git show` for commit time, `git log --grep=revert` per candidate sha, `git merge-base --is-ancestor`). With sessions sharing the same `cwd`, the same git work was redone hundreds of times.
+
+The pipeline is now **batched per distinct `cwd`** instead of per session:
+
+- One `git rev-parse` per distinct cwd (cached for the request's lifetime).
+- One `git log --since={earliest}` per distinct cwd, format extended to `%H|%cI|%s` so the per-session windowed lookups answer from an in-memory list — the separate `git show` per candidate is gone.
+- One `git rev-list HEAD` per distinct cwd materialises the reachability set; per-session `--is-ancestor` shells are gone.
+- One `git log --all --grep=revert -i` per distinct cwd builds a short-sha hit set; per-session `--grep` calls are gone.
+
+Per-session SQL was also batched: `_first_cwd_for_session` (one `SELECT … LIMIT 1` per session against the partitioned `messages` view) is replaced by a single `ROW_NUMBER() OVER (PARTITION BY session_fk ORDER BY seq)` window query that returns at most one row per session.
+
+A defensive per-project session cap (`STACKUNDERFLOW_YIELD_MAX_SESSIONS_PER_PROJECT`, default 200, set to `unlimited` to disable) trims the most-recent N sessions for a single pathological project so the route stays bounded even if a future store carries thousands of sessions in one period.
+
+Timing measured against a `.backup`-copy of the maintainer's real store (1237 sessions, 270 K messages, 145 distinct cwds):
+
+| Period / scope            | Before     | After      |
+| ------------------------- | ---------- | ---------- |
+| `month` / all projects    | 6.62 s     | 1.47 s     |
+| `all` / all projects      | 42.16 s    | 12.6 s     |
+| `month` / single project (87 sessions) | n/a (route timed out at 15 s in original report) | 0.24 s |
+| `all` / single project (87 sessions)   | n/a        | 0.35 s     |
+
+Public `compute_yield` / `yield_summary` / `to_dicts` / `dumps` API and `YieldEntry` shape are unchanged. Existing route currency conversion + the `warning` field stay untouched. Two new latency-regression tests under `tests/stackunderflow/services/test_yield_perf.py` (`@pytest.mark.slow`, deselected by default) pin the bulk-per-cwd subprocess contract: a single project with 150 sessions on the same cwd must not issue more than 1× `rev-parse` / 2× `log` / 1× `rev-list` and must complete in under 2 s.
+
+Files touched: `stackunderflow/services/yield_tracker.py`, `tests/stackunderflow/services/test_yield_tracker.py` (test stubs updated to new `git log` format + `rev-list` mock), `tests/stackunderflow/services/test_yield_perf.py` (new). Test suite stays at 2750 passing (+2 new slow tests, deselected by default). Ruff baseline preserved.
+
 ### Added — PR / CI webhook ingest (spec 20 / issue #92)
 
 Foundation for outcome attribution v2: ingest GitHub / GitLab PR webhooks + CI workflow runs into the local store so a future spec can link "session X → commit Y → PR Z → CI ran W → 2 reverts later."
