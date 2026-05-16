@@ -3056,6 +3056,142 @@ def recommend_mode_cmd(
             click.echo(f"  - {sid}")
 
 
+# ── PR / CI webhook ingest (Spec 20 — issue #92) ────────────────────────────
+#
+# Two opt-in surfaces for pulling PR + CI data into the local store:
+#
+# * ``stackunderflow ingest github --repo OWNER/REPO`` — REST backfill
+#   for the historical PRs + workflow runs you missed before turning
+#   the webhook on.
+# * ``stackunderflow ingest webhook serve`` — opt-in webhook receiver
+#   that runs the FastAPI app's ``/api/webhooks/{github,gitlab,ci}``
+#   endpoints on a dedicated port, separate from the dashboard.
+#
+# Tokens come from the environment, never the database. See the module
+# docstring on ``stackunderflow.routes.webhooks`` for the env var names.
+
+
+@cli.group("ingest")
+def ingest_group():
+    """Pull PR / CI data into the local store (REST backfill + webhook receiver)."""
+
+
+@ingest_group.command("github")
+@click.option("--repo", required=True, metavar="OWNER/REPO",
+              help="The GitHub repository slug (e.g. 'octocat/hello-world').")
+@click.option("--token", default=None,
+              help="GitHub PAT. Falls back to $STACKUNDERFLOW_GITHUB_TOKEN, "
+                   "then $GITHUB_TOKEN. Public repos work without one but "
+                   "rate-limit much faster.")
+@click.option("--state", default="all", show_default=True,
+              type=click.Choice(("all", "open", "closed")),
+              help="PR state filter passed to the GitHub API.")
+@click.option("--max-pages", type=click.IntRange(min=1, max=50),
+              default=10, show_default=True,
+              help="Maximum pages of 100 to fetch per endpoint (PRs + CI).")
+@click.option("--no-ci", is_flag=True,
+              help="Skip the workflow-runs fetch — useful for quick PR-only refreshes.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS),
+              default="text", show_default=True, help="Output format.")
+def ingest_github_cmd(repo, token, state, max_pages, no_ci, fmt):
+    """Backfill GitHub PRs + workflow runs for REPO into the local store."""
+    from stackunderflow.services import github_ingest
+
+    resolved_token = token or os.environ.get("STACKUNDERFLOW_GITHUB_TOKEN") \
+        or os.environ.get("GITHUB_TOKEN")
+    if not resolved_token:
+        click.secho(
+            "  note: no GitHub token provided — public-repo rate limits apply (60/hr).",
+            fg="yellow",
+        )
+
+    conn = _open_store()
+    try:
+        try:
+            report = github_ingest.backfill_repo(
+                conn,
+                repo,
+                token=resolved_token,
+                state=state,
+                max_pages=max_pages,
+                include_ci=not no_ci,
+            )
+        except github_ingest.RateLimitedError as exc:
+            raise click.ClickException(str(exc)) from exc
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(report.to_dict(), indent=2))
+        return
+
+    click.echo(f"Backfill complete for {report.repo_slug}")
+    click.echo(f"  PRs:  inserted={report.pr_inserted:,}  "
+               f"updated={report.pr_updated:,}  "
+               f"pages={report.pr_pages_fetched}")
+    click.echo(f"  CI:   inserted={report.ci_inserted:,}  "
+               f"updated={report.ci_updated:,}  "
+               f"pages={report.ci_pages_fetched}")
+    click.echo(f"  duration: {report.duration_seconds:.2f}s")
+    if report.warnings:
+        click.echo("  warnings:")
+        for w in report.warnings:
+            click.echo(f"    - {w}")
+
+
+@ingest_group.group("webhook")
+def ingest_webhook_group():
+    """Run the opt-in webhook receiver (PR + CI events)."""
+
+
+@ingest_webhook_group.command("serve")
+@click.option("--port", type=int, default=8096, show_default=True,
+              help="Port to bind the receiver on.")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Bind address. Default 127.0.0.1 (loopback only). Override "
+                   "to 0.0.0.0 if you're tunneling from a public webhook URL.")
+def ingest_webhook_serve_cmd(port: int, host: str):
+    """Serve the /api/webhooks/* endpoints on a dedicated port.
+
+    The receiver verifies signatures against
+    $STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET (HMAC-SHA256) /
+    $STACKUNDERFLOW_GITLAB_WEBHOOK_SECRET (token compare) /
+    $STACKUNDERFLOW_CI_WEBHOOK_SECRET (HMAC-SHA256). Any unset secret
+    causes the matching endpoint to return 503 — this is opt-in by
+    design; we never accept anonymous payloads.
+    """
+    from fastapi import FastAPI
+
+    from stackunderflow.routes.webhooks import router as webhook_router
+
+    app = FastAPI(title="StackUnderflow webhook receiver")
+    app.include_router(webhook_router)
+
+    # Surface configured-vs-unconfigured state up front so the operator
+    # sees at startup which endpoints will accept events.
+    configured = []
+    if os.environ.get("STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET", "").strip():
+        configured.append("github")
+    if os.environ.get("STACKUNDERFLOW_GITLAB_WEBHOOK_SECRET", "").strip():
+        configured.append("gitlab")
+    if os.environ.get("STACKUNDERFLOW_CI_WEBHOOK_SECRET", "").strip():
+        configured.append("ci")
+    if not configured:
+        click.secho(
+            "  warn: no webhook secrets configured — every endpoint will "
+            "return 503. Set $STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET / "
+            "GITLAB / CI as needed and restart.",
+            fg="yellow",
+        )
+    else:
+        click.echo(f"  configured receivers: {', '.join(configured)}")
+
+    click.echo(f"Webhook receiver listening on http://{host}:{port}/api/webhooks/")
+
+    import uvicorn
+    uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:

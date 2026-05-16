@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — PR / CI webhook ingest (spec 20 / issue #92)
+
+Foundation for outcome attribution v2: ingest GitHub / GitLab PR webhooks + CI workflow runs into the local store so a future spec can link "session X → commit Y → PR Z → CI ran W → 2 reverts later."
+
+- **Schema v017** (`stackunderflow/store/migrations/v017_pr_ci_outcomes.sql`): two additive tables, `pr_outcomes (UNIQUE provider, repo_slug, pr_number)` and `ci_runs (UNIQUE provider, run_id)`. `raw_json` keeps the full webhook payload alongside the indexed columns so future migrations can promote new fields without re-fetching. `idx_pr_outcomes_repo` + `idx_ci_runs_commit` for the two most common queries.
+- **New service** `stackunderflow/services/github_ingest.py`: REST backfill via `backfill_repo(conn, repo_slug, token=..., max_pages=10, include_ci=True, client_factory=...)`. Pure `normalise_pr_payload` / `normalise_ci_run_payload` parsers; `upsert_pr_outcome` / `upsert_ci_run` helpers shared with the webhook route so insert/update logic stays in lockstep. Handles the GitHub Actions `{"workflow_runs": [...]}` envelope, the 404-on-no-actions case, and rate-limit detection (`RateLimitedError`).
+- **New route module** `stackunderflow/routes/webhooks.py`: `POST /api/webhooks/{github,gitlab,ci}`. Signature validation is non-negotiable: GitHub uses HMAC-SHA256 (`X-Hub-Signature-256`), GitLab uses a static-token compare (`X-Gitlab-Token`), generic CI uses HMAC-SHA256 (`X-Webhook-Signature-256`). Every comparison runs through `hmac.compare_digest`. Missing / mismatched signatures return 403; unset secrets return 503 (opt-in by design — never accepts anonymous payloads). Secrets are read from `$STACKUNDERFLOW_{GITHUB,GITLAB,CI}_WEBHOOK_SECRET` on every request, never from a database column.
+- **CLI**: `stackunderflow ingest github --repo OWNER/REPO [--token X] [--state all|open|closed] [--max-pages N] [--no-ci] [--format text|json]` for backfill; `stackunderflow ingest webhook serve [--port 8096] [--host 127.0.0.1]` for the opt-in receiver. GitHub PAT resolution: `--token` flag → `$STACKUNDERFLOW_GITHUB_TOKEN` → `$GITHUB_TOKEN`. Tokens are *never* persisted to the database (encrypted-at-rest token storage is deferred to Spec 28).
+- **Meta-agent tools**: `get_pr_outcomes(repo, state?, since?, limit?)` and `get_ci_runs(commit_sha?, status?, repo?, limit?)` added to `stackunderflow/services/meta_agent.py:TOOL_CATALOG` + `_EXECUTORS`. Read-only; same flat-JSON / `error` contract every other meta-agent tool follows.
+
+68 new tests (13 migration, 14 service unit + REST mock, 14 meta-agent dispatch, 17 webhook route inc. signature validation, 10 CLI). All use `tmp_path` / in-memory stores; the real `~/.stackunderflow/store.db` is never touched, and no real network calls happen anywhere in the suite (REST tests mount an `httpx.MockTransport`).
+
 ## [0.9.0] - 2026-05-15
 
 ### Added — proactive skill recommender (spec 19 / issue #89)
