@@ -305,6 +305,14 @@ def _detect_unused_mcp_servers(
     MCP tool calls show up in ``tools_json`` with the ``mcp__<server>__*``
     naming convention. We strip the server prefix and compare against the
     registry; unused servers waste a context-load slot for no benefit.
+
+    Wave 5 fast path: when ``tool_mart`` is populated, pull the distinct
+    set of MCP tool names straight from the indexed ``tool_name`` column
+    in the day window — one ``SELECT DISTINCT`` instead of parsing every
+    message's ``tools_json``. On the maintainer's store this drops the
+    detector from ~1.3s to <1ms. Empty mart → the legacy ``tools_json``
+    scan runs unchanged so test fixtures that seed messages directly
+    still pass.
     """
     registered = _registered_mcp_servers()
     if not registered:
@@ -317,15 +325,26 @@ def _detect_unused_mcp_servers(
         from datetime import UTC, datetime, timedelta
         since_iso = (datetime.now(UTC) - timedelta(days=UNUSED_TOOL_LOOKBACK_DAYS)).isoformat()
 
-    counts = _recent_tool_names(conn, since_iso=since_iso)
     used_servers: set[str] = set()
-    for tool_name in counts:
-        # MCP tool names follow ``mcp__<server>__<tool>`` (Claude Code's
-        # convention). Be lenient about variations (single-underscore,
-        # case) — anything that looks like a prefix match counts.
-        m = re.match(r"^mcp__([^_]+(?:_[^_]+)*?)__", tool_name)
-        if m:
-            used_servers.add(m.group(1))
+    if mart_queries.mart_has_tool_rows(conn):
+        # Mart fast-path: distinct ``mcp__*`` tool names in window —
+        # parametrically bound LIKE on the indexed ``tool_name`` column.
+        names = mart_queries.tool_mart_distinct_tool_names_in_window(
+            conn, since_iso=since_iso, name_prefix="mcp__",
+        )
+        for tool_name in names:
+            m = re.match(r"^mcp__([^_]+(?:_[^_]+)*?)__", tool_name)
+            if m:
+                used_servers.add(m.group(1))
+    else:
+        counts = _recent_tool_names(conn, since_iso=since_iso)
+        for tool_name in counts:
+            # MCP tool names follow ``mcp__<server>__<tool>`` (Claude Code's
+            # convention). Be lenient about variations (single-underscore,
+            # case) — anything that looks like a prefix match counts.
+            m = re.match(r"^mcp__([^_]+(?:_[^_]+)*?)__", tool_name)
+            if m:
+                used_servers.add(m.group(1))
 
     unused = [s for s in registered if s not in used_servers]
     if not unused:
