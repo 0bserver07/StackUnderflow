@@ -560,8 +560,13 @@ export function formatEtlBadgeText(status: EtlStatusResponse): string {
 // when no sidechain messages are present. See docs/specs/agent-teams.md.
 // ---------------------------------------------------------------------------
 
-export async function listAgentTeams(limit = 50): Promise<AgentTeamListResponse> {
-  return fetchJson(`${BASE}/agent-teams?limit=${limit}`)
+export async function listAgentTeams(
+  limit = 50,
+  project?: string | null,
+): Promise<AgentTeamListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (project) params.set('project', project)
+  return fetchJson(`${BASE}/agent-teams?${params.toString()}`)
 }
 
 export async function getAgentTeam(sessionId: string): Promise<AgentTeamGraph> {

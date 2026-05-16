@@ -41,8 +41,16 @@ router = APIRouter()
 
 
 @router.get("/api/agent-teams")
-async def list_agent_teams(limit: int = Query(50, ge=1, le=500)) -> JSONResponse:
+async def list_agent_teams(
+    limit: int = Query(50, ge=1, le=500),
+    project: str | None = Query(None, description="Project slug filter"),
+) -> JSONResponse:
     """List recent sessions that spawned at least one sub-agent.
+
+    When ``project`` is set, only teams whose lead session belongs to
+    that project slug are returned — this is what the dashboard's
+    per-project Agents tab needs to avoid showing teams from sibling
+    projects.
 
     Empty stores return ``{"teams": []}`` — never raises 500 on a fresh
     install. ``limit`` is bounded ``[1, 500]`` to keep the dashboard
@@ -51,12 +59,10 @@ async def list_agent_teams(limit: int = Query(50, ge=1, le=500)) -> JSONResponse
     """
     conn = db.connect(deps.store_path)
     try:
-        # Idempotent + cheap on an already-current store; protects the
-        # route from a fresh-install run where the schema migrations
-        # haven't yet been applied (e.g. during the first server boot
-        # before the lifespan hook runs).
         schema.apply(conn)
-        teams = agent_teams_service.list_team_sessions(conn, limit=limit)
+        teams = agent_teams_service.list_team_sessions(
+            conn, limit=limit, project_slug=project,
+        )
     finally:
         conn.close()
 

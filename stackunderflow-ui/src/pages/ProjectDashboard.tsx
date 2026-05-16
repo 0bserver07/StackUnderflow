@@ -341,7 +341,7 @@ export default function ProjectDashboard() {
         {activeTab === 'bookmarks' && <BookmarksTab />}
         {activeTab === 'tags' && <TagsTab />}
         {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
-        {activeTab === 'agents' && <AgentsTab />}
+        {activeTab === 'agents' && <AgentsTab projectName={name!} />}
         {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
       </div>
     </div>

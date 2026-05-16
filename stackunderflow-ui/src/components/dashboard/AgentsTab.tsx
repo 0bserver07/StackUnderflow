@@ -61,7 +61,11 @@ function shortId(id: string | null | undefined, n = 8): string {
 
 // ── component ──────────────────────────────────────────────────────────────
 
-export default function AgentsTab() {
+interface AgentsTabProps {
+  projectName?: string
+}
+
+export default function AgentsTab({ projectName }: AgentsTabProps = {}) {
   // Read initial selection from URL so a refresh / shared link restores
   // the open team + selected agent.
   const initialSelection = readAgentTeamSelection(
@@ -102,8 +106,8 @@ export default function AgentsTab() {
   }, [selectedSession, selectedAgent])
 
   const teamsQuery = useQuery({
-    queryKey: ['agent-teams', 'list'],
-    queryFn: () => listAgentTeams(50),
+    queryKey: ['agent-teams', 'list', projectName ?? '__all__'],
+    queryFn: () => listAgentTeams(50, projectName ?? null),
   })
 
   const graphQuery = useQuery({

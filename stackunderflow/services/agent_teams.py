@@ -284,25 +284,37 @@ def _agent_summary_for_session(
 
 
 def list_team_sessions(
-    conn: sqlite3.Connection, *, limit: int = 50
+    conn: sqlite3.Connection, *, limit: int = 50, project_slug: str | None = None
 ) -> list[TeamSummary]:
     """List recent teams (one row per lead session that spawned sub-agents).
 
     Uses the materialised ``agent_teams`` table when populated (a single
     indexed JOIN), otherwise falls back to the ``messages.is_sidechain``
     heuristic. Returns at most ``limit`` rows ordered by most recent
-    activity. Empty store → empty list.
+    activity. When ``project_slug`` is set, only teams whose lead
+    session lives in that project are returned (per-project Agents-tab
+    scoping). Empty store → empty list.
     """
     if _indexed_teams_available(conn):
-        return _list_team_sessions_indexed(conn, limit=limit)
-    return _list_team_sessions_scan(conn, limit=limit)
+        return _list_team_sessions_indexed(
+            conn, limit=limit, project_slug=project_slug,
+        )
+    return _list_team_sessions_scan(
+        conn, limit=limit, project_slug=project_slug,
+    )
 
 
 def _list_team_sessions_indexed(
-    conn: sqlite3.Connection, *, limit: int
+    conn: sqlite3.Connection, *, limit: int, project_slug: str | None = None
 ) -> list[TeamSummary]:
+    where = ""
+    params: list = []
+    if project_slug:
+        where = "WHERE p.slug = ?"
+        params.append(project_slug)
+    params.append(limit)
     rows = conn.execute(
-        """
+        f"""
         SELECT
           t.team_id,
           t.description,
@@ -317,11 +329,12 @@ def _list_team_sessions_indexed(
         FROM agent_teams t
         JOIN projects p ON p.id = t.project_id
         JOIN sessions s ON s.team_id = t.team_id
+        {where}
         GROUP BY t.team_id, t.description, t.lead_session_id, p.slug, p.display_name
         ORDER BY MAX(s.last_ts) DESC, t.team_id ASC
         LIMIT ?
         """,
-        (limit,),
+        tuple(params),
     ).fetchall()
     return [
         TeamSummary(
@@ -341,7 +354,7 @@ def _list_team_sessions_indexed(
 
 
 def _list_team_sessions_scan(
-    conn: sqlite3.Connection, *, limit: int
+    conn: sqlite3.Connection, *, limit: int, project_slug: str | None = None
 ) -> list[TeamSummary]:
     """Heuristic list view (pre-v013, or stores without materialised teams).
 
@@ -349,18 +362,23 @@ def _list_team_sessions_scan(
     the sidechain rows by ``(project_id, session_id)`` and treat each
     distinct ``session_id`` as one team-lead candidate. We then aggregate
     counts + timestamps + a ``teamName`` peek from the lead session's
-    first row.
+    first row. ``project_slug`` filter narrows to a single project's
+    teams (per-project Agents-tab scoping).
     """
-    # Fast bail-out: zero sidechain rows → no teams. Common on a fresh
-    # install / non-team project.
     has_sidechain = conn.execute(
         "SELECT 1 FROM messages WHERE is_sidechain = 1 LIMIT 1"
     ).fetchone()
     if not has_sidechain:
         return []
 
+    extra_where = ""
+    extra_params: list = []
+    if project_slug:
+        extra_where = "AND p.slug = ?"
+        extra_params.append(project_slug)
+
     rows = conn.execute(
-        """
+        f"""
         SELECT
           s.id AS session_fk,
           s.session_id,
@@ -380,11 +398,13 @@ def _list_team_sessions_scan(
           JOIN messages m2 ON m2.session_fk = s2.id
           WHERE m2.is_sidechain = 1
         )
+        {extra_where}
         GROUP BY s.id, s.session_id, s.first_ts, s.last_ts,
                  s.project_id, p.slug, p.display_name
         HAVING lead_msgs > 0
         ORDER BY s.last_ts DESC
-        """
+        """,
+        tuple(extra_params),
     ).fetchall()
 
     sub_session_rows = conn.execute(
