@@ -2992,11 +2992,6 @@ def hooks_run_cmd(hook_id: str, capture_content: bool):
 # and suggest the cheapest model that historically solved similar tasks.
 # Heuristic v1; the full benchmark engine is Spec 26 (issue #99).
 
-@cli.group("recommend")
-def recommend_group():
-    """Heuristic recommendations driven by your own past sessions."""
-
-
 @recommend_group.command("mode")
 @click.option("--prompt", "prompt", required=True,
               help="The task prompt to score (text in quotes).")
