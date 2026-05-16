@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 39 new tests (20 service, 7 CLI, 6 MCP, 6 meta-agent dispatch). All use `tmp_path` / in-memory stores; the real `~/.stackunderflow/store.db` and the real cache directory are never touched.
 
+### Added — mode recommender (heuristic v1)
+
+New service `stackunderflow/services/mode_recommender.py` recommends the cheapest model that fits a task, based on the user's own past sessions. Pattern-matches the prompt's *intent* (build / fix / refactor / test / explore — keyword scan) + *token band* (tiny<200 / small<800 / med<3000 / large) + *language overlap* against the most recent 200 sessions in `session_mart`, groups matches by `primary_model`, and picks the model whose median `cost_usd` is lowest. Confidence in [0, 1] multiplies three terms: sample-size (`min(1, n/5)`), spread (`1 - σ/μ` of pick costs, clamped), cost gap (`(median_other - median_pick) / median_other`, clamped). Empty store / fewer than 3 similar matches returns `confidence = 0.0` with a clean "no historical data" message.
+
+Recommendations are cached for 24h in a new `mode_recommendations` table (schema migration v016 — `task_pattern_hash` md5 of the normalised feature dict, `recommended_model`, `confidence`, `evidence_session_ids` JSON, `created_ts` / `last_used_ts`). Cache hits bump `last_used_ts` so frequently-asked patterns can be analysed for skew later (Spec 26 input).
+
+Three call sites: `stackunderflow recommend mode --prompt "<text>" [--current-model X] [--no-cache] [--format text|json]` (CLI), `recommend_mode(prompt, current_model?)` (MCP tool), `recommend_mode` in the meta-agent's `TOOL_CATALOG` (Ollama/sidebar). All three return the same payload shape: `{recommended_model, current_model, confidence, cost_delta_usd, similar_session_count, evidence_session_ids, features, task_pattern_hash, rationale, cache_hit}`. `cost_delta_usd > 0` ⇒ switching to the recommended model would have saved that much per session of this shape (`median_current_model_cost - median_pick_cost`).
+
+Heuristic v1 explicitly — the full benchmark engine is Spec 26 (issue #99). Read-only against `session_mart` and `messages.content_text`; never touches the live `usage_events` rows. Cost figures are pulled straight from `session_mart.cost_usd` (post-v0.8.0 cost-fix path) and never recomputed in this layer. 35 new tests cover feature extraction, hash stability, recommendation shape, cache miss/hit/TTL eviction, empty-store path, intent / band filter behaviour, and the MCP + meta-agent dispatcher round-trips. Suite goes from 2488 → 2523 fast tests.
+
 ## [0.8.0] - 2026-05-15
 
 ### Fixed — CLI report cost commands (today / month / status / report) now read from usage_events

@@ -310,6 +310,40 @@ TOOL_CATALOG: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "recommend_mode",
+            "description": (
+                "Recommend the cheapest model that fits a task, based on the "
+                "user's own past sessions. Pattern-matches the prompt's "
+                "intent + token-band + language hints against past similar "
+                "sessions and returns the model whose similar history had the "
+                "lowest median cost. Returns confidence=0.0 when there isn't "
+                "enough historical data (no opinion). Use this for 'this task "
+                "fits a Sonnet, you used Opus' routing nudges."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": (
+                            "The task prompt to score. Required, non-empty."
+                        ),
+                    },
+                    "current_model": {
+                        "type": "string",
+                        "description": (
+                            "The model the caller would otherwise route to. "
+                            "Drives the cost_delta_usd field."
+                        ),
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_recent_sessions",
             "description": (
                 "Return the most recently active sessions across the store. Use "
@@ -642,6 +676,21 @@ def _exec_get_session_playback(
     }
 
 
+def _exec_recommend_mode(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    from stackunderflow.services import mode_recommender
+
+    prompt = str(args.get("prompt") or "")
+    if not prompt.strip():
+        return {"error": "prompt is required"}
+    current_model = args.get("current_model")
+    return mode_recommender.recommend(
+        conn, prompt,
+        current_model=str(current_model) if current_model else None,
+    )
+
+
 def _exec_list_recent_sessions(
     conn: sqlite3.Connection, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -741,6 +790,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_session_playback": _exec_get_session_playback,
     "list_recent_sessions": _exec_list_recent_sessions,
     "recommend_skills": _exec_recommend_skills,
+    "recommend_mode": _exec_recommend_mode,
 }
 
 

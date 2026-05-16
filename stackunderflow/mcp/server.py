@@ -1105,6 +1105,78 @@ def recommend_skills(
     )
 
 
+# ── mode recommender (Spec 18 — heuristic v1) ──────────────────────────────
+
+
+def recommend_mode_impl(
+    prompt: str,
+    current_model: str | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """Implementation behind the ``recommend_mode`` MCP tool."""
+    from stackunderflow.services import mode_recommender
+
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt must be a non-empty string")
+    with store_reader._maybe_conn(conn) as c:
+        if c is None:
+            return {
+                "recommended_model": current_model or "",
+                "current_model": current_model,
+                "confidence": 0.0,
+                "cost_delta_usd": 0.0,
+                "similar_session_count": 0,
+                "evidence_session_ids": [],
+                "features": mode_recommender.extract_features(prompt),
+                "task_pattern_hash": mode_recommender.hash_features(
+                    mode_recommender.extract_features(prompt),
+                ),
+                "rationale": "no historical data: store unavailable",
+                "cache_hit": False,
+            }
+        return mode_recommender.recommend(
+            c, prompt, current_model=current_model,
+        )
+
+
+@mcp.tool()
+def recommend_mode(
+    prompt: str,
+    current_model: str | None = None,
+) -> dict:
+    """Recommend the cheapest model that fits a task, based on past sessions.
+
+    Heuristic v1: pattern-matches ``prompt`` (intent + token-band +
+    language hints) against the user's own past sessions and returns
+    the cheapest model whose similar past sessions had the lowest
+    median cost. The full benchmark engine is Spec 26 (issue #99) —
+    use this for "this task fits a Sonnet, you used Opus" routing
+    nudges, not for hard model selection.
+
+    Reads from the unified StackUnderflow store
+    (``~/.stackunderflow/store.db``). Nothing leaves the machine.
+
+    Args:
+        prompt: The task prompt to score. Required, non-empty.
+        current_model: The model the caller would otherwise route to.
+            Drives the ``cost_delta_usd`` field (positive = switching
+            saves that much per session). Optional.
+
+    Returns:
+        Dict with: ``recommended_model``, ``current_model``,
+        ``confidence`` (in [0, 1] — 0.0 = no opinion / no historical
+        data), ``cost_delta_usd`` (positive = switching saves money),
+        ``similar_session_count``, ``evidence_session_ids`` (a few
+        ``sessions.session_id`` values you can drill into),
+        ``features`` (the extracted feature dict),
+        ``task_pattern_hash``, ``rationale`` (human-readable
+        justification), ``cache_hit`` (bool — true when the result
+        came from the 24h cache).
+    """
+    return recommend_mode_impl(prompt=prompt, current_model=current_model)
+
+
 def main() -> None:
     """Console-script entry point — run the server over stdio."""
     mcp.run()

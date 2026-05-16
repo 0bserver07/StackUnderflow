@@ -139,6 +139,11 @@ ignore = [
 "stackunderflow/settings.py" = ["N806"]
 # `isinstance(x, (int, float))` is more readable than `int | float` here
 "stackunderflow/infra/discovery.py" = ["UP038"]
+# Mode-recommender feature dict has a "token_band" key whose values look
+# like password constants to ruff (S105 false-positive on the token/secret
+# keyword scan). The key name is part of the public payload — we suppress
+# the warning rather than rename a contract.
+"tests/stackunderflow/services/test_mode_recommender.py" = ["S105"]
 
 
 [tool.pytest.ini_options]
