@@ -1,14 +1,97 @@
 # StackUnderflow — Handoff doc
 
-**Date:** 2026-05-13 (last tagged release: v0.7.2; the v0.7.1 → v0.7.2 round merged into `main` directly)
+**Date:** 2026-05-19
 **Maintainer:** 0bserver07 / 0bserver07
-**Branch:** `main` is the live branch; last tag `v0.7.2`
-**Tests:** 2355 fast (`pytest tests/ -q`) / 2 skipped / 12 deselected, 10 slow (`pytest -m slow tests/stackunderflow/integration`) / 1 skipped, 110 frontend (`node --test stackunderflow-ui/tests/services/*.test.ts`). Was 2310 immediately after v0.7.1 — +45 fast tests across the v0.7.2 follow-up round (outcome confidence, optimize parity, command_costs structural lock-in, pricing-fixes-round2).
-**Frontend:** typecheck + build clean; the dashboard build output lands in `stackunderflow/static/react/`
+**Branch:** `main`; last tag `v0.9.1` (on PyPI). HEAD: `c4d32ea`.
+**Schema:** `CURRENT_VERSION = 17`. Real store `~/.stackunderflow/store.db` at `user_version = 17`. v018 (static analysis, spec 21) exists on the `feat/static-analysis-pass` branch but is **not merged**.
+**Tests:** 2779 fast (`pytest tests/ -q`) / 2 skipped / 14 deselected. Frontend: 168 (`node --test stackunderflow-ui/tests/services/*.test.ts`). Ruff: 41 baseline. Typecheck + build clean.
 
 This doc gets a fresh agent oriented in 10 minutes. Read it before reading code.
 
-> **Versioning note for an incoming agent.** The maintainer owns version decisions; do **not** bump `__version__.py` / `pyproject.toml` / `package.json` or move a "release" label without being asked. New CHANGELOG entries go under `## [Unreleased]` only.
+> **STOP-THE-PRESS NOTE (2026-05-19).** The maintainer has asked for **no more version bumps** for now. Eight releases shipped in ~3 days (v0.7.0 → v0.9.1); each one fixed something the previous broke. v0.9.1 alone was five real production bugs that only surfaced after a maintainer-forced audit — bugs the v0.9.0 release shipped silently. **Accumulate under `## [Unreleased]` for as long as it takes** until the dashboard is verified end-to-end on a real project (not just per-route curl smoke tests, not just unit tests passing). The maintainer explicitly told me: "stop doing aggressive version changes, meanwhile u have left the project riddled with a giant gapping hole with bugs."
+>
+> **Versioning rule.** Patch bumps only when shipping is warranted (`0.9.X`). NO MINOR / MAJOR until the audit gap below is fully closed. The maintainer owns version decisions; do **not** bump `__version__.py` / `pyproject.toml` / `package.json` or move a "release" label without explicit approval. New CHANGELOG entries go under `## [Unreleased]` only.
+
+## The current audit gap (read this first)
+
+A real-data audit only happened after v0.9.0 shipped. It found **5 broken tabs** out of 15 routes checked — `agents` (showed sessions from unrelated projects), `messages` (49 MB unbounded payload), `stats` (4 MB payload), `optimize` (1.5s warm, 13s cold), `yield` (15s timeout). All 5 were fixed in v0.9.1.
+
+**But the audit only covered 15 routes**. Untouched surfaces that an incoming agent should NOT assume work just because tests pass:
+
+- **Compare tab** — `/api/compare` returned 859 bytes in the audit (probably empty), no per-tab UX check
+- **Plan tab** — including the v0.9.0 burn-projector v2 forecast strip + alert thresholds — never opened in a browser
+- **Q&A tab** — `/api/qa` returned 1696 rows in 0.15s, but rendering not verified
+- **Tags tab** — likewise, surface returns; render unverified
+- **Bookmarks tab** — empty in the audit project
+- **Search** — returned 1 hit, search-UI experience never exercised
+- **Playback v1 event stream** — `/api/playback/project/{slug}?since=7d` returned `total=0` (window probably wrong); the per-session event scrubber + FS panel never verified end-to-end against real session data
+- **Live tab** (v0.9.0 SSE) — the SSE handler was suspect (server CPU-locked once when a tab was open); never actually validated as load-bearing
+- **Meta-agent sidebar** (v0.8.0) — requires Ollama running locally; never tested with a real model on real data; the tool-call loop's behavior on edge cases is unverified
+- **Discovery embeddings** (`--use-embeddings`, v0.7.3) — needs `pip install stackunderflow[embeddings]` + first-time model download; first-run UX never tested on a fresh machine
+- **`stackunderflow init --install-skills`** (v0.7.1) — copies SKILL.md files; never confirmed Claude Code picks them up
+
+**The next session's first job should be**: finish the audit. Open every tab on a real project, click around, watch for silent-render-but-wrong failures (the agents-tab nonsense was exactly this — it returned 200 OK with 10 rows of garbage). Treat unit tests as "code compiles," not "feature works."
+
+## Recent history (releases on PyPI)
+
+| Tag | Date | What |
+|---|---|---|
+| v0.7.0 | 2026-05-06 | ETL pipeline (Waves 1–4): usage_events + 5 marts + watermarked refresh + filesystem watcher + every dashboard route migrated to mart reads |
+| v0.7.1 | 2026-05-13 | `init --install-skills` + beta-normalizer pricing coverage (qwen, gemini, etc.) |
+| v0.7.2 | 2026-05-13 | Pricing fixes round 2 (`claude-opus-4-7` + GLM-5 + `composer-1` + `droid-auto`); outcome-aware discovery `outcome_confidence` ladder; optimize parity tests; command_costs structural-mismatch lock-in |
+| v0.7.3 | 2026-05-14 | Playback v2 (virtual-FS reconstruction) + opt-in semantic search (`--use-embeddings`, v014 `discovery_embeddings`) + Windows CI matrix + beta-flag drop on Playback/Agents |
+| v0.7.4 | 2026-05-14 | CI cleanup (Tests Ubuntu-only after the Windows pytest port surfaced ~40 POSIX-shaped fixtures) + drop beta on yield/qa/tags + API docs for playback `/fs` |
+| **v0.8.0** | **2026-05-15** | **CLI cost-report fix** (today/month/status/report were under-counting by ~6× — $502 vs $3072 on the real store) + **meta-agent sidebar** (Ask StackUnderflow, 7 backend tools, Ollama tool-call loop) + `--ingest` / `--auto-ingest` flags on read-only CLI commands |
+| **v0.9.0** | **2026-05-15** | **Wave 1** of the world-class roadmap (issue #103): file-risk recommender (#86), burn projector v2 (#87), mode recommender heuristic v1 (#88, v016 `mode_recommendations`), skill recommender (#89), real-time observability tab (#90, SSE), session-schema spec doc (#91); also fixed `daily_mart_by_day` to return frontend-expected dict-keyed-by-date shape (was returning a list, crashing every project page with `tokens.input undefined`) |
+| **v0.9.1** | **2026-05-16** | **Five audit fixes** (issue #104): agents tab redesigned to detect Task-tool sub-agents per project (was synthesizing fake teams from unrelated projects); `/api/messages` paginated (49 MB → 262 KB); `/api/stats` trimmed (4 MB → 67.5 KB); `/api/optimize` cached + MCP-detector fast-path (1.5s → 345ms); `/api/yield` batched git work per cwd (timeout → 0.35s per project) |
+
+## Wave-2 status (in-progress)
+
+| Spec | Issue | Branch | State |
+|---|---|---|---|
+| Spec 20: PR / CI webhook ingest (v017 `pr_outcomes` + `ci_runs`) | #92 | `feat/pr-ci-webhook-ingest` | **MERGED** in v0.9.1 era |
+| Spec 21: Per-session static analysis pass (v018 `static_analysis_findings`) | #93 | `feat/static-analysis-pass` | **NOT MERGED.** Branch pushed at `dd1414d`. CURRENT_VERSION on branch = 18, on main = 17. Per-language analyzers for Python (radon/mypy/ruff), TS (tsc/eslint), Go (go vet/gocyclo). Coverage measurement deferred to spec 22. Has new `[analysis]` extra in pyproject. 59 new tests on the branch. Needs review + merge — but probably AFTER finishing the audit, so we don't ship more unverified surface. |
+
+Issues #92, #93 are still **OPEN on GitHub** (merge commits didn't include closing keywords). Manually close after verifying merged work is functional.
+
+## Roadmap (issue #103) — what's still ahead
+
+Wave 1 ✅ merged (v0.9.0). Wave 2 ⚠️ half-merged (spec 20 in, spec 21 on branch).
+
+| Wave | Issues | State |
+|---|---|---|
+| 3 — outcome attribution + grading | #94 (outcome attribution v2, depends on #92), #95 (LLM-graded session quality) | pending |
+| 4 — replay + active surfacing | #96 (context-window replay), #97 (active-surfacing meta-agent via hooks) | pending |
+| 5 — fork mode + comparative benchmark (the killer features) | #98 (fork mode), #99 (comparative benchmark engine — `needs-design`, maintainer rubric required) | pending |
+| 6 — sensitive / long-tail | #100 (multi-device sync — `needs-design`), #101 (Windows test-fixture port), #102 (real-world beta-normalizer fixtures) | pending |
+
+**Schema versions pre-reserved**: v015 unused (file-risk didn't need it), v016 = mode_recommendations, v017 = pr_outcomes + ci_runs, v018 = static_analysis_findings (on branch). Next free slot: v019 (reserved for spec 22 `commit_session_link`).
+
+## Real-data state right now (maintainer's machine)
+
+```
+~/.stackunderflow/store.db (~3.9 GB):
+  user_version: 17
+  ~150,843 usage_events (cost_source=unknown: 0)
+  All 8 marts populated (daily / session / project / provider_day / model_day / tool / command / message_tool).
+  v014: discovery_embeddings — table present, empty (populates on first --use-embeddings query)
+  v016: mode_recommendations — table present, populates on first `recommend mode` call
+  v017: pr_outcomes + ci_runs — tables present, empty (no webhooks configured)
+  agent_teams: still empty (~/.claude/teams/ does not exist on this machine)
+  captured_events: empty (hooks not installed)
+  discovery_telemetry: empty
+```
+
+## Hard rules (NON-NEGOTIABLE — these have been violated several times this round and the maintainer has called it out)
+
+1. **NO version bumps without explicit approval.** `__version__.py`, `pyproject.toml`, `stackunderflow-ui/package.json`, `stackunderflow-ui/package-lock.json`, CHANGELOG `## [N.N.N]` headings.
+2. **NO PRs opened by agents** — the maintainer handles the merge. Agents push the branch; that's it.
+3. **NO touching `~/.stackunderflow/store.db`** from tests or scripts. Use `tmp_path` / `:memory:`. For real-data spot-check, copy to `/tmp/wt-X/test-store.db` via `sqlite3 ~/.stackunderflow/store.db ".backup ..."`.
+4. **NO `.notes/` commits** (gitignored).
+5. **NO `--no-verify`** (skipping git hooks). Fix the underlying issue.
+6. **NO external-library name references** in shipped code/docs (no `claude-recall`, `sniffly`, etc.).
+7. **Pre-assigned schema slots are sacred.** v015 unused (reserved), v016 used (mode), v017 used (pr/ci), v018 reserved for spec 21 if/when it merges.
+8. **Tests pass ≠ feature works.** Before claiming "fixed," open the real dashboard tab in a browser and click through it. Per-route 200-OK curls are necessary but not sufficient — the agents-tab bug returned 200 OK with 10 rows of garbage from unrelated projects.
 
 ---
 
@@ -401,42 +484,19 @@ node --test tests/services/*.test.ts      # frontend unit tests (Node built-in r
 
 ---
 
-## Real-data state right now (maintainer's machine)
+## What's left / known follow-ups (post v0.9.1)
 
-```
-~/.stackunderflow/store.db (~3.9 GB, swap done 2026-05-13):
-  user_version: 13   ← v007 through v013 applied
-  ~150,843 usage_events (re-derived under v0.7.2 pricers — cost_source=unknown is 0)
-  All 8 marts populated (daily / session / project / provider_day / model_day / tool / command / message_tool),
-  watermarks in sync at last_event_id=150,843.
-  agent_teams + the 4 new `sessions` columns (team_id / spawned_by_session_id / spawn_prompt / agent_role)
-  populate on the next ingest cycle when ~/.claude/teams/ artefacts exist.
-  discovery_telemetry / captured_events are empty by default (only populate on use).
-  Per-provider events: claude ~150K, gemini ~400, cursor ~220, droid ~100, cline ~100.
-  Pre-swap backups kept at /tmp/stackunderflow-migration/store.{backup,pre-swap}.<TS>.db.
-```
-
-**Practical upshot for an incoming agent:** the maintainer's real store is at the current schema version with every post-v0.7 feature live. The dashboard reads from populated marts, not the aggregator fallback. The next 46-min `backfill --force` is only needed if pricing entries change again.
-
----
-
-## What's left / known follow-ups
-
-The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store now on `user_version=13` with all 8 marts populated, 31,859 → 0 `cost_source=unknown` after the post-fix backfill), #2 (optimize → `message_tool_mart`, locked in with parity tests + perf bench), #3 (pricing-table coverage — `claude-opus-4-7`, `gemini-3-pro-preview` family, `glm-5*`, `composer-1`, `droid-auto`, `cline-auto` all added), #5 (verified `command_costs` structural mismatch — locked the aggregator path with tests), #7 (`init --install-skills` shipped in v0.7.1), and #9 (outcome heuristic + `outcome_confidence` ladder + default `min_confidence=0.5`). The remaining live items:
+The Real-data + Audit-gap + Wave-2 + Roadmap sections at the top of this doc are the source of truth. This section enumerates the long-tail items not captured there.
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | ~~Apply v007–v013 to the real store.~~ **Closed** — applied 2026-05-13. Real store at `user_version=13`, all 8 marts populated, 0 unknown cost rows. | — |
-| 2 | ~~Migrate `optimize` detectors onto `message_tool_mart`.~~ **Closed** — parity tests + `bench_optimize_mart.py` lock the contract; 270×–1242× speedups verified. | — |
-| 3 | ~~Beta-normalizer pricing-table coverage.~~ **Closed in v0.7.2** — `claude-opus-4-7`, `gemini-3-(pro/flash)-preview` family, `glm-5` / `glm-5.1`, `composer-1`, `droid-auto`, `cline-auto` added with cited sources. Real-store unknowns dropped to zero. | — |
-| 4 | Watcher / lock cross-platform coverage. **Build matrix landed** (`build.yml` runs Ubuntu + macOS + windows-latest at Python 3.11+3.12 — the wheel install + `stackunderflow --version` / `--help` / `cfg ls` smoke test exercises the real cross-platform import surface). **Test matrix is Ubuntu-only** — first Windows pytest run surfaced ~40 POSIX-shaped test fixtures (hard-coded `/Users/...` literals, `Path.resolve()` drive-prefixing, paths comparing across `\` vs `/`). The production code paths fixed in this round are correct (`_is_ancestor` separator normalisation in `discovery.py`; `set_home_env` helper in `tests/conftest.py` covers HOME + USERPROFILE), but the rest of the suite needs a port. Tracking as a separate effort — runtime behaviour on Windows is fine. | medium (works at runtime; full pytest port on Windows is a multi-day effort) |
-| 5 | ~~`command_costs` → `command_mart`.~~ **Closed (verified infeasible)** — the aggregator's per-Interaction shape carries 7 fields the `(day, project, command_name)` mart grain throws away on ingest. Locked the aggregator path with tests in `test_cost_command_mart_overlay.py`. A future per-Interaction-grain mart could revisit this. | — |
-| 6 | Beta normalizer fixtures (`tests/fixtures/beta_normalizers/`) are synthetic-but-spec-accurate per the codeburn catalog. They don't replace real-world parity — that needs actual session data per provider on the maintainer's machine, which most beta providers don't have. The defensive empty/malformed coverage from v0.6.1 + the spec-shape coverage from Wave 5 catch the structural failure modes; the next "Cursor v3 conversationId-in-the-key" still needs real local data. | low (no concrete bug today) |
-| 7 | ~~`stackunderflow init --install-skills`.~~ **Closed in v0.7.1.** | — |
-| 8 | ~~Playback v2 — virtual-filesystem reconstruction at a point in time.~~ **Closed** — backend route `GET /api/playback/{session}/fs?at=<iso>&paths=<csv>&include_content=…` shipped this round (replay of Read / Write / Edit / MultiEdit / NotebookEdit, ~150ms median). Frontend side panel landed on top: file tree grouped by directory, monospace content viewer with line numbers, 250ms debounced fetch on scrub, `include_content=false` for metadata-only scrub passes, warnings banner for partial reconstructions. Both halves in `## [Unreleased]` of `CHANGELOG.md`. | — |
-| 9 | ~~Outcome inference quality.~~ **Closed in v0.7.2** — confidence ladder (0.0 / 0.3 / 0.5 / 0.8 / 1.0), default `min_confidence=0.5` filters silence-as-worked false positives. 8 adversarial tests lock the contract. | — |
-| 10 | ~~Discovery semantic search.~~ **Closed** — `search-past-decisions --use-embeddings` ships as an opt-in extra (`pip install stackunderflow[embeddings]` → sentence-transformers + the all-MiniLM-L6-v2 model). Pull-through cache in v014's `discovery_embeddings` table; cosine re-rank replaces the LIKE-density relevance term in `pack_within_budget`. MCP tool gains matching `use_embeddings` + `embed_model` args. The legacy substring path stays the default — agents that don't flag `--use-embeddings` pay zero. | — |
-| 11 | ~~Drop beta flag on Playback + Agents dashboard tabs once empty-state UX is verified against the now-populated real store.~~ **Closed** — `beta: true` removed from both tab definitions in `stackunderflow-ui/src/pages/ProjectDashboard.tsx`. Both tabs already carry their own `EmptyState` components for the no-data case (AgentsTab: "No agent teams yet"; PlaybackTab: "No tool calls yet in this project"), so empty-store users still get a sensible surface. | — |
+| A | **Finish the dashboard audit.** Open every tab on a real project, click through filters, watch for silent-render-but-wrong. The 5 fixed in v0.9.1 were just the ones I happened to hit. Untouched: Compare, Plan, QA, Tags, Bookmarks, Search-UX, Playback event-stream + FS panel end-to-end, Live tab SSE under load, meta-agent sidebar with real Ollama, `init --install-skills` first-run, `--use-embeddings` first-run. | **HIGH — gating any new feature work** |
+| B | **Merge spec 21 (static analysis).** Branch `feat/static-analysis-pass` at `dd1414d`, 59 tests, v018 migration. Adds Python (radon/mypy/ruff) + TS (tsc/eslint) + Go (go vet/gocyclo) analyzers + meta-agent `get_session_quality` tool. Held off merging during the v0.9.1 audit-fix sweep. Wave 2 is otherwise complete. | medium (don't merge until A is well underway) |
+| C | **Close GitHub issues #86, #87, #88, #89, #90, #91, #92, #104.** They were finished but the merge commits didn't include closing keywords. Manual close after verifying the merged work is functional (depends on A). | low |
+| D | **Windows test-fixture port** (issue #101, spec 29). Build matrix is on Ubuntu + macOS + Windows; pytest matrix is Ubuntu-only because the first Windows run surfaced ~40 POSIX-shaped fixtures. Production code on Windows is fine; the test suite needs `pathlib`-friendly rewrites. Slog — a multi-day port plus several rounds of Windows-CI feedback. | low |
+| E | **Real-world beta-normalizer fixtures** (issue #102, spec 30). Synthetic spec-accurate fixtures exist; real captures need actual provider sessions on the maintainer's machine (logistics, not code). | low |
+| F | **Apply v018 to the real store** (after merging spec 21). v017 just applied automatically; v018 will too. Then `stackunderflow analyze backfill --since 30d` to populate `static_analysis_findings`. | low (post-B) |
+| G | **CHANGELOG hygiene.** v0.9.1 release notes were added late and out of order due to a file-modified race during the version-bump commit. Inspect `CHANGELOG.md` around the `## [0.9.1]` heading and tidy if needed. | low cosmetic |
 
 ---
 
@@ -494,12 +554,21 @@ The v0.7.1 → v0.7.2 round closed items #1 (apply v007–v013 — real store no
 
 ---
 
-## What I'd do next if I had a week
+## What I'd do next (post v0.9.1, in order)
 
-1. **Spec 06 — backup / sync service. CLOSED — shipped as `stackunderflow backup`.** The local rsync-`--link-dest` snapshot path (`backup create / list / restore / auto`, macOS launchd integration) covers the original spec's local-incremental requirement. Snapshots land at `~/.stackunderflow/backups/<ts>[-label]/`. Off-machine sync / encrypted remote storage is deliberately not part of this surface — users who need that pipe the local snapshot through their preferred tool (tar + cloud, restic, borg). See `docs/backup.md` and `stackunderflow/cli.py` around `backup_group`.
-2. **Cross-platform CI matrix.** Linux + Windows runners. Smoke-test `watchfiles` source-file detection latency, smoke-test `msvcrt.locking` lock acquisition, document the gaps. Closes follow-up #4.
-3. **Discovery semantic-search mode (`--use-embeddings`).** Opt-in re-ranker that runs after the substring filter and brings up sessions that talk about the same idea in different words. Closes follow-up #10 — only do this if substring search proves brittle in practice.
+1. **Finish the dashboard audit (item A above).** Run `stackunderflow start` (or `python -m stackunderflow start` from the repo for editable-source), open `http://127.0.0.1:8095`, pick a project with substantive data (`-Users-yadkonrad-dev-dev-year26-feb26-SutroYaro` is a known good test target — 95 sessions, 374 Task tool calls). Open EVERY tab in order. For each: does it render, does the data make sense, do filters work, are there silent rendering bugs that look right but show wrong data? Use the audit script template from issue #104 if you want a starting point. **Write findings to `## [Unreleased]` in CHANGELOG and to a new audit issue.** Don't ship a release at the end of this — just fix bugs and accumulate.
+2. **Merge spec 21 (static analysis) when (1) is well underway.** Branch `feat/static-analysis-pass`. CURRENT_VERSION bumps 17 → 18. Adds the `[analysis]` extra in `pyproject.toml`. After merge: `stackunderflow analyze backfill --since 30d` to populate findings on the real store.
+3. **Close stale GitHub issues** (#86–#104 minus #104 which tracks the audit). Manual close after verifying each merged feature actually functions in the dashboard.
+4. **Consider what the next genuine release should mean.** v0.9.1 was forced by the audit-bug discovery. The next bump should be when the dashboard is provably solid AND there's a story (e.g., wave-2 fully landed + audit clean, ship as v0.10.0).
+5. **DO NOT start wave 3 yet.** Wave 3 (#94, #95) builds on wave 2 (#92 + #93). #93 is on a branch but not merged. Don't kick off wave 3 specs until #93 lands and the audit closes.
+
+## Big picture / vision
+
+The roadmap (issue #103) is the long-term direction: outcome attribution + comparative benchmark + replay/fork + multi-device sync. Two design-gated items need maintainer input before any agent dispatches:
+
+- **#99 Comparative benchmark engine.** Maintainer writes the scoring rubric (`docs/specs/benchmark-rubric-v1.md`) — what counts as "model X won" against model Y on a replayed session. Static-score + LLM-grade composition weights. Without this rubric an agent will pick reasonable-looking defaults and you'll argue about them later.
+- **#100 Multi-device sync.** Crypto library (`age` vs `pynacl`), wire format (per-device incremental snapshots vs append-log), conflict-resolution policy. Privacy contract is non-negotiable — get this wrong and you've shipped a destructive bug.
 
 ---
 
-That's the picture. Files referenced are absolute paths under `/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/`. Welcome.
+That's the picture. Files referenced are absolute paths under `/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/`. Welcome — but please finish the audit before shipping anything.
