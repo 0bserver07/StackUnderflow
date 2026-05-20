@@ -1,7 +1,7 @@
 # StackUnderflow — Handoff doc
 
 **Date:** 2026-05-19
-**Maintainer:** 0bserver07 / 0bserver07
+**Maintainer:** 0bserver07
 **Branch:** `main`; last tag `v0.9.1` (on PyPI). HEAD: `8606974`.
 **Schema:** `CURRENT_VERSION = 17`. Real store `~/.stackunderflow/store.db` at `user_version = 17`. v018 (static analysis, spec 21) exists on the `feat/static-analysis-pass` branch but is **not merged**.
 **Tests:** `pytest tests/ -q` collects 2781 — 2779 pass, 2 skipped, 14 `slow` tests deselected by default. Frontend: 168 (`node --test stackunderflow-ui/tests/services/*.test.ts`). Ruff: 41 baseline. Typecheck + build clean.

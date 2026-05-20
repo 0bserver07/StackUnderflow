@@ -1,6 +1,6 @@
 # AI Coding Agent Local Data Inventory
 
-**User:** yad.konrad@gmail.com
+**User:** 0bserver07
 **Date:** 2026-04-30
 **Machine:** Darwin 25.3.0 (Apple Silicon)
 
