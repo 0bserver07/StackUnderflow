@@ -90,6 +90,13 @@ stackunderflow hooks run <hook-id>     # internal — Claude Code calls this; re
 - `user` — `~/.claude/settings.json`.
 - `all` — *repair only* — walk `$HOME` for every project's `.claude/settings.json`.
 
+**Prefer `project` scope.** A hook entry is just the command `stackunderflow
+hooks run <id>`, which works only where the `stackunderflow` binary resolves on
+`PATH`. At `project` scope the hooks fire inside that one repo, so the binary
+only has to resolve there. At `user` scope they fire in *every* Claude Code
+session in every directory — which works only if `stackunderflow` is on `PATH`
+everywhere; see [Why hook commands are portable](#why-hook-commands-are-portable-not-absolute-paths).
+
 ### install
 
 Merges StackUnderflow's hook entries into the target `settings.json`. It is
@@ -145,6 +152,19 @@ hooks silently stop firing after an environment change, `stackunderflow hooks
 status` will show them as stale and `stackunderflow hooks repair` will fix the
 command form (though if the binary genuinely isn't on `PATH` anymore you'll need
 to make it resolvable — that's the one thing `repair` can't do for you).
+
+### Version managers are the common trap
+
+If `stackunderflow` was installed into a `pyenv`, `conda`, or `asdf`
+environment, the binary resolves only while that environment is selected.
+`install` checks the `PATH` of the shell *it* runs in, so it cannot see this —
+it reports success, and the hook still fails in any directory that selects a
+different environment. Two ways out:
+
+- **`project` scope** in a repo that always selects the environment where
+  `stackunderflow` lives — the hook fires only there, so it just works.
+- For **`user` scope**, install `stackunderflow` independent of any environment
+  manager. `pipx install` puts it in `~/.local/bin`, on `PATH` for every shell.
 
 ## Performance notes (read before installing widely)
 
