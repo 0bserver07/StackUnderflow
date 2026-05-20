@@ -532,6 +532,38 @@ class TestProjectScoping:
         assert body["query"]["project"] is None
         assert body["result_count"] == 1
 
+    def test_cwd_prefers_deepest_nested_project(self, tmp_path, monkeypatch):
+        # Real-data shape: projects carry no `path`, the slug encodes the
+        # path. cwd inside a nested repo must resolve to that repo, not a
+        # busier enclosing project.
+        import re as _re
+        store_db = tmp_path / "store.db"
+        repo = tmp_path / "work" / "repo"
+        repo.mkdir(parents=True)
+        parent_slug = _re.sub(r"[^A-Za-z0-9]", "-", str((tmp_path / "work").resolve()))
+        repo_slug = _re.sub(r"[^A-Za-z0-9]", "-", str(repo.resolve()))
+        conn = db.connect(store_db)
+        schema.apply(conn)
+        for slug in (parent_slug, repo_slug):
+            pid = int(conn.execute(
+                "INSERT INTO projects (provider, slug, path, display_name, "
+                " first_seen, last_modified) VALUES ('claude', ?, NULL, 'p', 0.0, 0.0)",
+                (slug,),
+            ).lastrowid)
+            _add_session(conn, pid, f"s-{slug[-8:]}", "2026-05-05", [
+                ("assistant", "we decided to use sqlite right here", "[]"),
+            ])
+        conn.commit()
+        conn.close()
+        monkeypatch.chdir(repo)
+        r = _invoke(CliRunner(),
+                    ["memory", "decisions", "sqlite", "--json"],
+                    store_db, monkeypatch)
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["query"]["project"] == repo_slug
+        assert body["result_count"] == 1
+
 
 # ── the mcp command is gone ─────────────────────────────────────────────────
 

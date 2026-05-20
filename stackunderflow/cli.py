@@ -2703,13 +2703,36 @@ def _default_skills_out(scope: str) -> Path:
 
 
 def _detect_cwd_project_slug(conn) -> str | None:
-    """Best-effort: which project slug does the current directory belong to?"""
-    from stackunderflow.services.discovery import find_sessions_in_path
+    """Best-effort: which project slug does the current directory belong to?
+
+    Scores every project against the cwd and returns the most specific
+    match: by the ``path`` column when it is populated, otherwise by the
+    slug (which encodes the path — every non-alphanumeric character
+    becomes ``-``). Longest match wins, so a command run inside a nested
+    repo scopes to that repo rather than a busier parent directory.
+    """
+    cwd = str(Path.cwd())
+    cwd_slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
     try:
-        matches = find_sessions_in_path(conn, str(Path.cwd()), limit=1)
-    except ValueError:
+        rows = conn.execute("SELECT DISTINCT slug, path FROM projects").fetchall()
+    except Exception:
         return None
-    return matches[0].project_slug if matches else None
+    best_slug: str | None = None
+    best_score = -1
+    for row in rows:
+        slug, path = row[0], row[1]
+        if not slug:
+            continue
+        if path:
+            anchor = path.rstrip("/")
+            matched = cwd == anchor or cwd.startswith(anchor + "/")
+            score = len(anchor)
+        else:
+            matched = cwd_slug == slug or cwd_slug.startswith(slug + "-")
+            score = len(slug)
+        if matched and score > best_score:
+            best_score, best_slug = score, slug
+    return best_slug
 
 
 def _split_csv(value: str | None) -> list[str] | None:
