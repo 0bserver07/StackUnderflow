@@ -1,13 +1,13 @@
 # Multi-provider support
 
-StackUnderflow ingests session data from more than one coding agent. As of v0.7.0 four adapters ship default-on (Claude Code, Codex, Cursor, Cline) and twelve more are opt-in beta (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi + OMP).
+StackUnderflow ingests session data from more than one coding agent. Seventeen adapters are registered: four ship default-on (Claude Code, Codex, Cursor, Cline) and thirteen are opt-in beta (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi + OMP).
 
 ## Supported providers
 
 | Provider | Status | Source format | Default state |
 |----------|--------|---------------|---------------|
 | Claude Code | stable | per-project JSONL under `~/.claude/projects/<slug>/` (+ legacy `~/.claude/history.jsonl`) | on |
-| Codex | stable | rollout JSONL under `~/.codex/` | on |
+| Codex | stable | rollout JSONL under `~/.codex/sessions/` | on |
 | Cursor | stable | SQLite `state.vscdb` at `~/Library/Application Support/Cursor/User/globalStorage/` | on |
 | Cline | stable | per-task JSON in `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | on |
 | KiloCode | beta | per-task JSON in `…/kilocode.kilo-code/tasks/` (Cline parser) | off |
@@ -26,11 +26,11 @@ StackUnderflow ingests session data from more than one coding agent. As of v0.7.
 
 ### Cursor + Cline default-on
 
-Cursor and Cline shipped behind `STACKUNDERFLOW_BETA_CURSOR=1` / `STACKUNDERFLOW_BETA_CLINE=1` from v0.4.0 through v0.6.0. They were promoted to default-on in v0.7.0: both have full test coverage, fingerprint-based caching for the Cursor vscdb (`stackunderflow/infra/cursor_cache.py`), and have been stable against real local user data across several releases. Existing installs that already exported the beta env vars do not need to change anything — the env vars are a no-op for the two promoted adapters.
+Cursor and Cline shipped as opt-in beta in v0.4.0, behind `STACKUNDERFLOW_BETA_CURSOR=1` / `STACKUNDERFLOW_BETA_CLINE=1`. They were promoted to default-on in v0.6.0: both have test coverage, fingerprint-based caching for the Cursor vscdb (`stackunderflow/infra/cursor_cache.py`), and have run against real local user data across several releases. Existing installs that already exported the beta env vars need no change — the env vars are a no-op for the two promoted adapters.
 
 ## Enabling beta adapters
 
-The remaining 12 beta adapters are gated by environment variables in `stackunderflow/adapters/__init__.py`:
+The remaining 13 beta adapters are gated by environment variables in `stackunderflow/adapters/__init__.py`:
 
 ```bash
 STACKUNDERFLOW_BETA_KILOCODE=1 stackunderflow start
@@ -63,7 +63,7 @@ export STACKUNDERFLOW_BETA_GEMINI=1
 
 The flag parser accepts `1`, `true`, `yes`, `on` (case-insensitive); anything else leaves the adapter unregistered.
 
-## What each beta adapter reads
+## What Cursor and Cline read
 
 **Cursor.** Reads the `cursorDiskKV` table in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (opened via SQLite read-only URI). Two key prefixes are walked: `bubbleId:%` for chat bubbles (with `text`, `modelInfo.modelName`, `tokenCount`, `createdAt`) and `agentKv:blob:%` for agent KV blobs (with `content`, `providerOptions.cursor.modelName`). One `SessionRef` is yielded per `conversationId`; `source_kind="database"` and `seq` is the SQLite `rowid` so resumable reads use the rowid as a high-water mark. macOS only in v1 — Linux and Windows path constants are present in `stackunderflow/adapters/cursor.py` but untested.
 
@@ -77,21 +77,22 @@ Provider chips render on the session table and project cards, color-coded per pr
 
 ## Cursor pricing
 
-Cursor doesn't publish a per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) classifies real cursor model ids into three groups:
+Cursor publishes no general per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) prices each cursor model id one of four ways:
 
 | Class | Examples | Rate source |
 |-------|----------|-------------|
-| Vendor-prefixed | `claude-4.5-sonnet-thinking`, `claude-4.6-sonnet`, `gpt-5-codex`, `gpt-4o`, `gemini-2.5-pro-preview-05-06`, `gemini-3-pro` | Delegates to AnthropicPricer / OpenAIPricer / GeminiPricer. A Claude-via-Cursor record costs the same as a native Claude record. Gemini ids with `-preview-MM-DD` or `-experimental` suffixes strip back to the base id and retry. |
-| Cursor-trained composer line | `composer-1`, `composer-2` | **ESTIMATED** at Anthropic Sonnet 4.x rates (input $3/M, output $15/M, cache-write $3.75/M, cache-read $0.30/M). Cursor doesn't publish per-token pricing for its own agents as of 2026-04; Sonnet-tier is the closest publicly-acknowledged analogue for an agentic Sonnet-class model. |
-| Autoselectors | `cursor-auto`, `cursor-fast` | Same **ESTIMATED** Sonnet-tier rates — when Cursor picks the model for the user we don't know which engine actually ran, and the Sonnet-tier estimate keeps these records out of $0-territory in compare / cost reports. |
+| Vendor-prefixed | `claude-4.5-sonnet-thinking`, `claude-4.6-sonnet`, `gpt-5-codex`, `gpt-4o`, `gemini-2.5-pro-preview-05-06`, `gemini-3-pro` | Delegates to `AnthropicPricer` / `OpenAIPricer` / `GeminiPricer`. A Claude-via-Cursor record costs the same as a native Claude record. Gemini ids with `-preview-MM-DD` or `-experimental` suffixes strip back to the base id and retry. |
+| `composer-1` | `composer-1` | Cursor's published rate: input $1.25/M, output $10.00/M, cache-write $1.5625/M, cache-read $0.125/M (cursor.com/docs/models-and-pricing). |
+| `composer-2` | `composer-2` | **ESTIMATED** at Anthropic Sonnet 4.x rates: input $3/M, output $15/M, cache-write $3.75/M, cache-read $0.30/M. Cursor publishes no per-token rate for `composer-2`; Sonnet-tier is the closest acknowledged analogue for an agentic Sonnet-class model. |
+| Autoselectors | `cursor-auto`, `cursor-fast` | Same **ESTIMATED** Sonnet-tier rates. When Cursor picks the model the actual engine is unknown, and the estimate keeps these records out of $0 territory in compare / cost reports. |
 
-Unknown ids fall back to the same Sonnet-tier estimate rather than returning `None`, so a record with non-zero token counts always contributes a real dollar figure. The estimate is conservative-ish and explicitly flagged in the source comments and the rate-table comments.
+An id no delegate recognizes falls back to the same Sonnet-tier estimate rather than returning `None`, so a record with non-zero token counts always contributes a real dollar figure. The source comments flag every estimated rate.
 
 ## The estimated-cost marker
 
 When a record's `record.raw["cost_source"] == "estimated"`, the UI prefixes its cost with `≈` and exposes a tooltip ("estimated cost — provider does not surface per-message tokens"). The Cursor adapter sets this flag whenever it falls back to the `len(text) // 4` heuristic because the bubble has zero `tokenCount.{inputTokens, outputTokens}` (Cursor v3 returns zero counts on every bubble; see `stackunderflow/adapters/cursor.py`).
 
-The flag is set on the adapter record and persists in `messages.raw_json`. It does not yet flow through the aggregator into `session_costs` / `command_costs` API rows — the UI types in `stackunderflow-ui/src/types/analytics.ts` carry an optional `cost_source` field, but the backend pipeline does not populate it. Tracking this as a pending follow-up against `docs/specs/multi-provider/spec.md` §2.5; the marker renders on the SessionsTab cost column today and stays dormant on the Compare/Cost surfaces until the propagation lands.
+The flag is set on the adapter `Record` and persists in `messages.raw_json`. The ETL `usage_events` pipeline carries `cost_source` as a first-class column: the normalizer layer (`stackunderflow/etl/normalize/`) stamps every event with one of `live`, `rate_card`, `estimated`, or `unknown` (the `COST_SOURCE_*` constants in `etl/normalize/base.py`). The `≈` marker on the Sessions table reads the `messages`-level flag.
 
 ## Architecture
 
@@ -102,7 +103,7 @@ flowchart LR
     ingest --> codex[CodexAdapter]
     ingest --> cursor[CursorAdapter]
     ingest --> cline[ClineAdapter]
-    ingest --> betas[12 opt-in beta adapters]
+    ingest --> betas[13 opt-in beta adapters]
     claude --> store[(SQLite store.db)]
     codex --> store
     cursor --> store
@@ -117,6 +118,6 @@ flowchart LR
 
 **I enabled a beta adapter but no data shows up.** Same pattern: confirm the on-disk source exists for the adapter you opted into (paths are listed in the table above), then re-run `stackunderflow reindex` with the env var set.
 
-**My Cursor sessions show $0 (or a `≈` marker).** As of the cursor-pricing fix, cursor records with non-zero token counts always price at a real dollar figure: vendor-prefixed ids (`claude-*`, `gpt-*`, `gemini-*`) delegate to the upstream pricer; `composer-*` and the `cursor-auto` / `cursor-fast` autoselectors use **ESTIMATED** Anthropic Sonnet 4.x rates (see "Cursor pricing" above). A record still showing $0 means its token counts are zero — Cursor v3 stores zero `tokenCount.{inputTokens, outputTokens}` on every bubble, and the adapter's `len(text) // 4` fallback estimate also returns 0 when the bubble's text payload is empty (the v3 bubble shape stores rich JSON with diffs and code chunks instead of a top-level `text` field, so some assistant bubbles legitimately have no estimable text). The `≈` marker on Sessions table rows reflects the estimated-tokens flag; cost _is_ estimated even when the dollar figure is non-zero.
+**My Cursor sessions show $0 (or a `≈` marker).** As of the cursor-pricing fix, cursor records with non-zero token counts always price at a real dollar figure: vendor-prefixed ids (`claude-*`, `gpt-*`, `gemini-*`) delegate to the upstream pricer; `composer-1` prices at Cursor's published rate; `composer-2` and the `cursor-auto` / `cursor-fast` autoselectors use **ESTIMATED** Anthropic Sonnet 4.x rates (see "Cursor pricing" above). A record still showing $0 means its token counts are zero — Cursor v3 stores zero `tokenCount.{inputTokens, outputTokens}` on every bubble, and the adapter's `len(text) // 4` fallback estimate also returns 0 when the bubble's text payload is empty (the v3 bubble shape stores rich JSON with diffs and code chunks instead of a top-level `text` field, so some assistant bubbles legitimately have no estimable text). The `≈` marker on Sessions table rows reflects the estimated-tokens flag; cost _is_ estimated even when the dollar figure is non-zero.
 
 **How do I disable a beta adapter?** Unset the env var (`unset STACKUNDERFLOW_BETA_QWEN`) and restart the server. The adapter is no longer registered and any existing rows in the store stay put — running `stackunderflow reindex` again only refreshes whatever the registered adapters can see. Cursor and Cline can no longer be disabled via env var (they're default-on as of v0.7.0); to skip them, comment out the `register(_CursorAdapter())` / `register(_ClineAdapter())` calls in `stackunderflow/adapters/__init__.py` or run a custom build.

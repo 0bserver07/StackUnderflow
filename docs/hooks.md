@@ -12,8 +12,10 @@ on the debounce. This is **opt-in**: nothing is installed unless you run
 `stackunderflow hooks install` yourself, and uninstalling is one command.
 
 If you don't install hooks, nothing changes — StackUnderflow keeps working off the
-transcripts, and consumers that benefit from hook data (outcome-aware discovery)
-fall back to a transcript heuristic.
+transcripts, and the consumers that benefit from hook data fall back to a transcript
+heuristic. Outcome-aware discovery is the clearest example: the outcome tools in
+[`docs/mcp.md`](mcp.md) prefer the deterministic `captured_events` feed but degrade
+gracefully without it.
 
 ## What gets captured
 

@@ -1,6 +1,6 @@
-# Claude Logs Structure and Processing Documentation
+# Claude Code Logs: Structure and Processing
 
-This document describes Claude log files (JSONL format), their structure, and how StackUnderflow processes them to generate analytics while handling complex edge cases.
+This document describes Claude Code log files (JSONL format), their structure, and how StackUnderflow ingests and processes them.
 
 ## Table of Contents
 1. [Log File Structure](#log-file-structure)
@@ -32,15 +32,9 @@ The slug is the absolute project path with path separators replaced by hyphens:
 
 `ClaudeAdapter.enumerate()` walks `~/.claude/projects/`, yields a `SessionRef` for every `.jsonl` file it finds, and falls back to `~/.claude/history.jsonl` for project directories that predate the per-project format (see [Legacy Format](#legacy-format)).
 
-### Important: Multiple Sessions Per File
+### Multiple Sessions Per File
 
-While JSONL files are named after a primary session ID, they can contain log entries from multiple sessions:
-
-1. **Conversation Continuation**: When a conversation is continued after compaction or restart
-2. **Cross-Session References**: When Claude references work from another session
-3. **Session Merging**: When multiple related sessions are logged together
-
-**Best Practice**: The adapter reads the `sessionId` field from each JSONL line and stores it on the `Record`. Filename stems are used as a fallback only when `sessionId` is absent.
+Each JSONL file is named after a primary session id, but its lines can carry several different `sessionId` values — for example when a conversation is continued after compaction or a restart. The adapter reads `sessionId` from each line and stores it on the `Record`; the filename stem is used only as a fallback when a line has no `sessionId`.
 
 ## Entry Types and Fields
 
@@ -49,7 +43,7 @@ While JSONL files are named after a primary session ID, they can contain log ent
 - `user` — User messages (includes tool results)
 - `assistant` — Claude's responses
 
-**Important:** The root `type` field indicates the log entry type, NOT necessarily the message role.
+The root `type` field is the log entry type, which is not always the message role — when `type` is neither `user` nor `assistant`, the adapter falls back to `message.role`.
 
 ### Common Fields
 
@@ -164,13 +158,13 @@ Tool results appear in subsequent user messages:
 ```
 
 ### Tool Names on Records
-`ClaudeAdapter._tools_from()` walks the `message.content` array and collects every block whose `type` is `"tool_use"`. The resulting tuple of names is stored in the `Record.tools` field and serialised as `tools_json` in the messages table.
+The module-level helper `_tools_from()` walks the `message.content` array and collects every block whose `type` is `"tool_use"`. The resulting tuple of names is stored in `Record.tools` and serialised as `tools_json` in the messages table.
 
 ### Task Tool Limitations
-**Critical**: Task tool operations are NOT individually logged:
-- Only the Task invocation and final result appear in logs
-- Internal tool operations by sub-agents are invisible
-- Token usage by sub-agents is NOT tracked
+Task tool operations are not individually logged:
+- Only the Task invocation and its final result appear in the logs
+- Internal tool calls by sub-agents are invisible
+- Sub-agent token usage is not recorded
 - This causes apparent "missing" tool counts in analytics
 
 ## Special Cases
@@ -199,7 +193,7 @@ Claude logs streaming responses as multiple entries with the same message ID:
 ```
 
 ### Conversation Compaction
-When conversations approach context limits, Claude Code creates comprehensive summaries:
+When a conversation approaches the context limit, Claude Code compacts it and writes a summary entry:
 
 ```json
 {
@@ -249,7 +243,7 @@ Appears as both error AND user message:
 ### Overview
 
 ```
-~/.claude/
+~/.claude/projects/<slug>/*.jsonl
     |
     v
 ClaudeAdapter          (stackunderflow/adapters/claude.py)
@@ -257,22 +251,24 @@ ClaudeAdapter          (stackunderflow/adapters/claude.py)
     read(ref)   -> Record[]
     |
     v
-ingest/writer          (stackunderflow/ingest/writer.py)
-    ingest_file()  -- one transaction per file,
-                      mtime + byte-offset tracking via ingest_log table
+ingest                 (stackunderflow/ingest/)
+    run_ingest()   -- per file: skip / tail-read / reparse
+    ingest_file()  -- one transaction per file; updates the ingest_log row
     |
     v
 SQLite store           (~/.stackunderflow/store.db)
-    projects / sessions / messages / ingest_log tables
+    projects / sessions / ingest_log tables;
+    messages -- a view over monthly messages_YYYYMM partitions (since v008)
     |
     v
 store/queries          (stackunderflow/store/queries.py)
-    get_project_stats() -- reconstructs RawEntry objects from raw_json,
-                           feeds the stats chain below
+    get_project_stats() -- rebuilds RawEntry objects from raw_json,
+                           then runs the stats chain below
     |
     v
 stats chain            (stackunderflow/stats/)
-    classifier  -> enricher -> aggregator -> formatter
+    classifier.tag -> enricher.build -> aggregator.summarise
+                                     \-> formatter.to_dicts
     |
     v
 API routes             (stackunderflow/routes/)
@@ -280,65 +276,64 @@ API routes             (stackunderflow/routes/)
 
 ### Incremental Ingest
 
-`ingest/writer.run_ingest()` compares each `SessionRef`'s `(mtime, size)` against the `ingest_log` table:
+`run_ingest()` (in `stackunderflow/ingest/__init__.py`) compares each `SessionRef`'s `(mtime, size)` against the matching `ingest_log` row before reading anything:
 
-- **Unchanged** (same mtime and size): skip entirely — no read, no transaction.
-- **Appended** (larger size, same or newer mtime): seek to `processed_offset` and read only the new bytes.
-- **Truncated / rotated** (size shrank): delete the `ingest_log` row and reparse from byte 0.
+- **Unchanged** (mtime and size both match the stored row): skip entirely — no read, no transaction.
+- **Truncated or rotated** (file smaller than the stored size): delete the `ingest_log` row and reparse from byte 0.
+- **Changed otherwise** (grown, or no stored row yet): resume from the stored `processed_offset` and read only the bytes past it.
 
-This means large projects pay for a filesystem stat check only, not a full reparse, on every poll.
+`run_ingest()` makes the skip/resume decision; `ingest_file()` (in `writer.py`) runs the per-file transaction and writes the updated `ingest_log` row. Large projects pay for a filesystem stat check only, not a full reparse, on every poll.
 
 ### Record Normalisation
 
-`ClaudeAdapter._parse_line()` converts a raw JSONL object into a `Record` dataclass:
+`ClaudeAdapter._parse_line()` converts a raw JSONL object into a `Record` dataclass. Role assignment is delegated to the module-level `_role_from(obj, msg)`:
 
 ```python
-# Role assignment
-base_type = obj['type']      # 'user' | 'assistant' | 'summary' | ...
-if base_type == 'user':
-    role = 'user'
-elif base_type == 'assistant':
-    role = 'assistant'
-elif base_type in ('summary', 'compact_summary'):
-    return None              # skip — not a conversational record
+raw_type = obj.get("type", "")
+if raw_type == "user":
+    return "user"
+if raw_type == "assistant":
+    return "assistant"
+if raw_type in ("summary", "compact_summary"):
+    return None                       # skip — not a conversational record
+role = msg.get("role")                # fall back to the nested message role
+return role if role in ("user", "assistant") else None
 ```
 
-Token counts come from `message.usage`; tool names from every `"tool_use"` block in `message.content`; the entire raw dict is preserved in `Record.raw` and written to `messages.raw_json`.
+A `None` role drops the line — it is not inserted into the store. Token counts come from `message.usage`; tool names from every `"tool_use"` block in `message.content`; `message.usage.service_tier == "priority"` sets `Record.speed` to `"fast"` (Anthropic's priority tier, billed higher for Opus). The entire raw dict is preserved in `Record.raw` and written to `messages.raw_json`.
 
 ### Timezone Handling
-All timestamps are stored in UTC but displayed in the user's local timezone:
-
-1. Frontend detects timezone offset: `new Date().getTimezoneOffset()`
-2. Backend converts UTC to local time for grouping
-3. Charts display dates in the user's local timezone
+Timestamps are stored in UTC. The frontend sends its offset (`new Date().getTimezoneOffset()`); `get_project_stats()` passes a `tz_offset` into `aggregator.summarise()`, which groups daily buckets in the user's local time.
 
 ## Deduplication and Tool Counting
 
 ### The Problem
 When Claude Code crashes and restarts with `--continue`:
 - Duplicate messages appear in multiple files
-- Same message shows inconsistent tool counts
-- Incomplete assistant responses
-- Missing tool execution logs
+- The same interaction shows inconsistent tool counts
+- Assistant responses arrive split across several entries
 
-### Solution: stats/classifier Deduplication
+### Solution: interaction-level dedup in the enricher
 
-The `stackunderflow/stats/classifier.py` module receives a list of `RawEntry` objects (reconstructed from `messages.raw_json`) and performs two-phase deduplication:
+Dedup runs at query time inside the stats chain, not at ingest. The on-disk records keep their duplicates — the raw JSONL is preserved faithfully — and the duplicates are collapsed each time the stats chain runs.
 
-1. **Phase 1 — ID-based merge**: Merges entries sharing the same `message.id` (keeping the longer content variant). This handles streaming responses where Claude emits multiple entries for the same message.
+`stats/classifier.py` only tags entries (message kind, error status, interruption flag). The dedup itself lives in `stats/enricher.py`, whose `build()` constructs the `EnrichedDataset` in five steps:
 
-2. **Phase 2 — Exact duplicate drop**: Drops exact duplicates by hashing timestamp + content + UUID. This handles entries duplicated across files after crash/continue scenarios.
+1. **Extract** every `TaggedEntry` into a `Record`.
+2. **Group** time-sorted records into `Interaction` chains: a user message carrying no `tool_result` opens an interaction; the assistant responses and tool results that follow attach to it.
+3. **Deduplicate interactions** — interactions sharing an `interaction_id` collapse to one. The id is `sha256(f"{timestamp}|{content[:64]}")[:16]`, so a prompt duplicated across files after a crash/continue produces the same id. The survivor is the interaction with more assistant responses; the loser's tool-use blocks are absorbed into it.
+4. **Finalise tools** — within each interaction, tool-use blocks are deduplicated by their tool-call `id`; `tool_count` is the number of unique calls.
+5. **Scan sessions** for per-session start/end timestamps and message counts.
 
-The deduplication logic that was previously in `pipeline/dedup.py` now lives inside the stats chain at `stackunderflow/stats/classifier.py`. The on-disk records themselves are stored with duplicates intact — dedup is a query-time operation so the raw JSONL is always faithfully preserved.
+There is no `message.id`-based merge: streaming responses (several assistant entries sharing one `message.id`) simply become several `responses` on the same interaction, and their tool calls are merged and deduped by id in step 4.
 
 ### Edge Cases Handled
 
-1. **Split Interactions**: User message in file A, assistant response in file B
-2. **Incomplete Tool Executions**: Crash during tool execution
-3. **Compact Summary Continuations**: Sessions starting with summaries
-4. **Missing Tool Logs**: Tools used but not logged
-5. **Streaming Response Merging**: Multiple entries with same message ID
-6. **Task Tool Sidechains**: Sub-agent operations not logged
+1. **Duplicate prompts after crash/continue** — identical `interaction_id`, collapsed in step 3.
+2. **Split interactions** — assistant responses spread across entries all attach to the open interaction.
+3. **Streaming responses** — multiple assistant entries with one `message.id` become multiple responses; their tools are merged and deduped by id.
+4. **Compact-summary entries** — `summary` / `compact_summary` records never reach the store, and the grouping step skips them anyway.
+5. **Task tool sidechains** — sub-agent operations are not logged, so they cannot be counted.
 
 ## Storage
 
@@ -349,26 +344,32 @@ The deduplication logic that was previously in `pipeline/dedup.py` now lives ins
 
 ### Schema
 
-The authoritative schema lives in `stackunderflow/store/migrations/v001_initial.sql`. Key tables:
+The schema is built by the migration chain under `stackunderflow/store/migrations/` (`v001` through `v017`, applied in order by `store/schema.py`). `v001_initial.sql` creates the original tables; later migrations evolve them. Core ingest relations:
 
-| Table | Purpose |
+| Relation | Purpose |
 |---|---|
 | `projects` | One row per `(provider, slug)` pair |
-| `sessions` | One row per session UUID, FK to `projects` |
-| `messages` | One row per parsed line, FK to `sessions` |
-| `ingest_log` | One row per source file; tracks `mtime`, `size`, `processed_offset` |
+| `sessions` | One row per session, FK to `projects` |
+| `messages` | One parsed line per row, FK to `sessions` — a view, see below |
+| `ingest_log` | One row per source file (file-backed sources); tracks `mtime`, `size`, `processed_offset` |
 
-**messages** is the central table. Rows are keyed on `(session_fk, seq)` where `seq` is the byte offset of the line within its source file. Every row carries a `raw_json` column containing the full original JSONL object, so nothing is ever discarded during ingest — downstream consumers reconstruct whatever they need from the raw payload.
+Since `v008`, **`messages` is a view**, not a table — a `UNION ALL` over monthly `messages_YYYYMM` partition tables (plus `messages_unknown` for malformed timestamps). The writer routes each insert to the partition matching the record's timestamp, creating partitions on demand. Each partition table carries the `UNIQUE (session_fk, seq)` constraint, so `(session_fk, seq)` is the per-message key. `seq` is the byte offset of the line within its JSONL file; for legacy `history.jsonl` records it is a 0-based line counter instead.
+
+Every row carries a `raw_json` column with the full original JSONL object, so nothing is discarded during ingest — downstream consumers rebuild whatever they need from the raw payload.
 
 Selected `messages` columns:
-- `seq` (INTEGER) — byte offset used as a stable, monotonically increasing sequence number
+- `seq` (INTEGER) — byte offset of the source line; part of the `(session_fk, seq)` key
 - `role` (TEXT) — `"user"` or `"assistant"`
-- `model` (TEXT) — model identifier when present in the source line
+- `model` (TEXT) — model identifier when present in the source line (`null` for `"<synthetic>"` placeholder records)
 - `input_tokens`, `output_tokens`, `cache_create_tokens`, `cache_read_tokens` (INTEGER)
+- `content_text` (TEXT) — flattened message text
 - `tools_json` (TEXT) — JSON array of tool names called in this message
+- `speed` (TEXT, added in `v003`) — `"standard"` or `"fast"` (Anthropic priority tier)
 - `raw_json` (TEXT) — the complete original JSONL object
 - `is_sidechain` (INTEGER 0/1) — set when `isSidechain` is true in the source
 - `uuid`, `parent_uuid` (TEXT) — message threading fields from the JSONL
+
+Ingest also feeds an ETL layer: once a per-file transaction commits, `ingest_file()` normalises the new messages into `usage_events` rows and refreshes the mart tables — the SQL-driven cost path, separate from the query-time stats chain above. That layer was introduced by `v006_etl_layer.sql`.
 
 All typed query helpers that read from the store live in `stackunderflow/store/queries.py`. Application code imports helpers from there rather than writing raw SQL.
 
@@ -394,24 +395,12 @@ This means analytics for pre-January-2026 projects will show user prompts but no
 
 ### Issue 1: Duplicate Commands in Table
 **Cause**: Same user message in multiple files after crash/continue
-**Solution**: Two-phase deduplication in `stats/classifier.py` at query time; raw records are preserved intact in the store
+**Solution**: Interaction-level deduplication in `stats/enricher.py` at query time — interactions with the same `interaction_id` collapse to one; raw records stay intact in the store
 
 ### Issue 2: Wrong Tool Counts
-**Cause**: Incomplete logging, Task tool limitations, streaming issues
-**Solution**: Tool count reconciliation across all interaction versions during the classify → enrich chain
+**Cause**: Streaming entries, Task tool limitations, duplicated interactions
+**Solution**: When two interactions collapse, the survivor absorbs the other's tool-use blocks; `finalise_tools()` then deduplicates them by tool-call `id` so each call is counted once
 
 ### Issue 3: Missing Model Names
-**Cause**: Incomplete assistant messages from crashes
-**Solution**: Preserve model info during interaction merging in the stats chain; `MAX(CASE WHEN model IS NOT NULL …)` aggregation in `get_session_stats()`
-
-### Issue 4: Overview Refresh Intermittent
-**Status**: Documented in TODO
-**Workaround**: Refresh individual project dashboards first
-
-## Success Metrics
-
-1. **Accuracy**: No duplicate messages, correct type classification
-2. **Performance**: Incremental ingest — only new bytes read per poll cycle
-3. **Completeness**: All tools counted accurately; raw JSONL always preserved
-4. **Timezone Support**: Correct local time display
-5. **Reliability**: Graceful handling of crashes and continuations
+**Cause**: Some assistant entries (placeholders, crash fragments) carry no model id
+**Solution**: An interaction adopts the model from any assistant response that names one; `get_session_stats()` uses `MAX(CASE WHEN model IS NOT NULL AND model != '' THEN model END)`, so a session reports a model as long as one of its messages recorded one

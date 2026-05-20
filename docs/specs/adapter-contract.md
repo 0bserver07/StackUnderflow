@@ -1,6 +1,6 @@
 # Adapter Contract — implementing a new `SourceAdapter`
 
-**Audience:** anyone adding a 17th coding-tool integration to StackUnderflow.
+**Audience:** anyone adding an 18th coding-tool integration to StackUnderflow.
 **Scope:** the `SourceAdapter` Protocol and the dataclasses it produces. The store-side schema your records land in is documented separately in [session-schema-v1.md](session-schema-v1.md).
 
 A source adapter is the bridge between a coding tool's native on-disk format (JSONL, vscdb, SQLite, JSON blob) and StackUnderflow's raw layer. The adapter answers two questions: *what sessions exist?* and *what records do they contain?* The ingest layer drives adapters; nothing downstream — routes, services, MCP — ever touches an adapter.
@@ -149,10 +149,10 @@ Read these in this order:
 1. **`stackunderflow/adapters/codex.py`** — the cleanest JSONL-only example. Single file format, well-defined record shape, clear `read()` loop.
 2. **`stackunderflow/adapters/claude.py`** — the most-tested adapter; covers JSONL plus the legacy `~/.claude/history.jsonl` fallback and the `<synthetic>` model cleanup.
 3. **`stackunderflow/adapters/cursor.py`** — the canonical vscdb / SQLite-backed example. Shows `source_kind="database"`, rowid resume, and the per-workspace slug derivation (the bug that motivated v005).
-4. **`stackunderflow/adapters/cline.py`** — VS Code globalStorage walking. Subclassed by `KiloCodeAdapter` and `RooCodeAdapter` for sibling extensions; same parser, different filesystem root.
+4. **`stackunderflow/adapters/cline.py`** — VS Code globalStorage walking. Also home to `KiloCodeAdapter` and `RooCodeAdapter` — sibling extensions on the same parser base, differing only in filesystem root.
 5. **`stackunderflow/adapters/_streaming.py`** — shared JSONL streaming helper used by several adapters.
 
-The 12 beta adapters under `STACKUNDERFLOW_BETA_*` flags are useful as case studies for unusual source formats (Kiro's missing tokens, Codeium's protobuf stub, Pi+OMP's shared parser).
+The 13 beta adapters under `STACKUNDERFLOW_BETA_*` flags are useful as case studies for unusual source formats (Kiro's missing tokens, Codeium's protobuf stub, Pi+OMP's shared parser).
 
 ---
 

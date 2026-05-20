@@ -1,124 +1,64 @@
-# Local chat sidebar (Ollama)
+# Chat sidebar (local Ollama)
 
-The dashboard ships a chat sidebar that talks to a **local** Ollama
-instance. It is meant for ad-hoc queries about the data you are
-looking at — drop a question, get a streamed answer from a model
-running on your own machine. Nothing leaves the host.
+The dashboard ships a chat sidebar that talks to a **local** Ollama instance — ask a question about your coding history, get a streamed answer from a model running on your own machine. Nothing leaves the host.
 
-This is an overlay drawer in the current release. A persistent
-sidebar lands in a parallel branch; the behaviour below applies to
-both.
+The chat sidebar is the **meta-agent sidebar**: there is one chat surface, not two. This page covers the Ollama dependency — installing it, pulling models, and the proxy that connects the dashboard to it. For what the sidebar can do (the backend tools, the tool-call loop, the wire format), see [`docs/meta-agent.md`](meta-agent.md).
 
 ## Prerequisites
 
-You need a working Ollama install on the same machine that runs the
-StackUnderflow dashboard.
+You need a working Ollama install on the same machine that runs the dashboard.
 
 1. Install Ollama from [ollama.com](https://ollama.com).
-2. Pull at least one model:
+2. Pull at least one tool-capable model:
    ```
-   ollama pull llama3.2:3b
    ollama pull qwen2.5-coder:7b
+   ollama pull llama3.2
    ```
+   The meta-agent calls backend tools, which needs a model trained on the function-calling shape. See [`docs/meta-agent.md`](meta-agent.md) for the recommended list. A non-tool model still chats — it just can't ground answers in your store.
 3. Confirm Ollama is listening on the default port:
    ```
    curl -s http://localhost:11434/api/tags | jq .
    ```
    The response is a JSON object with a `models` array.
 
-If Ollama is not running, the drawer's model dropdown is empty and
-the sidebar prints `Ollama not available`. Start `ollama serve` (or
-let the desktop app do it) and reopen the drawer.
+If Ollama isn't running, the model dropdown stays empty and sending a message surfaces an error banner. Start `ollama serve` (or let the desktop app do it) and reopen the sidebar.
 
-## Opening the drawer
+## The Ollama proxy route
 
-In the dashboard header there's a chat toggle next to the theme
-button. Clicking it slides the drawer in from the right edge over
-whatever you were looking at. Click the toggle again (or the `×`
-inside the drawer) to close it.
+`stackunderflow/routes/misc.py` exposes `/ollama-api/{path:path}` as a thin httpx-backed pass-through to the local Ollama daemon. A request to `/ollama-api/tags` is forwarded to `http://localhost:11434/api/tags`, and so on for any path.
 
-The drawer is purely local UI state — it doesn't disturb the route,
-the filters, or the page-level query state. You can keep it open
-while clicking around the dashboard.
+- The HTTP method (`GET` / `POST` / `PUT` / `DELETE`) is forwarded as-is.
+- The request body is forwarded verbatim.
+- Headers are forwarded except `host` and `content-length` (httpx rewrites those for the upstream connection).
+- A chunked response (`transfer-encoding: chunked`) is streamed back with `StreamingResponse`; a JSON response is parsed and re-emitted; anything else comes back as an empty object.
+- A 120-second timeout sits on the proxy. If Ollama is unreachable, the proxy returns HTTP 502 with `{"error": "Ollama not available"}`.
+
+The chat sidebar uses this proxy for one thing — enumerating your installed models via `/ollama-api/tags`. The chat itself does **not** go through this proxy; it streams through `POST /api/meta-agent/chat`, which opens its own connection to Ollama (see [`docs/meta-agent.md`](meta-agent.md)).
+
+The proxy exists so the React app can reach Ollama through the dashboard's own origin without browser CORS friction. There is **no auth, no rate limit, and no input validation** on it. The dashboard binds to `127.0.0.1` by default; don't bind it to a public interface while this proxy is enabled.
 
 ## Model selection
 
-The drawer lazy-loads the model list on first open by calling
-`GET /api/ollama-api/tags` (proxied to Ollama's `/api/tags`). The
-first model in the response is selected by default; the dropdown lets
-you switch.
+The sidebar loads the model list on first open by calling `/ollama-api/tags` (via `services/ollama.ts`). The first model in the response is selected by default; a dropdown lets you switch, and a refresh button re-fetches the list.
 
-The selected model id is what gets forwarded as `"model"` on each
-chat request, so it must be the **exact tag** Ollama uses (e.g.
-`llama3.2:3b`, not just `llama3.2`).
+The selected model id is forwarded as `"model"` on each chat request, so it must be the **exact tag** Ollama uses — `llama3.2:3b`, not just `llama3.2`. If the model's name isn't in a known tool-capable family, the sidebar shows an amber "Tool-calling may not work" banner; the chat still works without tool grounding.
 
-## How it streams
+## Opening the sidebar
 
-User input is sent as a `messages: [...]` array to
-`POST /api/ollama-api/chat` with `stream: true`. The server proxies
-the request to `http://localhost:11434/api/chat` and streams the
-chunked NDJSON response back unmodified. The dashboard appends
-tokens to the assistant bubble as each chunk arrives.
+On wide viewports (`>= 1280px`) the sidebar is a docked right-hand column, expanded by default. On tablet widths it collapses to an icon rail. On narrow viewports it hides, and the header chat button opens it as a temporary overlay. The expanded/collapsed state persists in `localStorage`. The layout details live in [`docs/meta-agent.md`](meta-agent.md).
 
-```
-   browser                StackUnderflow                 Ollama
-     │                         │                            │
-     │  POST /ollama-api/chat  │                            │
-     │ ──────────────────────► │  POST /api/chat            │
-     │                         │ ─────────────────────────► │
-     │                         │                            │
-     │                         │ ◄ ─ ─ ─ chunked NDJSON ─ ─ │
-     │ ◄ ─ ─ ─ chunked stream ─│                            │
-```
-
-A timeout of 120s sits on the proxy. If Ollama is unreachable, the
-proxy returns HTTP 502 with `{"error": "Ollama not available"}` and
-the UI surfaces a generic error in the drawer.
-
-## The proxy route
-
-`stackunderflow/routes/misc.py` exposes
-`/api/ollama-api/{path:path}` as a thin httpx-backed pass-through:
-
-- Method (`GET` / `POST` / `PUT` / `DELETE`) is forwarded as-is.
-- Body is forwarded verbatim.
-- Headers are forwarded except `host` and `content-length` (httpx
-  rewrites those for the upstream connection).
-- Streaming responses (`transfer-encoding: chunked`) are streamed
-  back with `starlette.responses.StreamingResponse`; everything else
-  is parsed as JSON and re-emitted.
-
-This is a development convenience — it lets the React app talk to
-Ollama through the dashboard's origin without browser CORS friction.
-There is **no auth, no rate limit, no input validation** on the
-proxy. The CLI binds to `127.0.0.1` by default; do not bind the
-dashboard to a public interface while this proxy is enabled.
+Conversations persist in `localStorage` and survive a page reload. You can keep several conversations and switch between them from the session manager inside the sidebar.
 
 ## The privacy model
 
-- **Where queries go.** The dashboard → the local proxy
-  (`127.0.0.1:8095/api/ollama-api/...`) → the local Ollama daemon
-  (`127.0.0.1:11434`). Nothing crosses the network.
-- **What gets logged.** Nothing on StackUnderflow's side. The proxy
-  is stateless. Ollama logs whatever Ollama logs (usually a brief
-  request line; check its own configuration).
-- **What context the model sees.** Only the messages you type into
-  the drawer. The drawer does not slip in your session history,
-  store contents, or any other dashboard data unless you paste it in
-  yourself.
+- **Where queries go.** The browser → the dashboard (`127.0.0.1:8081`) → the local Ollama daemon (`127.0.0.1:11434`). Nothing crosses the network.
+- **What gets logged.** Nothing on StackUnderflow's side for the proxy — it's stateless. Ollama logs whatever Ollama logs (check its own configuration). The meta-agent route reads your local store but writes nothing back from a chat turn.
+- **The upstream is hard-coded.** Both the `/ollama-api` proxy and the meta-agent route target `http://localhost:11434`. If you point Ollama elsewhere with `OLLAMA_HOST`, StackUnderflow does not follow — it always talks to the local port.
 
-If you point Ollama at a non-localhost endpoint by setting
-`OLLAMA_HOST` in its environment, that's on you — the StackUnderflow
-proxy hard-codes `http://localhost:11434` as the upstream and won't
-follow you.
+For the guarantee that the meta-agent never reaches a remote LLM, and how to verify it, see [`docs/meta-agent.md`](meta-agent.md).
 
 ## Limits
 
-- One conversation at a time (per drawer mount). Closing the drawer
-  preserves the conversation; reopening shows it.
-- No persistence across page reloads.
-- No conversation export, no markdown rendering of code blocks
-  beyond what the chat bubble renderer does inline.
-- The model has no awareness of the StackUnderflow store; if you
-  want it to know about a session, paste the session id and
-  relevant content.
+- The meta-agent needs a tool-capable model to answer with data from your store; without one you get general-knowledge replies.
+- Conversation history lives in `localStorage` only — there's no server-side persistence and no export.
+- The proxy has no auth or rate limiting. Keep the dashboard bound to localhost.

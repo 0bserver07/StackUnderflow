@@ -16,12 +16,22 @@ Everything else stays stable.
 
 **Two layers of control:**
 
-1. **Global beta toggle** (`suf:beta` in localStorage). Default: `false` (new users don't see beta tabs). Flipping to `true` reveals all beta tabs.
-2. **Per-tab override** (`suf:tabs` in localStorage, JSON object like `{"qa": "shown", "tags": "hidden"}`). Overrides the global flag for a specific tab. Lets users keep Q&A visible even with the beta flag off, or hide Cost even though it's stable.
+1. **Global beta toggle** — `suf:beta` in `localStorage`. Default `true`
+   (see "First-run default" below). Set it to `false` to hide every beta
+   tab at once.
+2. **Per-tab override** — `suf:tabs` in `localStorage`, a JSON object
+   like `{"qa": "shown", "tags": "hidden"}`. Overrides the global flag
+   for one tab: keep Q&A visible with the beta flag off, or hide a stable
+   tab like Cost.
 
-The **first-run default for EXISTING users** is `suf:beta = true` so we don't silently hide tabs they were using. Implementation: if `suf:beta` key is not set when the hook first runs, read any existing bookmark/tag data from localStorage OR prior usage signals to decide; if none, default to `true` and write `suf:beta=true` (so the user has full visibility). We'll treat missing-key as "migrated user, keep everything visible" — new installs get `false` only after a future major version.
-
-*Simplification for v0.3.2:* default to `true` always. New users can go to Settings and hide beta tabs if they want. This avoids the awkward "you upgraded and things vanished" UX.
+**First-run default.** When `suf:beta` is unset the hook reads it as
+`true` (`DEFAULT_BETA_ENABLED`), so upgrading users keep every tab they
+were already using and new users can hide beta tabs from Settings. An
+earlier draft tried to tell a migrated user from a fresh install by
+probing existing bookmark/tag data, defaulting only fresh installs to
+`false`; v0.3.2 dropped that for the same end state with less code. The
+always-`true` default also avoids the "you upgraded and things vanished"
+surprise.
 
 ## API
 

@@ -1,201 +1,116 @@
-# StackUnderflow Test Documentation
+# Tests
 
-## Overview
-This document describes the test suite for StackUnderflow. The suite currently runs **340 passing + 2 skipped** tests covering the adapter layer, ingest pipeline, SQLite store, statistics pipeline, report rendering, and the CLI/HTTP surfaces.
+StackUnderflow has a Python backend suite (pytest) and a TypeScript
+frontend suite (the Node built-in test runner). This document covers the
+layout of both and how to run them.
 
-## Test Structure
+## Backend suite
 
-The test directory structure mirrors the `stackunderflow` module structure for better organization:
+Collecting `tests/` finds 2795 tests. The default configuration
+deselects 14 `slow`-marked tests (see [Slow tests](#slow-tests) below),
+leaving 2781; of those, 2 are skipped — interactive `init` flows that
+need a running server.
 
-```
-tests/
-├── stackunderflow/
-│   ├── adapters/                       # Adapter contract + Claude adapter
-│   │   ├── contract.py                 # Shared contract helpers (not a test module)
-│   │   ├── test_base.py                # BaseAdapter shared behaviour (3 tests)
-│   │   ├── test_claude.py              # Claude JSONL adapter (12 tests)
-│   │   └── test_registry.py            # Adapter registry (2 tests)
-│   ├── ingest/                         # Log discovery + incremental ingest
-│   │   ├── test_enumerate.py           # Log enumeration (2 tests)
-│   │   ├── test_incremental.py         # Incremental watermark logic (4 tests)
-│   │   └── test_writer.py              # Ingest writer + rollback (5 tests)
-│   ├── store/                          # SQLite session store
-│   │   ├── test_db.py                  # Connection + migrations (4 tests)
-│   │   ├── test_queries.py             # Read queries (10 tests)
-│   │   ├── test_schema.py              # Schema definitions (4 tests)
-│   │   └── test_types.py               # Row dataclasses (4 tests)
-│   ├── stats/                          # Classifier → enricher → aggregator → formatter
-│   │   ├── test_classifier.py          # Message classification (50 tests)
-│   │   ├── test_enricher.py            # Token / cost enrichment (36 tests)
-│   │   ├── test_aggregator.py          # Daily / model / tool aggregation (63 tests)
-│   │   └── test_formatter.py           # Output formatting (10 tests)
-│   ├── reports/                        # Report pipeline
-│   │   ├── test_scope.py               # Scope filtering (9 tests)
-│   │   ├── test_aggregate.py           # Report-level aggregation (6 tests)
-│   │   ├── test_optimize.py            # Optimization step (3 tests)
-│   │   └── test_render.py              # Renderers (5 tests)
-│   ├── utils/
-│   │   └── test_log_finder.py          # Log discovery helpers (6 tests)
-│   ├── test_cli.py                     # CLI command parsing (20 tests)
-│   ├── test_cli_data_commands.py       # `data` subcommands (13 tests)
-│   ├── test_server.py                  # FastAPI endpoints (26 tests)
-│   ├── test_pricing_service.py         # Pricing service (5 tests)
-│   ├── test_qa_service_resolution.py   # Q&A resolution service (19 tests)
-│   ├── test_tag_service_intent.py      # Tag / intent service (21 tests)
-│   └── baseline_phase2.json            # Baseline fixture used by pipeline tests
-├── mock-data/
-│   ├── -Users-test-dev-ai-music/       # Sample Claude JSONL logs
-│   └── pricing.json                    # Pricing fixture
-└── baseline_results.json               # Baseline fixture for regression checks
-```
+The suite covers the adapter layer, the ETL pipeline and marts, the
+SQLite store and its migrations, the stats pipeline, report rendering,
+the MCP server, and the CLI and HTTP surfaces.
 
-### What Each Test Suite Covers
+### Layout
 
-#### Adapter Tests (`tests/stackunderflow/adapters/`)
+`tests/stackunderflow/` mirrors the `stackunderflow` package. File
+counts below are the number of `test_*.py` files in each directory, not
+the number of test functions.
 
-**test_base.py** (3 tests):
-- Shared `BaseAdapter` behaviour and default implementations
+| Directory | Files | Covers |
+|---|---:|---|
+| `adapters/` | 32 | Source-adapter contract and per-provider adapters. `*_defensive.py` files feed malformed input. |
+| `cli/` | 15 | CLI subcommands: `compare`, `context-budget`, `discovery`, `etl status`, `export`, `hooks`, `ingest`, `plan`, `recommend`, `risk`, `skills`, `init --install-skills`. |
+| `etl/` | 8 | ETL watcher, watermark, backfill, lock, registries. |
+| `etl/marts/` | 9 | The eight mart builders plus a cross-mart integration test. |
+| `etl/normalize/` | 18 | Per-provider normalizers. |
+| `hooks/` | 3 | Claude Code hook install, repair, and handlers. |
+| `infra/` | 3 | Currency, Cursor parse cache, model aliases. |
+| `infra/providers/` | 20 | Per-provider pricing and cost math. |
+| `ingest/` | 6 | Log enumeration, incremental ingest, the writer, auto-reindex. |
+| `integration/` | 2 | Real-data end-to-end and route performance regression. Both `slow`-marked. |
+| `mcp/` | 5 | MCP server and its tools. |
+| `reports/` | 8 | CLI report pipeline: aggregate, optimize, render, scope. |
+| `routes/` | 30 | FastAPI endpoint behaviour, including mart-overlay routes. |
+| `services/` | 23 | Stateful services: agent teams, burn projection, compare, discovery, GitHub ingest, live stats, meta-agent, mode recommender, plans, playback, risk, skills, yield. |
+| `stats/` | 4 | The stats pipeline: classifier, enricher, aggregator, formatter. |
+| `store/` | 15 | Connection and PRAGMAs, schema, queries, types, individual migrations, partitioning, mart queries. |
+| `utils/` | 1 | Log-directory discovery. |
 
-**test_claude.py** (12 tests):
-- Parsing Claude JSONL logs
-- Message extraction, role mapping, and tool-use records
-- Token / cost field normalization
+Eleven more files sit directly under `tests/stackunderflow/`:
+`test_cli.py`, `test_cli_data_commands.py`, `test_cli_model_alias.py`,
+`test_cli_yield.py`, `test_mcp.py`, `test_pricing_service.py`,
+`test_public_api.py`, `test_qa_service_resolution.py`,
+`test_server.py`, `test_skills.py`, `test_tag_service_intent.py`.
 
-**test_registry.py** (2 tests):
-- Adapter registration and lookup
-- Defensive copy of registered adapters
+### Slow tests
 
-#### Ingest Tests (`tests/stackunderflow/ingest/`)
+`pyproject.toml` registers a `slow` marker and sets
+`addopts = -m 'not slow'`, so a plain `pytest` run skips slow tests by
+default. They are the real-data integration tests under
+`tests/stackunderflow/integration/` plus a few performance checks
+(`services/test_yield_perf.py`, `services/test_skill_synth.py`). Run
+them explicitly:
 
-**test_enumerate.py** (2 tests):
-- Enumerating log files for ingest
-
-**test_incremental.py** (4 tests):
-- Incremental ingest watermarks
-- Skipping already-ingested rows
-
-**test_writer.py** (5 tests):
-- Writing parsed rows into the SQLite store
-- Transactional rollback on failure
-
-#### Store Tests (`tests/stackunderflow/store/`)
-
-**test_db.py** (4 tests):
-- Connection management and migrations
-
-**test_queries.py** (10 tests):
-- Read queries against the session store
-
-**test_schema.py** (4 tests):
-- Schema definitions and column types
-
-**test_types.py** (4 tests):
-- Row dataclasses (e.g. `DayTotals`) field shape
-
-#### Stats Pipeline Tests (`tests/stackunderflow/stats/`)
-
-**test_classifier.py** (50 tests):
-- Role, error, and interaction classification
-- Tool-use and streaming-message handling
-
-**test_enricher.py** (36 tests):
-- Token counting and cost enrichment
-- Model resolution and pricing lookups
-
-**test_aggregator.py** (63 tests):
-- Daily / hourly activity aggregation
-- Per-model and per-tool rollups
-- Project and cross-project summaries
-
-**test_formatter.py** (10 tests):
-- Output shaping for the HTTP layer
-- Error-flag mapping
-
-#### Report Tests (`tests/stackunderflow/reports/`)
-
-**test_scope.py** (9 tests):
-- Scope / date-range filters
-- Malformed timestamp handling
-
-**test_aggregate.py** (6 tests):
-- Report-level aggregation over stats output
-
-**test_optimize.py** (3 tests):
-- Report optimization pass
-
-**test_render.py** (5 tests):
-- Renderer output
-
-#### Utility Tests (`tests/stackunderflow/utils/`)
-
-**test_log_finder.py** (6 tests):
-- Claude log directory discovery
-- Project path ↔ log path conversion
-- Cross-platform path handling
-- Log file filtering
-
-#### CLI & Server Tests
-
-**test_cli.py** (20 tests):
-- CLI command parsing (`start`, `init`, `cfg`, `config`, `clear-cache`)
-- Settings management and persistence
-- Environment variable handling
-- Command output formatting
-
-**test_cli_data_commands.py** (13 tests):
-- `data` subcommands (optimize, etc.)
-- Project-loop behaviour
-
-**test_server.py** (26 tests):
-- FastAPI endpoint behaviour
-- Request / response validation
-- Error handling
-- Store-backed data routes
-
-#### Service Tests
-
-**test_pricing_service.py** (5 tests):
-- Pricing refresh, staleness flag, error paths
-
-**test_qa_service_resolution.py** (19 tests):
-- Q&A route filters (resolved, unresolved)
-- Resolution state transitions
-
-**test_tag_service_intent.py** (21 tests):
-- Tag browse by intent
-- Intent tag resolution
-
-### Test Data
-- `tests/mock-data/-Users-test-dev-ai-music/` — sample JSONL files mirroring a Claude project directory
-- `tests/mock-data/pricing.json` — pricing fixture for enricher tests
-- `tests/baseline_results.json` — baseline fixture for regression checks
-- `tests/stackunderflow/baseline_phase2.json` — pipeline baseline fixture
-
-## Running Tests
-
-### All Tests
 ```bash
-python -m pytest
+python -m pytest -m slow
 ```
 
-Quiet mode (one line per file):
-```bash
-python -m pytest -q
-```
+### Test data
 
-### Specific Test Modules
+- `tests/mock-data/-Users-test-dev-ai-music/` — sample Claude JSONL logs laid out like a real project directory.
+- `tests/mock-data/codex-sessions/` — sample OpenAI Codex session logs.
+- `tests/mock-data/pricing.json` — pricing fixture for enricher and cost tests.
+- `tests/fixtures/beta_normalizers/` — one input/expected fixture directory per beta provider (codeium, continue, copilot, cursor_agent, droid, gemini, kilocode, kiro, openclaw, opencode, pi, qwen, roocode).
+- `tests/baseline_results.json` and `tests/stackunderflow/baseline_phase2.json` — baseline fixtures for regression checks.
+- `tests/conftest.py` — `set_home_env`, a cross-platform helper for redirecting `Path.home()` to a `tmp_path`.
+
+### Running the backend suite
+
 ```bash
+python -m pytest tests/ -q                              # default run (slow tests deselected)
+python -m pytest tests/ -v                              # verbose
+python -m pytest -m slow                                # only the slow suite
+python -m pytest tests/stackunderflow/store/            # one subtree
 python -m pytest tests/stackunderflow/stats/test_aggregator.py
-python -m pytest tests/stackunderflow/store/
-python -m pytest tests/stackunderflow/test_server.py
+python -m pytest -k "classifier and error"              # select by name
+python -m pytest --cov=stackunderflow --cov-report=html # coverage
 ```
 
-### Selecting By Name
+`pytest`, `pytest-asyncio`, and `pytest-cov` install with the `dev`
+extra: `pip install -e ".[dev]"`.
+
+## Frontend suite
+
+The frontend tests run on the Node built-in test runner — no test
+framework dependency. They live in `stackunderflow-ui/tests/services/`
+and exercise the pure helpers in `src/services/`. There are nine files:
+
+| File | Covers |
+|---|---|
+| `agent-teams.test.ts` | Agent-teams service |
+| `burn-projection.test.ts` | Burn / budget projection |
+| `etl-status.test.ts` | ETL status service |
+| `filters.test.ts` | Filter state and query-string encoding |
+| `format.test.ts` | `formatModelName` and formatting helpers |
+| `live.test.ts` | Live-stats service |
+| `meta-agent.test.ts` | Meta-agent service |
+| `playback-fs.test.ts` | Playback filesystem service |
+| `playback.test.ts` | Playback service |
+
+`node --test` strips TypeScript types natively, so this needs **Node
+22+**. There is no `npm test` script; run the files directly from
+`stackunderflow-ui/`:
+
 ```bash
-python -m pytest -k "classifier and error"
+cd stackunderflow-ui
+node --test tests/services/*.test.ts          # all files
+node --test tests/services/format.test.ts     # one file
 ```
 
-### With Coverage
-```bash
-python -m pytest --cov=stackunderflow --cov-report=html
-```
+`npm run typecheck` (`tsc --noEmit`) type-checks the whole UI and is the
+other check to run before pushing frontend changes.

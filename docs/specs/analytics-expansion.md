@@ -6,7 +6,7 @@ All new computation lives in `stackunderflow/stats/aggregator.py`. All new UI li
 
 ## 1. API contract
 
-These fields are appended to the dict returned by `summarise()` in `stackunderflow/stats/aggregator.py`. They live alongside the existing keys (`overview`, `tools`, `sessions`, `daily_stats`, `hourly_pattern`, `errors`, `models`, `user_interactions`, `cache`) and ship on every call to `GET /api/dashboard-data`.
+These fields are appended to the dict returned by `summarise()` in `stackunderflow/stats/aggregator.py`, alongside the existing keys (`overview`, `tools`, `sessions`, `daily_stats`, `hourly_pattern`, `errors`, `models`, `user_interactions`, `cache`). The v1 build shipped them inside `GET /api/dashboard-data`; the analytics-polish wave later split them into a dedicated `GET /api/cost-data` endpoint to keep the dashboard payload small (see analytics-polish.md §A3).
 
 ### 1.1 `session_costs: list[SessionCost]` — ranked desc by cost
 

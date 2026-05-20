@@ -1,13 +1,16 @@
 # Codex Adapter Specification
 
-> **Status: HISTORICAL — Codex adapter shipped in v0.x.**
-> This document remains as design context for the Codex integration work.
-> For current adapter authoring (the `SourceAdapter` protocol, `SessionRef`
-> / `Record` shapes, `ProviderPricer` extension points, beta-flag wiring,
-> the resume-aware contract test), see [`docs/adapters.md`](adapters.md).
-> The shipping Codex adapter lives at `stackunderflow/adapters/codex.py`
-> and reads `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` rollout files —
-> not the `state_5.sqlite` schema sketched below.
+> **Status: historical.** This is the original design sketch for Codex
+> ingestion. The adapter shipped, but on a different design than the one
+> below: `stackunderflow/adapters/codex.py` reads
+> `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` rollout files, not the
+> `state_5.sqlite` schema in §1.1. The document is kept for design
+> context.
+>
+> For current adapter authoring — the `SourceAdapter` protocol,
+> `SessionRef` / `Record` shapes, `ProviderPricer` extension points,
+> beta-flag wiring, and the resume-aware contract test — see
+> [`docs/adapters.md`](adapters.md).
 
 Adds OpenAI Codex (CLI coding agent) as a second data source alongside Claude Code.
 

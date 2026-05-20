@@ -1,9 +1,10 @@
 # StackUnderflow CLI Reference
 
-StackUnderflow ships a single `stackunderflow` binary that covers dashboard launch, usage reports,
-data export, config management, and session backups. All persistent state lives under
-`~/.stackunderflow/` (config at `~/.stackunderflow/config.json`, session data at
-`~/.stackunderflow/store.db`). Every command accepts `--help` for a quick reminder.
+The `stackunderflow` command covers dashboard launch, usage reports, data export,
+config management, and session backups; a second console script, `stackunderflow-mcp`,
+runs the MCP server. All persistent state lives under `~/.stackunderflow/` (config at
+`~/.stackunderflow/config.json`, session data at `~/.stackunderflow/store.db`). Every
+command accepts `--help` for a quick reminder.
 
 ---
 
@@ -11,7 +12,7 @@ data export, config management, and session backups. All persistent state lives 
 
 ```
 # Dashboard
-stackunderflow init [--port N] [--host H] [--no-browser] [--clear-cache]
+stackunderflow init [--port N] [--host H] [--no-browser] [--clear-cache] [--install-skills] [--skills-dest DIR] [--skills-force]
 stackunderflow start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-lock]
 stackunderflow reindex
 stackunderflow clear-cache [PROJECT]
@@ -19,7 +20,7 @@ stackunderflow clear-cache [PROJECT]
 # MCP server (also exposed as `stackunderflow-mcp` console script)
 stackunderflow mcp
 
-# Reports
+# Reports  (all eight also accept --ingest / --no-auto-ingest — see "Reading freshness")
 stackunderflow status [--format text|json]
 stackunderflow today [--format text|json] [--project P] [--exclude P]
 stackunderflow month [--format text|json] [--project P] [--exclude P]
@@ -33,14 +34,19 @@ stackunderflow context-budget [--project DIR] [--global] [--format text|json]
 # Discovery — self-referential queries for coding agents (also exposed as MCP tools)
 stackunderflow find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
 stackunderflow find-sessions-touching-file FILE [--limit N] [--mode read|write|any] [--format text|json] [--context-budget N]
-stackunderflow search-past-decisions QUERY [--project P] [--since X] [--limit N] [--format text|json] [--context-budget N]
-stackunderflow find-sessions-where-action-worked ACTION [--project P] [--file F] [--since X] [--limit N] [--format text|json]
-stackunderflow find-failure-modes-for-file FILE [--since X] [--limit N] [--format text|json]
+stackunderflow search-past-decisions QUERY [--project P] [--since X] [--limit N] [--use-embeddings] [--embed-model M] [--format text|json] [--context-budget N]
+stackunderflow find-sessions-where-action-worked ACTION [--project P] [--file F] [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
+stackunderflow find-failure-modes-for-file FILE [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
+stackunderflow risk file PATH [--since X] [--format text|json]
 
 # Auto-generated skills (mined from the local store — see docs/skills.md)
 stackunderflow skills generate [--project P] [--projects A,B] [--scope project|user] [--min-occurrences N] [--kind K] [--window W] [--out DIR] [--dry-run] [--format text|json]
 stackunderflow skills list [--scope project|user] [--out DIR] [--format text|json]
 stackunderflow skills clean [--scope project|user] [--out DIR] [--older-than X] [--dry-run] [--yes]
+
+# Recommendations (mined from the local store — read-only, never auto-applied)
+stackunderflow recommend skills [--project P] [--threshold N] [--window-days N] [--no-cache] [--format text|json]
+stackunderflow recommend mode --prompt TEXT [--current-model M] [--no-cache] [--format text|json]
 
 # Discovery citation-feedback telemetry
 stackunderflow discovery telemetry [--command C] [--session S] [--limit N] [--format text|json]
@@ -71,13 +77,17 @@ stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-con
 stackunderflow hooks uninstall [--scope project|user]
 stackunderflow hooks status    [--scope project|user] [--format text|json]
 stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
-stackunderflow hooks run <hook-id>            # internal — invoked by Claude Code
+stackunderflow hooks run <hook-id> [--capture-content]   # internal — invoked by Claude Code
 
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
 stackunderflow backup list
 stackunderflow backup restore NAME [--dry-run]
 stackunderflow backup auto [--enable|--disable]
+
+# PR / CI ingest (opt-in — REST backfill + webhook receiver)
+stackunderflow ingest github --repo OWNER/REPO [--token T] [--state all|open|closed] [--max-pages N] [--no-ci] [--format text|json]
+stackunderflow ingest webhook serve [--port N] [--host H]
 ```
 
 ---
@@ -98,8 +108,8 @@ Usage: stackunderflow start [OPTIONS]
 | `-H, --host` | TEXT | from config | Bind address |
 | `--headless` | flag | false | Don't open the browser |
 | `--fresh` | flag | false | Clear disk cache before starting |
-| `--no-watcher` | flag | false | Disable the Wave 2C ETL filesystem watcher (headless / debugging) |
-| `--no-lock` | flag | false | Skip the watcher single-instance lock (sets `STACKUNDERFLOW_DISABLE_LOCK=1`). Useful for running multiple servers against the same store, or when a stale lock file is blocking startup |
+| `--no-watcher` | flag | false | Disable the ETL filesystem watcher (sets `STACKUNDERFLOW_DISABLE_WATCHER=1`); headless / debugging |
+| `--no-lock` | flag | false | Skip the singleton watcher lock at `~/.stackunderflow/server.lock` (sets `STACKUNDERFLOW_DISABLE_LOCK=1`). Headless / test only — two instances running watchers against the same store race on ingest and mart refresh |
 
 **Examples:**
 
@@ -116,30 +126,27 @@ $ stackunderflow start --fresh
   cache cleared: /Users/you/.stackunderflow/cache
   StackUnderflow is live at http://127.0.0.1:8081
   Ctrl+C to stop
-
-$ stackunderflow start --no-watcher
-  StackUnderflow is live at http://127.0.0.1:8081
-  # ETL filesystem watcher disabled — dashboard data refreshes only on
-  # manual reindex / restart. Useful for headless profiling runs.
-  Ctrl+C to stop
-
-$ stackunderflow start --no-lock
-  StackUnderflow is live at http://127.0.0.1:8081
-  # Watcher single-instance lock skipped (STACKUNDERFLOW_DISABLE_LOCK=1).
-  # Useful for running multiple servers against the same store, or when
-  # a stale lock file from a crashed prior run is blocking startup.
-  Ctrl+C to stop
 ```
 
+`--no-watcher` starts the server without the ETL filesystem watcher;
+dashboard data then refreshes only on a manual `reindex` or restart.
+`--no-lock` skips the singleton watcher lock — a headless / test escape
+hatch, not a way to run two servers against one store (their watchers
+race). Both print the same two-line banner as a normal start.
+
+> **Network exposure.** Binding to any host other than `127.0.0.1`,
+> `localhost`, or `::1` prints a yellow warning to stderr: the API has
+> no authentication, so a non-loopback bind serves session data,
+> tokens, and cost figures to anyone who can reach that interface.
+> The server still starts — the warning does not block it.
+
 > **Filesystem watcher.** By default `start` spawns a daemon thread
-> that watches every registered adapter's source paths
-> (`~/.claude/projects`, `~/.codex/sessions`,
-> `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`,
-> `~/Library/Application Support/Code/User/globalStorage/.../tasks`).
-> On any change → ingest the new bytes → refresh the marts; total
-> latency from source-file write to dashboard data fresh is ~400ms.
-> Pass `--no-watcher` (or set `STACKUNDERFLOW_DISABLE_WATCHER=1`) to
-> skip the spawn and rely on the periodic-ingest path instead.
+> that watches every registered adapter's source paths (for the four
+> default-on adapters: `~/.claude/projects`, `~/.codex/sessions`, the
+> Cursor `state.vscdb`, and the Cline task store under VS Code's
+> `globalStorage`). On any change it ingests the new bytes and refreshes
+> the marts. Pass `--no-watcher` (or set `STACKUNDERFLOW_DISABLE_WATCHER=1`)
+> to skip the spawn and rely on the periodic-ingest path instead.
 
 > **Restart after upgrades.** `stackunderflow start` is a long-lived
 > process that loads the application code into memory once at boot.
@@ -152,8 +159,9 @@ $ stackunderflow start --no-lock
 
 ### `stackunderflow init`
 
-Start the dashboard (alias for `start`). This is the primary user-facing command.
-Flag names differ slightly from `start` for convenience.
+Start the dashboard. A backward-compatible alias for `start` with
+slightly different flag names. With `--install-skills`, it also copies
+the three shipped Claude Code skills into place before the server boots.
 
 ```
 Usage: stackunderflow init [OPTIONS]
@@ -163,8 +171,17 @@ Usage: stackunderflow init [OPTIONS]
 |---|---|---|---|
 | `--port` | INTEGER | from config | Server port |
 | `--host` | TEXT | from config | Bind address |
-| `--no-browser` | flag | false | Don't open the browser (maps to `--headless`) |
-| `--clear-cache` | flag | false | Clear disk cache first (maps to `--fresh`) |
+| `--no-browser` | flag | false | Don't open the browser (maps to `start --headless`) |
+| `--clear-cache` | flag | false | Clear disk cache first (maps to `start --fresh`) |
+| `--install-skills` | flag | false | Copy the three shipped Claude Code skills (`check-prior-work`, `find-related-sessions`, `recall-past-decisions`) into the skills destination before starting. Idempotent: byte-identical files are skipped silently |
+| `--skills-dest` | PATH | `~/.claude/skills/` | Destination directory for `--install-skills` |
+| `--skills-force` | flag | false | With `--install-skills`, overwrite destination `SKILL.md` files that differ from the shipped copy. Default behaviour preserves local edits — a modified destination is skipped with a warning |
+
+**Skill install.** `--install-skills` runs first, then the dashboard
+starts as usual. A missing destination is created; one whose bytes
+match the shipped copy is reported as already current; one that differs
+is skipped with a warning unless `--skills-force` is set. See
+[`docs/skills.md`](skills.md).
 
 **Examples:**
 
@@ -172,15 +189,22 @@ Usage: stackunderflow init [OPTIONS]
 $ stackunderflow init
 $ stackunderflow init --port 9000 --no-browser
 $ stackunderflow init --clear-cache
+$ stackunderflow init --install-skills
+  + installed skill: check-prior-work → /Users/you/.claude/skills/check-prior-work/SKILL.md
+  + installed skill: find-related-sessions → /Users/you/.claude/skills/find-related-sessions/SKILL.md
+  + installed skill: recall-past-decisions → /Users/you/.claude/skills/recall-past-decisions/SKILL.md
 ```
 
 ---
 
 ### `stackunderflow reindex`
 
-Rebuild the session store from scratch. Reads all registered adapter sources and
-re-ingests them into `~/.stackunderflow/store.db`. Use this after a schema migration
-or if the store gets corrupted.
+Re-ingest every registered adapter source into `~/.stackunderflow/store.db`,
+applying the current schema first. Ingest is incremental — each source
+file is read from its stored watermark and rows land via `INSERT OR
+IGNORE` — so re-running is safe and cheap. Run it after an upgrade (a
+new release may add adapters or schema) or to force a catch-up when
+`start` and its watcher are not running.
 
 ```
 Usage: stackunderflow reindex [OPTIONS]
@@ -193,8 +217,11 @@ No options beyond `--help`.
 ```
 $ stackunderflow reindex
 Reindexing into /Users/you/.stackunderflow/store.db
-Done: {'sessions': 412, 'messages': 58203}
+Done: {'claude': 58203, 'codex': 1171, 'cursor': 1035, 'cline': 860}
 ```
+
+The `Done:` line is the per-provider count of messages ingested on this
+pass (`run_ingest` returns a `{provider: messages_added}` dict).
 
 ---
 
@@ -241,10 +268,17 @@ the client config you're pasting expects a single-word command.
 Usage: stackunderflow mcp [OPTIONS]
 ```
 
-The server exposes one tool, `session_query`, that any MCP client (Claude
-Desktop, Claude Code, Cursor) can call to read local Claude-Code-format
-session logs across `~/.claude*` directories. Stateless — does not read or
-write StackUnderflow's SQLite store.
+The server exposes twelve read-only tools any MCP client (Claude Desktop,
+Claude Code, Cursor) can call: `session_query`, `list_sessions`,
+`list_projects`, the five discovery tools (`find_sessions_in_path`,
+`find_sessions_touching_file`, `search_past_decisions`,
+`find_sessions_where_action_worked`, `find_failure_modes_for_file`),
+`file_risk`, `recommend_skills`, `recommend_mode`, and
+`get_burn_projection`. They read the unified StackUnderflow store at
+`~/.stackunderflow/store.db`, which aggregates sessions across every
+ingested provider; when a requested `session_id` is not in the store
+yet, `session_query` falls back to walking the `~/.claude*` JSONL logs
+directly.
 
 **Example Claude Desktop config:**
 
@@ -415,12 +449,13 @@ Usage: stackunderflow report [OPTIONS]
 | `--format` | `text\|json` | text | Output format |
 | `--project` | TEXT | (all) | Include only this project dir name (repeatable) |
 | `--exclude` | TEXT | (none) | Exclude this project dir name (repeatable) |
-| `--provider` | `all\|claude\|codex\|cursor\|opencode\|pi\|copilot` | `all` | Provider filter (only `claude` and `all` supported today) |
+| `--provider` | `all\|claude\|codex\|cursor\|opencode\|pi\|copilot` | `all` | Provider filter. Accepted for forward-compatibility but not yet applied — the report aggregates every provider regardless of this value |
 | `--ingest` | flag | off | Force a fresh ingest pass — see [Reading freshness](#reading-freshness---ingest----auto-ingest) above |
 | `--auto-ingest / --no-auto-ingest` | flag | on | Auto-refresh when the store is > 6 h stale |
 
-Valid period strings: `today`, `7days`, `30days`, `month`, `all`. Any other value exits with
-code 1 and prints `Unknown period`.
+Valid period strings: `today`, `7days`, `30days`, `month`, `all`. Any other value
+exits with code 1 and prints `Error: Unknown period '<value>'. Valid: today, 7days,
+30days, month, all`.
 
 **Examples:**
 
@@ -509,7 +544,12 @@ matching query parameters (`format`, `period`, `provider`, `project`,
 
 ### `stackunderflow optimize`
 
-Find wasted spend: sessions where the assistant had to retry repeatedly (looped Q&A pairs).
+Surface wasted spend in two blocks. **Q&A loops** lists projects where
+the assistant retried the same question repeatedly. **Structural
+patterns** reports waste detected from filesystem state and tool-call
+history — seven detectors: bloated `CLAUDE.md`, unused MCP servers,
+ghost agents, exploration-only sessions, files re-read excessively,
+cache thrash, and oversized bash output.
 
 ```
 Usage: stackunderflow optimize [OPTIONS]
@@ -528,17 +568,30 @@ Usage: stackunderflow optimize [OPTIONS]
 
 ```
 $ stackunderflow optimize --period 7days
-No looped Q&A pairs found in last 7 days.
+No waste or structural patterns found in last 7 days.
 
 $ stackunderflow optimize --period 30days
 Waste report — last 30 days
 
+Q&A loops:
   my-api: 3 looped pair(s)
     - How do I fix the auth middleware?
     - Why does the test keep failing?
 
+Structural patterns:
+  [MEDIUM] bloated_claude_md: 2 bloated CLAUDE.md file(s)
+      2 CLAUDE.md file(s) exceed 5,000 tokens and are loaded into every session's context.
+      ~7,400 wasted tokens
+      fix: Trim CLAUDE.md to the bare essentials — move long-form notes to project-local docs and reference them on demand.
+
 $ stackunderflow optimize --period all --format json
 ```
+
+JSON output is `{"scope": "<label>", "waste": [...], "patterns": [...]}`.
+Each `patterns` entry carries `pattern_id`, `severity`, `title`,
+`description`, `estimated_waste_tokens`, `suggested_fix`, and a
+`details` payload. `estimated_waste_tokens` is `null` for detectors
+that can't put a token figure on the waste.
 
 ---
 
@@ -583,27 +636,29 @@ $ stackunderflow compare
 
 $ stackunderflow compare --period week --provider claude --format json
 {
-  "period": "week",
+  "generated": 1746125443.117,
   "models": [
     {
-      "model": "claude-opus-4-6",
-      "provider": "claude",
-      "sessions": 3,
-      "calls": 124,
-      "one_shot_pct": 0.0,
-      "retry_rate": 40.33,
       "cache_hit_rate": 0.94,
+      "calls": 124,
       "cost_per_call": 0.018,
       "cost_per_session": 0.74,
+      "model": "claude-opus-4-6",
+      "one_shot_pct": 0.0,
+      "provider": "claude",
+      "retry_rate": 40.33,
+      "sessions": 3,
       "total_cost": 2.21,
-      "total_tokens": 4_120_000
+      "total_tokens": 4120000
     }
   ],
-  "generated": 1746125443.117
+  "period": "week"
 }
 ```
 
-The same data is available via `GET /api/compare` — see `docs/api-reference.md`.
+The payload is `json.dumps(..., indent=2, sort_keys=True)`, so keys are
+alphabetical. The same data is available via `GET /api/compare` — see
+[`docs/api-reference.md`](api-reference.md).
 
 ---
 
@@ -753,26 +808,52 @@ Usage: stackunderflow cfg ls [OPTIONS]
 |---|---|---|---|
 | `--json` | flag | false | JSON output instead of table |
 
-**Examples:**
+Each row's `[source]` tag is `default` (built-in), `file` (set in
+`config.json`), or `env` (an environment variable currently overrides it).
+The text table is sorted alphabetically; the JSON keeps declaration order.
+
+**Examples (fresh install — every key at its built-in default):**
 
 ```
 $ stackunderflow cfg ls
 Settings:
-  auto_browser                        False           [file]
+  auto_browser                        True            [default]
+  auto_reindex_on_ingest              True            [default]
+  currency                            USD             [default]
+  discovery_budget_tokens             2000            [default]
+  discovery_rank_weights              0.5,0.2,0.3     [default]
   host                                127.0.0.1       [default]
   log_level                           INFO            [default]
   max_date_range_days                 30              [default]
   messages_initial_load               500             [default]
-  port                                8095            [file]
+  model_aliases                       {}              [default]
+  plan_alert_thresholds               [50, 75, 90]    [default]
+  plan_monthly_usd                    None            [default]
+  plan_name                           None            [default]
+  plan_reset_day                      1               [default]
+  port                                8081            [default]
 
 $ stackunderflow cfg ls --json
 {
-  "port": 8095,
+  "port": 8081,
   "host": "127.0.0.1",
-  "auto_browser": false,
+  "auto_browser": true,
   "max_date_range_days": 30,
   "messages_initial_load": 500,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "auto_reindex_on_ingest": true,
+  "currency": "USD",
+  "model_aliases": {},
+  "plan_name": null,
+  "plan_monthly_usd": null,
+  "plan_reset_day": 1,
+  "plan_alert_thresholds": [
+    50,
+    75,
+    90
+  ],
+  "discovery_budget_tokens": 2000,
+  "discovery_rank_weights": "0.5,0.2,0.3"
 }
 ```
 
@@ -931,10 +1012,13 @@ The plan is stored in three settings keys (`plan_name`, `plan_monthly_usd`,
 `plan_reset_day`) but managed through this command — `cfg set plan_name ...`
 is intentionally rejected because the three keys have inter-key invariants.
 
-The `Projected` figure is a **simple linear** extrapolation
-(`used + daily_burn × days_left`). It does not weight weekends, project
-ramps, or week-of-month seasonality — read it as a directional signal,
-not a forecast.
+The `Projected` figure comes from the burn projector: once the period
+has at least three non-zero daily samples it uses a weighted 7-day
+average (recent days dominate, decay 0.85/day), falling back to a linear
+running mean below that. Read it as a directional signal, not a forecast
+— it does not model weekends, project ramps, or week-of-month
+seasonality. The **Projection method** note under `plan show` covers the
+switch in detail.
 
 The cost rollup reuses the same engine as `stackunderflow month`
 (`reports.aggregate.build_report`), so the `Used` number always matches
@@ -1072,8 +1156,9 @@ $ stackunderflow plan set claude-pro --monthly-usd 18
 
 ### `stackunderflow plan reset`
 
-Clear the active plan. After this, `plan show` reports "No plan set" and
-`/api/plan` returns `{"plan": null, "usage": null}`.
+Clear the active plan. Afterwards `plan show` prints `No plan set. Run:
+stackunderflow plan set claude-pro`, and `plan show --format json`
+returns `{"plan": null, "usage": null}`.
 
 ```
 Usage: stackunderflow plan reset
@@ -1135,9 +1220,11 @@ line.
 
 ### `stackunderflow etl backfill`
 
-Convert all existing `messages` rows into `usage_events`, then refresh every
-mart from the new watermark. Idempotent — already-converted messages are
-skipped via the `UNIQUE(source_message_fk)` index.
+Convert all existing `messages` rows into `usage_events`, then refresh
+every mart from the new watermark. The default run is incremental:
+messages already converted on a prior run are skipped via the
+`uniq_events_msg` UNIQUE index. When `tqdm` is installed a progress bar
+is shown; otherwise the orchestrator logs a line every 10K events.
 
 ```
 Usage: stackunderflow etl backfill [OPTIONS]
@@ -1145,24 +1232,30 @@ Usage: stackunderflow etl backfill [OPTIONS]
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `--force` | flag | false | Drop events + marts + watermarks and rebuild from scratch |
+| `--force` | flag | false | Wipe `usage_events` + `mart_watermark`, rebuild every mart from scratch, then run the normalize pass fresh — useful after a normalizer change or model-rate update |
 
 **Example:**
 
 ```
 $ stackunderflow etl backfill
-  events inserted:           247,278
+
+Backfill complete.
+  events inserted:            247,278
   events skipped (duplicate): 0
   marts refreshed:
     command          247,278 events
     daily            247,278 events
+    message_tool     247,278 events
     model_day        247,278 events
     project          247,278 events
     provider_day     247,278 events
     session          247,278 events
     tool             247,278 events
-  duration:                  4.812s
+  duration:                   4.812s
 ```
+
+All eight marts appear here because `backfill` refreshes every
+registered mart. `etl status` (below) reports only five of them.
 
 ### `stackunderflow etl status`
 
@@ -1179,12 +1272,16 @@ Usage: stackunderflow etl status [OPTIONS]
 |---|---|---|---|
 | `--format` | `text\|json` | text | Output format |
 
-**Health rules:**
+**Health rules** (evaluated worst-first — lag is `max_event_id` minus the
+laggiest mart watermark, threshold 100 events):
 
-- `error` — at least one mart is more than 100 events behind the max event id **and** the watcher reports `running=false` (we know we're behind, and nothing is going to catch us up).
-- `stale` — any mart is more than 100 events behind, but the watcher is still alive (catch-up may still happen).
-- `syncing` — any mart is behind but a refresh ran in the last 10 seconds (pipeline is actively catching up).
-- `live` — zero lag, or no events at all.
+- `error` — lag is over 100 events **and** the watcher reports `running=false` (we are behind, and nothing is catching up).
+- `stale` — lag is over 100 events but the watcher is not known-stopped (catch-up may still happen).
+- `syncing` — lag is above 0 but a refresh ran in the last 10 seconds (pipeline is actively catching up).
+- `live` — zero lag, lag within the 100-event threshold, or no events at all.
+
+A recently-failed backfill also forces `error` for the ~30 s its result
+slot is retained, regardless of mart lag.
 
 **Example:**
 
@@ -1197,57 +1294,70 @@ ETL pipeline — live (last refresh 7s ago)
                  by cost source: rate_card=226,000 estimated=2,311
 
   Marts:
-                 daily=4,521 rows         (watermark 228,311, fresh)
-                 session=1,106 rows       (watermark 228,311, fresh)
-                 project=188 rows         (watermark 228,311, fresh)
-                 provider_day=312 rows    (watermark 228,311, fresh)
-                 model_day=482 rows       (watermark 228,311, fresh)
+                 daily=4,521 rows          (watermark 228,311, fresh)
+                 session=1,106 rows        (watermark 228,311, fresh)
+                 project=188 rows          (watermark 228,311, fresh)
+                 provider_day=312 rows     (watermark 228,311, fresh)
+                 model_day=482 rows        (watermark 228,311, fresh)
 
-  Watcher:       running (lock held by PID 48213)
+  Watcher:       running
                  last cycle: 12 events processed
+                 lock held by PID 48213
 ```
 
-The `lock held by PID N` suffix only appears when a watcher lock file is
-present and readable. When no process holds the lock the suffix is
-omitted (the line just reads `running`).
+`etl status` surfaces five marts — `daily`, `session`, `project`,
+`provider_day`, `model_day` (the Wave 2B set). The other three registered
+marts (`tool`, `command`, `message_tool`) are refreshed by `backfill` and
+the watcher but not shown here.
 
-**JSON output:**
+The `last cycle:` line appears only when the watcher handle reports a
+last-cycle count, and `lock held by PID N` only when a watcher lock file
+is present and readable — each is a separate indented line, not a suffix
+on the `Watcher:` line.
+
+**JSON output.** The payload is `json.dumps(..., indent=2, sort_keys=True)`,
+so keys are alphabetical and every nested object is fully expanded; the
+inner objects are shown compact here only to keep the example short.
 
 ```
 $ stackunderflow etl status --format json
 {
+  "current_job": null,
+  "events": {
+    "by_cost_source": {"estimated": 2311, "rate_card": 226000},
+    "by_provider": {"claude": 225245, "cline": 860, "codex": 1171, "cursor": 1035},
+    "max_id": 228311,
+    "total": 228311
+  },
+  "health": "live",
+  "lag_seconds": 0,
+  "last_job": null,
+  "marts": {
+    "daily":        {"last_refresh_ts": "2026-05-06T08:24:11+00:00", "row_count": 4521, "watermark": 228311},
+    "model_day":    {"last_refresh_ts": "2026-05-06T08:24:11+00:00", "row_count": 482,  "watermark": 228311},
+    "project":      {"last_refresh_ts": "2026-05-06T08:24:11+00:00", "row_count": 188,  "watermark": 228311},
+    "provider_day": {"last_refresh_ts": "2026-05-06T08:24:11+00:00", "row_count": 312,  "watermark": 228311},
+    "session":      {"last_refresh_ts": "2026-05-06T08:24:11+00:00", "row_count": 1106, "watermark": 228311}
+  },
   "watcher": {
     "enabled": true,
-    "running": true,
-    "last_refresh_ts": "2026-05-06T08:24:11+00:00",
-    "seconds_since_refresh": 7,
     "events_in_last_cycle": 12,
-    "lock_held_by": 48213
-  },
-  "marts": {
-    "daily":        {"watermark": 228311, "row_count": 4521, "last_refresh_ts": "..."},
-    "session":      {"watermark": 228311, "row_count": 1106, "last_refresh_ts": "..."},
-    "project":      {"watermark": 228311, "row_count": 188,  "last_refresh_ts": "..."},
-    "provider_day": {"watermark": 228311, "row_count": 312,  "last_refresh_ts": "..."},
-    "model_day":    {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."},
-    "tool":         {"watermark": 228311, "row_count": 47,   "last_refresh_ts": "..."},
-    "command":      {"watermark": 228311, "row_count": 482,  "last_refresh_ts": "..."}
-  },
-  "events": {
-    "total": 228311,
-    "max_id": 228311,
-    "by_provider": {"claude": 225245, "codex": 1171, "cursor": 1035, "cline": 860},
-    "by_cost_source": {"rate_card": 226000, "estimated": 2311}
-  },
-  "current_job": null,
-  "lag_seconds": 0,
-  "health": "live"
+    "last_refresh_ts": "2026-05-06T08:24:11+00:00",
+    "lock_held_by": 48213,
+    "running": true,
+    "seconds_since_refresh": 7
+  }
 }
 ```
 
+`marts` carries the same five marts as the text view. `current_job` and
+`last_job` reflect the in-process backfill slots — both `null` when no
+backfill ran recently. `lag_seconds` is a misnomer kept for compatibility:
+it counts *events* behind, not seconds.
+
 When the CLI is run with no live server (the typical case for `etl status`),
-`watcher.running` reports `"unknown"` — the assembler has no way to introspect
-a daemon thread that lives in another process.
+`watcher.running` reports `"unknown"` — the assembler cannot introspect a
+daemon thread that lives in another process.
 
 ---
 
@@ -1256,7 +1366,7 @@ a daemon thread that lives in another process.
 Self-referential queries over the local store: "what's happened in this project /
 this file / about this decision?" — designed for a coding agent to call before
 starting non-trivial work, so it can reuse prior context instead of re-deriving it.
-The first three are also exposed as MCP tools (see [`docs/mcp.md`](mcp.md)). All
+All five are also exposed as MCP tools (see [`docs/mcp.md`](mcp.md)). All
 read the store directly (no running server needed), accept `--format text|json`
 (the JSON shape is stable), and resolve `~` / relative paths before matching.
 
@@ -1352,7 +1462,7 @@ Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
 | `--since` | TEXT | (all time) | Filter to messages newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
 | `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
 | `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
-| `--use-embeddings` | FLAG | off | Re-rank substring matches by local sentence-transformers cosine similarity (requires `pip install stackunderflow[embeddings]`) |
+| `--use-embeddings` | flag | false | Re-rank substring matches by local sentence-transformers cosine similarity (requires `pip install stackunderflow[embeddings]`) |
 | `--embed-model` | TEXT | env or `all-MiniLM-L6-v2` | Override the sentence-transformers model id; ignored without `--use-embeddings` |
 | `--format` | `text\|json` | text | Output format |
 
@@ -1416,11 +1526,14 @@ Usage: stackunderflow find-sessions-where-action-worked [OPTIONS] ACTION
 | `--file` | TEXT | (none) | Narrow to sessions that also touched this file |
 | `--since` | TEXT | (all time) | Only sessions whose matching activity is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
 | `--limit` | INTEGER | `20` | Max sessions to return |
+| `--min-confidence` | FLOAT | `0.5` | Minimum outcome confidence in `[0.0, 1.0]`. Explicit-phrase confirmations clear the default; lower-confidence "silence ⇒ worked" rows do not. Pass `0.0` for the legacy "anything that didn't break is a success" behaviour |
+| `-v, --verbose` | flag | false | Append `outcome_confidence` to each text row (JSON always carries it) |
 | `--format` | `text\|json` | text | Output format |
 
 Each result carries the inferred `outcome` (`"worked"`), `outcome_evidence` (the
-message that established it), and `outcome_msg_id`. The text output prints a
-`→ worked: <evidence>` line under each session.
+message that established it), `outcome_msg_id`, and `outcome_confidence`. The text
+output prints a `→ worked: <evidence>` line under each session; with `-v` it also
+shows the confidence score.
 
 **Example:**
 
@@ -1449,10 +1562,12 @@ Usage: stackunderflow find-failure-modes-for-file [OPTIONS] FILE
 |---|---|---|---|
 | `--since` | TEXT | (all time) | Only sessions whose edit is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
 | `--limit` | INTEGER | `20` | Max sessions to return |
+| `--min-confidence` | FLOAT | `0.5` | Minimum outcome confidence in `[0.0, 1.0]`. Explicit-phrase complaints (0.8) and agent revert tool calls (0.5) clear the default; pass `0.0` to include lower-confidence inferences |
+| `-v, --verbose` | flag | false | Append `outcome_confidence` to each text row (JSON always carries it) |
 | `--format` | `text\|json` | text | Output format |
 
 Each result carries `outcome` (`"failed"` or `"reverted"`), `outcome_evidence`,
-and `outcome_msg_id`.
+`outcome_msg_id`, and `outcome_confidence`.
 
 **Example:**
 
@@ -1464,6 +1579,56 @@ Failure modes for stackunderflow/routes/cost.py  (1 session(s))
       -Users-you-dev-app  /Users/you/dev/app
       → reverted: agent ran `git checkout -- stackunderflow/routes/cost.py` after the test broke
 ```
+
+---
+
+## Risk Command
+
+### `stackunderflow risk file`
+
+Risk summary for a file before you edit it: how many distinct past
+sessions that touched it ended `reverted`, `failed`, or `worked`. A
+read-only aggregator over the same outcome heuristic that powers
+`find-failure-modes-for-file` — no extra schema, the counts are computed
+from `messages` / `sessions` rows on each call. Also exposed as the
+`file_risk` MCP tool.
+
+```
+Usage: stackunderflow risk file [OPTIONS] PATH
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `PATH` | yes | File path to assess — `~` and relative paths are resolved to an absolute path before matching |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--since` | TEXT | (all time) | Only sessions whose activity is newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `--format` | `text\|json` | text | Output format |
+
+`recent_session_ids` lists up to five of the most recent failure-mode
+sessions (`reverted` ∪ `failed`) for the file — read them with
+`session_query` to see what went wrong.
+
+**Example:**
+
+```
+$ stackunderflow risk file stackunderflow/routes/cost.py --since 90d
+File risk for /Users/you/dev/app/stackunderflow/routes/cost.py
+  since: 90d
+
+  total sessions touching the file: 14
+  reverted:                         2
+  failed:                           1
+  worked:                           9
+
+  recent failure-mode sessions:
+    - ccc333dd-1a2b-4c3d-...
+    - 91b2f0a1-9e8d-4f7c-...
+```
+
+JSON output is `{path, since, total_sessions, reverted, failed, worked,
+recent_session_ids}`.
 
 ---
 
@@ -1551,6 +1716,84 @@ hand-authored skill. Without `--yes` it prints the would-be deletions and exits.
 ```
 $ stackunderflow skills clean --older-than 30d        # preview
 $ stackunderflow skills clean --older-than 30d --yes  # delete
+```
+
+---
+
+## Recommendation Commands
+
+Proactive suggestions mined from your local session store. Both
+subcommands are read-only — they never write a file or change a setting;
+acting on a recommendation is always a separate, explicit step. Both are
+also exposed as MCP tools (`recommend_skills`, `recommend_mode`).
+
+### `stackunderflow recommend skills`
+
+List workflow patterns you've re-run by hand often enough to be worth a
+skill and don't already have one for. Reads `messages` plus the skills
+already on disk; each row carries an `accept_command` you can paste to
+generate that skill. The proactive counterpart to `skills generate`.
+
+```
+Usage: stackunderflow recommend skills [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | TEXT | (cwd's project) | Project slug to scan. Defaults to the project the current directory belongs to |
+| `--threshold` | INTEGER (≥1) | `5` | A pattern must appear in this many distinct sessions |
+| `--window-days` | INTEGER (≥1) | `30` | Lookback window in days |
+| `--no-cache` | flag | false | Bypass the recommendation cache and re-mine |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow recommend skills
+Found 2 skill recommendation(s) for -Users-you-dev-app:
+  • run-pytest-after-edit  [always-runs-X-after-Y]  occurrences=18
+      You ran `pytest` right after editing a source file in 18 sessions.
+      accept: stackunderflow skills generate --project -Users-you-dev-app --pattern always_runs_pytest_after_edit
+  • avoid-pkill  [avoids-X]  occurrences=7
+      You consistently steered away from `pkill` across 7 sessions.
+      accept: stackunderflow skills generate --project -Users-you-dev-app --pattern avoids_pkill
+```
+
+The `--pattern` selector in each `accept` command is forward-compatible —
+`skills generate` does not consume it yet, so accepting a recommendation
+today means re-running `skills generate` for the whole project. If the
+current directory can't be mapped to a project, the command exits with a
+usage error; pass `--project` explicitly.
+
+### `stackunderflow recommend mode`
+
+Pattern-match a task prompt against your own past sessions and suggest
+the cheapest model whose similar sessions had the lowest cost. Heuristic
+v1 — read it as a routing nudge, not a hard model picker. A `confidence`
+of `0.00` means there isn't enough similar history to have an opinion.
+Nothing leaves the machine.
+
+```
+Usage: stackunderflow recommend mode [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--prompt` | TEXT | (required) | The task prompt to score (quote it) |
+| `--current-model` | TEXT | (none) | The model you'd otherwise route to; drives the cost delta |
+| `--no-cache` | flag | false | Skip the 24 h cache and recompute from history |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow recommend mode --prompt "rename a local variable" --current-model claude-opus-4-6
+Recommended model:  claude-sonnet-4-6
+Current model:      claude-opus-4-6
+Confidence:         0.82
+Estimated savings:  $0.1840/session
+Similar sessions:   23
+Why:                23 similar past tasks finished on Sonnet at a median $0.02
 ```
 
 ---
@@ -1725,6 +1968,81 @@ $ stackunderflow backup auto --disable
 
 ---
 
+## PR & CI Ingest Commands
+
+Two opt-in surfaces for pulling pull-request and CI data into the local
+store. Neither runs unless you invoke it; tokens and secrets come from
+the environment, never the database. This `ingest` command group is
+separate from the `--ingest` flag on the read commands, which refreshes
+session data.
+
+### `stackunderflow ingest github`
+
+Backfill a repository's pull requests and workflow runs over the GitHub
+REST API into the local store — a one-shot catch-up for history from
+before the webhook receiver was turned on.
+
+```
+Usage: stackunderflow ingest github [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--repo` | `OWNER/REPO` | (required) | The GitHub repository slug, e.g. `octocat/hello-world` |
+| `--token` | TEXT | (from env) | GitHub PAT. Falls back to `$STACKUNDERFLOW_GITHUB_TOKEN`, then `$GITHUB_TOKEN`. Public repos work without one but hit the 60-requests/hour anonymous limit |
+| `--state` | `all\|open\|closed` | `all` | PR state filter passed to the GitHub API |
+| `--max-pages` | INTEGER (1–50) | `10` | Maximum pages of 100 to fetch per endpoint (PRs and CI) |
+| `--no-ci` | flag | false | Skip the workflow-runs fetch — a quick PR-only refresh |
+| `--format` | `text\|json` | text | Output format |
+
+**Example:**
+
+```
+$ stackunderflow ingest github --repo 0bserver07/StackUnderflow --max-pages 5
+Backfill complete for 0bserver07/StackUnderflow
+  PRs:  inserted=42  updated=3   pages=2
+  CI:   inserted=118 updated=0   pages=5
+  duration: 6.30s
+```
+
+A request that exhausts the GitHub rate limit exits with an error.
+
+### `stackunderflow ingest webhook serve`
+
+Run a small FastAPI receiver that serves the
+`/api/webhooks/{github,gitlab,ci}` endpoints on a dedicated port,
+separate from the dashboard. Each endpoint verifies a signature and
+returns `503` until its secret is set, so the receiver never accepts an
+anonymous payload.
+
+```
+Usage: stackunderflow ingest webhook serve [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--port` | INTEGER | `8096` | Port to bind the receiver on |
+| `--host` | TEXT | `127.0.0.1` | Bind address. Loopback by default; set `0.0.0.0` only when tunnelling from a public webhook URL |
+
+The endpoints check these secrets (HMAC-SHA256 for GitHub and CI, token
+comparison for GitLab):
+
+| Endpoint | Secret env var |
+|---|---|
+| `/api/webhooks/github` | `STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET` |
+| `/api/webhooks/gitlab` | `STACKUNDERFLOW_GITLAB_WEBHOOK_SECRET` |
+| `/api/webhooks/ci` | `STACKUNDERFLOW_CI_WEBHOOK_SECRET` |
+
+**Example:**
+
+```
+$ STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET=... stackunderflow ingest webhook serve
+  configured receivers: github
+Webhook receiver listening on http://127.0.0.1:8096/api/webhooks/
+```
+
+---
+
 ## Config Keys Reference
 
 | Key | Type | Default | Description |
@@ -1741,6 +2059,7 @@ $ stackunderflow backup auto --disable
 | `plan_name` | str \| null | `null` | Active plan preset name (manage via `plan set`) |
 | `plan_monthly_usd` | float \| null | `null` | Monthly budget in USD (manage via `plan set`) |
 | `plan_reset_day` | int | `1` | Day-of-month the budget resets (manage via `plan set`) |
+| `plan_alert_thresholds` | list[int] | `[50, 75, 90]` | Burn-projector alert thresholds, percent of budget (manage via `plan thresholds set`) |
 | `discovery_budget_tokens` | int | `2000` | Default `--context-budget` for the budget-aware discovery commands / MCP tools |
 | `discovery_rank_weights` | str | `0.5,0.2,0.3` | Discovery-ranking weights `recency,cost,relevance` (malformed → default) |
 
@@ -1798,6 +2117,11 @@ site:
 | `STACKUNDERFLOW_DISABLE_LOCK` | unset | Truthy = skip the watcher single-instance lock at `~/.stackunderflow/server.lock` (same as `start --no-lock`) |
 | `STACKUNDERFLOW_DISCOVERY_TELEMETRY` | on | Set to `0` / `false` to disable the passive discovery citation-feedback recording |
 | `STACKUNDERFLOW_BETA_<NAME>` | unset | Truthy = enable a beta-flagged provider adapter (e.g. `STACKUNDERFLOW_BETA_GEMINI=1`) |
+| `STACKUNDERFLOW_EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | sentence-transformers model id for `search-past-decisions --use-embeddings`; the `--embed-model` flag overrides it |
+| `STACKUNDERFLOW_GITHUB_TOKEN` / `GITHUB_TOKEN` | unset | GitHub PAT for `ingest github`. The `--token` flag overrides; `STACKUNDERFLOW_GITHUB_TOKEN` is consulted before `GITHUB_TOKEN` |
+| `STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET` | unset | HMAC-SHA256 secret for the `/api/webhooks/github` receiver; unset → that endpoint returns 503 |
+| `STACKUNDERFLOW_GITLAB_WEBHOOK_SECRET` | unset | Token-comparison secret for `/api/webhooks/gitlab`; unset → 503 |
+| `STACKUNDERFLOW_CI_WEBHOOK_SECRET` | unset | HMAC-SHA256 secret for `/api/webhooks/ci`; unset → 503 |
 
 The `discovery_rank_weights` value is `recency,cost,relevance` (three comma-separated
 floats); a malformed value or the wrong component count falls back to the default
@@ -1918,8 +2242,11 @@ disrupt Claude Code). Not for direct use.
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| non-zero | Error |
+| `1` | A command-level error (`click.ClickException`) — e.g. an unknown `--period` passed to `report` or `optimize` |
+| `2` | A usage error (bad parameter / `click.UsageError`) — e.g. an invalid `cfg set` key, or a `--period` outside the fixed choice list on `compare` / `yield` / `export` |
 
-Invalid period strings (e.g. `stackunderflow report -p yesterday`) exit with code 1
-and print `Unknown period`. Invalid config keys passed to `cfg set` exit with an error
-message listing the valid keys.
+An unknown period given to `report` or `optimize` exits `1` and prints
+`Error: Unknown period '<value>'. Valid: today, 7days, 30days, month, all`.
+The same bad period on `compare`, `yield`, or `export` is caught by Click's
+choice validation instead and exits `2`. An unknown key passed to `cfg set`
+exits `2` with a message listing the valid keys.

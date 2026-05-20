@@ -40,32 +40,38 @@ class Record:
     uuid: str
     parent_uuid: str | None
     raw: dict
+    speed: Literal["standard", "fast"] = "standard"
 
 
 class SourceAdapter(Protocol):
     name: str
     def enumerate(self) -> Iterable[SessionRef]: ...
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterable[Record]: ...
+    def watch_paths(self) -> list[Path]: ...
 ```
 
 `enumerate()` lists every session the adapter can see on disk. It must not parse message bodies — the writer uses it to decide which sessions changed. `read(ref, since_offset=N)` yields records from `ref` strictly past offset `N`. `since_offset == 0` means a fresh read; the writer passes the last seen `seq` value otherwise so resume picks up exactly one record after the previous tail.
 
 `Record.seq` is the resume cursor. Its units depend on `source_kind`. For `file` adapters it is the byte offset of the line start; for `database` adapters it is the SQLite rowid (or any monotonically increasing per-session integer the adapter chooses).
 
+`watch_paths()` returns the on-disk roots the ETL watcher follows for incremental re-ingest — the parent directory for JSONL adapters, the database file for vscdb-style adapters. Return `[]` to opt out and let periodic ingest handle the provider. The watcher treats a missing method as `[]`, so it is optional in practice.
+
+`Record.speed` is `"standard"` or `"fast"`. It flags Anthropic's priority tier, which bills Opus at roughly 6× standard rates. `ClaudeAdapter` derives it from `message.usage.service_tier`; every other adapter leaves the default, and only the Anthropic pricer reads the field.
+
 ## Choosing source_kind
 
-`"file"` fits one-session-per-file formats with byte-resumable reads. The Claude adapter (`stackunderflow/adapters/claude.py`) opens each JSONL file in binary mode, seeks to `since_offset`, and yields one record per line; the byte offset of the line start is the record's `seq`.
+`"file"` fits one-session-per-file formats with byte-resumable reads. The Claude adapter (`stackunderflow/adapters/claude.py`) streams each JSONL file through the shared `_streaming.iter_jsonl_lines` helper, which opens the file in binary mode, seeks to `since_offset`, and yields `(line_offset, raw_line)` pairs; the byte offset of the line start becomes the record's `seq`.
 
 `"database"` fits row-shaped sources where many sessions share one storage file. The Cursor adapter (`stackunderflow/adapters/cursor.py`) opens `state.vscdb` in read-only mode and selects rows from `cursorDiskKV` with `rowid > since_offset`; the rowid is the record's `seq`.
 
-Hybrid case: Cline reads files but uses event indexes instead of byte offsets (`stackunderflow/adapters/cline.py:23`). It declares `source_kind="file"` and treats `since_offset` as "skip first N events." The contract test (below) only requires monotonic `seq` and that resume yields strictly fewer records, so the hybrid is fine.
+Hybrid case: Cline reads files but uses event indexes instead of byte offsets (see the module docstring in `stackunderflow/adapters/cline.py`). It declares `source_kind="file"` and treats `since_offset` as "skip first N events." The contract test (below) only requires monotonic `seq` and that resume yields strictly fewer records, so the hybrid is fine.
 
 ## Implementing enumerate()
 
 The discovery path lives at the top of the adapter. Two real patterns:
 
 ```python
-# stackunderflow/adapters/claude.py:27-40 — directory walk
+# stackunderflow/adapters/claude.py:62-73 — directory walk
 def enumerate(self) -> Iterable[SessionRef]:
     root = Path.home() / ".claude" / "projects"
     if not root.is_dir():
@@ -79,7 +85,7 @@ def enumerate(self) -> Iterable[SessionRef]:
 ```
 
 ```python
-# stackunderflow/adapters/cursor.py:89-138 — SQL group-by-conversation
+# stackunderflow/adapters/cursor.py:119-176 — SQL group-by-conversation
 def enumerate(self) -> Iterator[SessionRef]:
     path = self._db_path
     if not path.is_file():
@@ -102,24 +108,22 @@ The body of `read` is where you parse. Two contracts the writer relies on:
 1. `seq` is monotonically increasing within one session. Records yielded later have larger `seq` than records yielded earlier.
 2. `read(ref, since_offset=N)` yields strictly past `N`. A record at `seq == N` was already seen by the caller.
 
-For file mode, seek and read:
+For file mode, stream lines through the shared helper. `_streaming.iter_jsonl_lines` opens the file in binary mode, applies the 128 MB size cap, seeks to `since_offset`, and yields `(line_offset, raw_line)` pairs:
 
 ```python
-# stackunderflow/adapters/claude.py:80-114
-fp.seek(since_offset)
-offset = since_offset
-for raw_line in fp:
-    line_offset = offset
-    offset += len(raw_line)
+# stackunderflow/adapters/claude.py:142-159 — _read_jsonl
+for line_offset, raw_line in iter_jsonl_lines(
+    ref.file_path, since_offset=since_offset,
+):
     if since_offset > 0 and line_offset <= since_offset:
         continue
-    # ... parse and yield Record(seq=line_offset, ...)
+    # ... parse raw_line and yield Record(seq=line_offset, ...)
 ```
 
 For database mode, push the floor into SQL:
 
 ```python
-# stackunderflow/adapters/cursor.py:163-167
+# stackunderflow/adapters/cursor.py:227-232
 cur = conn.execute(
     "SELECT rowid, key, value FROM cursorDiskKV "
     "WHERE (key LIKE 'bubbleId:%' OR key LIKE 'agentKv:blob:%') "
@@ -132,7 +136,9 @@ cur = conn.execute(
 
 If your provider needs distinct cost calculation, subclass `ProviderPricer` from `stackunderflow/infra/providers/base.py`. The four required methods are `canonicalize(model_id)`, `normalize_tokens(raw)`, `rates_for(canonical)`, and `supports_per_message_tokens()`.
 
-When a provider runs other vendors' models behind the scenes (Cursor delegates Claude rates to Anthropic), wrap an existing pricer rather than copy its rate table. `stackunderflow/infra/providers/cursor.py:67-85` is the reference implementation: the `rates_for` method checks the provider-specific override table first, delegates to `AnthropicPricer.rates_for` when the canonical id starts with `claude-`, and returns `None` otherwise. The cost layer surfaces a missing rate as zero rather than mispricing an unknown model.
+When a provider runs other vendors' models behind the scenes, wrap an existing pricer instead of copying its rate table. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) is the reference: its `rates_for` checks a small Cursor-specific override table first, then delegates by id prefix — `claude-*` to `AnthropicPricer`, `gpt-*` / `codex*` to `OpenAIPricer`, `gemini-*` to `GeminiPricer`. For an id no delegate recognizes it returns a Sonnet-tier estimate rather than `None`, so a Cursor record with real token counts never prices at $0.
+
+A pricer with no internal fallback may return `None` from `rates_for` for an unknown id. `ProviderPricer._apply_overlay_rates` then produces an all-zero cost breakdown — surfacing a missing rate as $0 rather than mispricing the record.
 
 When you do own a rate table outright, follow `AnthropicPricer` or `OpenAIPricer` (in the same package) — both store rates as `tuple[float, float, float, float]` representing `(input, output, cache_write, cache_read)` in dollars per million tokens.
 
@@ -147,9 +153,9 @@ def _beta_enabled(name: str) -> bool:
     val = os.environ.get(f"STACKUNDERFLOW_BETA_{name.upper()}", "")
     return val.strip().lower() in ("1", "true", "yes", "on")
 
-if _beta_enabled("CURSOR"):
-    from .cursor import CursorAdapter as _CursorAdapter
-    register(_CursorAdapter())
+if _beta_enabled("QWEN"):
+    from .qwen import QwenAdapter as _QwenAdapter
+    register(_QwenAdapter())
 ```
 
 Default OFF. Users opt in with `STACKUNDERFLOW_BETA_<NAME>=1` (case-insensitive `1`/`true`/`yes`/`on`). The `__init__.py` does the registration; the adapter file itself does not call `register()`.
@@ -196,8 +202,8 @@ sequenceDiagram
 
 Before you push:
 
-- Tests pass: `python -m pytest tests/ -q` (527 passing baseline).
-- Lint clean: `ruff check stackunderflow/ --select E,F --exclude="*/build.py"`.
+- Tests pass: `python -m pytest tests/ -q`.
+- Lint clean: `ruff check stackunderflow/`.
 - Beta flag default OFF in `stackunderflow/adapters/__init__.py`.
 - CHANGELOG entry under `## [Unreleased] / ### Added`.
 - README provider table updated only if the adapter graduates from beta.

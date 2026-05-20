@@ -2,7 +2,7 @@
 
 **Status:** v1 (pinned to `schema_version = 17`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
-**Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; `stackunderflow/store/migrations/v00*.sql` and `v01*.sql` are the reference implementation.
+**Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
 The schema described here is **additive-only**. Any future column requires a new migration and bumps `PRAGMA user_version` per the existing pattern in `stackunderflow/store/schema.py`. A reader that targets v1 will keep working against future versions; a writer should refuse to write rows that omit columns added after the version it was built against.
 
@@ -14,7 +14,7 @@ The schema described here is **additive-only**. Any future column requires a new
 2. **Raw + normalised separation.** The `messages` view (or table, pre-v008) carries one row per source-message exactly as the adapter parsed it from disk. The `usage_events` table carries one row per *billable* event in the canonical 4-token shape. The two are never merged; downstream consumers pick the layer they need.
 3. **Cost computed once.** `usage_events.cost_usd` is stamped at normalisation time and never recomputed by readers. The accompanying `cost_source` enum tells the reader whether they're looking at a billed amount, a rate-card lookup, an estimate, or a guess.
 4. **Marts are derivative.** The 8 mart tables are watermarked rebuilds of `usage_events`. Drop them and they rebuild from scratch; never write to a mart from outside the store.
-5. **Migrations are additive.** Every migration since v001 has either added a new table or added a column to an existing table. No column has been dropped or had its type changed. v008 turned `messages` into a view over `messages_YYYYMM` partitions — but the column shape stayed identical.
+5. **Migrations are additive.** No column has been dropped, renamed, or had its type changed; new columns ship with a `DEFAULT` so existing rows stay valid. Most migrations add a table or a column. A few only rewrite data — v004 nulls out synthetic model ids, v005 redistributes legacy cursor sessions — and v008 restructured `messages` into a view over `messages_YYYYMM` partitions without changing its column shape.
 
 ---
 
@@ -40,6 +40,8 @@ Pin to `schema_version = 17`. The current migration set is:
 | 14 | `v014_discovery_embeddings.sql` | `discovery_embeddings` (semantic-search vector cache) |
 | 16 | `v016_mode_recommendations.sql` | `mode_recommendations` (mode-recommender 24h pull-through cache) |
 | 17 | `v017_pr_ci_outcomes.sql` | `pr_outcomes` + `ci_runs` (Spec 20 — PR / CI webhook ingest) |
+
+Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
 A reader checks the version with `PRAGMA user_version`. A writer should refuse to apply its own migrations against a store on an unknown version — the runner in `stackunderflow/store/schema.py` is the only sanctioned writer of `PRAGMA user_version`.
 
@@ -228,6 +230,8 @@ These are not part of the analytics path but are part of the schema:
 - **`captured_events`** (v010) — opt-in sink for Claude Code lifecycle hooks (`failure` / `correction` / `boundary` / `snapshot`).
 - **`agent_teams`** (v013) — one row per Claude Code agent team.
 - **`discovery_embeddings`** (v014) — pull-through cache of sentence-transformer vectors keyed by `(session_id, message_id, model_name)`.
+- **`mode_recommendations`** (v016) — 24-hour pull-through cache for the mode recommender.
+- **`pr_outcomes`** + **`ci_runs`** (v017) — PR / CI webhook ingest (Spec 20).
 
 Refer to the corresponding migration file headers for column details and rationale.
 
@@ -235,7 +239,7 @@ Refer to the corresponding migration file headers for column details and rationa
 
 ## Per-provider normalizer contracts
 
-There are 16 registered normalizers in `stackunderflow/etl/normalize/__init__.py`. Each maps one `messages` row to 0..N `usage_events` rows. Two pairs share a class (kilocode + roocode subclass `ClineNormalizer`; the `pi` and `omp` keys both register `PiNormalizer`).
+The registry in `stackunderflow/etl/normalize/__init__.py` holds 18 entries — each maps one `messages` row to 0..N `usage_events` rows. The table below has 17 rows: `pi` and `omp` are separate registry keys that both point at `PiNormalizer`, so they share a row. `KiloCodeNormalizer` and `RooCodeNormalizer` are thin subclasses of `ClineNormalizer` that override only `provider_name`.
 
 | provider key | class | source | cost_source |
 |---|---|---|---|
@@ -272,10 +276,10 @@ The `cost_source` value is the contract you owe downstream consumers — pick th
 
 A tool that writes to a StackUnderflow store should validate its writes round-trip. The minimal smoke test:
 
-1. Open a fresh store. Run `stackunderflow.store.schema.apply(conn)` (or apply the migrations directly) and check `PRAGMA user_version == 14`.
+1. Open a fresh store. Run `stackunderflow.store.schema.apply(conn)` (or apply the migrations directly) and check `PRAGMA user_version == 17`.
 2. Insert one row into `messages` for your provider.
 3. Insert the matching `usage_events` row with all required columns set, `cost_source` from the enum, and `source_message_fk` pointing back at the message.
-4. Run `stackunderflow etl backfill --provider <yours>` (or call `MartBuilder.refresh_all_marts(conn)`) and check that the mart row counts increased by the expected amount.
+4. Run `stackunderflow etl backfill` (or call `stackunderflow.etl.watermark.refresh_all_marts(conn)`) and check that the mart row counts increased by the expected amount.
 5. Re-run the backfill — counts must not increase (idempotency).
 
 A more rigorous check parses this document for the column lists in each `CREATE TABLE` block and asserts via `PRAGMA table_info(<table>)` that every column is present with the declared type. The `tests/stackunderflow/store/test_schema.py` module is a good starting point for that style of test.

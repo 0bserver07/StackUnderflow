@@ -1,15 +1,15 @@
 # ETL Architecture — Three-Layer Pipeline with Watcher
 
-**Status:** Wave 1 landed — schema + ABCs + backfill orchestrator are in. Wave 2 fills in normalizers + mart builders + watcher. Wave 3 migrates routes.
+**Status:** Shipped. The three layers, the watcher, and the backfill orchestrator are all in; the per-provider normalizers feed `usage_events`, and 8 marts serve the cost and dashboard routes. The pipeline was built from migration v006 onward — this document is the original design contract, annotated where the build reached past it.
 **Goal:** Replace ad-hoc per-request aggregation with a real ETL pipeline. Sub-50ms route reads regardless of project size. Sub-second sync from source-file change to dashboard refresh.
 
 ---
 
 ## Why
 
-Today every "fast" cost / dashboard / compare endpoint runs an aggregator pass against the raw 228K-row `messages` table at request time. Result caches (`TieredCache` on `/api/dashboard-data`) and bulk SQL helpers (PR #65) are band-aids on top of full re-aggregation. They mask the gap, they don't close it.
+Before this pipeline, every "fast" cost / dashboard / compare endpoint ran an aggregator pass against the raw 228K-row `messages` table at request time. Result caches (`TieredCache` on `/api/dashboard-data`) and bulk SQL helpers (PR #65) were band-aids on full re-aggregation — they hid its cost without removing it.
 
-We have **Extract** (adapters → store) and **Load** (raw `messages` table). We have **no Transform layer**. Adding one is the actual fix.
+The store already had **Extract** (adapters → store) and **Load** (the raw `messages` table) but no **Transform** layer. This pipeline is that layer.
 
 ## Architecture
 
@@ -18,10 +18,9 @@ Three layers, one pluggable watcher tying them together.
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │  RAW LAYER                                                         │
-│  messages_YYYYMM    one row per source-message, immutable          │
-│                     monthly-partitioned (deferred — table stays    │
-│                     unpartitioned in v0.7 but the access pattern   │
-│                     is partition-friendly so we can add later)     │
+│  messages           one row per source-message, immutable          │
+│                     a UNION-ALL view over monthly messages_YYYYMM  │
+│                     partition tables, added in v008                │
 └────────────────────────────────────────────────────────────────────┘
                               │
                               ▼  per-provider Normalizer
@@ -40,8 +39,11 @@ Three layers, one pluggable watcher tying them together.
 │  daily_mart           (day, project, provider, model, speed)       │
 │  session_mart         (session_id, all aggregates per session)     │
 │  project_mart         (project_id, lifetime totals)                │
-│  provider_day_mart    (day, provider) — by-provider chart           │
-│  model_day_mart       (day, model)    — compare across agents       │
+│  provider_day_mart    (day, provider) — by-provider chart          │
+│  model_day_mart       (day, model)    — compare across agents      │
+│  tool_mart            (day, project, provider, tool) — v007        │
+│  command_mart         (day, project, command) — v007               │
+│  message_tool_mart    (message, tool, call_index) — v011           │
 │                                                                    │
 │  Each mart owns its rebuild SQL.                                   │
 │  Each mart records `last_event_id` watermark independently.        │
@@ -72,7 +74,7 @@ CREATE TABLE usage_events (
     day                 TEXT    NOT NULL,  -- YYYY-MM-DD, derived for index
     -- model + tier
     model               TEXT    NOT NULL DEFAULT '',
-    speed               TEXT    NOT NULL DEFAULT 'standard',  -- standard | fast | batch
+    speed               TEXT    NOT NULL DEFAULT 'standard',  -- standard | fast
     -- canonical 4-token shape (Anthropic-style)
     input_tokens        INTEGER NOT NULL DEFAULT 0,
     output_tokens       INTEGER NOT NULL DEFAULT 0,
@@ -96,7 +98,7 @@ CREATE INDEX idx_events_model      ON usage_events(model, day);
 CREATE UNIQUE INDEX uniq_events_msg ON usage_events(source_message_fk);
 ```
 
-`source_message_fk` is the dedup key — re-running normalization is a no-op for already-converted messages.
+`source_message_fk` is the dedup key — re-running normalization is a no-op for already-converted messages. v008 dropped the `REFERENCES messages(id)` foreign key shown above (a SQLite FK cannot point at a view, and `messages` became one); the `uniq_events_msg` UNIQUE index is what backs the dedup.
 
 ### Marts
 
@@ -187,6 +189,16 @@ CREATE TABLE mart_watermark (
 );
 ```
 
+### Lower-grain marts (added after v006)
+
+v006 shipped the five marts above. Three finer-grain marts landed later, as the cost-attribution and optimize features needed per-tool and per-call signal:
+
+- `tool_mart` (v007) — keyed `(day, project_id, provider, tool_name)`. Carries `event_count` (distinct message/tool pairs), `calls_total` (total occurrences, added in v012), `cost_usd` (1/N attribution per distinct tool), `tokens_in`, `tokens_out`, `session_count`.
+- `command_mart` (v007) — keyed `(day, project_id, command_name)`, same measure columns. `command_name` is the leading slash-command of the prompt that triggered the turn, or `freeform` for non-slash prompts.
+- `message_tool_mart` (v011) — one row per `(message_id, tool_name, call_index)`. Carries `file_path`, `byte_count`, `call_index`; feeds the optimize detectors that need per-call signal.
+
+All three follow the same `MartBuilder` contract — watermarked, idempotent, independently rebuildable. Full DDL is in the migration files; column-level detail is in [session-schema-v1.md](session-schema-v1.md#marts-layer-8-tables).
+
 ---
 
 ## Code shape
@@ -197,7 +209,7 @@ CREATE TABLE mart_watermark (
 class Normalizer(ABC):
     """Per-provider transform: messages.row → usage_events row(s)."""
 
-    provider_name: str  # "claude" | "codex" | "cursor" | ...
+    provider_name: str = ""  # "claude" | "codex" | "cursor" | ...
 
     @abstractmethod
     def normalize(self, msg_row: dict) -> Iterable[dict]:
@@ -216,7 +228,8 @@ class Normalizer(ABC):
 
 ```python
 class MartBuilder(ABC):
-    name: str  # "daily" | "session" | "project" | "provider_day" | "model_day"
+    name: str  # "daily" | "session" | "project" | "provider_day"
+               # | "model_day" | "tool" | "command" | "message_tool"
 
     @abstractmethod
     def refresh(self, conn: sqlite3.Connection, since_event_id: int) -> int:
@@ -226,12 +239,18 @@ class MartBuilder(ABC):
         the new watermark.
 
         Idempotent: re-running with the same since_event_id is a no-op
-        for already-built rows. Implementations use INSERT ... ON CONFLICT
-        DO UPDATE so a re-run after a partial failure self-heals.
+        for already-built rows. Additive marts use INSERT ... ON CONFLICT
+        DO UPDATE; per-entity marts use INSERT OR REPLACE over a
+        recomputed aggregate. Either way, a re-run after a partial
+        failure self-heals.
         """
 
     def rebuild_from_scratch(self, conn: sqlite3.Connection) -> None:
-        """DROP + CREATE + full backfill. Idempotent. Used by --rebuild."""
+        """DELETE every row, then refresh from event 0. Idempotent.
+
+        Concrete default; runs on `backfill --force`. Subclasses
+        override only when the table name differs from `<name>_mart`.
+        """
 ```
 
 ### Watermark helpers — `stackunderflow/etl/watermark.py`
@@ -247,7 +266,8 @@ def refresh_all_marts(conn) -> dict[str, int]:
 ### Watcher — `stackunderflow/etl/watcher.py`
 
 ```python
-def start_watcher(conn_factory, *, debounce_ms: int = 200) -> WatcherHandle:
+def start_watcher(conn_factory, *, debounce_ms: int = 200,
+                  poll_interval_ms: int = 50) -> WatcherHandle:
     """Watch all registered adapter source paths.
 
     On any change:
@@ -267,14 +287,20 @@ Library: `watchfiles` (Rust-backed, sub-100ms latency, async-friendly). Already-
 ### Backfill orchestrator — `stackunderflow/etl/backfill.py`
 
 ```python
-def backfill(conn, *, force: bool = False) -> BackfillReport:
+def backfill(conn, *, force: bool = False,
+             progress_callback=None) -> BackfillReport:
     """One-shot: convert all existing messages into usage_events, then
-    rebuild every mart from scratch.
+    refresh every mart from the new watermark.
 
-    `force=True` drops events + marts and rebuilds. Default is incremental
-    (skip messages with existing source_message_fk).
+    Default is incremental — messages with an existing source_message_fk
+    are skipped via the uniq_events_msg index (INSERT OR IGNORE).
 
-    Reports timing per stage so we can tune later.
+    `force=True` first wipes usage_events + mart_watermark and rebuilds
+    every mart from scratch, then runs the normalize pass fresh.
+
+    The returned BackfillReport carries events_inserted,
+    events_skipped_duplicate, per-mart refresh counts, and total
+    duration_seconds.
     """
 ```
 
@@ -292,15 +318,25 @@ Wave 1 (foundation, sequential)  ✅ landed
   └── etl/backfill.py                    (orchestrator skeleton)
        │
        ▼
-Wave 2 (parallel, all 3 agents)
+Wave 2 (parallel)  ✅ landed
   ├── A: 4 default normalizers           (claude, codex, cursor, cline)
   ├── B: 5 mart builders                 (daily, session, project, provider_day, model_day)
   └── C: filesystem watcher              (watchfiles + debounce + per-source dispatch)
        │
        ▼
-Wave 3 (parallel, route migrations)
+Wave 3 (route migrations)  ✅ landed
   └── 6 routes → mart reads              (cost-data, dashboard-data, projects,
                                           compare, optimize, yield)
+       │
+       ▼
+Wave 4 (beta providers)  ✅ landed
+  ├── 14 beta-provider normalizers       (registry now holds 18 entries)
+  └── backfill.py body                   (streaming normalize pass + report)
+       │
+       ▼
+Wave 5 (lower-grain marts)  ✅ landed
+  └── tool_mart + command_mart (v007), message_tool_mart (v011),
+      tool_mart.calls_total (v012)
 ```
 
 ---
@@ -317,20 +353,19 @@ Wave 3 (parallel, route migrations)
 
 ## Migration / rollback
 
-`v006_etl_layer.sql` is **additive** — it doesn't touch the existing `messages` / `sessions` / `projects` tables. Routes can be migrated one at a time; the old aggregator paths keep working until each route is swapped.
+`v006_etl_layer.sql` is **additive** — it doesn't touch the existing `messages` / `sessions` / `projects` tables. Routes were migrated one at a time; the old aggregator paths kept working until each route was swapped.
 
-> **Numbering note.** Earlier drafts of this spec called the migration `v004_etl_layer.sql`. Two unrelated migrations (`v004_clean_synthetic_models.sql`, `v005_cursor_workspace_redistribute.py`) shipped between the spec being written and Wave 1 landing, so the actual file is `v006_etl_layer.sql`. `schema.CURRENT_VERSION` bumps to 6.
+> **Numbering note.** Earlier drafts of this spec called the migration `v004_etl_layer.sql`. Two unrelated migrations (`v004_clean_synthetic_models.sql`, `v005_cursor_workspace_redistribute.py`) shipped between the spec being written and Wave 1 landing, so the actual file is `v006_etl_layer.sql` and it sets `PRAGMA user_version = 6`. The schema has advanced well past 6 since — `schema.CURRENT_VERSION` is 17.
 
-Rollback: drop `usage_events` + 5 marts + `mart_watermark`. Routes that already migrated would 500 on read — keep the old aggregator code in tree until every route is migrated and a release ships.
+Rolling back v006 means dropping `usage_events`, its five marts, and `mart_watermark`. Routes already on mart reads would 500 — the old aggregator code stayed in tree until every route was migrated and a release shipped.
 
 ---
 
 ## What this does NOT do (out of scope for v0.7.x ETL)
 
-- Cross-machine sync (this is the local-first design's selling point — staying local)
+- Cross-machine sync (the local-first design keeps everything on one machine by choice)
 - True streaming (would need a worker process or async ingest queue; the watcher pattern gives us "feels-live" without that complexity)
 - Time-travel queries (no `valid_to` columns; events are immutable, marts are derived state)
 - Per-account dimension is stubbed (`account TEXT DEFAULT 'default'`) — wired but not exposed in any UI yet
-- Monthly partitioning on `messages` — designed-for, not implemented yet
 
-These can come in v0.8+.
+Monthly partitioning of `messages` was also out of scope here; it shipped separately in v008 — see [messages-partitioning.md](messages-partitioning.md). The rest may come in a later release.

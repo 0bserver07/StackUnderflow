@@ -1,28 +1,32 @@
 # Cross-Agent Knowledge Base RFC
 
 > **Status: Proposal / RFC — partially implemented.**
-> This document scopes out what it would take to turn StackUnderflow from a
-> Claude Code analytics dashboard into a unified, cross-agent, cross-project
-> knowledge base that actively feeds context back into agent sessions.
+> This document scopes what it would take to turn StackUnderflow from a
+> coding-agent analytics dashboard into a cross-agent, cross-project
+> knowledge base that feeds context back into agent sessions.
 >
-> **Shipped so far:** an initial MCP server (`stackunderflow-mcp` /
-> `stackunderflow mcp`) exposing a `session_query` tool — read-only,
-> stateless, walks `~/.claude*` JSONL logs through the adapter layer.
-> This is a step toward §7 ("MCP tool") and §8.7 (read-only query API),
-> but does not yet implement the push/persistence side of the proposed
-> knowledge store. See [`docs/mcp.md`](mcp.md) for the current surface.
+> **Shipped since this RFC was written:** multi-provider ingest (adapters
+> for Claude Code, Codex, Cursor, Gemini, and more), the shared
+> `SourceAdapter` protocol, and a read-only MCP server (`stackunderflow-mcp`
+> / `stackunderflow mcp`). The MCP server reads the ingested store and
+> exposes session-query and discovery tools — a step toward the §7 query
+> API (specifically the MCP integration mechanism in §7.3). It does **not**
+> implement the knowledge layer this RFC proposes: there is no knowledge
+> artifact extraction, no `/knowledge/query` or `/knowledge/push` endpoint,
+> and no cross-node sync. See [`docs/mcp.md`](mcp.md) for the current MCP
+> surface.
 
 ## 1. Problem Statement
 
-Right now StackUnderflow indexes and analyzes every Claude Code session on
-a single machine. But the real value is the **knowledge** those sessions
-contain: decisions made, solutions found, patterns discovered, mistakes
-avoided, architectural reasoning, and debugging tricks.
+StackUnderflow indexes and analyzes coding-agent sessions on a single
+machine — across every provider it has an adapter for. The value those
+sessions hold is **knowledge**: decisions, solved problems, patterns, and
+the dead ends worth not repeating.
 
-Today, each agent session starts cold. Claude knows nothing about what Gemini
-debugged yesterday. Codex doesn't recall the dependency injection pattern
-you agreed on in a Cursor conversation last week. Every project, every agent,
-every machine -- siloed.
+Today each agent session starts cold. Claude knows nothing about what Gemini
+debugged yesterday. Codex doesn't recall the dependency-injection pattern you
+agreed on in a Cursor conversation last week. The sessions are indexed, but
+the knowledge in them does not flow back into new sessions.
 
 The goal: **every agent conversation contributes to a shared knowledge base
 that every other agent can query during its own session**, regardless of
@@ -41,37 +45,42 @@ provider or machine.
 ## 3. Current Architecture (What Exists)
 
 ```
-~/.claude/projects/<slug>/*.jsonl
+~/.claude/projects/<slug>/*.jsonl   (+ ~/.codex, ~/.cursor, … — many providers)
          │
          ▼
-┌──────────────────┐
-│   discovery.py   │  enumerate projects, locate logs
-├──────────────────┤
-│   reader.py      │  scan JSONL → RawEntry
-├──────────────────┤
-│   dedup.py       │  collapse streaming duplicates
-├──────────────────┤
-│  classifier.py   │  tag message types
-├──────────────────┤
-│  enricher.py     │  build EnrichedDataset
-├──────────────────┤
-│ aggregator.py    │  compute statistics
-├──────────────────┤
-│  formatter.py    │  shape for REST API
-└──────────────────┘
+  adapters/<provider>.py    enumerate() → SessionRef, read() → Record
          │
          ▼
-┌──────────────────┐     ┌──────────────┐
-│   FastAPI server │────▶│ React UI     │
-└──────────────────┘     └──────────────┘
+  ingest/                   run_ingest → ingest_file: one txn per file
+         │
+         ▼
+  SQLite store (~/.stackunderflow/store.db)
+    projects / sessions / messages / usage_events / mart tables
+         │
+         ├──▶ store/queries.py → stats/ (classifier → enricher →
+         │       aggregator + formatter) → FastAPI routes → React UI
+         │
+         └──▶ MCP server (stackunderflow-mcp) — read-only session tools
 ```
 
-**Gaps:**
-- Single provider (Claude Code only)
-- Single machine (local `~/.claude/`)
-- Read-only indexer — agents don't query it during sessions
-- No structured knowledge extraction beyond Q&A pairs and tags
-- Cache is ephemeral (`~/.stackunderflow/`), not a knowledge store
+The pipeline files this RFC originally named (`discovery.py`, `reader.py`,
+`dedup.py`) no longer exist as separate modules: discovery and reading are
+the adapter layer, and dedup folded into `stats/enricher.py`.
+
+**What's done since this RFC was drafted:**
+- Multi-provider ingest — adapters for Claude Code, Codex, Cursor, Gemini,
+  and others (see [`docs/multi-provider.md`](multi-provider.md)).
+- The shared `SourceAdapter` protocol (`stackunderflow/adapters/base.py`).
+- A read-only MCP server, so agents *can* query session history mid-session.
+- A persistent SQLite store (`~/.stackunderflow/store.db`) — the source of
+  truth, not an ephemeral cache.
+
+**Still missing (what this RFC is about):**
+- No structured knowledge extraction beyond Q&A pairs, tags, and error
+  detection — nothing portable across providers or machines.
+- The store holds raw messages and usage events, not knowledge artifacts.
+- No push path — agents read history but don't write resolved decisions back.
+- Single machine; no cross-node sync.
 
 ## 4. Target Architecture
 
@@ -123,8 +132,8 @@ provider or machine.
 
 ## 5. Knowledge Artifacts
 
-What actually gets stored and shared. Not every message -- structured
-derivatives that are small, searchable, and useful.
+What gets stored and shared: not raw messages, but compact searchable
+derivatives of them.
 
 | Artifact | Source | Example |
 |----------|--------|---------|
@@ -161,29 +170,41 @@ Each provider needs:
 2. **Reader** — parse logs into `RawEntry`
 3. **Extraction** — derive knowledge artifacts from raw messages
 
-The existing `Source` protocol (proposed in `codex-adapter-spec.md`) is the right abstraction:
+The shipped `SourceAdapter` protocol (`stackunderflow/adapters/base.py`)
+already covers discovery and reading. The knowledge layer would add a third
+step, `extract_knowledge`:
 
 ```python
-class Source(Protocol):
-    def enumerate_projects(self) -> list[tuple[str, str]]: ...
-    def locate_project(self, project_dir: str) -> str | None: ...
-    def project_metadata(self) -> list[dict]: ...
-    def scan(self, project_key: str) -> list[RawEntry]: ...
-    def extract_knowledge(self, entries: list) -> list[KnowledgeArtifact]: ...
+# Shipped today — SourceAdapter
+class SourceAdapter(Protocol):
+    name: str
+    def enumerate(self) -> Iterable[SessionRef]: ...
+    def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterable[Record]: ...
+    def watch_paths(self) -> list[Path]: ...
+
+# Proposed addition for the knowledge layer
+def extract_knowledge(self, entries: list[RawEntry]) -> list[KnowledgeArtifact]: ...
 ```
 
-### 6.1 Provider Coverage (Planned)
+### 6.1 Provider Coverage
 
-| Provider | Location | Format | Status |
-|----------|----------|--------|--------|
-| Claude Code | `~/.claude/projects/` | JSONL | ✅ Implemented (reader only) |
-| OpenAI Codex | `~/.codex/state_5.sqlite` | SQLite | 📝 RFC (`codex-adapter-spec.md`) |
-| Gemini CLI | `~/.gemini/` | TBD | 🔲 To spec |
-| Cursor | `~/.cursor/` | TBD | 🔲 To spec |
-| VS Code Copilot | `~/.vscode/` | TBD | 🔲 To spec |
-| OpenHands | `~/.openhands/` | TBD | 🔲 To spec |
+The **Ingest adapter** column is the shipped state — adapter present,
+sessions ingested and analysed. **Knowledge extraction** (`extract_knowledge`)
+is not built for any provider yet; it is the work this RFC proposes.
 
-Each adapter follows the same pattern: discovery → reader → `RawEntry` → classifier → enricher → artifact extraction.
+| Provider | Ingest adapter | Knowledge extraction |
+|----------|----------------|----------------------|
+| Claude Code | ✅ `adapters/claude.py` | 🔲 proposed |
+| OpenAI Codex | ✅ `adapters/codex.py` | 🔲 proposed |
+| Gemini CLI | ✅ `adapters/gemini.py` | 🔲 proposed |
+| Cursor | ✅ `adapters/cursor.py`, `cursor_agent.py` | 🔲 proposed |
+| GitHub Copilot | ✅ `adapters/copilot.py` | 🔲 proposed |
+| OpenHands | 🔲 no adapter | 🔲 proposed |
+
+Several more providers have adapters; see [`docs/adapters.md`](adapters.md)
+for the full list. Each adapter follows the same pattern: discovery →
+reader → `RawEntry` → classifier → enricher; artifact extraction would be
+the proposed final step.
 
 ### 6.2 Claude Adapter (Refactor Existing)
 
@@ -362,8 +383,8 @@ Everything stays local by default. Sync is opt-in and encrypts artifacts with th
 ### 9.3 Implementation
 
 The `.env.example` already has R2 fields (`R2_ENDPOINT`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`). These would be used by a sync
-client that:
+`R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`) — currently used for dashboard
+sharing. A knowledge-sync client would reuse them. Such a client:
 1. Fetches artifacts from the local store that haven't been synced
 2. Encrypts and uploads to R2
 3. Pulls new artifacts from other machines
@@ -379,30 +400,35 @@ client that:
 
 ## 11. Implementation Phases
 
+This roadmap predates the multi-provider and MCP work. Items already shipped
+are marked inline (✅ done, ⚠️ partial); the rest stand as proposed.
+
 ### Phase 0: Clean up existing foundation
 
 1. **Artifact extraction for Claude** — Add `extract_knowledge()` to the
    existing pipeline. Use Q&A pairs, tags, and error detection as building
    blocks. Output structured `KnowledgeArtifact` objects.
-2. **SQLite knowledge store** — Replace ephemeral cache with a proper SQLite
-   store. Migrate existing cache logic to write to the knowledge store.
+2. **SQLite knowledge store** — Stand up a dedicated store for knowledge
+   artifacts (schema in §8), separate from the existing message store.
 3. **Query/push API** — Implement the REST endpoints described in section 7.
 4. **Claude Code hook integration** — Demonstrate with a `CLAUDE.md` hook
    that queries StackUnderflow before each new session.
 
 ### Phase 1: Second provider
 
-5. **Codex adapter** — Implement per `codex-adapter-spec.md`. Discovery,
-   reader, and knowledge extraction.
-6. **Source protocol** — Implement `Source` protocol from codex spec.
-   Refactor Claude adapter to implement it too.
-7. **Multi-source pipeline** — Update `process()` to accept any `Source`.
-   Tag projects with their provider.
+5. **Codex adapter** — ✅ `adapters/codex.py` ships discovery + reader.
+   Knowledge extraction is still proposed.
+6. **Source protocol** — ✅ shipped as `SourceAdapter` (`adapters/base.py`);
+   the Claude adapter and every other adapter implement it.
+7. **Multi-source pipeline** — ✅ ingest runs every registered adapter and
+   tags each project with its provider.
 
 ### Phase 2: Active agent integration
 
-8. **MCP server** — Expose the query/push API as an MCP tool server. Any
-   agent with MCP support can query the knowledge base.
+8. **MCP server** — ⚠️ partially shipped. A read-only MCP server exists
+   (`stackunderflow-mcp`) with session-query and discovery tools. It does
+   not yet expose a knowledge query/push API — that depends on the
+   knowledge store (Phase 0).
 9. **Pre-hook injection** — Agent hooks that query relevant knowledge before
    each session and inject it as context.
 10. **Post-hook persistence** — Agent hooks that push resolved decisions and
@@ -418,8 +444,8 @@ client that:
 
 ### Phase 4: Additional providers
 
-14. **Gemini CLI adapter** — Discovery and reader for `~/.gemini/`.
-15. **Cursor adapter** — Discovery and reader for Cursor logs.
+14. **Gemini CLI adapter** — ✅ `adapters/gemini.py`.
+15. **Cursor adapter** — ✅ `adapters/cursor.py` and `cursor_agent.py`.
 16. **OpenHands adapter** — If community demand.
 17. **Source indicator in UI** — Badge each project/session/artifact with
     its provider.
@@ -448,8 +474,10 @@ client that:
 
 ## 13. References
 
-- [Codex Adapter Spec](codex-adapter-spec.md) — Provider adapter interface
-  and pipeline integration (RFC)
-- [README-DEV.md](README-DEV.md) — Architecture overview
-- [Memory & Latency Optimization](memory-and-latency-optimization.md) — Cache
-  strategy (existing)
+- [Codex Adapter Spec](codex-adapter-spec.md) — provider adapter interface
+  and pipeline integration
+- [Multi-provider overview](multi-provider.md) — the shipped adapter set
+- [MCP server](mcp.md) — current read-only tool surface
+- [README-DEV.md](README-DEV.md) — architecture overview
+- [Memory & latency optimization](memory-and-latency-optimization.md) — cache
+  strategy

@@ -1,6 +1,6 @@
 # Claude Code skills
 
-StackUnderflow ships **Claude Code skills** — markdown files that teach Claude Code *when* to invoke StackUnderflow's discovery commands. With these installed, Claude Code automatically surfaces prior session context at the right moments: starting work in a known project, touching a specific file, or recalling a past decision. The store stops being passive and becomes a reflex.
+StackUnderflow ships **Claude Code skills** — markdown files that teach Claude Code *when* to invoke StackUnderflow's discovery commands. With these installed, Claude Code surfaces prior session context at the right moments: starting work in a known project, touching a specific file, or recalling a past decision.
 
 > **What's a skill?** A skill is a directory under `~/.claude/skills/<name>/` containing a `SKILL.md` file with YAML frontmatter (`name`, `description`) and a markdown body. Claude Code reads the descriptions of every installed skill at session start and decides which to invoke based on the user's request. Skills are documented at <https://code.claude.com/docs/en/skills>.
 
@@ -169,7 +169,7 @@ Project-level wins over user-level for the same skill name.
 
 ## Auto-generated skills
 
-The three skills above are **static** — they teach Claude Code *how* to query the store, and ship with the package. StackUnderflow can also **mine your local store for the workflows specific to one project** and emit `SKILL.md` files for them: "always run `pytest tests/ -q` after editing `stackunderflow/`", "lint with `ruff check --fix`", "never `pkill` — use a graceful SIGTERM first", "never modify `~/.stackunderflow/store.db`". These are derived from ground truth (what actually happened across your sessions), not from `CLAUDE.md` vibes.
+The three skills above are **static** — they teach Claude Code *how* to query the store, and ship with the package. StackUnderflow can also mine your local store for the workflows specific to one project and emit `SKILL.md` files for them: "always run `pytest tests/ -q` after editing `stackunderflow/`", "lint with `ruff check --fix`", "never `pkill` — use a graceful SIGTERM first", "never modify `~/.stackunderflow/store.db`". These are derived from what actually happened across your sessions, not from declarations in `CLAUDE.md`.
 
 ```bash
 # Mine the project the current directory belongs to; write to ./.claude/skills/auto-*/
@@ -200,16 +200,30 @@ What gets mined (pattern kinds): `canonical-test-command`, `always-runs-X-after-
 
 The synthesis lives in `stackunderflow/services/skill_synth.py`; the bulk-load helper it uses is `stackunderflow.services.discovery.load_messages_for_project`.
 
+## Proactive recommendations
+
+`stackunderflow skills generate` is reactive — you have to remember to run it. `stackunderflow recommend skills` is the proactive counterpart: it mines the same patterns and surfaces "you ran X N times — want a skill?" without writing anything to disk.
+
+```bash
+# Scan the current directory's project for skill-worthy patterns
+stackunderflow recommend skills
+
+# Tune the bar and window, or scan another project
+stackunderflow recommend skills --project -Users-you-dev-foo --threshold 8 --window-days 60
+```
+
+It filters out patterns you already have a skill for. Each row carries an `accept_command` you paste to install the skill — acceptance is always an explicit step. The same recommender is exposed as the `recommend_skills` MCP tool and to the meta-agent sidebar; see [`docs/mcp.md`](mcp.md) and [`docs/meta-agent.md`](meta-agent.md).
+
 ## Future work
 
 `stackunderflow init --install-skills` covers the idempotent install of the three static skills today; there's no longer a manual-only path. Possible follow-ups: a `stackunderflow skills update` subcommand that diffs the destination against the shipped copy without writing anything (preview), or a per-skill opt-out flag (`--skip-skill <name>`) for users who want only a subset of the three.
 
 ## Validation
 
-The repo has a smoke test (`tests/test_skills.py`) that verifies each shipped `SKILL.md` parses as valid YAML frontmatter + non-empty body. Run it after editing skill files:
+The repo has a smoke test (`tests/stackunderflow/test_skills.py`) covering the shipped skills. It checks each `SKILL.md` for the `<name>/SKILL.md` directory layout, valid `---`-delimited frontmatter, a `name` matching the directory, a non-empty `description` of at least 40 characters, a non-empty body, and a `stackunderflow` CLI command somewhere in that body. It also fails if a skill directory appears that isn't one of the three expected. Run it after editing skill files:
 
 ```bash
-pytest tests/test_skills.py -q
+pytest tests/stackunderflow/test_skills.py -q
 ```
 
 ## Troubleshooting

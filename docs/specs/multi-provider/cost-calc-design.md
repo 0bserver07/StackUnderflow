@@ -16,7 +16,7 @@ The current system is **model-keyed**, not provider-keyed. Core design:
 - **Rates table** `_RATES` is indexed by `_Family` enum, holding tuples of `(input_rate, output_rate, cache_write_rate, cache_read_rate)` in $/million-tokens.
 - **Model ID resolution** happens via `_identify(model_id: str) -> _Family`:
   - Splits on hyphens and dots, converts to lowercase set membership checks.
-  - Example: `"claude-opus-4-6"` → matches `"opus"` and `"6"`, `"4"` tokens → `_Family.OPUS_46`.
+  - Example: `"claude-opus-4-6"` → matches `"opus"`, `"6"`, `"4"` tokens → `_Family.OPUS_46`.
   - Fallback to `_FALLBACK = _Family.SONNET_35` if no match.
 - **Dynamic overlay** via `PricingService`:
   - Fetches LiteLLM pricing JSON, re-indexes to `_Family`, merges with hardcoded `_RATES`.
@@ -35,9 +35,9 @@ The current system is **model-keyed**, not provider-keyed. Core design:
   - `_RetryCollector.ingest_interaction()` (lines 526, 711)
   - `_OutlierCollector.ingest_interaction()` (line 442)
   - Various summary functions.
-- `route/cost.py`: re-exported but not directly called.
+- `routes/cost.py`: re-exported but not directly called.
 
-**Pipeline step:** Cost computation happens **in the aggregator**, after records are enriched but during the collector pass. Crucially:
+**Pipeline step:** Cost computation happens **in the aggregator**, after records are enriched but during the collector pass:
 1. Records arrive with raw token counts (keys: `"input"`, `"output"`, `"cache_creation"`, `"cache_read"`).
 2. Each collector independently calls `compute_cost(tokens_dict, model)` when building its output.
 3. No normalization or provider-aware transformation happens before the aggregator — it is the aggregator's responsibility.
@@ -47,7 +47,7 @@ The current system is **model-keyed**, not provider-keyed. Core design:
 **OpenAI convention:** Cached input tokens are nested inside `input_tokens` in the API response.  
 **Anthropic convention:** Cached tokens are separate (`cache_creation`, `cache_read`).
 
-**In `adapters/codex.py` lines 299–337**, the `_attach_tokens_to_last_assistant()` function normalizes this:
+In `adapters/codex.py` lines 299–337, the `_attach_tokens_to_last_assistant()` function normalizes this:
 
 ```python
 raw_input = int(last_usage.get("input_tokens", 0) or 0)      # Includes cached
@@ -65,7 +65,7 @@ updated = Record(
 )
 ```
 
-**This normalization occurs in the adapter layer**, before records reach the aggregator. The cost computation layer assumes all records are in Anthropic format (separate cache counts).
+This normalization occurs in the adapter layer, before records reach the aggregator. The cost computation layer assumes all records are in Anthropic format (separate cache counts).
 
 ---
 
@@ -147,7 +147,7 @@ _RATES: dict[_ProviderFamily, tuple[float, float, float, float]] = { ... }
   - Still uses token-based heuristics (e.g., split on hyphens, detect "opus" + "4" + "6").
   - Adds provider hint to resolve ambiguities (e.g., "auto" means different things for Cursor vs. Copilot).
 - Fallback chain:
-  1. Exact match on `_ProviderFamily.
+  1. Exact match on `_ProviderFamily`.
   2. Substring match (e.g., `claude-sonnet-4-5-*` → matches family for any date pin).
   3. Provider-default (e.g., Cursor → Claude Sonnet 4.5).
 

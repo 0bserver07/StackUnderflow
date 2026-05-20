@@ -778,7 +778,7 @@ git commit -m "feat(reports): add text/JSON/CSV/status-line renderers"
 - Create: `stackunderflow/reports/optimize.py`
 - Create: `tests/stackunderflow/reports/test_optimize.py`
 
-Leverages Plan B's `resolution_status='looped'` Q&A pairs. For each project, count looped pairs and multiply by the project's total cost (proxy — in practice you'd want per-session cost, but we don't have session↔cost mapping in the aggregator's output shape). Return a ranked list.
+Uses Plan B's `resolution_status='looped'` Q&A pairs. For each project, count looped pairs and multiply by the project's total cost (proxy — in practice you'd want per-session cost, but we don't have session↔cost mapping in the aggregator's output shape). Return a ranked list.
 
 - [ ] **Step 1: Write the failing test**
 

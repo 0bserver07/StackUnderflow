@@ -5,11 +5,11 @@
 ```bash
 git clone https://github.com/0bserver07/StackUnderflow.git
 cd StackUnderflow
-pip install -e .
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 ```
 
-To work on the React frontend:
+The `[dev]` extra pulls in pytest, ruff, mypy, and the build tooling. To work
+on the React frontend:
 
 ```bash
 cd stackunderflow-ui
@@ -21,13 +21,20 @@ npm run build  # production build → stackunderflow/static/react/
 ## Running Tests
 
 ```bash
-python -m pytest tests/ -v
+pytest tests/ -q                                       # fast suite; slow tests are deselected by default
+pytest -m slow tests/stackunderflow/integration -q     # slow e2e + perf-regression suite
+```
+
+Frontend tests use the Node built-in test runner (no vitest dependency):
+
+```bash
+cd stackunderflow-ui && node --test tests/services/*.test.ts
 ```
 
 ## Linting
 
 ```bash
-bash lint.sh
+bash lint.sh        # ruff check + ruff format --check + mypy
 ```
 
 ## Pull Requests
@@ -44,11 +51,16 @@ See [docs/adapters.md](docs/adapters.md) for the contract (`SessionRef`, `Record
 
 ## Project Structure
 
-- `stackunderflow/pipeline/` — ETL core (reader → dedup → classify → enrich → aggregate → format)
+- `stackunderflow/adapters/` — per-provider source-file parsers
+- `stackunderflow/etl/` — the normalize → marts pipeline, the filesystem watcher, backfill
+- `stackunderflow/store/` — SQLite store, schema, migrations, query helpers
 - `stackunderflow/routes/` — FastAPI route modules
-- `stackunderflow/services/` — search, Q&A, tags, bookmarks, etc.
-- `stackunderflow/infra/` — cache, discovery, costs
+- `stackunderflow/services/` — search, Q&A, tags, bookmarks, discovery, recommenders
+- `stackunderflow/infra/` — cache, costs, currency, provider pricers
+- `stackunderflow/mcp/` — the MCP server
 - `stackunderflow-ui/` — React frontend
+
+`docs/HANDOFF.md` has the full package map and the design rationale.
 
 ## Code Style
 

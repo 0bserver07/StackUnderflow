@@ -45,8 +45,8 @@ codeburn's `src/` contains 24 non-provider `.ts` files totaling ~3000 LOC of log
 
 | CB File | Purpose | SU Equivalent | Status |
 |---------|---------|---------------|--------|
-| **parser.ts** | Read JSONL, dedup, classify, aggregate turns | `pipeline/reader.py`, `pipeline/classifier.py`, `stats/enricher.py` | ✅ Exists; multi-provider dedup added in v0.5 |
-| **bash-utils.ts** | Extract bash commands from shell tool args | `pipeline/classifier.py` (reads `toolCall.arguments.command`) | ✅ Covered via tool usage extraction |
+| **parser.ts** | Read JSONL, dedup, classify, aggregate turns | `pipeline/reader.py`, `stats/classifier.py`, `stats/enricher.py` | ✅ Exists; multi-provider dedup added in v0.5 |
+| **bash-utils.ts** | Extract bash commands from shell tool args | `stats/classifier.py` (reads `toolCall.arguments.command`) | ✅ Covered via tool usage extraction |
 | **classifier.ts** | 13-category task classification | `stats/classifier.py` (matches 13 categories: Coding, Debugging, etc.) | ✅ Matches exactly |
 | **types.ts** | Core type defs (TokenUsage, ParsedApiCall, TaskCategory) | `store/types.py`, `stats/enricher.py` | ✅ Equivalent structure |
 
@@ -203,7 +203,7 @@ codeburn exposes 8 top-level commands (from `src/cli.ts` lines 287–887):
 - Filters out `cd`, `true`, `false`
 - Returns sorted list of command names
 
-**StackUnderflow**: `pipeline/classifier.py` (embedded in tool usage extraction)
+**StackUnderflow**: `stats/classifier.py` (embedded in tool usage extraction)
 - Reads `toolCall.arguments.command` as-is
 - No dedicated bash extractor; relying on provider to parse tool call args
 
@@ -473,7 +473,7 @@ codeburn exposes 8 top-level commands (from `src/cli.ts` lines 287–887):
 
 ## Summary
 
-StackUnderflow v0.5.0 has complete provider parity but is missing **12 user-facing features** from codeburn's non-provider surface area:
+StackUnderflow v0.5.0 has complete provider parity but is missing 12 user-facing features from codeburn's non-provider surface area:
 
 1. **Multi-currency** — Users outside USD region can't see costs in their local currency
 2. **CLI Export** — No way to save reports to disk (CSV/JSON)
@@ -488,7 +488,7 @@ StackUnderflow v0.5.0 has complete provider parity but is missing **12 user-faci
 11. **Streaming Reader** — Large logs can OOM (no 128 MB cap)
 12. **Cursor Parse Cache** — Every parse re-reads vscdb (no fingerprint cache)
 
-The **top 3 high-impact gaps** are currency, export, and model aliases — each adds <3 hours of work and unlocks value for >50% of users. The remaining 9 are niche or nice-to-have.
+The top 3 high-impact gaps are currency, export, and model aliases — each adds <3 hours of work and unlocks value for >50% of users. The remaining 9 are niche or nice-to-have.
 
 SU's architecture (web server + REST API) is better-suited for multi-user and mobile use cases than codeburn's CLI-first approach. The gaps are mostly in analytics depth and configuration, not in core parsing.
 

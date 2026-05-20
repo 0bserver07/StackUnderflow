@@ -107,11 +107,12 @@ either).
 7. **`DROP TABLE messages`**.
 8. **`CREATE VIEW messages`** as `UNION ALL` across partitions with
    explicit columns.
-9. **Create `_messages_id_seq`** and bootstrap `next_id = MAX(id) + 1`.
-10. **Create `messages_insert_route`** — INSTEAD OF INSERT trigger
-    that handles raw `INSERT INTO messages` (tests, ad-hoc tooling).
-    Production writes route directly via the writer; the trigger is
-    the slow path.
+9. **Create `messages_insert_route`** — the INSTEAD OF INSERT trigger
+   that handles raw `INSERT INTO messages` (tests, ad-hoc tooling).
+   Production writes route directly via the writer; the trigger is
+   the slow path.
+10. **Create `_messages_id_seq`** and bootstrap `next_id = MAX(id) + 1`
+    (the max is read from the old table before step 7 drops it).
 
 ---
 
@@ -364,8 +365,11 @@ out of `writer.py` and become a public store helper.
 
 ## Operational rollout (1.9 GB store)
 
-This migration is **not auto-applied** to `~/.stackunderflow/store.db`.
-The maintainer reviews the plan and applies manually in three steps:
+v008 runs through the standard migration chain — `schema.apply()` picks
+it up like any other pending migration, and the maintainer's store is on
+it (`user_version = 17`). Because it rewrites the largest table in the
+store, it was applied to the 1.9 GB production store with a
+backup-and-verify procedure rather than run blind:
 
 1. **Backup.**
    ```bash
@@ -406,8 +410,8 @@ The maintainer reviews the plan and applies manually in three steps:
    ```
 
 The migration is **transactional** — a crash mid-migration leaves the
-DB on `user_version = 6` (or whatever was the prior version), so a
-failed run is just `mv ~/.stackunderflow/store.db.pre-v008.bak
+DB on `user_version = 7` (where v007 left it), so a failed run is just
+`mv ~/.stackunderflow/store.db.pre-v008.bak
 ~/.stackunderflow/store.db` away from clean.
 
 ---

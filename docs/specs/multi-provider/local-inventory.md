@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This machine hosts extensive local data from multiple AI coding agents, with **Tier 1** priority given to Claude CLI (5.0GB), Codex (114MB), and Cursor (1.4GB). These three providers alone represent >6.5GB of real local data with very recent activity (within last week). Cline extension in VS Code also has substantial conversation history (13MB). Most other agents have minimal or zero local data.
+This machine hosts extensive local data from multiple AI coding agents, with **Tier 1** priority given to Claude CLI (5.0GB), Codex (114MB), and Cursor (1.4GB). These three providers alone represent >6.5GB of real local data with very recent activity. Cline extension in VS Code also has substantial conversation history (13MB). Most other agents have minimal or zero local data.
 
 ---
 
@@ -66,7 +66,7 @@ This machine hosts extensive local data from multiple AI coding agents, with **T
 {"session_id":"5f9c9d0d-e655-4057-ba6c-90b570873fa7","ts":1754718491,"text":"should we be updated the index..."}
 ```
 
-**Value:** HIGH — comprehensive activity logging with conversation history and system logs. Very recent.
+**Value:** HIGH — activity logging with conversation history and system logs. Very recent.
 
 ---
 
@@ -101,7 +101,7 @@ This machine hosts extensive local data from multiple AI coding agents, with **T
 **Total Disk Size:** 13 MB
 
 **Most Recent Activity:** Jan 15, 2026
-**Date Range:** Jan 19, 2026 to Aug 1, 2025
+**Date Range:** Aug 1, 2025 to Jan 19, 2026
 
 **Sample Task History (first 500 chars):**
 ```
@@ -316,4 +316,4 @@ This machine hosts extensive local data from multiple AI coding agents, with **T
 
 ---
 
-**Inventory complete.** Tier 1 providers (Claude CLI, Codex, Cursor) represent 6.5+ GB of recent, high-value data — start implementation there.
+Tier 1 providers (Claude CLI, Codex, Cursor) represent 6.5+ GB of recent, high-value data — start implementation there.

@@ -1,6 +1,6 @@
 # CodeBurn Multi-Provider Catalog
 
-This document provides a comprehensive reference of all 16 provider integrations supported by CodeBurn (a TypeScript codebase for harvesting AI provider usage data). It serves as a design reference for implementing parallel provider support in StackUnderflow's Python codebase.
+This document catalogs the 16 provider integrations supported by CodeBurn (a TypeScript codebase for harvesting AI provider usage data). It serves as a design reference for implementing parallel provider support in StackUnderflow's Python codebase.
 
 ---
 

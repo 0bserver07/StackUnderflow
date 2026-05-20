@@ -1,11 +1,12 @@
-# Memory and Latency: StackUnderflow Performance Notes
+# Memory and latency
 
 ## Overview
 
-This document describes how StackUnderflow handles performance now that all session
-data lives in a single SQLite store. Storage is `~/.stackunderflow/store.db` and
-all performance characteristics derive from that. There is no in-process memory
-cache for session data.
+All session data lives in a single SQLite store at
+`~/.stackunderflow/store.db`, and most performance characteristics
+derive from that. The one in-process cache is a memo on the
+`/api/dashboard-data` payload; every other request reads SQLite
+directly.
 
 ## Measured Numbers
 
@@ -20,9 +21,9 @@ resulting in a ~1.6 GB store (60% of raw, due to structured column extraction).
 | Dashboard query, typical project | ~51 ms | SQLite read + pipeline (classify, enrich, aggregate) |
 | Dashboard query, large project (10k messages) | ~962 ms | Same path, more rows |
 
-There is no warm-up phase. Every request goes to SQLite directly. The OS page
-cache keeps hot pages in RAM automatically; StackUnderflow does not manage that
-memory.
+There is no warm-up phase. Apart from the dashboard memo described below, every
+request reads SQLite directly. The OS page cache keeps hot pages in RAM
+automatically; StackUnderflow does not manage that memory.
 
 ## Storage Architecture
 
@@ -30,13 +31,20 @@ memory.
 
 ```
 ~/.stackunderflow/
-├── store.db            # All sessions and messages (WAL mode)
-└── store.db-wal        # WAL journal (auto-checkpointed by SQLite)
+├── store.db            # All sessions and messages
+├── store.db-wal        # Write-ahead log (auto-checkpointed by SQLite)
+└── store.db-shm        # Shared-memory index for the WAL
 ```
 
-Tables: `projects`, `sessions`, `messages`, `ingest_log`. Cross-project queries
-(`get_global_stats`, `cross_project_daily_totals`) are single `GROUP BY` queries
-over the `messages` table, indexed on `(session_fk, seq)`, `timestamp`, and `model`.
+The core tables are `projects`, `sessions`, `messages`, and `ingest_log`. The ETL
+layer adds eight precomputed mart tables (`daily_mart`, `session_mart`,
+`project_mart`, `tool_mart`, `command_mart`, `message_tool_mart`,
+`provider_day_mart`, `model_day_mart`) plus `usage_events` and bookkeeping tables.
+The schema version is held in `PRAGMA user_version` and migrated on startup.
+
+The `messages` table carries the bulk of the rows. It is indexed on
+`(session_fk, seq)`, `timestamp`, and `model`, which back the joins and `GROUP BY`
+rollups that the non-mart query paths run.
 
 ## SQLite PRAGMA Choices
 
@@ -58,18 +66,26 @@ conn.execute("PRAGMA foreign_keys = ON")
 
 ## Dashboard Query Path
 
-`store.queries.get_project_stats(conn, project_id=...)` is the hot path:
+`/api/dashboard-data` serves the dashboard in three tiers:
 
-1. Fetch all `raw_json` rows for the project from `messages` (single indexed
-   join: `messages → sessions → projects`).
-2. Reconstruct `RawEntry` objects and run the pipeline:
-   `classifier.tag → enricher.build → formatter.to_dicts + aggregator.summarise`.
-3. Return `(messages, stats)` to the route handler, which serializes to JSON.
+1. **Memo hit.** An in-process dict holds the last payload per
+   `(project, timezone_offset)`. Its key carries a signature — `MAX(last_ts)` and
+   `SUM(message_count)` from the `sessions` table — that moves whenever ingest
+   writes new rows, so a stale entry cannot survive a refresh. A hit returns
+   after one signature query.
+2. **Mart read.** On a memo miss, if the project has a row in `project_mart`, the
+   statistics come from mart reads rather than the message pipeline.
+3. **Full pipeline.** Otherwise `store.queries.get_project_stats(conn,
+   project_id=...)` runs: fetch the project's `raw_json` rows from `messages`
+   (indexed join `messages → sessions → projects`), reconstruct pipeline entries,
+   run `classifier.tag → enricher.build → formatter.to_dicts +
+   aggregator.summarise`, and return `(messages, stats)` for the route to
+   serialize.
 
-No result is cached between requests. Memory peaks during step 2 when the full
-message list for the project is held in Python. Typical project: 50–100 MB
-transient. Largest projects (~10k messages): ~400 MB transient. Memory is
-released once the request completes.
+Memory peaks on the full-pipeline path, when the project's whole message list is
+held in Python: 50–100 MB transient for a typical project, ~400 MB for the
+largest (~10k messages). It is released when the request completes. The memo and
+mart paths never build that list, so their footprint stays flat.
 
 ## Ingest Path
 
@@ -88,11 +104,14 @@ not total file size.
 
 ## What Is Explicitly Cached
 
-StackUnderflow does not maintain a programmatic in-process cache for session data.
-Two narrow exceptions:
+In-process caching is deliberately minimal:
 
-- **Pricing data** (`infra/costs.py`): model pricing table loaded once at startup,
-  held in memory for the lifetime of the process.
+- **Dashboard payload memo** (`routes/data.py`): the last `/api/dashboard-data`
+  response per `(project, timezone_offset)`, invalidated by a signature derived
+  from the `sessions` table. `POST /api/refresh` also drops it for the project it
+  touched.
+- **Pricing data** (`infra/costs.py`): the model pricing table, loaded once at
+  startup and held for the process lifetime.
 - **FTS databases** (search, Q&A, tags): separate SQLite databases, not part of
   `store.db`. Written during ingest, read-only at query time.
 
@@ -102,10 +121,11 @@ eviction policy to configure; page cache size is controlled by SQLite's
 
 ## API Payload Size
 
-The `/api/dashboard-data` endpoint returns statistics plus a page of messages.
-Only the first 50 messages are included in the initial response; subsequent pages
-are fetched on demand. This keeps the initial payload small regardless of project
-size.
+`/api/dashboard-data` returns statistics plus the first page of messages — 50 at
+most, and none at all when the payload is served from marts. Later pages load on
+demand from `/api/messages`. Heavy analytics sections (per-command lists, cost
+breakdowns, tool distributions) load lazily from their own endpoints rather than
+riding along here. The initial payload stays small regardless of project size.
 
 ## Memory Footprint Summary
 
@@ -116,5 +136,6 @@ size.
 | During get_project_stats, 10k-message project | +400 MB transient |
 | After request completes | Returned to baseline |
 
-There is no persistent per-project memory cache. Each request allocates and
-releases its own working set.
+Working sets are transient — each request allocates and releases its own. Only
+the dashboard payload memo persists between requests, and it holds a finished
+payload, not the pipeline's intermediate objects.

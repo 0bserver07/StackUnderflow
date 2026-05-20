@@ -79,7 +79,7 @@ class Record:
     raw: dict
 ```
 
-**All fields are immutable (frozen).** The `seq` field is the primary ordering token—it should be monotonically increasing per session. For JSONL adapters, `seq` is set to the byte offset where the line starts; for SQLite adapters, it could be a rowid or sequence number.
+All fields are immutable (frozen). The `seq` field is the primary ordering token—it should be monotonically increasing per session. For JSONL adapters, `seq` is set to the byte offset where the line starts; for SQLite adapters, it could be a rowid or sequence number.
 
 ### The Ingest Loop
 
@@ -151,7 +151,7 @@ For SQLite, `read()` should:
 - Open the `.db` file
 - Issue a query like `SELECT ... FROM table WHERE session_id = ? AND rowid > ? ORDER BY rowid`
 - Yield one `Record` per row
-- **The `seq` field (currently a byte offset) should be set to the rowid or a sequence number**, not a byte offset
+- The `seq` field (currently a byte offset) should be set to the rowid or a sequence number, not a byte offset
 
 The semantics are compatible: both are resumable, both preserve order. But the underlying mechanism differs.
 
@@ -441,7 +441,7 @@ def run_ingest(conn: sqlite3.Connection, adapters: list[SourceAdapter]) -> dict[
 
 ---
 
-### Recommendation: **Proposal 3 (Extended SessionRef)**
+### Recommendation: Proposal 3 (Extended SessionRef)
 
 **Why:**
 

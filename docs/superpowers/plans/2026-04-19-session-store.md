@@ -2485,7 +2485,7 @@ grep -n "pipeline\|process\|_run_pipeline\|qa_service\|deps.cache" stackunderflo
 - [ ] **Step 2: Add `queries.looped_qa_with_session_context()` helper if needed**
 
 If `find_waste` needs project + session metadata alongside Q&A rows, add a helper that joins `qa_pairs` (existing qa.db table) to the new `sessions` + `projects` tables. Because `qa.db` and `store.db` are separate SQLite files, the helper has to either:
-- run on the store connection and accept pre-fetched QA rows as input, **or**
+- run on the store connection and accept pre-fetched QA rows as input, or
 - `ATTACH DATABASE ? AS qa` to read across both.
 
 Pick (a) unless the join volume makes it painful — it keeps each DB's concerns separate.

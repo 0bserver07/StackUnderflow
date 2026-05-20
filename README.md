@@ -2,7 +2,7 @@
 
 **Local cost dashboard for AI coding agents.** Watches the JSONL / vscdb / SQLite files your coding tools write, parses them in-process, and serves a dashboard that shows what you're spending, where it goes, and which sessions actually shipped code.
 
-16 providers supported (4 default-on, 12 opt-in beta). Sub-second sync from source-file write to dashboard data fresh. No telemetry, no upload, no cloud — everything stays in `~/.stackunderflow/`.
+17 providers supported (4 default-on, 13 opt-in beta). Sub-second sync from source-file write to dashboard data fresh. No telemetry, no upload, no cloud — everything stays in `~/.stackunderflow/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [MCP](#mcp-server) · [Configuration](#configuration) · [Privacy](#privacy)
 
@@ -55,7 +55,7 @@ stackunderflow init
 ## What it does
 
 ### Multi-provider ingest
-16 coding agents have adapters in the registry. Four ship default-on:
+17 coding agents have adapters in the registry. Four ship default-on:
 
 | Provider | Source |
 |---|---|
@@ -64,7 +64,7 @@ stackunderflow init
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
 | Cline | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` |
 
-Twelve more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi+OMP) opt in via env var:
+Thirteen more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi+OMP) opt in via env var:
 
 ```bash
 STACKUNDERFLOW_BETA_GEMINI=1 STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
@@ -132,7 +132,7 @@ A header toggle slides in a chat drawer that streams from a **local** Ollama ins
 The pipeline is three layers tied together by a watermarked refresh loop and a filesystem watcher.
 
 ```
-                ┌─ Source files (16 providers) ─┐
+                ┌─ Source files (17 providers) ─┐
                 │  ~/.claude/projects/           │
                 │  ~/.codex/sessions/            │
                 │  state.vscdb (Cursor)          │
@@ -162,6 +162,7 @@ The pipeline is three layers tied together by a watermarked refresh loop and a f
                │  model_day_mart                │
                │  tool_mart                     │
                │  command_mart                  │
+               │  message_tool_mart             │
                └─────────────┬──────────────────┘
                               ▼
                REST routes — plain SELECTs
@@ -176,10 +177,10 @@ Every dashboard route reads from the marts. On a 247K-message store the cold-loa
 
 ```
 stackunderflow/
-  adapters/         # 16 source-file parsers (4 default-on, 12 beta)
+  adapters/         # 17 source-file parsers (4 default-on, 13 beta)
   etl/              # ETL pipeline (v0.7+)
-    normalize/      #   Normalizer ABC + per-provider transforms (16 adapters; 13 beta normalizers wired, omp aliases pi)
-    marts/          #   MartBuilder ABC + 7 mart builders
+    normalize/      #   Normalizer ABC + per-provider transforms (18 normalizers — pi and omp register separately, one more than the 17 adapters)
+    marts/          #   MartBuilder ABC + 8 mart builders
     backfill.py     #   streams messages → events → marts
     watcher.py      #   watchfiles daemon, debounced 200ms
     watermark.py    #   per-mart last_event_id tracking
@@ -187,7 +188,7 @@ stackunderflow/
   api/              # public Python API (list_projects/process/list_sessions)
   ingest/           # writer + per-record normalize hook
   store/            # SQLite at ~/.stackunderflow/store.db
-    migrations/     #   v001 → v008 (additive)
+    migrations/     #   v001 → v017 (additive; v015 intentionally skipped)
     queries.py      #   typed read helpers (raw layer)
     mart_queries.py #   typed read helpers (marts)
   infra/
@@ -195,11 +196,11 @@ stackunderflow/
     currency.py     # Frankfurter + 24h cache + ECB snapshot fallback
     cursor_cache.py # fingerprint cache for vscdb (3-8x cold-start speedup)
     providers/      # per-provider Pricers (one file per provider)
-  mcp/              # FastMCP server (3 tools, multi-provider)
+  mcp/              # FastMCP server (12 tools, multi-provider)
   reports/          # CLI report renderers + 8 optimize patterns
-  routes/           # FastAPI route modules (one per concern)
+  routes/           # FastAPI route modules — 23, one per concern
   services/         # compare, plans, yield_tracker, search, qa, tags, ...
-  cli.py            # click CLI (24 commands incl. etl status / etl backfill)
+  cli.py            # click CLI — dashboard, ETL ops, exports, plan budgets, discovery
   server.py         # thin shell — app + lifespan + watcher + bg ingest
   settings.py       # env → file → default resolution (descriptor pattern)
 
@@ -248,11 +249,23 @@ from stackunderflow.infra.discovery import locate_logs
 
 ## MCP server
 
-StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that reads the local store. Three tools across all 16 providers (no longer Claude-only):
+StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that reads the local store. Twelve tools, covering every ingested provider (no longer Claude-only):
 
+*Session & project*
 - `session_query(session_id, kind="all"|"tool_calls"|"errors")` — pull messages from a specific session
 - `list_sessions(provider=None, limit=50, since=None)` — recent sessions across providers
 - `list_projects(provider=None)` — provider-tagged project catalogue
+
+*Discovery & outcomes* — query your own history before doing work
+- `find_sessions_in_path` / `find_sessions_touching_file` — sessions that worked in a directory or touched a file
+- `search_past_decisions` — free-text search across past transcripts
+- `find_sessions_where_action_worked` / `find_failure_modes_for_file` — outcome-aware variants, each with a confidence score
+
+*Recommenders*
+- `recommend_skills` — repeated patterns worth turning into a project skill
+- `recommend_mode` — the cheapest model that fits a task, from your own history
+- `file_risk` — how often past edits to a file were reverted or failed
+- `get_burn_projection` — projected month-end spend against your plan budget
 
 ```bash
 stackunderflow-mcp     # console script
@@ -351,7 +364,7 @@ Everything runs locally. Nothing about your sessions, prompts, or code leaves th
 - `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
 - `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`
 
-Beta adapters add up to 12 more roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
+The 13 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
 
 **What it writes** — `~/.stackunderflow/` only.
 - `store.db` — SQLite, WAL mode, the source of truth
@@ -374,10 +387,10 @@ cd StackUnderflow
 pip install -e ".[dev]"
 cd stackunderflow-ui && npm install && npm run build && cd ..
 
-# Backend tests (1598 fast tests; default invocation skips slow integration suite)
+# Backend tests — fast suite (pytest tests/ -q collects 2781; slow tests deselected by default)
 pytest tests/ -q
 
-# Slow integration + perf-regression suite (~10 tests, ~30s)
+# Slow integration + perf-regression suite (opt-in via the `slow` marker)
 pytest -m slow tests/stackunderflow/integration -q
 
 # Lint

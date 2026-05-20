@@ -146,7 +146,7 @@ Regression tests in `tests/stackunderflow/etl/normalize/test_beta_normalizers.py
 
 The validation was driven by
 `tests/stackunderflow/etl/normalize/test_beta_normalizers.py`. For each
-provider it runs four parametrized assertions:
+provider it runs six parametrized assertions:
 
 1. **`test_beta_normalizer_registered`** — provider key resolves through
    the registry.

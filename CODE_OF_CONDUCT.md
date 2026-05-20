@@ -6,9 +6,10 @@ By participating, you agree to abide by its terms.
 
 ## Reporting
 
-Report unacceptable behaviour by opening a confidential issue or contacting
-the maintainers via email (see `pyproject.toml`). All reports will be
-reviewed and investigated promptly and fairly.
+Report unacceptable behaviour privately to the maintainer,
+[@0bserver07](https://github.com/0bserver07). Reports will be reviewed and
+investigated promptly and fairly, and the reporter's identity kept
+confidential.
 
 ## Scope
 
