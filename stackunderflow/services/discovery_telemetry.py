@@ -3,8 +3,8 @@
 The three discovery commands (``find-sessions-in-path``,
 ``find-sessions-touching-file``, ``search-past-decisions``) rank
 surfaced sessions purely on metadata (recency, cost). This module
-records *outcomes*: which surfaced sessions an agent actually looked up
-(via the ``session_query`` MCP tool). That signal feeds the
+records *outcomes*: which surfaced sessions an agent actually looked up.
+That signal feeds the
 token-budgeted ranking so sessions that consistently earn citations
 climb and uncited noise sinks.
 
@@ -15,7 +15,7 @@ Five entry points, all taking the main store connection
   discovery command just surfaced. Called from
   ``services.discovery``'s three ``find_*`` functions.
 * :func:`record_cited` — bump ``cited_count`` when a previously-surfaced
-  session is looked up. Called from the ``session_query`` MCP tool.
+  session is looked up.
 * :func:`cite_rate` — ``cited / loaded`` for a single ``(command,
   session_id)`` pair, ``0.0`` if never loaded. The spec's ranking input.
 * :func:`cite_rate_terms` — the same thing for *all* sessions of a
@@ -27,7 +27,7 @@ Five entry points, all taking the main store connection
   times over ``min_age_days``+ days with zero citations.
 
 Cite attribution is **lax** (spec §"Cite-attribution heuristic"): a
-``session_query`` lookup counts as a cite for that session regardless of
+session lookup counts as a cite for that session regardless of
 which discovery command surfaced it, so :func:`record_cited` bumps every
 ``(command, session_id)`` row for the session. If the session was never
 surfaced, the cite is still recorded (a zero-load row per command) so it
@@ -162,8 +162,7 @@ def record_cited(
 ) -> None:
     """Increment ``cited_count`` for a session that was just looked up.
 
-    Called from the ``session_query`` MCP tool (and a future
-    ``stackunderflow sessions show``). Lax attribution: bumps every
+    Lax attribution: bumps every
     existing ``(command, session_id)`` row for the session. If the
     session was never surfaced, seeds a zero-load row per known command
     so the cite survives — once a load lands on one of those rows the

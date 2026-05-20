@@ -6,9 +6,9 @@ layout of both and how to run them.
 
 ## Backend suite
 
-Collecting `tests/` finds 2697 tests. The default configuration
+Collecting `tests/` finds 2816 tests. The default configuration
 deselects 14 `slow`-marked tests (see [Slow tests](#slow-tests) below),
-leaving 2683; of those, 2 are skipped — interactive `init` flows that
+leaving 2802; of those, 2 are skipped — interactive `init` flows that
 need a running server.
 
 The suite covers the adapter layer, the ETL pipeline and marts, the
@@ -24,11 +24,11 @@ the number of test functions.
 | Directory | Files | Covers |
 |---|---:|---|
 | `adapters/` | 32 | Source-adapter contract and per-provider adapters. `*_defensive.py` files feed malformed input. |
-| `cli/` | 15 | CLI subcommands: `compare`, `context-budget`, `discovery`, `etl status`, `export`, `hooks`, `ingest`, `plan`, `recommend`, `risk`, `skills`, `init --install-skills`. |
+| `cli/` | 18 | CLI subcommands: `compare`, `context-budget`, `discovery`, `etl status`, `export`, `guide`, `hooks`, `ingest`, `memory`, `plan`, `recommend`, `risk`, `skills`, `init --install-skills`. |
 | `etl/` | 8 | ETL watcher, watermark, backfill, lock, registries. |
 | `etl/marts/` | 9 | The eight mart builders plus a cross-mart integration test. |
 | `etl/normalize/` | 18 | Per-provider normalizers. |
-| `hooks/` | 3 | Claude Code hook install, repair, and handlers. |
+| `hooks/` | 4 | Claude Code hook install, repair, handlers, and context injection. |
 | `infra/` | 3 | Currency, Cursor parse cache, model aliases. |
 | `infra/providers/` | 20 | Per-provider pricing and cost math. |
 | `ingest/` | 6 | Log enumeration, incremental ingest, the writer, auto-reindex. |
@@ -40,9 +40,9 @@ the number of test functions.
 | `store/` | 15 | Connection and PRAGMAs, schema, queries, types, individual migrations, partitioning, mart queries. |
 | `utils/` | 1 | Log-directory discovery. |
 
-Ten more files sit directly under `tests/stackunderflow/`:
-`test_cli.py`, `test_cli_data_commands.py`, `test_cli_model_alias.py`,
-`test_cli_yield.py`, `test_pricing_service.py`,
+Eleven more files sit directly under `tests/stackunderflow/`:
+`test_agentsmd.py`, `test_cli.py`, `test_cli_data_commands.py`,
+`test_cli_model_alias.py`, `test_cli_yield.py`, `test_pricing_service.py`,
 `test_public_api.py`, `test_qa_service_resolution.py`,
 `test_server.py`, `test_skills.py`, `test_tag_service_intent.py`.
 

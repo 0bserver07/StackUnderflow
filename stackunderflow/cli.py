@@ -2222,7 +2222,7 @@ def reindex():
 #
 # Three commands let an agent ask the local store about its current
 # project / file / past decisions. Each accepts ``--format text|json``;
-# the JSON shape is stable so MCP tools and shell consumers can rely on
+# the JSON shape is stable so agents and shell consumers can rely on
 # it without parsing the human-readable text.
 
 
@@ -2967,8 +2967,8 @@ def recommend_skills_cmd(project, threshold, window_days, no_cache, fmt):
 # ── discovery citation-feedback telemetry ──────────────────────────────────
 #
 # The three discovery commands above passively record which sessions they
-# surface (``loaded_count``) and the ``session_query`` MCP tool records
-# which surfaced sessions get looked up (``cited_count``). These two
+# surface (``loaded_count``); ``cited_count`` counts which of those
+# surfaced sessions later get looked up. These two
 # subcommands let you introspect that table and run the periodic
 # "demote sessions nobody ever cites" sweep. Telemetry is local-only
 # (session ids + counters, no content) and the passive recording is
