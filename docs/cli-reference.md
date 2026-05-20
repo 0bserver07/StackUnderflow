@@ -1,8 +1,8 @@
 # StackUnderflow CLI Reference
 
 The `stackunderflow` command covers dashboard launch, usage reports, data export,
-config management, and session backups; a second console script, `stackunderflow-mcp`,
-runs the MCP server. All persistent state lives under `~/.stackunderflow/` (config at
+config management, session backups, and the agent-facing `memory` namespace. All
+persistent state lives under `~/.stackunderflow/` (config at
 `~/.stackunderflow/config.json`, session data at `~/.stackunderflow/store.db`). Every
 command accepts `--help` for a quick reminder.
 
@@ -17,9 +17,6 @@ stackunderflow start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-l
 stackunderflow reindex
 stackunderflow clear-cache [PROJECT]
 
-# MCP server (also exposed as `stackunderflow-mcp` console script)
-stackunderflow mcp
-
 # Reports  (all eight also accept --ingest / --no-auto-ingest — see "Reading freshness")
 stackunderflow status [--format text|json]
 stackunderflow today [--format text|json] [--project P] [--exclude P]
@@ -31,7 +28,14 @@ stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [-
 stackunderflow yield [-p PERIOD] [--format text|json] [--project SLUG]
 stackunderflow context-budget [--project DIR] [--global] [--format text|json]
 
-# Discovery — self-referential queries for coding agents (also exposed as MCP tools)
+# Memory — the agent-facing namespace (stable JSON envelope; see "Memory Commands")
+stackunderflow memory decisions QUERY  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stackunderflow memory file PATH        [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stackunderflow memory worked ACTION    [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stackunderflow memory sessions [PATH]  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stackunderflow memory ask QUESTION     [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+
+# Discovery — lower-level self-referential queries (the `memory` namespace wraps these)
 stackunderflow find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
 stackunderflow find-sessions-touching-file FILE [--limit N] [--mode read|write|any] [--format text|json] [--context-budget N]
 stackunderflow search-past-decisions QUERY [--project P] [--since X] [--limit N] [--use-embeddings] [--embed-model M] [--format text|json] [--context-budget N]
@@ -252,48 +256,6 @@ $ stackunderflow clear-cache
 ```
 
 > To actually wipe the disk cache: `stackunderflow start --fresh`
-
----
-
-## MCP Server
-
-### `stackunderflow mcp`
-
-Run the MCP (Model Context Protocol) server over stdio. Equivalent to the
-standalone `stackunderflow-mcp` console script — both are wired to the same
-entry point. Use this if you prefer one binary; use `stackunderflow-mcp` if
-the client config you're pasting expects a single-word command.
-
-```
-Usage: stackunderflow mcp [OPTIONS]
-```
-
-The server exposes twelve read-only tools any MCP client (Claude Desktop,
-Claude Code, Cursor) can call: `session_query`, `list_sessions`,
-`list_projects`, the five discovery tools (`find_sessions_in_path`,
-`find_sessions_touching_file`, `search_past_decisions`,
-`find_sessions_where_action_worked`, `find_failure_modes_for_file`),
-`file_risk`, `recommend_skills`, `recommend_mode`, and
-`get_burn_projection`. They read the unified StackUnderflow store at
-`~/.stackunderflow/store.db`, which aggregates sessions across every
-ingested provider; when a requested `session_id` is not in the store
-yet, `session_query` falls back to walking the `~/.claude*` JSONL logs
-directly.
-
-**Example Claude Desktop config:**
-
-```json
-{
-  "mcpServers": {
-    "stackunderflow": {
-      "command": "stackunderflow-mcp"
-    }
-  }
-}
-```
-
-See [`docs/mcp.md`](mcp.md) for the full tool reference, supported agent
-roots, architectural rationale, and known limitations.
 
 ---
 
@@ -1361,12 +1323,155 @@ daemon thread that lives in another process.
 
 ---
 
+## Memory Commands
+
+`stackunderflow memory` is the agent-facing namespace — the single set of
+commands a coding agent learns to ask the local store *"have I decided this
+before, what broke on this file, what worked last time"*. Each subcommand
+wraps an existing discovery query (see [Discovery Commands](#discovery-commands)
+below); `memory` adds a uniform option set and, with `--json`, a stable
+output envelope built for splicing into a context window.
+
+### Shared options
+
+Every `memory` subcommand carries the same six options:
+
+| Option | Default | Description |
+|---|---|---|
+| `--format text\|json` | `text` | `text` for humans, `json` for agents |
+| `--json` | — | Shortcut for `--format json` |
+| `--project SLUG` | cwd → slug | Scope to one project. Default: the current directory's project when StackUnderflow recognises it, otherwise all projects |
+| `--since X` | (all time) | Time lower bound — `7d` / `1w` / `1m` / `24h` or an ISO date/datetime |
+| `--limit N` | `20` | Hard cap on the number of results |
+| `--context-budget N` | env or `2000` | Token budget — results are ranked and packed greedily until ~N estimated tokens are used; `0` disables |
+
+`--project` defaulting to the current directory is what makes these ergonomic
+inside a repo: `stackunderflow memory file src/foo.py` Just Works without
+naming the project.
+
+### The JSON envelope (`--format json`)
+
+With `--json` (or `--format json`), every subcommand emits one envelope:
+
+```json
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "decisions",
+  "query": { "text": "retry logic", "project": "-Users-you-dev-app",
+             "since": null, "limit": 20 },
+  "results": [ { "...": "command-specific result shape" } ],
+  "result_count": 7,
+  "token_estimate": 1840,
+  "budget": 2000,
+  "truncated": false
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | `stackunderflow.memory/<N>`; the integer bumps only on a breaking change |
+| `command` | The subcommand that produced the envelope |
+| `query` | The resolved inputs, echoed back (`project` is the *resolved* slug) |
+| `results` | The rows — discovery result dicts; the shape is per-command |
+| `result_count` | `len(results)` |
+| `token_estimate` | chars/4 estimate of `results` — what the payload costs to splice in |
+| `budget` | The `--context-budget` that was enforced (`0` = no budget) |
+| `truncated` | `true` when the budget dropped at least one ranked row |
+
+Contract guarantees: the envelope is **stable and versioned**, **deterministic**
+(same store + same query → byte-identical JSON), and **token-bounded**. In
+`--format json`, stdout is pure JSON with nothing on stderr; a non-zero exit
+means stdout is an `{"error": "..."}` envelope instead. `memory file` adds a
+`risk` block alongside the eight core fields; `memory ask` adds a `note`.
+
+### `stackunderflow memory decisions`
+
+"Did I decide something about this before?" — substring-searches `QUERY`
+across past message content, newest first, each result with a snippet. Wraps
+`search_past_decisions`.
+
+```
+Usage: stackunderflow memory decisions [OPTIONS] QUERY
+```
+
+**Example:**
+
+```
+$ stackunderflow memory decisions "watcher flag"
+Past decisions matching 'watcher flag'  (2 session(s))
+  ...
+
+$ stackunderflow memory decisions "retry logic" --json
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "decisions",
+  ...
+}
+```
+
+### `stackunderflow memory file`
+
+"What do I know about this file?" — merges three file-scoped discovery calls
+into one report: known failure modes, every session that touched the file, and
+a risk summary. `PATH` is resolved against the current directory. Wraps
+`find_failure_modes_for_file` + `find_sessions_touching_file` + `risk file`.
+
+```
+Usage: stackunderflow memory file [OPTIONS] PATH
+```
+
+Each `results[]` row carries a `kind` of `"failure_mode"` or `"touched"`; the
+envelope's extra `risk` block carries `total_sessions`, `reverted`, `failed`,
+`worked`, and `recent_session_ids`. `--since` filters the failure-mode and risk
+portions — the touching-sessions query has no time bound.
+
+```
+$ stackunderflow memory file stackunderflow/routes/cost.py --json
+```
+
+### `stackunderflow memory worked`
+
+"What worked last time I tried this?" — sessions where `ACTION` was performed
+and the next user turn confirmed success. Wraps
+`find_sessions_where_action_worked`.
+
+```
+Usage: stackunderflow memory worked [OPTIONS] ACTION
+```
+
+### `stackunderflow memory sessions`
+
+"Which past sessions ran here?" — with no `PATH`, lists sessions for the current
+directory's project; give a directory to scope to that tree, or a file to list
+only the sessions that touched it. An explicit `--project SLUG` overrides
+`PATH`. Wraps `find_sessions_in_path` / `find_sessions_touching_file` — the file
+form has no time bound, so `--since` applies to the path form only.
+
+```
+Usage: stackunderflow memory sessions [OPTIONS] [PATH]
+```
+
+### `stackunderflow memory ask`
+
+A natural-language question of the local store. **v1 is a keyword search:**
+`ask` runs the same query as `memory decisions` on `QUESTION` and labels the
+result `ask`, with a `note` saying so. The local-LLM meta-agent — which needs a
+running Ollama, so an agent caller cannot rely on it — is deliberately
+deferred; until it lands, `memory decisions` with specific terms is the precise
+tool.
+
+```
+Usage: stackunderflow memory ask [OPTIONS] QUESTION
+```
+
+---
+
 ## Discovery Commands
 
 Self-referential queries over the local store: "what's happened in this project /
 this file / about this decision?" — designed for a coding agent to call before
 starting non-trivial work, so it can reuse prior context instead of re-deriving it.
-All five are also exposed as MCP tools (see [`docs/mcp.md`](mcp.md)). All
+These are the lower-level commands the `memory` namespace wraps; they
 read the store directly (no running server needed), accept `--format text|json`
 (the JSON shape is stable), and resolve `~` / relative paths before matching.
 
@@ -1590,8 +1695,9 @@ Risk summary for a file before you edit it: how many distinct past
 sessions that touched it ended `reverted`, `failed`, or `worked`. A
 read-only aggregator over the same outcome heuristic that powers
 `find-failure-modes-for-file` — no extra schema, the counts are computed
-from `messages` / `sessions` rows on each call. Also exposed as the
-`file_risk` MCP tool.
+from `messages` / `sessions` rows on each call. Also surfaced, merged with
+failure modes and touching sessions, by
+[`stackunderflow memory file`](#stackunderflow-memory-file).
 
 ```
 Usage: stackunderflow risk file [OPTIONS] PATH
@@ -1724,8 +1830,7 @@ $ stackunderflow skills clean --older-than 30d --yes  # delete
 
 Proactive suggestions mined from your local session store. Both
 subcommands are read-only — they never write a file or change a setting;
-acting on a recommendation is always a separate, explicit step. Both are
-also exposed as MCP tools (`recommend_skills`, `recommend_mode`).
+acting on a recommendation is always a separate, explicit step.
 
 ### `stackunderflow recommend skills`
 
@@ -1801,8 +1906,8 @@ Why:                23 similar past tasks finished on Sonnet at a median $0.02
 ## Discovery Telemetry Commands
 
 A citation-feedback loop on discovery: the three budget-aware discovery commands
-passively record which sessions they surface (`loaded_count`), and the
-`session_query` MCP tool records which surfaced sessions get looked up
+passively record which sessions they surface (`loaded_count`), and a later
+session-detail lookup records which surfaced sessions actually get used
 (`cited_count`). `cite_rate = cited_count / loaded_count` feeds the discovery
 ranking so sessions agents actually use climb and uncited noise sinks. Telemetry
 is local-only (session ids + counters, no transcript content) and the passive
@@ -2060,7 +2165,7 @@ Webhook receiver listening on http://127.0.0.1:8096/api/webhooks/
 | `plan_monthly_usd` | float \| null | `null` | Monthly budget in USD (manage via `plan set`) |
 | `plan_reset_day` | int | `1` | Day-of-month the budget resets (manage via `plan set`) |
 | `plan_alert_thresholds` | list[int] | `[50, 75, 90]` | Burn-projector alert thresholds, percent of budget (manage via `plan thresholds set`) |
-| `discovery_budget_tokens` | int | `2000` | Default `--context-budget` for the budget-aware discovery commands / MCP tools |
+| `discovery_budget_tokens` | int | `2000` | Default `--context-budget` for the `memory` namespace and the budget-aware discovery commands |
 | `discovery_rank_weights` | str | `0.5,0.2,0.3` | Discovery-ranking weights `recency,cost,relevance` (malformed → default) |
 
 **Example — set, verify, then reset a key:**
@@ -2095,7 +2200,7 @@ Environment variables take precedence over the config file.
 | `log_level` | `LOG_LEVEL` | `LOG_LEVEL=DEBUG stackunderflow start` |
 | `auto_reindex_on_ingest` | `AUTO_REINDEX_ON_INGEST` | `AUTO_REINDEX_ON_INGEST=false stackunderflow start` |
 | `currency` | `STACKUNDERFLOW_CURRENCY` | `STACKUNDERFLOW_CURRENCY=GBP stackunderflow start` |
-| `discovery_budget_tokens` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=4000 stackunderflow mcp` |
+| `discovery_budget_tokens` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=4000 stackunderflow memory decisions "retry logic"` |
 | `discovery_rank_weights` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS=0.6,0.1,0.3 stackunderflow find-sessions-in-path .` |
 
 Boolean env vars accept `1`, `true`, `yes`, `on` (case-insensitive) as truthy values;

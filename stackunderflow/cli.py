@@ -352,15 +352,6 @@ def init_cmd(
     ctx.invoke(start_cmd, port=port, host=host, headless=no_browser, fresh=clear_cache)
 
 
-# ── MCP server ──────────────────────────────────────────────────────────────
-
-@cli.command("mcp")
-def mcp_cmd():
-    """Run the MCP server over stdio (alias for ``stackunderflow-mcp``)."""
-    from stackunderflow.mcp.server import main as _mcp_main
-    _mcp_main()
-
-
 # ── configuration ────────────────────────────────────────────────────────────
 
 @cli.group("cfg")
@@ -1053,6 +1044,559 @@ def _open_store():
     conn = db.connect(deps.store_path)
     schema.apply(conn)
     return conn
+
+
+# ── memory: the agent-facing command namespace ───────────────────────────────
+#
+# ``stackunderflow memory`` (Moves 1 & 2 of docs/specs/agent-memory-cli.md) is
+# the one namespace a coding agent learns to ask the local store "have I
+# decided this before, what broke on this file, what worked". Every
+# subcommand wraps an existing ``services/discovery.py`` entry point — no new
+# analytics — and, in ``--format json``, emits the stable agent-output
+# envelope owned by ``cli_helpers/agent_output.py``.
+#
+# The ``_run_*_query`` helpers below are the single home for each discovery
+# call. Both the ``memory`` subcommands AND the back-compat top-level aliases
+# (``search-past-decisions``, ``find-sessions-*``, ``find-failure-modes-for-file``)
+# delegate to them, so the two surfaces can never drift. The top-level aliases
+# keep their original ``{"sessions": [...]}`` output; the ``memory`` namespace
+# is the new enveloped surface.
+
+
+def _run_in_path_query(path, *, since, limit, provider, budget):
+    """Run ``discovery.find_sessions_in_path`` against the store.
+
+    Shared by ``memory sessions`` and the ``find-sessions-in-path`` alias.
+    A malformed ``since`` raises ``ValueError`` (after the connection is
+    closed) for the caller to surface.
+    """
+    from stackunderflow.services.discovery import find_sessions_in_path
+
+    conn = _open_store()
+    try:
+        return find_sessions_in_path(
+            conn, path, since=since, limit=limit, provider=provider,
+            context_budget=budget,
+        )
+    finally:
+        conn.close()
+
+
+def _run_touching_file_query(file_path, *, limit, mode, budget):
+    """Run ``discovery.find_sessions_touching_file`` against the store.
+
+    Shared by ``memory sessions`` (file form), ``memory file``, and the
+    ``find-sessions-touching-file`` alias.
+    """
+    from stackunderflow.services.discovery import find_sessions_touching_file
+
+    conn = _open_store()
+    try:
+        return find_sessions_touching_file(
+            conn, file_path, limit=limit, mode=mode, context_budget=budget,
+        )
+    finally:
+        conn.close()
+
+
+def _run_decisions_query(
+    query, *, project, since, limit, budget,
+    use_embeddings=False, model_name=None, scope_to_cwd=False,
+):
+    """Run ``discovery.search_past_decisions`` against the store.
+
+    Returns ``(result, resolved_project_slug)``. When ``scope_to_cwd`` is
+    set and no explicit ``project`` was given, the slug is resolved from
+    the current directory — the ``memory`` default. The back-compat
+    ``search-past-decisions`` alias leaves ``scope_to_cwd`` False so its
+    ``--project`` default stays "all projects".
+    """
+    from stackunderflow.services.discovery import search_past_decisions
+
+    conn = _open_store()
+    try:
+        slug = project
+        if slug is None and scope_to_cwd:
+            slug = _detect_cwd_project_slug(conn)
+        result = search_past_decisions(
+            conn, query, project=slug, since=since, limit=limit,
+            context_budget=budget, use_embeddings=use_embeddings,
+            model_name=model_name,
+        )
+        return result, slug
+    finally:
+        conn.close()
+
+
+def _run_action_worked_query(
+    action, *, project, file_path, since, limit, min_confidence,
+    scope_to_cwd=False,
+):
+    """Run ``discovery.find_sessions_where_action_worked`` against the store.
+
+    Returns ``(matches, resolved_project_slug)``. ``scope_to_cwd`` behaves
+    as in :func:`_run_decisions_query`.
+    """
+    from stackunderflow.services.discovery import find_sessions_where_action_worked
+
+    conn = _open_store()
+    try:
+        slug = project
+        if slug is None and scope_to_cwd:
+            slug = _detect_cwd_project_slug(conn)
+        matches = find_sessions_where_action_worked(
+            conn, action=action, project=slug, file_path=file_path,
+            since=since, limit=limit, min_confidence=min_confidence,
+        )
+        return matches, slug
+    finally:
+        conn.close()
+
+
+def _run_failure_modes_query(file_path, *, since, limit, min_confidence):
+    """Run ``discovery.find_failure_modes_for_file`` against the store.
+
+    Shared by ``memory file`` and the ``find-failure-modes-for-file`` alias.
+    """
+    from stackunderflow.services.discovery import find_failure_modes_for_file
+
+    conn = _open_store()
+    try:
+        return find_failure_modes_for_file(
+            conn, file_path, since=since, limit=limit,
+            min_confidence=min_confidence,
+        )
+    finally:
+        conn.close()
+
+
+def _run_file_report(path, *, since, limit):
+    """Compose the three file-scoped discovery calls behind ``memory file``.
+
+    failure-modes + touching-sessions + file-risk, all on one connection.
+    Returns ``(failure_modes, touching_sessions, risk_summary)``.
+    ``find_sessions_touching_file`` has no time bound, so ``since`` filters
+    only the failure-mode and risk portions.
+    """
+    from stackunderflow.services.discovery import (
+        find_failure_modes_for_file,
+        find_sessions_touching_file,
+    )
+    from stackunderflow.services.risk import file_risk_summary
+
+    conn = _open_store()
+    try:
+        failure_modes = find_failure_modes_for_file(
+            conn, path, since=since, limit=limit,
+        )
+        touching = find_sessions_touching_file(conn, path, limit=limit, mode="any")
+        risk = file_risk_summary(conn, path, since=since)
+        return failure_modes, touching, risk
+    finally:
+        conn.close()
+
+
+def _memory_options(fn):
+    """Stack the six options shared by every ``memory`` subcommand.
+
+    Decorators apply bottom-up, so ``--help`` lists them in the order
+    ``--format``, ``--json``, ``--project``, ``--since``, ``--limit``,
+    ``--context-budget``.
+    """
+    fn = click.option(
+        "--context-budget", "context_budget", type=int, default=None,
+        help="Token budget for the output: results are ranked and packed "
+             "greedily until ~this many estimated tokens are used. Default: "
+             "STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. Pass 0 to disable.",
+    )(fn)
+    fn = click.option(
+        "--limit", type=int, default=20, show_default=True,
+        help="Hard cap on the number of results.",
+    )(fn)
+    fn = click.option(
+        "--since", default=None,
+        help="Time lower bound: '7d', '1w', '1m', '24h', or an ISO date/datetime.",
+    )(fn)
+    fn = click.option(
+        "--project", "project", default=None,
+        help="Project slug to scope to. Default: the current directory's "
+             "project, when StackUnderflow recognises it.",
+    )(fn)
+    fn = click.option(
+        "--json", "as_json", is_flag=True, default=False,
+        help="Shortcut for --format json.",
+    )(fn)
+    fn = click.option(
+        "--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+        show_default=True,
+        help="Output format. 'json' emits the stable agent-output envelope.",
+    )(fn)
+    return fn
+
+
+def _memory_format(fmt: str, as_json: bool) -> str:
+    """Resolve the effective output format. ``--json`` is a shortcut for
+    ``--format json`` and wins when both are given."""
+    return "json" if as_json else fmt
+
+
+def _memory_fail(ctx, *, command, query, exc, json_mode):
+    """Surface a discovery failure in the shape the format demands.
+
+    json mode → the ``{"error": ...}`` envelope on stdout + exit 1 (the
+    contract: a non-zero exit means stdout is an error envelope). text
+    mode → a normal Click ``--since`` parameter error. Always raises, so
+    the caller's control flow stops here.
+    """
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        click.echo(agent_output.render(agent_output.build_error_envelope(
+            command=command, query=query, error=str(exc),
+        )))
+        ctx.exit(1)
+    raise click.BadParameter(str(exc), param_hint="--since")
+
+
+def _memory_file_results(failure_modes, touching, *, limit, budget):
+    """Merge + dedup + budget-pack the two ``memory file`` session lists.
+
+    failure-mode rows lead (the higher-signal "what went wrong here"),
+    then the remaining touching sessions; deduped by session id, capped at
+    ``limit``, then packed to ``budget`` estimated tokens in recency order
+    (the outcome queries do not expose the full discovery ranker). Returns
+    ``(results, truncated)`` where each result dict carries a ``kind`` of
+    ``"failure_mode"`` or ``"touched"``.
+    """
+    from stackunderflow.services.discovery import pack_within_budget
+
+    kind_by_sid: dict[str, str] = {}
+    union: list = []
+    seen: set[str] = set()
+    for m in failure_modes:
+        if m.session_id in seen:
+            continue
+        union.append(m)
+        seen.add(m.session_id)
+        kind_by_sid[m.session_id] = "failure_mode"
+    for m in touching:
+        if m.session_id in seen:
+            continue
+        union.append(m)
+        seen.add(m.session_id)
+        kind_by_sid[m.session_id] = "touched"
+    if limit and limit > 0:
+        union = union[:limit]
+    kept, dropped, _used = pack_within_budget(
+        union, budget_tokens=budget, rank_fn=None,
+    )
+    results: list[dict] = []
+    for m in kept:
+        d = m.to_dict()
+        d["kind"] = kind_by_sid.get(m.session_id, "touched")
+        results.append(d)
+    return results, dropped > 0
+
+
+def _emit_memory_file_text(path, risk, results) -> None:
+    """Human-readable rendering of the ``memory file`` composite report."""
+    click.echo(f"What I know about {path}")
+    click.echo("")
+    click.echo("  risk:")
+    click.echo(f"    sessions touching the file: {risk['total_sessions']}")
+    click.echo(
+        f"    reverted: {risk['reverted']}   "
+        f"failed: {risk['failed']}   worked: {risk['worked']}"
+    )
+    click.echo("")
+    if not results:
+        click.echo("  no failure modes or touching sessions on record.")
+        return
+    fails = [d for d in results if d.get("kind") == "failure_mode"]
+    touched = [d for d in results if d.get("kind") == "touched"]
+    if fails:
+        click.echo(f"  failure modes ({len(fails)}):")
+        for d in fails:
+            click.echo(
+                f"    [{d['provider']}] {d['session_id'][:12]}…  "
+                f"{(d.get('last_ts') or '')[:19]}"
+            )
+            evidence = d.get("outcome_evidence") or ""
+            if len(evidence) > 160:
+                evidence = evidence[:157] + "…"
+            click.echo(f"      → {d.get('outcome', '?')}: {evidence}")
+        click.echo("")
+    if touched:
+        click.echo(f"  other sessions touching the file ({len(touched)}):")
+        for d in touched:
+            click.echo(
+                f"    [{d['provider']}] {d['session_id'][:12]}…  "
+                f"{(d.get('last_ts') or '')[:19]}  "
+                f"msgs={d.get('message_count', 0)}"
+            )
+
+
+@cli.group("memory")
+def memory_group():
+    """Ask the local store what past sessions already know.
+
+    ``memory`` is the agent-facing namespace: one set of commands, one
+    output contract. Run any subcommand with ``--json`` to get the stable,
+    token-bounded agent-output envelope an agent can splice straight into
+    its context window; without it you get a human-readable summary.
+
+    Every subcommand shares ``--format`` / ``--json``, ``--project``,
+    ``--since``, ``--limit`` and ``--context-budget``. ``--project``
+    defaults to the current directory's project when StackUnderflow
+    recognises it, so these commands Just Work when run inside a repo.
+    """
+
+
+@memory_group.command("decisions")
+@click.argument("query")
+@_memory_options
+@click.pass_context
+def memory_decisions(
+    ctx, query, fmt, as_json, project, since, limit, context_budget,
+):
+    """Search past decisions — "did I decide something about this before?"
+
+    Substring-searches QUERY across past message content and returns the
+    matching sessions, newest first, each with a short snippet. Wraps
+    ``services/discovery.py``'s ``search_past_decisions``.
+    """
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    q = {"text": query, "project": project, "since": since, "limit": limit}
+    try:
+        result, slug = _run_decisions_query(
+            query, project=project, since=since, limit=limit, budget=budget,
+            scope_to_cwd=True,
+        )
+    except ValueError as exc:
+        _memory_fail(ctx, command="decisions", query=q, exc=exc, json_mode=json_mode)
+        return
+    q["project"] = slug
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="decisions", query=q,
+            results=[m.to_dict() for m in result.sessions],
+            budget=budget, truncated=result.truncated,
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        _emit_sessions(
+            result, fmt="text",
+            title=f"Past decisions matching {query!r}", show_snippet=True,
+        )
+
+
+@memory_group.command("file")
+@click.argument("path", type=click.Path(file_okay=True, dir_okay=True))
+@_memory_options
+@click.pass_context
+def memory_file(
+    ctx, path, fmt, as_json, project, since, limit, context_budget,
+):
+    """Everything known about a file — "what do I know about this file?"
+
+    Merges three file-scoped discovery calls into one report: known
+    failure modes, every session that touched the file, and a risk
+    summary (revert / fail / work counts). PATH is resolved against the
+    current directory, so ``memory file src/foo.py`` works inside a repo.
+    """
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    q = {"path": path, "project": project, "since": since, "limit": limit}
+    try:
+        failure_modes, touching, risk = _run_file_report(
+            path, since=since, limit=limit,
+        )
+    except ValueError as exc:
+        _memory_fail(ctx, command="file", query=q, exc=exc, json_mode=json_mode)
+        return
+    # ``risk['path']`` is the absolute path discovery actually matched.
+    q["path"] = risk.get("path", path)
+    results, truncated = _memory_file_results(
+        failure_modes, touching, limit=limit, budget=budget,
+    )
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="file", query=q, results=results, budget=budget,
+            truncated=truncated, extra={"risk": risk},
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        _emit_memory_file_text(q["path"], risk, results)
+
+
+@memory_group.command("worked")
+@click.argument("action")
+@_memory_options
+@click.pass_context
+def memory_worked(
+    ctx, action, fmt, as_json, project, since, limit, context_budget,
+):
+    """Find where an action worked — "what worked last time I tried this?"
+
+    ACTION is matched as a substring against tool calls and message text.
+    Returns sessions where ACTION was performed and the next user turn
+    confirmed success. Wraps ``services/discovery.py``'s
+    ``find_sessions_where_action_worked``.
+    """
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    q = {"action": action, "project": project, "since": since, "limit": limit}
+    from stackunderflow.services.discovery import (
+        DEFAULT_MIN_OUTCOME_CONFIDENCE,
+        pack_within_budget,
+    )
+    try:
+        matches, slug = _run_action_worked_query(
+            action, project=project, file_path=None, since=since, limit=limit,
+            min_confidence=DEFAULT_MIN_OUTCOME_CONFIDENCE, scope_to_cwd=True,
+        )
+    except ValueError as exc:
+        _memory_fail(ctx, command="worked", query=q, exc=exc, json_mode=json_mode)
+        return
+    q["project"] = slug
+    # ``find_sessions_where_action_worked`` has no native budget path;
+    # pack the recency-ordered matches here so --context-budget applies.
+    kept, dropped, _used = pack_within_budget(
+        matches, budget_tokens=budget, rank_fn=None,
+    )
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="worked", query=q,
+            results=[m.to_dict() for m in kept],
+            budget=budget, truncated=dropped > 0,
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        _emit_sessions(
+            kept, fmt="text", title=f"Sessions where {action!r} worked",
+        )
+
+
+@memory_group.command("sessions")
+@click.argument("path", required=False, default=None)
+@_memory_options
+@click.pass_context
+def memory_sessions(
+    ctx, path, fmt, as_json, project, since, limit, context_budget,
+):
+    """List past sessions that touched here — "which sessions ran here?"
+
+    With no PATH, lists sessions for the current directory's project. Give
+    a directory to scope to that project tree, or a file to list only the
+    sessions that touched that file. An explicit ``--project SLUG``
+    overrides PATH. Wraps ``services/discovery.py``'s
+    ``find_sessions_in_path`` / ``find_sessions_touching_file``; note the
+    file form has no time bound, so ``--since`` applies to the path form
+    only.
+    """
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    from stackunderflow.services.discovery import decode_slug_to_path
+
+    # An explicit --project decodes to a path and overrides PATH; else the
+    # PATH argument, else the cwd.
+    if project:
+        target = decode_slug_to_path(project) or str(Path.cwd())
+    elif path:
+        target = path
+    else:
+        target = str(Path.cwd())
+    target_path = Path(target).expanduser()
+    as_file = target_path.is_file()
+    q = {
+        "path": str(target_path), "project": project, "since": since,
+        "limit": limit, "scope": "file" if as_file else "path",
+    }
+    try:
+        if as_file:
+            result = _run_touching_file_query(
+                str(target_path), limit=limit, mode="any", budget=budget,
+            )
+        else:
+            result = _run_in_path_query(
+                str(target_path), since=since, limit=limit, provider=None,
+                budget=budget,
+            )
+    except ValueError as exc:
+        _memory_fail(ctx, command="sessions", query=q, exc=exc, json_mode=json_mode)
+        return
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="sessions", query=q,
+            results=[m.to_dict() for m in result.sessions],
+            budget=budget, truncated=result.truncated,
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        title = (
+            f"Sessions touching {target_path}" if as_file
+            else f"Sessions in path {target_path}"
+        )
+        _emit_sessions(result, fmt="text", title=title)
+
+
+@memory_group.command("ask")
+@click.argument("question")
+@_memory_options
+@click.pass_context
+def memory_ask(
+    ctx, question, fmt, as_json, project, since, limit, context_budget,
+):
+    """Ask a natural-language question of the local store.
+
+    v1 of ``ask`` is a keyword search over past decisions — it runs the
+    same query as ``memory decisions`` on QUESTION and labels the result
+    ``ask``. The local-LLM meta-agent (which needs a running Ollama, so an
+    agent caller cannot rely on it) is intentionally deferred; until it is
+    wired in, prefer ``memory decisions`` with specific terms for a
+    precise lookup.
+    """
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    note = (
+        "memory ask v1 runs a keyword search over past decisions; for a "
+        "precise lookup use `memory decisions` with specific terms."
+    )
+    q = {"question": question, "project": project, "since": since, "limit": limit}
+    try:
+        result, slug = _run_decisions_query(
+            question, project=project, since=since, limit=limit, budget=budget,
+            scope_to_cwd=True,
+        )
+    except ValueError as exc:
+        _memory_fail(ctx, command="ask", query=q, exc=exc, json_mode=json_mode)
+        return
+    q["project"] = slug
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="ask", query=q,
+            results=[m.to_dict() for m in result.sessions],
+            budget=budget, truncated=result.truncated, extra={"note": note},
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        click.echo(f"note: {note}")
+        click.echo("")
+        _emit_sessions(
+            result, fmt="text",
+            title=f"Past decisions matching {question!r}", show_snippet=True,
+        )
 
 
 # ── ingest-on-read helpers ───────────────────────────────────────────────────
@@ -1827,26 +2371,17 @@ def find_sessions_in_path_cmd(
     has happened in the project rooted at /a/b. The match is
     ancestor-only — projects rooted *below* PATH do not match.
     """
-    from stackunderflow.services.discovery import find_sessions_in_path
-
+    # Thin alias over the same _run_in_path_query the `memory sessions`
+    # subcommand uses. Keeps the original {"sessions": [...]} output.
     budget = _resolve_context_budget(context_budget)
-    conn = _open_store()
     try:
-        try:
-            result = find_sessions_in_path(
-                conn, path, since=since, limit=limit, provider=provider,
-                context_budget=budget,
-            )
-        except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--since") from exc
-    finally:
-        conn.close()
+        result = _run_in_path_query(
+            path, since=since, limit=limit, provider=provider, budget=budget,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--since") from exc
 
-    _emit_sessions(
-        result,
-        fmt=fmt,
-        title=f"Sessions in path {path}",
-    )
+    _emit_sessions(result, fmt=fmt, title=f"Sessions in path {path}")
 
 
 @cli.command("find-sessions-touching-file")
@@ -1871,21 +2406,13 @@ def find_sessions_touching_file_cmd(
     fmt: str,
 ):
     """List sessions where FILE shows up in tool calls or message text."""
-    from stackunderflow.services.discovery import find_sessions_touching_file
-
+    # Thin alias over the same _run_touching_file_query the `memory`
+    # namespace uses. Keeps the original {"sessions": [...]} output.
     budget = _resolve_context_budget(context_budget)
-    conn = _open_store()
-    try:
-        result = find_sessions_touching_file(
-            conn, file, limit=limit, mode=mode, context_budget=budget,
-        )
-    finally:
-        conn.close()
+    result = _run_touching_file_query(file, limit=limit, mode=mode, budget=budget)
 
     _emit_sessions(
-        result,
-        fmt=fmt,
-        title=f"Sessions touching {file}  (mode={mode})",
+        result, fmt=fmt, title=f"Sessions touching {file}  (mode={mode})",
     )
 
 
@@ -1926,35 +2453,30 @@ def search_past_decisions_cmd(
     fmt: str,
 ):
     """Substring-search QUERY across past message content; return matching sessions."""
-    from stackunderflow.services.discovery import search_past_decisions
-
-    # Lazy import — only used when the user passes --use-embeddings, and
-    # even then only for catching the missing-extra error here at the
+    # Thin alias over the same _run_decisions_query the `memory decisions`
+    # subcommand uses (scope_to_cwd left off, so --project defaults to all
+    # projects — the original behaviour). Keeps the {"sessions": [...]} output.
+    #
+    # Lazy import — only to catch the missing-extra error here at the
     # surface so the user sees a clean exit instead of a bare traceback.
     from stackunderflow.services.discovery_embeddings import (
         MissingEmbeddingsDependencyError,
     )
 
     budget = _resolve_context_budget(context_budget)
-    conn = _open_store()
     try:
-        try:
-            result = search_past_decisions(
-                conn, query, project=project, since=since, limit=limit,
-                context_budget=budget,
-                use_embeddings=use_embeddings,
-                model_name=embed_model,
-            )
-        except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--since") from exc
-        except MissingEmbeddingsDependencyError as exc:
-            # ``raise SystemExit`` here (not click.UsageError) so the
-            # exit message matches the install hint verbatim — Click's
-            # error formatter prepends "Usage: ..." which would bury
-            # the actionable line under boilerplate.
-            raise SystemExit(str(exc)) from exc
-    finally:
-        conn.close()
+        result, _slug = _run_decisions_query(
+            query, project=project, since=since, limit=limit, budget=budget,
+            use_embeddings=use_embeddings, model_name=embed_model,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--since") from exc
+    except MissingEmbeddingsDependencyError as exc:
+        # ``raise SystemExit`` here (not click.UsageError) so the exit
+        # message matches the install hint verbatim — Click's error
+        # formatter prepends "Usage: ..." which would bury the actionable
+        # line under boilerplate.
+        raise SystemExit(str(exc)) from exc
 
     _emit_sessions(
         result,
@@ -2017,27 +2539,21 @@ def find_sessions_where_action_worked_cmd(
     filtered out. Pair with ``find-failure-modes-for-file`` to see where
     an edit went wrong.
     """
-    from stackunderflow.services.discovery import (
-        DEFAULT_MIN_OUTCOME_CONFIDENCE,
-        find_sessions_where_action_worked,
-    )
+    # Thin alias over the same _run_action_worked_query the `memory worked`
+    # subcommand uses. Keeps the original {"sessions": [...]} output.
+    from stackunderflow.services.discovery import DEFAULT_MIN_OUTCOME_CONFIDENCE
 
     threshold = (
         DEFAULT_MIN_OUTCOME_CONFIDENCE if min_confidence is None
         else float(min_confidence)
     )
-
-    conn = _open_store()
     try:
-        try:
-            matches = find_sessions_where_action_worked(
-                conn, action=action, project=project, file_path=file_path,
-                since=since, limit=limit, min_confidence=threshold,
-            )
-        except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--since") from exc
-    finally:
-        conn.close()
+        matches, _slug = _run_action_worked_query(
+            action, project=project, file_path=file_path, since=since,
+            limit=limit, min_confidence=threshold,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--since") from exc
 
     # Power-users who set --min-confidence explicitly (or -v) get the
     # score appended to text rows. The JSON branch always emits it via
@@ -2087,26 +2603,20 @@ def find_failure_modes_for_file_cmd(
     ``find-sessions-where-action-worked``: use this to learn why an edit
     went wrong, that one to learn how a successful change was done.
     """
-    from stackunderflow.services.discovery import (
-        DEFAULT_MIN_OUTCOME_CONFIDENCE,
-        find_failure_modes_for_file,
-    )
+    # Thin alias over the same _run_failure_modes_query that `memory file`
+    # uses. Keeps the original {"sessions": [...]} output.
+    from stackunderflow.services.discovery import DEFAULT_MIN_OUTCOME_CONFIDENCE
 
     threshold = (
         DEFAULT_MIN_OUTCOME_CONFIDENCE if min_confidence is None
         else float(min_confidence)
     )
-
-    conn = _open_store()
     try:
-        try:
-            matches = find_failure_modes_for_file(
-                conn, file, since=since, limit=limit, min_confidence=threshold,
-            )
-        except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--since") from exc
-    finally:
-        conn.close()
+        matches = _run_failure_modes_query(
+            file, since=since, limit=limit, min_confidence=threshold,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--since") from exc
 
     show_confidence = bool(verbose) or (min_confidence is not None)
     _emit_sessions(
@@ -2832,13 +3342,17 @@ _HOOK_SCOPES = ("project", "user")
 @click.option("--capture-content", is_flag=True,
               help="Store full hook payloads (prompt text, tool output) instead of sanitised "
                    "metadata. Off by default — the conservative choice.")
-def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool):
+@click.option("--inject", is_flag=True,
+              help="Also install the context-injection hooks (SessionStart / UserPromptSubmit / "
+                   "PreToolUse) that feed StackUnderflow's memory back into the live agent. "
+                   "Opt-in separately from capture; off by default.")
+def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool, inject: bool):
     """Register the StackUnderflow hooks in a settings.json (idempotent, backs up first)."""
     from stackunderflow.hooks import install as _install
     from stackunderflow.hooks import templates as _templates
 
     try:
-        report = _install(scope, dry_run=dry_run, capture_content=capture_content)
+        report = _install(scope, dry_run=dry_run, capture_content=capture_content, inject=inject)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     verb = "Would install" if dry_run else ("Installed" if report.changed else "Already installed")
@@ -2847,7 +3361,7 @@ def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool):
     if dry_run:
         if report.changed:
             click.echo("  would write the 'hooks' block:")
-            block = _templates.canonical_hooks_block(capture_content=capture_content)
+            block = _templates.canonical_hooks_block(capture_content=capture_content, inject=inject)
             for line in json.dumps({"hooks": block}, indent=2).splitlines():
                 click.echo(f"    {line}")
             if report.stale_entries_replaced:
@@ -2861,6 +3375,9 @@ def hooks_install_cmd(scope: str, dry_run: bool, capture_content: bool):
     if report.created_file:
         click.echo("  (created a new settings.json)")
     click.echo(f"  hooks active:    {', '.join(report.hooks_installed)}")
+    if report.inject:
+        click.echo("  injection:       on — memory is fed back to the agent on "
+                   "SessionStart / UserPromptSubmit / PreToolUse")
     if report.stale_entries_replaced:
         click.echo(f"  replaced stale:  {', '.join(sorted(set(report.stale_entries_replaced)))}")
     click.echo(f"  preserved:       {report.other_hooks_preserved} non-StackUnderflow hook entry(ies)")
@@ -2984,6 +3501,92 @@ def hooks_run_cmd(hook_id: str, capture_content: bool):
     if not isinstance(payload, dict):
         payload = {}
     sys.exit(_run(hook_id, payload, capture_content=capture_content))
+
+
+# ── agent-discovery snippet (Move 4) ─────────────────────────────────────────
+#
+# ``guide install`` writes a small marked block into CLAUDE.md / AGENTS.md that
+# teaches an agent the ``stackunderflow memory`` commands exist — the CLI's
+# answer to the auto-discovery an MCP server gave for free. Idempotent and
+# convergent, backup-before-mutate, exactly like ``hooks install``. The logic
+# lives in ``stackunderflow.agentsmd``; these commands are thin wrappers.
+
+@cli.group("guide")
+def guide_group():
+    """Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md."""
+
+
+def _echo_guide_files(report) -> None:
+    """Print one line per target file touched by a guide install/uninstall."""
+    for f in report.files:
+        click.echo(f"  {f.action:9s}  {f.path}")
+        if f.backup_path:
+            click.echo(f"               backup: {f.backup_path}")
+
+
+@guide_group.command("install")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="project = ./CLAUDE.md and ./AGENTS.md in cwd's git root; "
+                   "user = ~/.claude/CLAUDE.md")
+@click.option("--dry-run", is_flag=True, help="Show what would change; write nothing.")
+def guide_install_cmd(scope: str, dry_run: bool):
+    """Write the agent-discovery snippet into the instruction file(s) (idempotent, backs up first)."""
+    from stackunderflow import agentsmd
+
+    try:
+        report = agentsmd.install(scope, dry_run=dry_run)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    verb = "Would install" if dry_run else "Installed"
+    click.echo(f"{verb} the StackUnderflow guide snippet ({scope} scope)")
+    _echo_guide_files(report)
+    if not report.changed:
+        click.echo("  no change — already up to date.")
+
+
+@guide_group.command("uninstall")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default="project", show_default=True,
+              help="Which instruction file(s) to clean.")
+def guide_uninstall_cmd(scope: str):
+    """Remove the StackUnderflow guide snippet (only our marked block; never the file)."""
+    from stackunderflow import agentsmd
+
+    try:
+        report = agentsmd.uninstall(scope)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Removed the StackUnderflow guide snippet ({scope} scope)")
+    _echo_guide_files(report)
+    if not report.changed:
+        click.echo("  no change — nothing to remove.")
+
+
+@guide_group.command("status")
+@click.option("--scope", type=click.Choice(_HOOK_SCOPES), default=None,
+              help="Limit to one scope (default: show both project and user).")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text", show_default=True)
+def guide_status_cmd(scope: str | None, fmt: str):
+    """Show where the StackUnderflow guide snippet is installed."""
+    from stackunderflow import agentsmd
+
+    payload = agentsmd.status(scope)
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for sc, files in payload.items():
+        click.echo(f"[{sc}]")
+        for entry in files:
+            if not entry["exists"]:
+                state = "no file"
+            elif not entry.get("valid", True):
+                state = "⚠ not UTF-8 text — fix or remove it"
+            elif not entry["installed"]:
+                state = "not installed"
+            elif entry["up_to_date"]:
+                state = "installed"
+            else:
+                state = "STALE — run `stackunderflow guide install`"
+            click.echo(f"  {entry['path']}  —  {state}")
 
 
 # ── recommend (Spec 18 — heuristic v1 mode recommender) ────────────────────
