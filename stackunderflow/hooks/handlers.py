@@ -20,6 +20,12 @@ Only events worth a row produce one: a ``PostToolUse`` that *failed*, a
 ``UserPromptSubmit`` that *looked like a correction*, every ``Stop`` (turn
 boundary) and every ``PreCompact`` (compaction snapshot). A successful tool
 call or an ordinary prompt is a silent no-op.
+
+``run()`` is also the dispatch point for the *injection* hooks (Move 3). Their
+ids — ``stackunderflow-inject-*`` — route to :mod:`stackunderflow.hooks.inject`,
+which READS the store and writes a context-injection JSON envelope to stdout
+rather than recording anything. The same never-disrupt contract holds: any
+error → empty output, exit ``0``.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -82,12 +89,22 @@ def ensure_captured_events_table(conn: sqlite3.Connection) -> None:
 def run(hook_id: str, payload: dict | None, *, capture_content: bool = False) -> int:
     """Handle one hook fire. Returns a process exit code — always ``0``.
 
-    Dispatches on *hook_id*; an unknown id is a no-op. Any exception
-    (malformed payload, store unavailable, …) is logged at DEBUG and
-    swallowed — a recorder must never make Claude Code stumble.
+    Dispatches on *hook_id*. The four capture ids record a ``captured_events``
+    row (or no-op). The three ``stackunderflow-inject-*`` ids route to
+    :mod:`stackunderflow.hooks.inject`, which writes a context-injection JSON
+    envelope to stdout instead. An unknown id is a no-op. Any exception
+    (malformed payload, store unavailable, …) is logged at DEBUG and swallowed —
+    neither a recorder nor an injector may make Claude Code stumble.
     """
     try:
         payload = payload if isinstance(payload, dict) else {}
+        if hook_id in templates.INJECT_HOOK_IDS:
+            from stackunderflow.hooks import inject
+
+            output = inject.build_injection(hook_id, payload)
+            if output:
+                sys.stdout.write(output if output.endswith("\n") else output + "\n")
+            return 0
         kind, sanitised = _classify(hook_id, payload, capture_content=capture_content)
         if kind is None:
             return 0  # nothing worth recording (success / non-correction / unknown hook)

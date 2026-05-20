@@ -1,4 +1,4 @@
-# Hybrid capture — opt-in Claude Code hooks
+# Opt-in Claude Code hooks — capture and injection
 
 StackUnderflow normally learns about your sessions *after the fact*: a filesystem
 watcher reads the JSONL transcripts once Claude Code has written them. That tells
@@ -13,9 +13,14 @@ on the debounce. This is **opt-in**: nothing is installed unless you run
 
 If you don't install hooks, nothing changes — StackUnderflow keeps working off the
 transcripts, and the consumers that benefit from hook data fall back to a transcript
-heuristic. Outcome-aware discovery is the clearest example: the outcome tools in
-[`docs/mcp.md`](mcp.md) prefer the deterministic `captured_events` feed but degrade
+heuristic. Outcome-aware discovery is the clearest example: the outcome-aware
+`memory` commands prefer the deterministic `captured_events` feed but degrade
 gracefully without it.
+
+Hooks come in two families. **Capture** hooks — the default — *record* what
+happens. **Injection** hooks — added with `--inject` — *feed memory back* into
+the live agent before it works. This document covers capture first; context
+injection and the agent-discovery snippet are the last sections.
 
 ## What gets captured
 
@@ -71,7 +76,7 @@ keeps everything.
 ## CLI
 
 ```
-stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content]
+stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
 stackunderflow hooks uninstall [--scope project|user]
 stackunderflow hooks status    [--scope project|user] [--format text|json]
 stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
@@ -164,15 +169,105 @@ to make it resolvable — that's the one thing `repair` can't do for you).
   `busy_timeout` so a fire under contention waits briefly rather than dropping the
   event.
 
+## Context injection (opt-in)
+
+Capture hooks record *what happened*. **Injection hooks** do the opposite — they
+read what StackUnderflow already knows and feed it back into the live agent,
+before it acts. Injection is opt-in *separately* from capture:
+
+```
+stackunderflow hooks install --inject     # capture hooks + the 3 injection hooks
+stackunderflow hooks install              # capture hooks only (unchanged)
+```
+
+`--inject` adds three hooks alongside the capture four:
+
+| Claude Code event | hook id | injects |
+|-------------------|---------|---------|
+| `SessionStart` | `stackunderflow-inject-session-start` | a digest of recent recorded sessions in this project |
+| `UserPromptSubmit` | `stackunderflow-inject-user-prompt` | a past decision whose text overlaps the prompt |
+| `PreToolUse` (Edit/Write/MultiEdit) | `stackunderflow-inject-pre-tool-use` | known failure modes for the file about to be edited |
+
+Each handler queries the local store in-process (through the same
+`services/discovery.py` engine the `memory` commands use — no new analytics, no
+shelling out) and prints Claude Code's context-injection envelope on stdout:
+
+```json
+{ "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "<digest text>" } }
+```
+
+`hookEventName` is the firing event; `additionalContext` is the text spliced
+into the agent's context. This shape was verified against the current Claude
+Code hooks reference — `additionalContext` nested under `hookSpecificOutput` is
+the documented field for all three of `SessionStart`, `UserPromptSubmit`, and
+`PreToolUse`.
+
+### Invariants
+
+Injection inherits the capture hooks' non-negotiables, sharpened:
+
+- **Never disrupt the agent.** Any error — a bad payload, a missing store, a
+  locked db, a slow query — produces *empty output* and exit `0`. An injection
+  hook that wedges a prompt is a worse bug than no injection. A payload with
+  nothing useful to say is the same silent no-op.
+- **Token-bounded.** Every injection is hard-clipped to a small budget —
+  ~400 tokens for `SessionStart`, ~200 for the other two. An agent's context
+  window is not a dumping ground.
+- **Fast and read-only.** Each fire is a fresh process running one or two
+  indexed `SELECT`s; it never applies the schema and never writes a capture row.
+  `PreToolUse` fires often, so its matcher is scoped to the file-editing tools
+  (`Edit|Write|MultiEdit`) — it never fires on a Read or a Bash call.
+
+`hooks status`, `uninstall`, and `repair` cover the injection hooks with no
+change in contract: `uninstall` removes all seven, and a convergent re-`install`
+*without* `--inject` cleanly drops the three injection hooks again. Injection
+hooks never carry `--capture-content` — they read the store, they don't record.
+
 ## Only Claude Code, for now
 
-This feature wires **Claude Code's** hook system. Other coding agents
-StackUnderflow ingests (Codex, Cursor, Cline, the beta providers) don't expose an
-equivalent lifecycle-hook mechanism, so there's nothing analogous to install for
-them — those providers stay on passive transcript ingestion. Outcome-aware
-discovery accounts for this: hook-installed Claude Code projects get deterministic
-failure/correction signals; everything else gets the transcript heuristic. Same
-surface, different fidelity.
+Both hook families — capture and injection — wire **Claude Code's** hook system.
+Other coding agents StackUnderflow ingests (Codex, Cursor, Cline, the beta
+providers) don't expose an equivalent lifecycle-hook mechanism, so there's
+nothing analogous to install for them — those providers stay on passive
+transcript ingestion. Outcome-aware discovery accounts for this: hook-installed
+Claude Code projects get deterministic failure/correction signals; everything
+else gets the transcript heuristic. Same surface, different fidelity.
+
+The one cross-agent piece is the agent-discovery snippet (next section): its
+`AGENTS.md` half is how a Codex agent finds the same `memory` commands.
+
+## The agent-discovery snippet (`stackunderflow guide`)
+
+Hooks are one way memory reaches the agent. The other is plain discoverability:
+teaching the agent that the `stackunderflow memory` commands *exist* at all. The
+`guide` command writes a short, marked snippet into the agent instruction file:
+
+```
+stackunderflow guide install   [--scope project|user] [--dry-run]
+stackunderflow guide uninstall [--scope project|user]
+stackunderflow guide status    [--scope project|user] [--format text|json]
+```
+
+- **Scope.** `project` (default) writes `./CLAUDE.md` *and* `./AGENTS.md` in the
+  cwd's git root — so both Claude Code and Codex pick the snippet up. `user`
+  scope writes `~/.claude/CLAUDE.md`.
+- **Idempotent and convergent.** The snippet sits between
+  `<!-- stackunderflow:guide:start -->` and `<!-- stackunderflow:guide:end -->`
+  markers, exactly like the hooks installer's settings block: re-running
+  `install` replaces the block in place (never a second copy), nothing outside
+  the markers is touched, a timestamped backup is written before any mutation,
+  and `--dry-run` writes nothing. `uninstall` strips only our block and never
+  deletes the file.
+- **Content.** ~15 lines naming the `memory` commands
+  (`decisions` / `file` / `worked` / `sessions` / `ask`), the `--json` output
+  contract, and when to reach for each — the discoverability a bundled MCP
+  server would have given for free.
+
+Unlike hooks, the guide snippet is **not Claude-Code-specific**: the `AGENTS.md`
+half is how a Codex agent — which has no lifecycle-hook mechanism — discovers
+the same `memory` surface.
 
 ## Windows
 

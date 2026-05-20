@@ -49,6 +49,7 @@ class InstallReport:
     settings_path: str
     dry_run: bool
     capture_content: bool
+    inject: bool                                   # were the context-injection hooks installed too?
     changed: bool                                  # did the file content change (or would it, under --dry-run)?
     created_file: bool                             # was settings.json absent before?
     backup_path: str | None                        # the .bak.<ts> written (None on no-op / dry-run / fresh file)
@@ -63,6 +64,7 @@ class InstallReport:
             "settings_path": self.settings_path,
             "dry_run": self.dry_run,
             "capture_content": self.capture_content,
+            "inject": self.inject,
             "changed": self.changed,
             "created_file": self.created_file,
             "backup_path": self.backup_path,
@@ -279,17 +281,30 @@ def _strip_our_hooks(settings: dict) -> tuple[dict, list[str]]:
     return new, removed
 
 
-def _add_our_hooks(settings: dict, *, capture_content: bool) -> dict:
-    """Append our canonical matcher-group to each event array (creating as needed)."""
+def _add_our_hooks(settings: dict, *, capture_content: bool, inject: bool) -> dict:
+    """Append our canonical matcher-groups to each event array (creating as needed).
+
+    Always installs the four capture hooks; with ``inject`` also installs the
+    three injection hooks. ``UserPromptSubmit`` then carries two of our
+    matcher-groups (a capture hook and an injection hook) — Claude Code runs
+    every hook registered for an event, so the two coexist cleanly.
+    """
     new = json.loads(json.dumps(settings))
     hooks = new.setdefault("hooks", {})
     if not isinstance(hooks, dict):  # pragma: no cover - defensive; caller passes a sane dict
         raise ValueError("settings['hooks'] must be a JSON object")
-    for event in templates.EVENT_HOOK_IDS:
+
+    def _append(event: str, group: dict) -> None:
         arr = hooks.setdefault(event, [])
         if not isinstance(arr, list):  # pragma: no cover - defensive
             raise ValueError(f"settings['hooks'][{event!r}] must be a JSON array")
-        arr.append(templates.matcher_group(event, capture_content=capture_content))
+        arr.append(group)
+
+    for event in templates.EVENT_HOOK_IDS:
+        _append(event, templates.matcher_group(event, capture_content=capture_content))
+    if inject:
+        for event in templates.INJECT_EVENT_HOOK_IDS:
+            _append(event, templates.inject_matcher_group(event))
     return new
 
 
@@ -301,14 +316,22 @@ def install(
     *,
     dry_run: bool = False,
     capture_content: bool = False,
+    inject: bool = False,
     cwd: Path | None = None,
 ) -> InstallReport:
     """Register the StackUnderflow hooks in the *scope*'s ``settings.json``.
 
     Idempotent and convergent — see the module docstring. With
-    ``capture_content=True`` the installed hook commands carry
+    ``capture_content=True`` the installed *capture* hook commands carry
     ``--capture-content`` so handlers store the full (unsanitised) payload
     (default: metadata + tool name + exit code only).
+
+    With ``inject=True`` the three context-injection hooks (Move 3) are
+    installed alongside the four capture hooks. Injection is opt-in *separately*
+    from capture: ``inject=False`` (default) is the unchanged capture-only
+    install. Because the installer is convergent, re-running with
+    ``inject=False`` after an ``inject=True`` install cleanly drops the
+    injection hooks again.
     """
     if scope not in _VALID_SCOPES:
         raise ValueError(f"scope must be one of {_VALID_SCOPES}, got {scope!r}")
@@ -317,7 +340,7 @@ def install(
     original = _read_settings(path)
 
     stripped, replaced = _strip_our_hooks(original)
-    desired = _add_our_hooks(stripped, capture_content=capture_content)
+    desired = _add_our_hooks(stripped, capture_content=capture_content, inject=inject)
 
     changed = json.dumps(desired, sort_keys=True) != json.dumps(original, sort_keys=True)
     other_count = count_other_hooks(original)
@@ -337,10 +360,11 @@ def install(
         settings_path=str(path),
         dry_run=dry_run,
         capture_content=capture_content,
+        inject=inject,
         changed=changed,
         created_file=changed and not existed and not dry_run,
         backup_path=str(backup_path) if backup_path else None,
-        hooks_installed=list(templates.HOOK_IDS),
+        hooks_installed=list(templates.ALL_HOOK_IDS if inject else templates.HOOK_IDS),
         stale_entries_replaced=replaced,
         other_hooks_preserved=other_count,
         captured_events_table_ready=table_ready,
