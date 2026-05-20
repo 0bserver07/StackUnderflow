@@ -7,7 +7,7 @@ Covers:
 * recommendation shape on a seeded store with 5+ historical sessions
 * cache miss → store, hit → bumped ``last_used_ts``, TTL eviction
 * empty-store path returns ``confidence=0.0`` with a clean message
-* MCP wrapper round-trips the same payload
+* the ``recommend()`` service entry point round-trips the full payload
 * meta-agent dispatcher routes ``recommend_mode`` correctly
 
 All tests use ``tmp_path``; the user's real
@@ -355,13 +355,18 @@ class TestSimilarityFilter:
         assert result["similar_session_count"] == 0
 
 
-# ── MCP wrapper ─────────────────────────────────────────────────────────────
+# ── recommend() service entry point ─────────────────────────────────────────
 
 
-class TestMcpWrapper:
-    def test_recommend_mode_impl_round_trips_payload(self, tmp_path):
-        from stackunderflow.mcp.server import recommend_mode_impl
+class TestRecommendServiceEntryPoint:
+    """``mode_recommender.recommend`` is the single service entry point
+    behind the recommendation surface. A thin wrapper used to sit in front
+    of it (it was retired with the standalone MCP server), so these
+    exercise the service directly — the payload it returns and how an
+    empty prompt is handled at the service layer.
+    """
 
+    def test_recommend_round_trips_full_payload(self, tmp_path):
         conn = _make_conn(tmp_path)
         pid = _seed_project(conn)
         for sid, model, cost in [
@@ -371,20 +376,25 @@ class TestMcpWrapper:
             _seed_session(conn, project_id=pid, session_id=sid,
                           primary_model=model, cost_usd=cost,
                           first_user_text="fix the failing test in foo.py")
-        result = recommend_mode_impl(
-            "fix the broken test in bar.py", current_model="opus", conn=conn,
+        result = mr.recommend(
+            conn, "fix the broken test in bar.py", current_model="opus",
         )
         assert result["recommended_model"] == "sonnet"
         assert result["confidence"] > 0.0
         assert result["cost_delta_usd"] > 0.0
         assert "features" in result
 
-    def test_recommend_mode_rejects_empty_prompt(self, tmp_path):
-        from stackunderflow.mcp.server import recommend_mode_impl
+    def test_empty_prompt_rejected_at_the_service_layer(self, tmp_path):
+        # ``recommend`` itself tolerates any prompt — it never raises on
+        # empty data (see TestEmptyStore). The empty/whitespace-prompt
+        # *rejection* lives in the meta-agent executor, the service-layer
+        # caller of recommend(); that is where this contract now sits.
+        from stackunderflow.services.meta_agent import execute_tool
 
         conn = _make_conn(tmp_path)
-        with pytest.raises(ValueError):
-            recommend_mode_impl("   ", conn=conn)
+        result = execute_tool(conn, "recommend_mode", {"prompt": "   "})
+        assert result.ok is False
+        assert "error" in result.data
 
 
 # ── meta-agent dispatcher ───────────────────────────────────────────────────

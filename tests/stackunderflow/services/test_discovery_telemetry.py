@@ -11,7 +11,7 @@ Covers the citation-feedback loop on discovery:
 * ``demote_candidates`` / ``mark_demoted`` — both thresholds + the demote flag
 * migration v009 idempotency + preservation of existing rows
 * the ranking-term shape (higher cite_rate ⇒ higher score)
-* the MCP ``session_query`` wiring (a specific-session lookup records a cite)
+* a specific-session lookup records a cite (``record_cited``)
 
 All tests use ``tmp_path``; the maintainer's real
 ``~/.stackunderflow/store.db`` is never touched.
@@ -446,66 +446,40 @@ class TestMigrationV009:
         assert conn.execute("PRAGMA user_version").fetchone()[0] >= 9
 
 
-# ── MCP session_query wiring ────────────────────────────────────────────────
+# ── session-lookup citation recording ───────────────────────────────────────
 
 
-class TestSessionQueryRecordsCite:
-    def test_specific_session_lookup_records_a_cite(self, tmp_path, monkeypatch):
-        from stackunderflow import deps
-        from stackunderflow.mcp import server as mcp_server
+class TestSessionLookupRecordsCite:
+    """Looking up a specific session records a citation against discovery
+    telemetry. That loop was driven by the retired MCP ``session_query``
+    tool; ``record_cited`` is the service-layer primitive it called, and
+    remains the contract a specific-session lookup relies on.
+    """
 
-        store_db = tmp_path / "store.db"
-        conn = db.connect(store_db)
-        schema.apply(conn)
-        conn.close()
-        monkeypatch.setattr(deps, "store_path", store_db)
-
-        # Session isn't in the store — record_cited still records the cite
-        # (and session_query falls back to the JSONL walk, returning []
-        # because there are no JSONL roots in the tmp env).
-        out = mcp_server.session_query_impl(session_id="sess-xyz", limit=5)
-        assert isinstance(out, list)
-
-        conn = db.connect(store_db)
+    def test_specific_session_lookup_records_a_cite(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        # The session was never surfaced by a discovery command — the
+        # lookup still records the cite, fanned across every known
+        # command so whichever one surfaces it next already carries it.
+        telemetry.record_cited(conn, "sess-xyz")
         rows = conn.execute(
             "SELECT command, loaded_count, cited_count FROM discovery_telemetry "
             "WHERE session_id = 'sess-xyz' ORDER BY command"
         ).fetchall()
-        conn.close()
         assert {r["command"] for r in rows} == set(telemetry.VALID_COMMANDS)
         assert all((r["loaded_count"], r["cited_count"]) == (0, 1) for r in rows)
 
-    def test_no_session_id_records_nothing(self, tmp_path, monkeypatch):
-        from stackunderflow import deps
-        from stackunderflow.mcp import server as mcp_server
-
-        store_db = tmp_path / "store.db"
-        conn = db.connect(store_db)
-        schema.apply(conn)
-        conn.close()
-        monkeypatch.setattr(deps, "store_path", store_db)
-
-        mcp_server.session_query_impl(session_id=None, limit=5)
-
-        conn = db.connect(store_db)
-        n = conn.execute("SELECT COUNT(*) AS n FROM discovery_telemetry").fetchone()["n"]
-        conn.close()
-        assert n == 0
+    def test_no_session_id_records_nothing(self, tmp_path):
+        conn = _make_conn(tmp_path)
+        telemetry.record_cited(conn, "")
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM discovery_telemetry"
+        ).fetchone()["n"] == 0
 
     def test_env_gate_skips_the_cite(self, tmp_path, monkeypatch):
-        from stackunderflow import deps
-        from stackunderflow.mcp import server as mcp_server
-
-        store_db = tmp_path / "store.db"
-        conn = db.connect(store_db)
-        schema.apply(conn)
-        conn.close()
-        monkeypatch.setattr(deps, "store_path", store_db)
+        conn = _make_conn(tmp_path)
         monkeypatch.setenv("STACKUNDERFLOW_DISCOVERY_TELEMETRY", "0")
-
-        mcp_server.session_query_impl(session_id="sess-xyz", limit=5)
-
-        conn = db.connect(store_db)
-        n = conn.execute("SELECT COUNT(*) AS n FROM discovery_telemetry").fetchone()["n"]
-        conn.close()
-        assert n == 0
+        telemetry.record_cited(conn, "sess-xyz")
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM discovery_telemetry"
+        ).fetchone()["n"] == 0
