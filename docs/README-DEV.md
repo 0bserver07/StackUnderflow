@@ -93,7 +93,6 @@ StackUnderflow/
 │   ├── reports/                 # CLI reporting (aggregate, optimize, scope, render, export)
 │   ├── routes/                  # FastAPI routers — one module per concern (23 modules)
 │   ├── services/                # Stateful services initialised at startup (search, qa, tags, …)
-│   ├── mcp/                     # MCP server (the `stackunderflow-mcp` entry point)
 │   ├── hooks/                   # Claude Code hook install / repair / handlers
 │   ├── infra/                   # Discovery, cost/pricing math, currency, caches
 │   ├── cli_helpers/             # Shared CLI helpers (ingest-on-read)
@@ -222,7 +221,6 @@ point.
 | --- | --- |
 | `stackunderflow start` | Launch the dashboard. `--fresh` wipes the disk cache first; `--headless` skips opening the browser. |
 | `stackunderflow init` | Start the dashboard (alias for `start`); `--install-skills` also installs the shipped Claude Code skills. |
-| `stackunderflow mcp` | Run the MCP server over stdio (same as the `stackunderflow-mcp` entry point). |
 | `stackunderflow reindex` | Apply pending migrations and run a full ingest pass. |
 | `stackunderflow cfg ls\|set\|rm` | View or change persistent settings. |
 | `stackunderflow plan show\|set\|reset` | Manage the monthly plan budget. |

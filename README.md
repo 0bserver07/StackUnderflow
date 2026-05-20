@@ -4,7 +4,7 @@
 
 17 providers supported (4 default-on, 13 opt-in beta). Sub-second sync from source-file write to dashboard data fresh. No telemetry, no upload, no cloud — everything stays in `~/.stackunderflow/`.
 
-[Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [MCP](#mcp-server) · [Configuration](#configuration) · [Privacy](#privacy)
+[Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
 ![StackUnderflow Dashboard](assets/dashboard.png)
 
@@ -96,7 +96,7 @@ A **right-docked sidebar** lets you talk to your local Ollama LLM about your own
 - **Virtual-FS reconstruction** (v0.7.3+) — at any timestamp in the scrub, see the reconstructed content of every file the session touched. Replays Read / Write / Edit / MultiEdit / NotebookEdit calls; marks partial reconstructions where no initial Read was seen.
 
 ### Self-referential discovery (for coding agents)
-- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI + MCP tools that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** (`pip install stackunderflow[embeddings]`) re-ranks by cosine similarity with a local sentence-transformers model.
+- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI commands that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** (`pip install stackunderflow[embeddings]`) re-ranks by cosine similarity with a local sentence-transformers model.
 - **`find-sessions-where-action-worked` / `find-failure-modes-for-file`** — outcome-aware variants. Returns sessions whose subsequent turns confirmed (or contradicted) the action, with a confidence score so silence isn't mistaken for success.
 - **`skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files. Project-scoped by default.
 - **Bookmarks** — pin conversations you want to find later.
@@ -196,7 +196,6 @@ stackunderflow/
     currency.py     # Frankfurter + 24h cache + ECB snapshot fallback
     cursor_cache.py # fingerprint cache for vscdb (3-8x cold-start speedup)
     providers/      # per-provider Pricers (one file per provider)
-  mcp/              # FastMCP server (12 tools, multi-provider)
   reports/          # CLI report renderers + 8 optimize patterns
   routes/           # FastAPI route modules — 23, one per concern
   services/         # compare, plans, yield_tracker, search, qa, tags, ...
@@ -244,47 +243,6 @@ from stackunderflow.etl import backfill, watermark
 from stackunderflow.etl.normalize import get as get_normalizer
 from stackunderflow.infra.discovery import locate_logs
 ```
-
----
-
-## MCP server
-
-StackUnderflow ships an [MCP](https://modelcontextprotocol.io/) server that reads the local store. Twelve tools, covering every ingested provider (no longer Claude-only):
-
-*Session & project*
-- `session_query(session_id, kind="all"|"tool_calls"|"errors")` — pull messages from a specific session
-- `list_sessions(provider=None, limit=50, since=None)` — recent sessions across providers
-- `list_projects(provider=None)` — provider-tagged project catalogue
-
-*Discovery & outcomes* — query your own history before doing work
-- `find_sessions_in_path` / `find_sessions_touching_file` — sessions that worked in a directory or touched a file
-- `search_past_decisions` — free-text search across past transcripts
-- `find_sessions_where_action_worked` / `find_failure_modes_for_file` — outcome-aware variants, each with a confidence score
-
-*Recommenders*
-- `recommend_skills` — repeated patterns worth turning into a project skill
-- `recommend_mode` — the cheapest model that fits a task, from your own history
-- `file_risk` — how often past edits to a file were reverted or failed
-- `get_burn_projection` — projected month-end spend against your plan budget
-
-```bash
-stackunderflow-mcp     # console script
-stackunderflow mcp     # equivalent CLI subcommand
-```
-
-Wire into Claude Desktop via `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "stackunderflow": {
-      "command": "stackunderflow-mcp"
-    }
-  }
-}
-```
-
-See [docs/mcp.md](docs/mcp.md) for the full tool reference + Cursor / Claude Code wiring.
 
 ---
 

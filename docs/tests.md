@@ -6,14 +6,14 @@ layout of both and how to run them.
 
 ## Backend suite
 
-Collecting `tests/` finds 2795 tests. The default configuration
+Collecting `tests/` finds 2697 tests. The default configuration
 deselects 14 `slow`-marked tests (see [Slow tests](#slow-tests) below),
-leaving 2781; of those, 2 are skipped — interactive `init` flows that
+leaving 2683; of those, 2 are skipped — interactive `init` flows that
 need a running server.
 
 The suite covers the adapter layer, the ETL pipeline and marts, the
 SQLite store and its migrations, the stats pipeline, report rendering,
-the MCP server, and the CLI and HTTP surfaces.
+and the CLI and HTTP surfaces.
 
 ### Layout
 
@@ -33,7 +33,6 @@ the number of test functions.
 | `infra/providers/` | 20 | Per-provider pricing and cost math. |
 | `ingest/` | 6 | Log enumeration, incremental ingest, the writer, auto-reindex. |
 | `integration/` | 2 | Real-data end-to-end and route performance regression. Both `slow`-marked. |
-| `mcp/` | 5 | MCP server and its tools. |
 | `reports/` | 8 | CLI report pipeline: aggregate, optimize, render, scope. |
 | `routes/` | 30 | FastAPI endpoint behaviour, including mart-overlay routes. |
 | `services/` | 23 | Stateful services: agent teams, burn projection, compare, discovery, GitHub ingest, live stats, meta-agent, mode recommender, plans, playback, risk, skills, yield. |
@@ -41,9 +40,9 @@ the number of test functions.
 | `store/` | 15 | Connection and PRAGMAs, schema, queries, types, individual migrations, partitioning, mart queries. |
 | `utils/` | 1 | Log-directory discovery. |
 
-Eleven more files sit directly under `tests/stackunderflow/`:
+Ten more files sit directly under `tests/stackunderflow/`:
 `test_cli.py`, `test_cli_data_commands.py`, `test_cli_model_alias.py`,
-`test_cli_yield.py`, `test_mcp.py`, `test_pricing_service.py`,
+`test_cli_yield.py`, `test_pricing_service.py`,
 `test_public_api.py`, `test_qa_service_resolution.py`,
 `test_server.py`, `test_skills.py`, `test_tag_service_intent.py`.
 

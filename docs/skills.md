@@ -146,14 +146,14 @@ The agent corrects itself with a verifiable citation. If the recall is wrong, th
 
 ### Semantic recall (optional)
 
-`recall-past-decisions` runs over plain `LIKE` substrings by default. If the original conversation used different wording from the user's recall ("watchfiles" vs. "file watching library"), the substring match misses. Install the optional sentence-transformers extra and the skill / CLI / MCP tool can re-rank the substring-matched candidate set by cosine similarity:
+`recall-past-decisions` runs over plain `LIKE` substrings by default. If the original conversation used different wording from the user's recall ("watchfiles" vs. "file watching library"), the substring match misses. Install the optional sentence-transformers extra and the skill / CLI can re-rank the substring-matched candidate set by cosine similarity:
 
 ```
 pip install 'stackunderflow[embeddings]'
 stackunderflow search-past-decisions "file watching library" --use-embeddings
 ```
 
-Each result gains an `embedding_score` in `[0, 1]`; the substring filter still runs first (`--use-embeddings` only re-orders, never widens). Default model is `sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim) and loads lazily on the first call; override via `STACKUNDERFLOW_EMBED_MODEL` or `--embed-model`. The MCP `search_past_decisions` tool takes the matching `use_embeddings: bool` and `embed_model: str` args.
+Each result gains an `embedding_score` in `[0, 1]`; the substring filter still runs first (`--use-embeddings` only re-orders, never widens). Default model is `sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim) and loads lazily on the first call; override via `STACKUNDERFLOW_EMBED_MODEL` or `--embed-model`.
 
 ## Optional: project-specific overrides
 
@@ -212,7 +212,7 @@ stackunderflow recommend skills
 stackunderflow recommend skills --project -Users-you-dev-foo --threshold 8 --window-days 60
 ```
 
-It filters out patterns you already have a skill for. Each row carries an `accept_command` you paste to install the skill — acceptance is always an explicit step. The same recommender is exposed as the `recommend_skills` MCP tool and to the meta-agent sidebar; see [`docs/mcp.md`](mcp.md) and [`docs/meta-agent.md`](meta-agent.md).
+It filters out patterns you already have a skill for. Each row carries an `accept_command` you paste to install the skill — acceptance is always an explicit step. The same recommender is exposed to the meta-agent sidebar; see [`docs/meta-agent.md`](meta-agent.md).
 
 ## Future work
 
