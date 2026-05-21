@@ -139,46 +139,53 @@ A header toggle slides in a chat drawer that streams from a **local** Ollama ins
 
 The pipeline is three layers tied together by a watermarked refresh loop and a filesystem watcher.
 
-```
-                ┌─ Source files (17 providers) ─┐
-                │  ~/.claude/projects/           │
-                │  ~/.codex/sessions/            │
-                │  state.vscdb (Cursor)          │
-                │  saoudrizwan.claude-dev (Cline)│
-                │  ...                           │
-                └─────────────┬──────────────────┘
-                              │  per-provider adapter
-                              ▼
-               ┌─────────  RAW LAYER  ─────────┐
-               │  messages, sessions, projects │
-               │  one row per source-message    │
-               └─────────────┬──────────────────┘
-                              │  per-provider Normalizer
-                              ▼
-               ┌──── NORMALIZED LAYER ─────────┐
-               │  usage_events                  │
-               │  canonical shape, cost_usd     │
-               │  computed once + stored        │
-               └─────────────┬──────────────────┘
-                              │  watermarked MartBuilders
-                              ▼
-               ┌──────  MARTS LAYER  ──────────┐
-               │  daily_mart                    │
-               │  session_mart                  │
-               │  project_mart                  │
-               │  provider_day_mart             │
-               │  model_day_mart                │
-               │  tool_mart                     │
-               │  command_mart                  │
-               │  message_tool_mart             │
-               └─────────────┬──────────────────┘
-                              ▼
-               REST routes — plain SELECTs
+```mermaid
+graph TD
+    %% Theme Definitions for High Legibility on Dark & Light Themes
+    classDef source fill:#1A202C,stroke:#4A5568,stroke-width:1.5px,color:#EDF2F7;
+    classDef raw fill:#2B6CB0,stroke:#3182CE,stroke-width:2px,color:#FFF;
+    classDef normalized fill:#D69E2E,stroke:#ECC94B,stroke-width:2px,color:#FFF;
+    classDef marts fill:#2C7A7B,stroke:#319795,stroke-width:2px,color:#FFF;
+    classDef routes fill:#2D3748,stroke:#718096,stroke-dasharray: 5 5,color:#A0AEC0;
+    classDef watcher fill:#E53E3E,stroke:#F56565,stroke-width:2px,color:#FFF;
 
-                ↑↑↑ filesystem watcher ties
-                    layers together: 200ms
-                    debounce, ~400ms total
-                    end-to-end latency
+    subgraph Sources ["📁 Source Logs (17 Providers)"]
+        S1["~/.claude/projects/ (Claude Code)"]
+        S2["~/.codex/sessions/ (Codex)"]
+        S3["state.vscdb (Cursor)"]
+        S4["saoudrizwan.claude-dev (Cline)"]
+        S5["... (13 Beta Providers)"]
+    end
+    class S1,S2,S3,S4,S5 source;
+
+    subgraph Pipeline ["⚡ Data Pipeline & Storage"]
+        Raw["📥 RAW LAYER<br/>(messages, sessions, projects)<br/>• Immutable log rows<br/>• UNIQUE per provider/slug"]
+        Norm["🔄 NORMALIZED LAYER<br/>(usage_events)<br/>• Canonical schema<br/>• Cost calculated once"]
+        Marts["📊 MARTS LAYER (8 Aggregated Marts)<br/>• daily_mart<br/>• session_mart<br/>• tool_mart & command_mart<br/>• provider/model marts"]
+    end
+    class Raw raw;
+    class Norm normalized;
+    class Marts marts;
+
+    subgraph Presentation ["🖥️ API & UI Presentation"]
+        Routes["🔌 REST Routes & MCP Server<br/>(Fast SELECT queries &lt;50ms)"]
+    end
+    class Routes routes;
+
+    %% Watcher Service
+    Watcher["🔄 Filesystem Watcher<br/>(200ms debounce | ~400ms end-to-end sync)"]
+    class Watcher watcher;
+
+    %% Data Flow Connections
+    Sources -->|Per-provider adapter| Raw
+    Raw -->|Per-provider normalizer| Norm
+    Norm -->|Watermarked MartBuilder| Marts
+    Marts -->|Instant reads| Routes
+
+    %% Watcher Connections
+    Watcher -.->|Monitors| Sources
+    Watcher -.->|Triggers refresh| Raw
+    Watcher -.->|Moniggers Mart rebuild| Marts
 ```
 
 Every dashboard route reads from the marts. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
