@@ -149,43 +149,43 @@ graph TD
     classDef routes fill:#2D3748,stroke:#718096,stroke-dasharray: 5 5,color:#A0AEC0;
     classDef watcher fill:#E53E3E,stroke:#F56565,stroke-width:2px,color:#FFF;
 
-    subgraph Sources ["📁 Source Logs (17 Providers)"]
-        S1["~/.claude/projects/ (Claude Code)"]
-        S2["~/.codex/sessions/ (Codex)"]
-        S3["state.vscdb (Cursor)"]
-        S4["saoudrizwan.claude-dev (Cline)"]
-        S5["... (13 Beta Providers)"]
+    subgraph Sources [Source Logs - 17 Providers]
+        S1[Claude Code - projects]
+        S2[Codex - sessions]
+        S3[Cursor - state.vscdb]
+        S4[Cline - tasks]
+        S5[13 Beta Providers]
     end
     class S1,S2,S3,S4,S5 source;
 
-    subgraph Pipeline ["⚡ Data Pipeline & Storage"]
-        Raw["📥 RAW LAYER<br/>(messages, sessions, projects)<br/>• Immutable log rows<br/>• UNIQUE per provider/slug"]
-        Norm["🔄 NORMALIZED LAYER<br/>(usage_events)<br/>• Canonical schema<br/>• Cost calculated once"]
-        Marts["📊 MARTS LAYER (8 Aggregated Marts)<br/>• daily_mart<br/>• session_mart<br/>• tool_mart & command_mart<br/>• provider/model marts"]
+    subgraph Pipeline [Data Pipeline & Storage]
+        Raw[RAW LAYER - messages, sessions, projects]
+        Norm[NORMALIZED LAYER - usage_events]
+        Marts[MARTS LAYER - 8 Aggregated Marts]
     end
     class Raw raw;
     class Norm normalized;
     class Marts marts;
 
-    subgraph Presentation ["🖥️ API & UI Presentation"]
-        Routes["🔌 REST Routes & MCP Server<br/>(Fast SELECT queries &lt;50ms)"]
+    subgraph Presentation [API & UI Presentation]
+        Routes[REST Routes & MCP Server]
     end
     class Routes routes;
 
     %% Watcher Service
-    Watcher["🔄 Filesystem Watcher<br/>(200ms debounce | ~400ms end-to-end sync)"]
+    Watcher[Filesystem Watcher]
     class Watcher watcher;
 
     %% Data Flow Connections
-    Sources -->|Per-provider adapter| Raw
-    Raw -->|Per-provider normalizer| Norm
-    Norm -->|Watermarked MartBuilder| Marts
-    Marts -->|Instant reads| Routes
+    Sources --> Raw
+    Raw --> Norm
+    Norm --> Marts
+    Marts --> Routes
 
     %% Watcher Connections
-    Watcher -.->|Monitors| Sources
-    Watcher -.->|Triggers refresh| Raw
-    Watcher -.->|Moniggers Mart rebuild| Marts
+    Watcher -.-> Sources
+    Watcher -.-> Raw
+    Watcher -.-> Marts
 ```
 
 Every dashboard route reads from the marts. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
