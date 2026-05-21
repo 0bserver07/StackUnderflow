@@ -99,7 +99,7 @@ Wave 1 ✅ merged (v0.9.0). Wave 2 ⚠️ half-merged (spec 20 in, spec 21 on br
 
 ## What StackUnderflow is
 
-A local-first knowledge base + cost dashboard for AI coding sessions. Forked from a since-rewritten codebase; **MIT, no external service dependencies, no telemetry**.
+An offline, local-first observability toolkit for AI coding agents. It ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Forked from a since-rewritten codebase; **MIT, no external service dependencies, no telemetry**.
 
 The user runs `stackunderflow start`. A FastAPI server binds `127.0.0.1:8081`, serves a React dashboard, and exposes:
 
