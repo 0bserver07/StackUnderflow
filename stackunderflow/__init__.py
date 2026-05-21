@@ -1,7 +1,9 @@
-"""StackUnderflow: the local observability for your coding agents.
+"""StackUnderflow: offline, local-first observability toolkit for AI coding agents.
 
-Search, replay, and analyse every session, all offline. Starts with
-Claude Code; adapters for more coding agents are on the way.
+Ingests and indexes session logs from 17 coding agent providers to surface cost
+analytics, interactive session playback (with step-by-step filesystem
+reconstruction), and a searchable knowledge base that both developers
+and agents can query to learn from past decisions and failures. All offline.
 
 Top-level API::
 

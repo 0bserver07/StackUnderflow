@@ -1,8 +1,16 @@
 # StackUnderflow
 
-**Local cost dashboard for AI coding agents.** Watches the JSONL / vscdb / SQLite files your coding tools write, parses them in-process, and serves a dashboard that shows what you're spending, where it goes, and which sessions actually shipped code.
+**Offline, local-first observability toolkit for AI coding agents.**
 
-17 providers supported (4 default-on, 13 opt-in beta). Sub-second sync from source-file write to dashboard data fresh. No telemetry, no upload, no cloud — everything stays in `~/.stackunderflow/`.
+StackUnderflow ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
+
+### The Four Pillars
+*   **📊 Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
+*   **🕒 Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
+*   **🧠 Local Agent Memory**: Exposes a CLI and an MCP server so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
+*   **🤖 Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
+
+17 providers supported (4 default-on, 13 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
