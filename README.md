@@ -60,6 +60,71 @@ stackunderflow init
 
 ---
 
+## CLI Tour (Live Terminal Demo)
+
+StackUnderflow features a robust, colorful terminal interface powered by `rich`. Here is a direct look at the CLI in action, showing how you can query cost, audit waste, and query past sessions:
+
+### 1. Cost & Ingest Status (`stackunderflow status`)
+Get a quick, one-line summary of your active token spending and message counts for the day and the current billing cycle:
+```bash
+$ stackunderflow status
+today: $35.63 (75 msg) | month: $7974.71 (31728 msg)
+```
+
+### 2. Multi-project reports (`stackunderflow report`)
+Generate high-fidelity, ASCII table summaries of your spending across all active agent workspaces over a custom date range (e.g., the last 7 days):
+```ansi
+$ stackunderflow report
+StackUnderflow — last 7 days
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Project                                     ┃     Cost ┃ Messages ┃ Sessions ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
+│ -Users-yadkonrad-dev-dev-year26-jan26-Stac… │ $1081.59 │    3,514 │       20 │
+│ -Users-yadkonrad-dev-dev-year26-jan26-new-… │  $635.22 │      998 │        2 │
+│ -Users-yadkonrad-dev-dev-year26-jan26-bour… │  $289.22 │      905 │        2 │
+│ -Users-yadkonrad-dev-dev-year26-feb26-chim… │  $239.58 │    1,254 │       11 │
+│ -Users-yadkonrad-dev-dev-year26-feb26-clau… │  $203.06 │      593 │        4 │
+│ -Users-yadkonrad-dev-dev-year26-may26-Stud… │  $157.24 │      176 │        2 │
+└─────────────────────────────────────────────┴──────────┴──────────┴──────────┘
+Total: $2894.57  8,315 messages  59 sessions
+```
+
+### 3. Waste audit & cost optimization (`stackunderflow optimize`)
+Run automated, offline waste detectors (looped Q&A pairs, cache thrashing, excessive file re-reads, and unused MCP servers) to cut down your active developer billing:
+```ansi
+$ stackunderflow optimize
+Waste report — last 30 days
+
+Q&A loops:
+  -Users-yadkonrad-dev-dev-year26-feb26-claude-sessions: 6 looped pair(s)
+    - "if u were to review our entire conversations, whats is the oscillation like?"
+
+Structural patterns:
+  [HIGH] cache_overhead: 241 session(s) with cache thrash
+      241 session(s) where cache_create_tokens exceed 50% of total input
+      ~289,497,821 wasted tokens
+      fix: Bundle related questions into one session so cache writes amortise.
+  [HIGH] junk_reads: 61 file(s) re-read excessively
+      61 file(s) Read 5+ times in a single session — assistant likely forgot prior reads.
+      fix: Cache file contents in working memory or use Grep to search.
+```
+
+### 4. Search past decisions (`stackunderflow memory decisions "<term>"`)
+Active agents (or developers) can query the database directly from the CLI to view past decisions and context-rich changes to avoid duplicating work:
+```ansi
+$ stackunderflow memory decisions "cache"
+Past decisions matching 'cache' (14 session(s))
+
+  [claude] 18d87ee4-b01…  2026-05-20T03:21:26  msgs=445  $115.0498
+      -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow  /Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow
+      … remove a leaked email and force-pushed. Please garbage-collect the dangling/unreachable commits so cached SHAs stop resolving.
+
+  [claude] 5be67015-9a4…  2026-05-20T01:56:58  msgs=198  $22.2723
+      … memory-and-latency's "no in-process cache" claim was false — `/api/dashboard-data` has a memo cache plus a `project_mart` fast-path.
+```
+
+---
+
 ## What it does
 
 ### Multi-provider ingest
@@ -140,52 +205,69 @@ A header toggle slides in a chat drawer that streams from a **local** Ollama ins
 The pipeline is three layers tied together by a watermarked refresh loop and a filesystem watcher.
 
 ```mermaid
-graph TD
-    %% Theme Definitions for High Legibility on Dark & Light Themes
+flowchart TD
+    %% Theme Styling for Dark & Light Mode Legibility
     classDef source fill:#1A202C,stroke:#4A5568,stroke-width:1.5px,color:#EDF2F7;
-    classDef raw fill:#2B6CB0,stroke:#3182CE,stroke-width:2px,color:#FFF;
-    classDef normalized fill:#D69E2E,stroke:#ECC94B,stroke-width:2px,color:#FFF;
-    classDef marts fill:#2C7A7B,stroke:#319795,stroke-width:2px,color:#FFF;
-    classDef routes fill:#2D3748,stroke:#718096,stroke-dasharray: 5 5,color:#A0AEC0;
-    classDef watcher fill:#E53E3E,stroke:#F56565,stroke-width:2px,color:#FFF;
+    classDef pipeline fill:#2B6CB0,stroke:#3182CE,stroke-width:2px,color:#FFF;
+    classDef db fill:#2C7A7B,stroke:#319795,stroke-width:2px,color:#FFF;
+    classDef interface fill:#D69E2E,stroke:#ECC94B,stroke-width:2px,color:#FFF;
+    classDef cli fill:#E53E3E,stroke:#F56565,stroke-width:2px,color:#FFF;
+    classDef agent fill:#805AD5,stroke:#9F7AEA,stroke-width:2px,color:#FFF;
 
-    subgraph Sources [Source Logs - 17 Providers]
-        S1[Claude Code - projects]
-        S2[Codex - sessions]
-        S3[Cursor - state.vscdb]
-        S4[Cline - tasks]
-        S5[13 Beta Providers]
+    %% 1. Log Sources
+    subgraph Sources ["📁 Input Log Sources (17 Providers)"]
+        Logs["Local Session Logs<br/>• Claude Code JSONL<br/>• Cursor state.vscdb<br/>• Cline tasks JSON"]
     end
-    class S1,S2,S3,S4,S5 source;
+    class Logs source;
 
-    subgraph Pipeline [Data Pipeline & Storage]
-        Raw[RAW LAYER - messages, sessions, projects]
-        Norm[NORMALIZED LAYER - usage_events]
-        Marts[MARTS LAYER - 8 Aggregated Marts]
+    %% 2. Background Processing
+    subgraph Engine ["⚡ StackUnderflow Core Engine"]
+        Watcher["Filesystem Watcher<br/>• 200ms debounce<br/>• ~400ms fresh sync"]
+        Ingest["Ingest & Normalizer<br/>• Standardizes events<br/>• Computes costs offline"]
+        Store[("SQLite Store<br/>~/.stackunderflow/store.db")]
+        ETL["Mart Builder (ETL)<br/>• Aggregates 8 reporting marts<br/>• Correlates Git yields"]
     end
-    class Raw raw;
-    class Norm normalized;
-    class Marts marts;
+    class Watcher,Ingest,ETL pipeline;
+    class Store db;
 
-    subgraph Presentation [API & UI Presentation]
-        Routes[REST Routes & MCP Server]
+    %% 3. Interfaces & Presentation
+    subgraph Frontends ["🖥️ Interfaces & Presenters"]
+        API["FastAPI REST Web Server<br/>• Serving /api/* routes"]
+        MCP["Model Context Protocol Server<br/>• Exposes tool history over stdio"]
+        CLI["Command Line Interface (CLI)<br/>• stackunderflow today / month<br/>• stackunderflow optimize / report"]
     end
-    class Routes routes;
+    class API,MCP interface;
+    class CLI cli;
 
-    %% Watcher Service
-    Watcher[Filesystem Watcher]
-    class Watcher watcher;
+    %% 4. Client / End User Applications
+    subgraph Clients ["👥 End Users & AI Clients"]
+        Dashboard["React Web Dashboard<br/>• http://localhost:8081<br/>• Analytics, playback & virtual FS"]
+        Ollama["Local Ollama Chat<br/>• Offline history Q&A sidebar"]
+        Agent["Active AI Agent (Claude Code / Cursor)<br/>• Queries past runs during sessions<br/>• Learns from previous failures"]
+    end
+    class Dashboard,Ollama interface;
+    class Agent agent;
 
-    %% Data Flow Connections
-    Sources --> Raw
-    Raw --> Norm
-    Norm --> Marts
-    Marts --> Routes
+    %% Watcher Loop
+    Watcher -.->|Monitors| Logs
+    Watcher -.->|Triggers Ingest| Ingest
 
-    %% Watcher Connections
-    Watcher -.-> Sources
-    Watcher -.-> Raw
-    Watcher -.-> Marts
+    %% Data Pipeline Flow
+    Logs --> Ingest
+    Ingest -->|Raw & Normalized events| Store
+    Store --> ETL
+    ETL -->|Aggregated reporting marts| Store
+
+    %% Access Points
+    Store --> API
+    Store --> MCP
+    Store --> CLI
+
+    %% Client Delivery
+    API --> Dashboard
+    API --> Ollama
+    MCP <-->|stdio feedback loop| Agent
+    CLI <-->|Developer CLI Reports| Dashboard
 ```
 
 Every dashboard route reads from the marts. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
