@@ -1,9 +1,9 @@
 ---
 title: StackUnderflow
-description: The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code.
+description: Offline, local-first observability toolkit for AI coding agents. Ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback, and a searchable knowledge base.
 template: splash
 hero:
-  tagline: "The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code."
+  tagline: "Offline, local-first observability toolkit for AI coding agents. Ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback, and a searchable knowledge base."
   image:
     file: ../../assets/dashboard.png
   actions:
@@ -28,7 +28,7 @@ That opens the dashboard at `http://127.0.0.1:8081`.
 
 ## What it does
 
-StackUnderflow is the local observability for your coding agents. Every session you run is indexed into a local SQLite store on your machine, searchable, replayable, and analysable without anything leaving the host. It starts with Claude Code; adapters for more agents are on the way.
+StackUnderflow is an offline, local-first observability toolkit for AI coding agents. It ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
 
 - **Dashboard** — browse projects, sessions, token costs, and daily usage
 - **Full-text search** across every message you've sent or received
