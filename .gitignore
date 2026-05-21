@@ -225,6 +225,10 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Antigravity — agentic IDE per-project local state, like `.claude/`
+.antigravitycli/
+
 # Nix build output
 result
 result-*
