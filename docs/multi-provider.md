@@ -103,11 +103,17 @@ flowchart LR
     ingest --> codex[CodexAdapter]
     ingest --> cursor[CursorAdapter]
     ingest --> cline[ClineAdapter]
-    ingest --> betas[13 opt-in beta adapters]
+    ingest --> openclaw[OpenClawAdapter]
+    ingest --> pi[PiAdapter]
+    ingest --> hermes[HermesAdapter]
+    ingest --> betas[10 opt-in beta adapters]
     claude --> store[(SQLite store.db)]
     codex --> store
     cursor --> store
     cline --> store
+    openclaw --> store
+    pi --> store
+    hermes --> store
     store --> api[/REST API/]
     api --> ui[React dashboard]
 ```
