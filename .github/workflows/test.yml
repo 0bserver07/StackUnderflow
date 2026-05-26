@@ -3,8 +3,22 @@ name: Tests
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'stackunderflow/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - '.github/workflows/test.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'stackunderflow/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - '.github/workflows/test.yml'
 
 jobs:
   test:

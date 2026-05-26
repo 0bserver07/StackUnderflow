@@ -3,8 +3,20 @@ name: Lint
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'stackunderflow/**'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - '.github/workflows/lint.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'stackunderflow/**'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - '.github/workflows/lint.yml'
 
 jobs:
   lint:
