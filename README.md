@@ -21,10 +21,10 @@ StackUnderflow ingests and indexes session logs from 17 coding agent providers t
 </p>
 
 ### The Four Pillars
-*   **📊 Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
-*   **🕒 Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
-*   **🧠 Local Agent Memory**: Exposes a CLI and an MCP server so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
-*   **🤖 Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
+*   **Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
+*   **Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
+*   **Local Agent Memory**: Exposes a CLI and an MCP server so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
+*   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
 17 providers supported (7 default-on, 10 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
 
