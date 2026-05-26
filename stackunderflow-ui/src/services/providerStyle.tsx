@@ -59,9 +59,10 @@ const PROVIDER_COLORS: Record<string, ProviderColor> = {
   codeium: 'yellow',
   // Kiro / Kiro Studio.
   kiro: 'red',
-  // OpenClaw + Pi (legacy beta adapters).
-  openclaw: 'gray',
-  pi: 'gray',
+  // OpenClaw + Pi + Hermes (promoted default-on adapters).
+  openclaw: 'blue',
+  pi: 'green',
+  hermes: 'purple',
 }
 
 // Wire-name → display-name normalisation (e.g. "anthropic" → "claude" so
