@@ -11,6 +11,7 @@ Spec: ``docs/specs/multi-provider/spec.md`` §2.
 from __future__ import annotations
 
 from .anthropic import AnthropicPricer
+from .antigravity import AntigravityPricer
 from .base import ProviderPricer
 from .cline import ClinePricer
 from .codeium import CodeiumPricer
@@ -20,6 +21,7 @@ from .cursor import CursorPricer
 from .cursor_agent import CursorAgentPricer
 from .droid import DroidPricer
 from .gemini import GeminiPricer
+from .hermes import HermesPricer
 from .kilocode import KiloCodePricer
 from .kiro import KiroPricer
 from .openai import OpenAIPricer
@@ -49,6 +51,8 @@ _DROID = DroidPricer()
 _KIRO = KiroPricer()
 _OPENCLAW = OpenClawPricer()
 _PI = PiPricer()
+_HERMES = HermesPricer()
+_ANTIGRAVITY = AntigravityPricer()
 
 
 # Stable mapping from the ``Record.provider`` strings used by adapters
@@ -78,6 +82,8 @@ _REGISTRY: dict[str, ProviderPricer] = {
     "kiro": _KIRO,
     "openclaw": _OPENCLAW,
     "pi": _PI,
+    "hermes": _HERMES,
+    "antigravity": _ANTIGRAVITY,
 }
 
 

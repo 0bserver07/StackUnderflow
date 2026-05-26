@@ -74,6 +74,7 @@ from .copilot import CopilotNormalizer  # noqa: E402
 from .cursor_agent import CursorAgentNormalizer  # noqa: E402
 from .droid import DroidNormalizer  # noqa: E402
 from .gemini import GeminiNormalizer  # noqa: E402
+from .hermes import HermesNormalizer  # noqa: E402
 from .kilocode import KiloCodeNormalizer  # noqa: E402
 from .kiro import KiroNormalizer  # noqa: E402
 from .openclaw import OpenClawNormalizer  # noqa: E402
@@ -88,6 +89,7 @@ register("copilot", CopilotNormalizer)
 register("cursor_agent", CursorAgentNormalizer)
 register("droid", DroidNormalizer)
 register("gemini", GeminiNormalizer)
+register("hermes", HermesNormalizer)
 register("kilocode", KiloCodeNormalizer)
 register("kiro", KiroNormalizer)
 register("openclaw", OpenClawNormalizer)
@@ -120,6 +122,7 @@ __all__ = [
     "CursorAgentNormalizer",
     "DroidNormalizer",
     "GeminiNormalizer",
+    "HermesNormalizer",
     "KiloCodeNormalizer",
     "KiroNormalizer",
     "OpenClawNormalizer",

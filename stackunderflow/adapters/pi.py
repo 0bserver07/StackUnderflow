@@ -69,7 +69,7 @@ class PiAdapter:
         for root, label in self._roots:
             if not root.is_dir():
                 continue
-            for fp in sorted(root.glob("*.jsonl")):
+            for fp in sorted(root.glob("**/*.jsonl")):
                 try:
                     stat = fp.stat()
                 except OSError as exc:
@@ -94,6 +94,9 @@ class PiAdapter:
                     # re-parsing the file path.
                     source_hint={"source": label},
                 )
+
+    def watch_paths(self) -> list[Path]:
+        return [root for root, _ in self._roots]
 
     # ── reading ───────────────────────────────────────────────────────
 
@@ -207,10 +210,19 @@ def _normalize_usage(usage: dict) -> dict[str, int]:
 
 
 def _safe_int(val: object) -> int:
-    try:
-        return max(int(val or 0), 0)
-    except (TypeError, ValueError):
-        return 0
+    if isinstance(val, (int, float)):
+        return max(int(val), 0)
+    if isinstance(val, str):
+        try:
+            return max(int(val), 0)
+        except ValueError:
+            return 0
+    if isinstance(val, bytes | bytearray):
+        try:
+            return max(int(val.decode("utf-8", errors="replace")), 0)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _message_text(content: object) -> str:

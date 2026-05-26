@@ -11,8 +11,11 @@ Default-on adapters (always registered):
   - Codex (rollout JSONL)
   - Cursor (vscdb) — promoted out of beta in v0.7.0
   - Cline (VS Code globalStorage) — promoted out of beta in v0.7.0
+  - OpenClaw (multi-base) — promoted out of beta in v0.9.2
+  - Pi+OMP (shared format) — promoted out of beta in v0.9.2
+  - Hermes (recursive JSONL) — promoted out of beta in v0.9.2
 
-Beta adapters are gated by environment variables (default: off). The 12 below
+Beta adapters are gated by environment variables (default: off). The 10 below
 remain opt-in pending broader real-world validation:
 
   STACKUNDERFLOW_BETA_KILOCODE=1       # opt into the KiloCode adapter (Cline parser)
@@ -29,8 +32,11 @@ remain opt-in pending broader real-world validation:
                                        #   (defensive SQLite parser)
   STACKUNDERFLOW_BETA_DROID=1          # opt into the Droid (Factory) adapter
   STACKUNDERFLOW_BETA_KIRO=1           # opt into the Kiro (kiroagent) adapter
-  STACKUNDERFLOW_BETA_OPENCLAW=1       # opt into the OpenClaw (multi-base) adapter
-  STACKUNDERFLOW_BETA_PI=1             # opt into the Pi+OMP shared adapter
+  STACKUNDERFLOW_BETA_ANTIGRAVITY=1    # opt into the Antigravity (Google IDE+CLI)
+                                       #   adapter. Per-message text and tokens
+                                       #   are encrypted; this adapter surfaces
+                                       #   plaintext metadata only (titles,
+                                       #   workspaces, CLI user prompts).
 """
 
 import os
@@ -63,6 +69,9 @@ from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
 from .cline import ClineAdapter as _ClineAdapter  # noqa: E402
 from .codex import CodexAdapter as _CodexAdapter  # noqa: E402
 from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
+from .hermes import HermesAdapter as _HermesAdapter  # noqa: E402
+from .openclaw import OpenClawAdapter as _OpenClawAdapter  # noqa: E402
+from .pi import PiAdapter as _PiAdapter  # noqa: E402
 
 register(_ClaudeAdapter())
 register(_CodexAdapter())
@@ -72,6 +81,15 @@ register(_CursorAdapter())
 
 # Cline (VS Code globalStorage). macOS-only for v1; spec §3.2.
 register(_ClineAdapter())
+
+# OpenClaw (multi-base).
+register(_OpenClawAdapter())
+
+# Pi + OMP.
+register(_PiAdapter())
+
+# Hermes (recursive JSONL).
+register(_HermesAdapter())
 
 # Beta: KiloCode (VS Code globalStorage, Cline parser reuse). Off by
 # default — set STACKUNDERFLOW_BETA_KILOCODE=1 to enable. macOS-only for v1.
@@ -153,18 +171,13 @@ if _beta_enabled("KIRO"):
 
     register(_KiroAdapter())
 
-# Beta: OpenClaw (and rebrand cousins). Off by default — set
-# STACKUNDERFLOW_BETA_OPENCLAW=1 to enable. Walks four candidate base
-# directories: ~/.openclaw, ~/.clawdbot, ~/.moltbot, ~/.moldbot.
-if _beta_enabled("OPENCLAW"):
-    from .openclaw import OpenClawAdapter as _OpenClawAdapter  # noqa: E402
+# Beta: Antigravity (Google IDE + CLI). Off by default — set
+# STACKUNDERFLOW_BETA_ANTIGRAVITY=1 to enable. macOS-only for v1.
+# Per-message text and token data live in encrypted .pb files behind
+# the macOS Keychain "Antigravity Safe Storage" key; only plaintext
+# metadata (titles, workspaces, CLI prompts) is surfaced. See the
+# module docstring for the decryption block details.
+if _beta_enabled("ANTIGRAVITY"):
+    from .antigravity import AntigravityAdapter as _AntigravityAdapter  # noqa: E402
 
-    register(_OpenClawAdapter())
-
-# Beta: Pi + OMP (shared format, two roots). Off by default — set
-# STACKUNDERFLOW_BETA_PI=1 to enable both. One adapter scans both
-# ~/.pi/agent/sessions and ~/.omp/agent/sessions.
-if _beta_enabled("PI"):
-    from .pi import PiAdapter as _PiAdapter  # noqa: E402
-
-    register(_PiAdapter())
+    register(_AntigravityAdapter())

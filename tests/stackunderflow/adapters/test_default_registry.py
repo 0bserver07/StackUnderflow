@@ -23,18 +23,21 @@ def _reload() -> set[str]:
 
 
 def test_cursor_and_cline_default_on(monkeypatch):
-    """With no env vars set, cursor + cline must register alongside
-    claude + codex."""
+    """With no env vars set, cursor, cline, openclaw, pi, and hermes must
+    register alongside claude + codex."""
     _clear_beta_env(monkeypatch)
     names = _reload()
     assert "claude" in names
     assert "codex" in names
     assert "cursor" in names
     assert "cline" in names
+    assert "openclaw" in names
+    assert "pi" in names
+    assert "hermes" in names
 
 
 def test_other_betas_stay_off_by_default(monkeypatch):
-    """The 12 remaining beta adapters must NOT register without their
+    """The remaining beta adapters must NOT register without their
     env var. ``cursor-agent`` is the registered name for the Cursor
     Agent adapter (distinct from the default-on ``cursor`` adapter)."""
     _clear_beta_env(monkeypatch)
@@ -51,16 +54,15 @@ def test_other_betas_stay_off_by_default(monkeypatch):
         "continue",
         "droid",
         "kiro",
-        "openclaw",
-        "pi",
     ):
         assert beta not in names, f"{beta!r} must stay opt-in"
 
 
-def test_default_registry_is_exactly_four(monkeypatch):
-    """No surprise registrations — the default contract is exactly four
+def test_default_registry_is_exactly_seven(monkeypatch):
+    """No surprise registrations — the default contract is exactly seven
     adapters. New default-on additions should bump this number
     intentionally."""
     _clear_beta_env(monkeypatch)
     names = _reload()
-    assert names == {"claude", "codex", "cursor", "cline"}
+    assert names == {"claude", "codex", "cursor", "cline", "openclaw", "pi", "hermes"}
+

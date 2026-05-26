@@ -1,16 +1,11 @@
-"""OpenClaw (and rebrand-cousins) session adapter.
+"""Hermes session adapter.
 
-OpenClaw ships under several names. This adapter checks each candidate
-base directory in order and reads from whichever one(s) exist:
-
-- ``~/.openclaw/agents/``
-- ``~/.clawdbot/agents/``
-- ``~/.moltbot/agents/``
-- ``~/.moldbot/agents/``
+Hermes writes JSONL conversation logs into its sessions directory under `~/.hermes/sessions/`.
 
 Within each base, the layout is::
 
-    {base}/{agent}/sessions/{sessionId}.jsonl
+    ~/.hermes/sessions/{sessionId}.jsonl
+    or recursively in nested project subdirectories.
 
 JSONL events look like::
 
@@ -22,22 +17,8 @@ JSONL events look like::
                  "model": "claude-3-5-sonnet",
                  "provider": "anthropic",
                  "usage": {"input": 100, "output": 50,
-                           "cacheRead": 10, "cacheWrite": 5,
-                           "cost": 0.0012}}}
-
-Model resolution: prefer ``message.model`` per record; otherwise use the
-most recent ``model_change`` event seen so far in the file. Falls back
-to ``"openclaw-unknown"``.
-
-Storage: byte-offset resume (spec §1.4) — same as Codex/Claude. ``seq``
-is the byte offset where each JSONL line started.
-
-Spec §3 (multi-provider).
-
-Defensive sizing: JSONL sessions larger than ``MAX_SESSION_FILE_BYTES``
-(128 MB; see ``stackunderflow/adapters/_streaming.py``) are **skipped
-with a logged warning** rather than parsed. Smaller files stream
-line-by-line."""
+                           "cacheRead": 10, "cacheWrite": 5}}}
+"""
 
 from __future__ import annotations
 
@@ -52,84 +33,59 @@ from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
 
-# Order matters: enumerate() walks each in turn so first-found wins for
-# cross-listed agents. Unlikely to collide in practice (the rebrands
-# don't share agent ids), but the deterministic order means tests can
-# rely on it.
-_CANDIDATE_BASES = (
-    "~/.openclaw/agents",
-    "~/.clawdbot/agents",
-    "~/.moltbot/agents",
-    "~/.moldbot/agents",
-)
-
-_DEFAULT_MODEL = "openclaw-unknown"
+_DEFAULT_ROOT = "~/.hermes/sessions"
+_DEFAULT_MODEL = "hermes-unknown"
 
 
-class OpenClawAdapter:
-    """Source adapter for OpenClaw and its rebranded forks."""
+class HermesAdapter:
+    """Source adapter for Hermes agent."""
 
-    name = "openclaw"
+    name = "hermes"
 
-    def __init__(self, base_dirs: list[Path] | None = None) -> None:
-        # Tests inject explicit base dirs; production uses the candidate
-        # list expanded against $HOME.
-        if base_dirs is not None:
-            self._bases = list(base_dirs)
+    def __init__(self, roots: list[Path] | None = None) -> None:
+        if roots is not None:
+            self._roots = list(roots)
         else:
-            self._bases = [Path(os.path.expanduser(p)) for p in _CANDIDATE_BASES]
+            self._roots = [Path(os.path.expanduser(_DEFAULT_ROOT))]
 
     # ── enumeration ───────────────────────────────────────────────────
 
     def enumerate(self) -> Iterator[SessionRef]:
-        for base in self._bases:
-            if not base.is_dir():
+        for root in self._roots:
+            if not root.is_dir():
                 continue
-            for agent_dir in sorted(p for p in base.iterdir() if p.is_dir()):
-                sessions_dir = agent_dir / "sessions"
-                if not sessions_dir.is_dir():
+            # Search recursively using glob("**/*.jsonl") to cover any nested project subdirs
+            for fp in sorted(root.glob("**/*.jsonl")):
+                try:
+                    stat = fp.stat()
+                except OSError as exc:
+                    _log.warning("Cannot stat Hermes session %s: %s", fp, exc)
                     continue
-                for fp in sorted(sessions_dir.glob("*.jsonl")):
-                    try:
-                        stat = fp.stat()
-                    except OSError as exc:
-                        _log.warning(
-                            "Cannot stat OpenClaw session %s: %s", fp, exc,
-                        )
-                        continue
 
-                    session_id = _peek_session_id(fp) or fp.stem
+                session_id = _peek_session_id(fp) or fp.stem
 
-                    yield SessionRef(
-                        provider=self.name,
-                        project_slug=agent_dir.name or "openclaw",
-                        session_id=session_id,
-                        file_path=fp,
-                        file_mtime=stat.st_mtime,
-                        file_size=stat.st_size,
-                        source_kind="file",
-                        source_hint=None,
-                    )
+                yield SessionRef(
+                    provider=self.name,
+                    project_slug=fp.parent.name if fp.parent != root else "hermes",
+                    session_id=session_id,
+                    file_path=fp,
+                    file_mtime=stat.st_mtime,
+                    file_size=stat.st_size,
+                    source_kind="file",
+                    source_hint=None,
+                )
 
     def watch_paths(self) -> list[Path]:
-        return self._bases
+        return self._roots
 
     # ── reading ───────────────────────────────────────────────────────
 
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterator[Record]:
-        # Defensive cap: skip files larger than 128 MB before doing the
-        # model_change pre-scan.
         if stat_or_skip(ref.file_path) is None:
             return
 
-        # Most-recent ``model_change`` seen so far. We always start by
-        # scanning from the head to capture model_change events that may
-        # precede ``since_offset`` — otherwise a resumed read could lose
-        # the model context for records past the resume floor.
         current_model: str | None = _scan_for_model(ref.file_path, since_offset)
 
-        # ``iter_jsonl_lines`` enforces the 128 MB cap and streams
-        # line-by-line.
         for line_offset, raw_line in iter_jsonl_lines(
             ref.file_path, since_offset=since_offset,
         ):
@@ -163,8 +119,6 @@ class OpenClawAdapter:
                 continue
             role = message.get("role")
             if role != "assistant":
-                # Spec says one Record per assistant message *with
-                # usage*; user/system messages don't drive cost.
                 continue
             usage = message.get("usage")
             if not isinstance(usage, dict):
@@ -193,7 +147,7 @@ class OpenClawAdapter:
                 cache_read_tokens=tokens["cache_read"],
                 content_text=_message_text(content),
                 tools=_tools_from_content(content),
-                cwd=None,
+                cwd=event.get("cwd") or None,
                 is_sidechain=False,
                 uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
                 parent_uuid=None,
@@ -205,7 +159,6 @@ class OpenClawAdapter:
 
 
 def _peek_session_id(fp: Path) -> str:
-    """Return the ``session_start`` event's id, or empty on failure."""
     try:
         with fp.open("rb") as fh:
             first = fh.readline()
@@ -224,12 +177,6 @@ def _peek_session_id(fp: Path) -> str:
 
 
 def _scan_for_model(fp: Path, until_offset: int) -> str | None:
-    """Walk the file and return the most recent ``model_change`` model id.
-
-    Stops scanning at ``until_offset`` (exclusive) so resume reads still
-    see model context that was established before the resume point.
-    Returns None when no ``model_change`` precedes the offset.
-    """
     if until_offset <= 0:
         return None
     current: str | None = None
@@ -270,7 +217,6 @@ def _model_from_model_change(event: dict) -> str:
 
 
 def _normalize_usage(usage: dict) -> dict[str, int]:
-    """Map OpenClaw's usage shape to canonical 4-key shape."""
     return {
         "input": _safe_int(usage.get("input")),
         "output": _safe_int(usage.get("output")),
@@ -312,7 +258,6 @@ def _message_text(content: object) -> str:
 
 
 def _tools_from_content(content: object) -> tuple[str, ...]:
-    """Pluck tool names from ``tool_use`` / ``toolCall`` blocks."""
     if not isinstance(content, list):
         return ()
     tools: list[str] = []
