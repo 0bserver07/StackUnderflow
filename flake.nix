@@ -19,7 +19,7 @@
         #   with the real hash that nix reports on first build.
         frontend = pkgs.buildNpmPackage {
           pname = "stackunderflow-ui";
-          version = "0.3.5";
+          version = "0.9.2-dev.002";
           src = ./stackunderflow-ui;
           npmDepsHash = "sha256-QCAlYLx7LP2702pTBwi3N8Ft4hFqP88xMCRoV+h1jls=";
 
@@ -48,7 +48,7 @@
         # ── Python package ──────────────────────────────────────────
         stackunderflow-pkg = pp.buildPythonPackage {
           pname = "stackunderflow";
-          version = "0.3.5";
+          version = "0.9.2-dev.002";
           pyproject = true;
           src = srcWithFrontend;
 
@@ -57,7 +57,7 @@
           propagatedBuildInputs = with pp; [
             python-dotenv click fastapi uvicorn httpx
             python-multipart orjson uvloop rich
-            mcp
+            mcp watchfiles
           ];
 
           doCheck = false; # tests use pytest separately
@@ -84,7 +84,7 @@
             pp.pytest pp.pytest-asyncio
             pp.pytest-cov pp.psutil
             pp.types-python-dateutil pp.types-psutil
-            pp.mcp
+            pp.mcp pp.watchfiles
             pkgs.rsync
           ];
 
