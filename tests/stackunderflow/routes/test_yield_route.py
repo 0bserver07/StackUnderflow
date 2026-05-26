@@ -41,6 +41,11 @@ _ENTRIES = [
 
 @pytest.mark.asyncio
 async def test_yield_route_returns_summary_and_sorted_entries(tmp_path, monkeypatch):
+    from stackunderflow.store import db, schema
+    db_conn = db.connect(tmp_path / "store.db")
+    schema.apply(db_conn)
+    db_conn.close()
+
     monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
     monkeypatch.setattr(
         "stackunderflow.routes.yield_route.compute_yield",
@@ -70,6 +75,11 @@ async def test_yield_route_rejects_invalid_period(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_yield_route_passes_project_filter(tmp_path, monkeypatch):
+    from stackunderflow.store import db, schema
+    db_conn = db.connect(tmp_path / "store.db")
+    schema.apply(db_conn)
+    db_conn.close()
+
     monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
     captured: dict = {}
 
@@ -89,6 +99,11 @@ async def test_yield_route_passes_project_filter(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_yield_route_converts_costs_to_active_currency(tmp_path, monkeypatch):
     """Cost figures get scaled by ``currency.rate_from_usd`` before send."""
+    from stackunderflow.store import db, schema
+    db_conn = db.connect(tmp_path / "store.db")
+    schema.apply(db_conn)
+    db_conn.close()
+
     monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
     monkeypatch.setattr(
         "stackunderflow.routes.yield_route.compute_yield",

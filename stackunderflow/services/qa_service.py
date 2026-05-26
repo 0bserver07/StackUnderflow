@@ -475,9 +475,11 @@ class QAService:
         compatibility but are ignored — the SQLite store is the single
         source of truth.
         """
-        from ..store import db, queries
-        import stackunderflow.deps as deps
         from collections import defaultdict
+
+        import stackunderflow.deps as deps
+
+        from ..store import db, queries
 
         store_path = getattr(deps, "store_path", None)
         if store_path is None:

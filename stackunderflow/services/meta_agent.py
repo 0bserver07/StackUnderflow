@@ -565,6 +565,34 @@ TOOL_CATALOG: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_session_quality",
+            "description": (
+                "Return the persisted static-analysis findings for one "
+                "session (cyclomatic complexity, lint count, type "
+                "completeness — pre/post deltas per touched file). Use this "
+                "to answer 'did the agent improve or regress code quality "
+                "in session X?' / 'how complex was the change?'. Returns "
+                "an empty findings list when the session hasn't been "
+                "analyzed yet (suggest the user run "
+                "``stackunderflow analyze session <id>``)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": (
+                            "Session UUID (matches ``sessions.session_id``)."
+                        ),
+                    },
+                },
+                "required": ["session_id"],
+            },
+        },
+    },
 ]
 
 
@@ -1166,6 +1194,25 @@ def _exec_get_ci_runs(
     }
 
 
+def _exec_get_session_quality(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Return persisted static-analysis findings for one session.
+
+    Hands off to :func:`stackunderflow.services.static_analysis.get_session_quality`.
+    The result is JSON-safe (``dataclasses.asdict``); the truncation
+    layer downstream caps the payload at the LLM context budget.
+    """
+    from stackunderflow.services import static_analysis
+    from stackunderflow.services.static_analysis.runner import quality_to_dict
+
+    session_id = str(args.get("session_id") or "")
+    if not session_id.strip():
+        return {"error": "session_id is required"}
+    quality = static_analysis.get_session_quality(conn, session_id)
+    return quality_to_dict(quality)
+
+
 # Dispatcher table — name → (conn, args) callable. Keeping this flat
 # (instead of dynamic getattr) makes the surface explicit: a new tool
 # has to be added in three places: catalogue, dispatcher, and tests.
@@ -1183,6 +1230,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_file_risk": _exec_get_file_risk,
     "get_pr_outcomes": _exec_get_pr_outcomes,
     "get_ci_runs": _exec_get_ci_runs,
+    "get_session_quality": _exec_get_session_quality,
 }
 
 

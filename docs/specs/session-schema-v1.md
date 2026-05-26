@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 17`).
+**Status:** v1 (pinned to `schema_version = 20`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 17`. The current migration set is:
+Pin to `schema_version = 20`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -40,6 +40,9 @@ Pin to `schema_version = 17`. The current migration set is:
 | 14 | `v014_discovery_embeddings.sql` | `discovery_embeddings` (semantic-search vector cache) |
 | 16 | `v016_mode_recommendations.sql` | `mode_recommendations` (mode-recommender 24h pull-through cache) |
 | 17 | `v017_pr_ci_outcomes.sql` | `pr_outcomes` + `ci_runs` (Spec 20 — PR / CI webhook ingest) |
+| 18 | `v018_static_analysis_findings.sql` | `static_analysis_findings` (Spec 21 — per-session static analysis pass) |
+| 19 | `v019_commit_session_link.sql` | `commit_session_link` (Spec 22 — link commits to sessions) |
+| 20 | `v020_session_quality_metrics.sql` | `session_quality_metrics` (Spec 23 — session quality metrics) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -232,6 +235,8 @@ These are not part of the analytics path but are part of the schema:
 - **`discovery_embeddings`** (v014) — pull-through cache of sentence-transformer vectors keyed by `(session_id, message_id, model_name)`.
 - **`mode_recommendations`** (v016) — 24-hour pull-through cache for the mode recommender.
 - **`pr_outcomes`** + **`ci_runs`** (v017) — PR / CI webhook ingest (Spec 20).
+- **`commit_session_link`** (v019) — link commits to sessions (Spec 22).
+- **`session_quality_metrics`** (v020) — LLM-graded session quality metrics (Spec 23).
 
 Refer to the corresponding migration file headers for column details and rationale.
 
@@ -276,7 +281,7 @@ The `cost_source` value is the contract you owe downstream consumers — pick th
 
 A tool that writes to a StackUnderflow store should validate its writes round-trip. The minimal smoke test:
 
-1. Open a fresh store. Run `stackunderflow.store.schema.apply(conn)` (or apply the migrations directly) and check `PRAGMA user_version == 17`.
+1. Open a fresh store. Run `stackunderflow.store.schema.apply(conn)` (or apply the migrations directly) and check `PRAGMA user_version == 20`.
 2. Insert one row into `messages` for your provider.
 3. Insert the matching `usage_events` row with all required columns set, `cost_source` from the enum, and `source_message_fk` pointing back at the message.
 4. Run `stackunderflow etl backfill` (or call `stackunderflow.etl.watermark.refresh_all_marts(conn)`) and check that the mart row counts increased by the expected amount.
@@ -291,7 +296,7 @@ A more rigorous check parses this document for the column lists in each `CREATE 
 - **Additive only.** A new column gets a new `vNNN_*.sql` migration that bumps `PRAGMA user_version` and adds the column with a sensible `DEFAULT` (so old rows backfill cleanly).
 - **No drops, no renames, no type changes.** If a column needs to go away, deprecate it (document it as ignored) and stop writing to it. Removing it requires a new schema major version, which has not happened.
 - **Mart shape can change freely.** Marts are derivative — drop and rebuild. A breaking mart change still requires a migration, but consumers that read marts should expect their shape to evolve faster than the raw / normalised layers.
-- **Tools that target `schema_version = 17`** should keep working against future versions until a major bump is announced. Read the `PRAGMA user_version` and gracefully degrade if you encounter columns you don't recognise.
+- **Tools that target `schema_version = 20`** should keep working against future versions until a major bump is announced. Read the `PRAGMA user_version` and gracefully degrade if you encounter columns you don't recognise.
 
 ---
 

@@ -169,8 +169,9 @@ class SearchService:
         Returns:
             Dict with reindex results.
         """
-        from ..store import db, queries
         import stackunderflow.deps as deps
+
+        from ..store import db, queries
 
         store_path = getattr(deps, 'store_path', None)
         if store_path is None:

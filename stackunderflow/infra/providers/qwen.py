@@ -28,7 +28,6 @@ from __future__ import annotations
 
 from .base import ProviderPricer
 
-
 # (input $/M, output $/M, cache-write $/M, cache-read $/M).
 #
 # Qwen surfaces cached input only — there is no separate cache-write

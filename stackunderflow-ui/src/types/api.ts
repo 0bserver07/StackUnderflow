@@ -748,7 +748,7 @@ export interface EtlWatcherStatus {
   running: boolean
   last_refresh_ts: string | null
   seconds_since_refresh: number | null
-  events_in_last_cycle: number
+  events_in_last_cycle: number | null
 }
 
 export interface EtlMartStatus {

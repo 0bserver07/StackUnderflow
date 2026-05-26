@@ -81,7 +81,7 @@ class ClaudeAdapter:
         yield from self._read_jsonl(ref, since_offset=since_offset)
 
     def materialize_metadata(self, conn: sqlite3.Connection) -> None:
-        """Post-ingest hook: index Claude Code agent-team metadata.
+        """Post-ingest hook: index Claude Code agent-team metadata and commit outcomes.
 
         Scans ``~/.claude/teams/`` + ``~/.claude/tasks/`` and writes the
         team graph into the schema (``agent_teams`` rows + the ``sessions``
@@ -91,15 +91,21 @@ class ClaudeAdapter:
         calls this after the per-file ingest sweep — wrapped in its own
         try/except there so a hiccup here can never break ingest.
         """
+        from stackunderflow.services.outcome_attribution import link_commits_to_sessions
+
         from .claude_teams import materialize_team_metadata
 
         materialize_team_metadata(conn, provider=self.name)
+        link_commits_to_sessions(conn)
 
     # ── internals ─────────────────────────────────────────────────────
 
     def _refs_from_jsonl(self, project_dir: Path, files: list[Path]) -> Iterable[SessionRef]:
         for fp in files:
-            stat = fp.stat()
+            try:
+                stat = fp.stat()
+            except FileNotFoundError:
+                continue
             yield SessionRef(
                 provider=self.name,
                 project_slug=project_dir.name,

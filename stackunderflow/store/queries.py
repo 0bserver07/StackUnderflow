@@ -124,12 +124,31 @@ def get_project(conn: sqlite3.Connection, *, slug: str) -> ProjectRow | None:
     return ProjectRow(**dict(row)) if row else None
 
 
-def list_sessions(conn: sqlite3.Connection, *, project_id: int) -> list[SessionRow]:
+def get_projects_by_slug(conn: sqlite3.Connection, *, slug: str) -> list[ProjectRow]:
     rows = conn.execute(
-        "SELECT id, project_id, session_id, first_ts, last_ts, message_count "
-        "FROM sessions WHERE project_id = ? ORDER BY last_ts DESC",
-        (project_id,),
+        "SELECT id, provider, slug, path, display_name, first_seen, last_modified "
+        "FROM projects WHERE slug = ?",
+        (slug,),
     ).fetchall()
+    return [ProjectRow(**dict(r)) for r in rows]
+
+
+def list_sessions(conn: sqlite3.Connection, *, project_id: int | list[int]) -> list[SessionRow]:
+    if isinstance(project_id, list):
+        if not project_id:
+            return []
+        placeholders = ",".join("?" for _ in project_id)
+        rows = conn.execute(
+            f"SELECT id, project_id, session_id, first_ts, last_ts, message_count "
+            f"FROM sessions WHERE project_id IN ({placeholders}) ORDER BY last_ts DESC",
+            tuple(project_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, project_id, session_id, first_ts, last_ts, message_count "
+            "FROM sessions WHERE project_id = ? ORDER BY last_ts DESC",
+            (project_id,),
+        ).fetchall()
     return [SessionRow(**dict(r)) for r in rows]
 
 
@@ -195,7 +214,7 @@ def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
 def build_enriched_dataset(
     conn: sqlite3.Connection,
     *,
-    project_id: int,
+    project_id: int | list[int],
 ):
     """Reconstruct an ``EnrichedDataset`` for a project from the store.
 
@@ -209,23 +228,39 @@ def build_enriched_dataset(
     from stackunderflow.stats import classifier, enricher
     from stackunderflow.stats.classifier import RawEntry
 
+    if isinstance(project_id, list) and not project_id:
+        return None, ""
+
+    first_id = project_id[0] if isinstance(project_id, list) else project_id
     row = conn.execute(
-        "SELECT path, slug, provider FROM projects WHERE id = ?", (project_id,)
+        "SELECT path, slug, provider FROM projects WHERE id = ?", (first_id,)
     ).fetchone()
     if row is None:
         return None, ""
 
     log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
-    provider = row["provider"] or "anthropic"
-
-    rows = conn.execute(
-        "SELECT m.raw_json, s.session_id, m.timestamp "
-        "FROM messages m "
-        "JOIN sessions s ON s.id = m.session_fk "
-        "WHERE s.project_id = ? "
-        "ORDER BY m.timestamp",
-        (project_id,),
-    ).fetchall()
+    
+    if isinstance(project_id, list):
+        placeholders = ",".join("?" for _ in project_id)
+        rows = conn.execute(
+            f"SELECT m.raw_json, s.session_id, m.timestamp, p.provider "
+            f"FROM messages m "
+            f"JOIN sessions s ON s.id = m.session_fk "
+            f"JOIN projects p ON s.project_id = p.id "
+            f"WHERE s.project_id IN ({placeholders}) "
+            f"ORDER BY m.timestamp",
+            tuple(project_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT m.raw_json, s.session_id, m.timestamp, p.provider "
+            "FROM messages m "
+            "JOIN sessions s ON s.id = m.session_fk "
+            "JOIN projects p ON s.project_id = p.id "
+            "WHERE s.project_id = ? "
+            "ORDER BY m.timestamp",
+            (project_id,),
+        ).fetchall()
 
     raw_entries = []
     for r in rows:
@@ -240,7 +275,7 @@ def build_enriched_dataset(
                 payload=payload,
                 session_id=r["session_id"],
                 origin=r["session_id"],
-                provider=provider,
+                provider=r["provider"] or "anthropic",
             )
         )
 
@@ -252,7 +287,7 @@ def build_enriched_dataset(
 def get_project_stats(
     conn: sqlite3.Connection,
     *,
-    project_id: int,
+    project_id: int | list[int],
     tz_offset: int = 0,
 ) -> tuple[list[dict], dict]:
     """Run the pipeline on stored messages and return (messages, statistics).
@@ -275,7 +310,7 @@ def get_project_stats(
 def get_project_messages(
     conn: sqlite3.Connection,
     *,
-    project_id: int,
+    project_id: int | list[int],
     limit: int | None = None,
 ) -> list[dict]:
     """Return pipeline-formatted messages for a project, ordered by timestamp."""

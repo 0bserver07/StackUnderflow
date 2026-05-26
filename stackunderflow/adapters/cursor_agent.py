@@ -46,7 +46,7 @@ import logging
 import re
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .base import Record, SessionRef
@@ -275,7 +275,7 @@ def _read_jsonl(
                     provider=provider,
                     session_id=ref.session_id,
                     seq=line_offset,
-                    timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    timestamp=datetime.now(tz=UTC).isoformat(),
                     role="assistant",
                     model=model,
                     input_tokens=input_estimate,
@@ -340,7 +340,7 @@ def _read_text(
             provider=provider,
             session_id=ref.session_id,
             seq=current_offset,
-            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            timestamp=datetime.now(tz=UTC).isoformat(),
             role="assistant",
             model=model,
             input_tokens=input_estimate,

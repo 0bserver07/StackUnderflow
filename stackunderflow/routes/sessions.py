@@ -67,17 +67,20 @@ async def get_jsonl_files(
     try:
         conn = db.connect(deps.store_path)
         try:
-            project_row = queries.get_project(conn, slug=slug)
-            if project_row is None:
+            project_rows = queries.get_projects_by_slug(conn, slug=slug)
+            if not project_rows:
                 return JSONResponse([])
-            # Honour provider scoping at the API layer: a project's sessions
-            # all share the project's provider, so filter the whole response
-            # to empty when the project's provider isn't in the active set.
-            if provider_filter is not None and (project_row.provider or "").lower() not in provider_filter:
+            # Honour provider scoping at the API layer: filter the matched projects
+            # to only those in the active set.
+            if provider_filter is not None:
+                project_rows = [r for r in project_rows if (r.provider or "").lower() in provider_filter]
+            if not project_rows:
                 currency = active_currency_payload()
                 return JSONResponse({"files": [], "currency": currency})
 
-            sessions = queries.list_sessions(conn, project_id=project_row.id)
+            project_ids = [r.id for r in project_rows]
+            provider_map = {r.id: (r.provider or "anthropic") for r in project_rows}
+            sessions = queries.list_sessions(conn, project_id=project_ids)
 
             files = []
             for session in sessions:
@@ -116,7 +119,7 @@ async def get_jsonl_files(
                     "title": title,
                     "tool_calls": stats["tool_calls"],
                     "estimated_cost": round(estimated_cost, 4),
-                    "provider": project_row.provider,
+                    "provider": provider_map.get(session.project_id, "anthropic"),
                 })
         finally:
             conn.close()
@@ -150,10 +153,11 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
     try:
         conn = db.connect(deps.store_path)
         try:
-            project_row = queries.get_project(conn, slug=slug)
-            if project_row is None:
+            project_rows = queries.get_projects_by_slug(conn, slug=slug)
+            if not project_rows:
                 raise HTTPException(status_code=404, detail=f"Project '{slug}' not found in store")
-            _, stats = queries.get_project_stats(conn, project_id=project_row.id)
+            project_ids = [r.id for r in project_rows]
+            _, stats = queries.get_project_stats(conn, project_id=project_ids)
         finally:
             conn.close()
     except HTTPException:
@@ -212,13 +216,15 @@ async def get_jsonl_content(file: str, project: str | None = None):
     try:
         conn = db.connect(deps.store_path)
         try:
-            project_row = queries.get_project(conn, slug=slug)
-            if project_row is None:
+            project_rows = queries.get_projects_by_slug(conn, slug=slug)
+            if not project_rows:
                 raise HTTPException(status_code=404, detail="Project not found in store")
+            project_ids = [r.id for r in project_rows]
 
+            placeholders = ",".join("?" for _ in project_ids)
             session_row = conn.execute(
-                "SELECT id FROM sessions WHERE project_id = ? AND session_id = ?",
-                (project_row.id, session_id),
+                f"SELECT id FROM sessions WHERE project_id IN ({placeholders}) AND session_id = ?",
+                (*project_ids, session_id),
             ).fetchone()
             if session_row is None:
                 raise HTTPException(status_code=404, detail="File not found")

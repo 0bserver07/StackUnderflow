@@ -81,15 +81,20 @@ async def get_yield(
     conn = db.connect(deps.store_path)
     try:
         entries = compute_yield(conn, period=period, project_filter=project_filter)
+        # Sort by cost desc so the UI's table renders meaningfully without
+        # needing client-side reordering.
+        sorted_entries = sorted(entries, key=lambda e: e.cost_usd, reverse=True)
+        body_entries = to_dicts(sorted_entries)
+
+        from stackunderflow.services.outcome_attribution import get_outcomes_for_session
+        for e in body_entries:
+            outcomes = get_outcomes_for_session(conn, e["session_id"])
+            e["pr"] = outcomes["prs"]
+            e["ci_runs"] = outcomes["ci_runs"]
     finally:
         conn.close()
 
-    # Sort by cost desc so the UI's table renders meaningfully without
-    # needing client-side reordering.
-    sorted_entries = sorted(entries, key=lambda e: e.cost_usd, reverse=True)
-
     summary = yield_summary(entries)
-    body_entries = to_dicts(sorted_entries)
 
     currency = active_currency_payload()
     rate = currency["rate_from_usd"]

@@ -32,11 +32,14 @@ _DASHBOARD_CACHE: dict[tuple[str, int], tuple[tuple[str | None, int], dict]] = {
 _DASHBOARD_CACHE_LOCK = threading.Lock()
 
 
-def _dashboard_signature(conn, project_id: int) -> tuple[str | None, int]:
+def _dashboard_signature(conn, project_ids: list[int]) -> tuple[str | None, int]:
+    if not project_ids:
+        return (None, 0)
+    placeholders = ",".join("?" for _ in project_ids)
     row = conn.execute(
-        "SELECT MAX(last_ts) AS max_ts, COALESCE(SUM(message_count), 0) AS n "
-        "FROM sessions WHERE project_id = ?",
-        (project_id,),
+        f"SELECT MAX(last_ts) AS max_ts, COALESCE(SUM(message_count), 0) AS n "
+        f"FROM sessions WHERE project_id IN ({placeholders})",
+        tuple(project_ids),
     ).fetchone()
     return (row["max_ts"], int(row["n"] or 0))
 
@@ -60,15 +63,15 @@ def _require_project() -> str:
     return deps.current_log_path
 
 
-def _get_project_id(conn, log_path: str) -> int:
+def _get_project_ids(conn, log_path: str) -> list[int]:
     slug = Path(log_path).name
-    row = queries.get_project(conn, slug=slug)
-    if row is None:
+    rows = queries.get_projects_by_slug(conn, slug=slug)
+    if not rows:
         raise HTTPException(
             status_code=404,
             detail=f"Project '{slug}' not found in store — try /api/refresh first",
         )
-    return row.id
+    return [r.id for r in rows]
 
 
 def _reindex_services(log_path: str, messages: list[dict]) -> None:
@@ -194,8 +197,8 @@ async def get_stats(
     t0 = time.time()
     conn = db.connect(deps.store_path)
     try:
-        project_id = _get_project_id(conn, log_path)
-        _, stats = queries.get_project_stats(conn, project_id=project_id, tz_offset=timezone_offset)
+        project_ids = _get_project_ids(conn, log_path)
+        _, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=timezone_offset)
     finally:
         conn.close()
     deps.logger.debug(f"stats [store] {(time.time()-t0)*1000:.1f}ms")
@@ -260,7 +263,7 @@ async def get_dashboard_data(
 
     conn = db.connect(deps.store_path)
     try:
-        project_id = _get_project_id(conn, log_path)
+        project_ids = _get_project_ids(conn, log_path)
         # Provider filter: if the active project's provider is excluded,
         # short-circuit to an empty stats body. The UI's empty-state path
         # already handles this gracefully.
@@ -280,7 +283,7 @@ async def get_dashboard_data(
                     "currency": currency,
                     "filtered": True,
                 }
-        sig = _dashboard_signature(conn, project_id)
+        sig = _dashboard_signature(conn, project_ids)
 
         with _DASHBOARD_CACHE_LOCK:
             cached = _DASHBOARD_CACHE.get(cache_key)
@@ -321,17 +324,17 @@ async def get_dashboard_data(
         # the JSON contract holds. The heavy detail blocks already
         # live behind dedicated endpoints (/api/cost-data,
         # /api/commands, /api/tool-distribution) that load lazily.
-        if mart_queries.mart_has_project_row(conn, project_id=project_id):
+        if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
             stats = _stats_from_marts(
                 conn,
-                project_id=project_id,
+                project_id=project_ids[0],
                 provider_filter=provider_filter,
                 model_filter=None,  # model filter applied below for parity
             )
             messages = []  # dashboard-data only ever exposed first 50 — see §A3
         else:
             messages, stats = queries.get_project_stats(
-                conn, project_id=project_id, tz_offset=timezone_offset
+                conn, project_id=project_ids, tz_offset=timezone_offset
             )
     finally:
         conn.close()
@@ -543,7 +546,7 @@ async def get_messages(
 
     conn = db.connect(deps.store_path)
     try:
-        project_id = _get_project_id(conn, log_path)
+        project_ids = _get_project_ids(conn, log_path)
         # Provider filter — short-circuit when the project is excluded.
         if provider_filter is not None:
             slug = Path(log_path).name
@@ -555,7 +558,7 @@ async def get_messages(
         # filtered list, not the raw one. The aggregator path is already
         # the slow part on big projects; paginating after this is constant
         # time. Long-term fix is a paginated SQL query at the store layer.
-        messages = queries.get_project_messages(conn, project_id=project_id)
+        messages = queries.get_project_messages(conn, project_id=project_ids)
     finally:
         conn.close()
 
@@ -582,11 +585,11 @@ async def get_messages_summary_endpoint():
     log_path = _require_project()
     conn = db.connect(deps.store_path)
     try:
-        project_id = _get_project_id(conn, log_path)
+        project_ids = _get_project_ids(conn, log_path)
         mart_totals = mart_queries.project_mart_messages_summary_totals(
-            conn, project_id=project_id
-        )
-        messages = queries.get_project_messages(conn, project_id=project_id)
+            conn, project_id=project_ids[0]
+        ) if len(project_ids) == 1 else None
+        messages = queries.get_project_messages(conn, project_id=project_ids)
     finally:
         conn.close()
     summary = get_messages_summary(messages)

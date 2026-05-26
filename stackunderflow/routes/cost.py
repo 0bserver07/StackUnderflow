@@ -90,15 +90,15 @@ def _resolve_log_path(log_path: str | None) -> str:
     return path
 
 
-def _project_id_for(conn, path: str) -> int:
+def _project_ids_for(conn, path: str) -> list[int]:
     slug = Path(path).name
-    row = queries.get_project(conn, slug=slug)
-    if row is None:
+    rows = queries.get_projects_by_slug(conn, slug=slug)
+    if not rows:
         raise HTTPException(
             status_code=404,
             detail=f"Project '{slug}' not found in store — try /api/refresh first",
         )
-    return row.id
+    return [r.id for r in rows]
 
 
 @router.get("/api/cost-data")
@@ -112,9 +112,9 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
     path = _resolve_log_path(log_path)
     conn = db.connect(deps.store_path)
     try:
-        project_id = _project_id_for(conn, path)
+        project_ids = _project_ids_for(conn, path)
         _, stats = queries.get_project_stats(
-            conn, project_id=project_id, tz_offset=timezone_offset
+            conn, project_id=project_ids, tz_offset=timezone_offset
         )
         # Wave 3A: when the project is materialised, overlay the
         # token_composition.daily/totals blocks with daily_mart-derived
@@ -125,9 +125,9 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
         # Wave 4. ``trends`` keeps its aggregator-driven shape because
         # the period split (current vs prior) needs interaction-level
         # correlations the daily mart can\'t see by itself.
-        if mart_queries.mart_has_project_row(conn, project_id=project_id):
+        if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
             stats = _overlay_mart_rollups(
-                conn, project_id=project_id, stats=stats
+                conn, project_id=project_ids[0], stats=stats
             )
     finally:
         conn.close()
@@ -465,8 +465,8 @@ async def get_interaction(interaction_id: str, log_path: str | None = None):
     path = _resolve_log_path(log_path)
     conn = db.connect(deps.store_path)
     try:
-        project_id = _project_id_for(conn, path)
-        dataset, _ = queries.build_enriched_dataset(conn, project_id=project_id)
+        project_ids = _project_ids_for(conn, path)
+        dataset, _ = queries.build_enriched_dataset(conn, project_id=project_ids)
     finally:
         conn.close()
 

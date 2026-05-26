@@ -215,8 +215,14 @@ function EtlStatusPopover({ data }: EtlStatusPopoverProps) {
         <div className="flex items-center justify-between mt-1">
           <span className="text-gray-600 dark:text-gray-400">Last cycle</span>
           <span className="font-mono text-gray-800 dark:text-gray-200">
-            {watcher.events_in_last_cycle.toLocaleString()} event
-            {watcher.events_in_last_cycle === 1 ? '' : 's'}
+            {watcher.events_in_last_cycle != null ? (
+              <>
+                {watcher.events_in_last_cycle.toLocaleString()} event
+                {watcher.events_in_last_cycle === 1 ? '' : 's'}
+              </>
+            ) : (
+              'unknown'
+            )}
           </span>
         </div>
       </div>

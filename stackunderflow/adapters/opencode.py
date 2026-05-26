@@ -48,7 +48,7 @@ import logging
 import os
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .base import Record, SessionRef
@@ -358,28 +358,28 @@ def _tools_from_parts(parts: list[dict]) -> list[str]:
 def _normalize_timestamp(raw: object) -> str:
     """Coerce ``time_created`` (ms epoch or ISO string) to ISO 8601 UTC."""
     if raw is None or raw == "":
-        return datetime.now(tz=timezone.utc).isoformat()
+        return datetime.now(tz=UTC).isoformat()
     if isinstance(raw, (int, float)):
         try:
             return datetime.fromtimestamp(
-                float(raw) / 1000.0, tz=timezone.utc
+                float(raw) / 1000.0, tz=UTC
             ).isoformat()
         except (OverflowError, OSError, ValueError):
-            return datetime.now(tz=timezone.utc).isoformat()
+            return datetime.now(tz=UTC).isoformat()
     if isinstance(raw, str):
         s = raw.strip()
         if not s:
-            return datetime.now(tz=timezone.utc).isoformat()
+            return datetime.now(tz=UTC).isoformat()
         try:
             dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt.isoformat()
         except ValueError:
             try:
                 return datetime.fromtimestamp(
-                    float(s) / 1000.0, tz=timezone.utc
+                    float(s) / 1000.0, tz=UTC
                 ).isoformat()
             except (ValueError, OverflowError, OSError):
-                return datetime.now(tz=timezone.utc).isoformat()
-    return datetime.now(tz=timezone.utc).isoformat()
+                return datetime.now(tz=UTC).isoformat()
+    return datetime.now(tz=UTC).isoformat()

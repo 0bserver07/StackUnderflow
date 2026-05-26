@@ -75,25 +75,46 @@ async def set_project_by_dir(data: dict[str, str]):
     if not dir_name:
         raise HTTPException(status_code=400, detail="Directory name is required")
 
-    # Build the log path
-    claude_base = Path.home() / ".claude" / "projects"
-    log_path = (claude_base / dir_name).resolve()
-    if not str(log_path).startswith(str(claude_base.resolve()) + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid path")
+    # First check if the project slug is registered in the database store
+    conn = db.connect(deps.store_path)
+    project_row = None
+    try:
+        project_row = queries.get_project(conn, slug=dir_name)
+    except Exception:  # noqa: S110
+        pass
+    finally:
+        conn.close()
 
-    if not log_path.exists() or not log_path.is_dir():
-        raise HTTPException(status_code=404, detail=f"Log directory not found: {dir_name}")
-
-    # Check if it has log files
-    log_files = list(log_path.glob("*.jsonl"))
-    if not log_files:
-        raise HTTPException(status_code=404, detail=f"No log files found in directory: {dir_name}")
-
-    # Try to convert back to project path (best effort)
-    if dir_name.startswith("-"):
-        project_path = dir_name[1:].replace("-", "/")
+    if project_row:
+        # If registered in store, we bypass filesystem and glob checks.
+        # It's an active/indexed project whose data is fully loaded in SQLite.
+        log_path = Path(_resolve_log_dir(project_row.path, dir_name))
+        project_path = project_row.path
+        if not project_path:
+            if dir_name.startswith("-"):
+                project_path = dir_name[1:].replace("-", "/")
+            else:
+                project_path = dir_name
     else:
-        project_path = dir_name
+        # Build the log path
+        claude_base = Path.home() / ".claude" / "projects"
+        log_path = (claude_base / dir_name).resolve()
+        if not str(log_path).startswith(str(claude_base.resolve()) + os.sep):
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        if not log_path.exists() or not log_path.is_dir():
+            raise HTTPException(status_code=404, detail=f"Log directory not found: {dir_name}")
+
+        # Check if it has log files
+        log_files = list(log_path.glob("*.jsonl"))
+        if not log_files:
+            raise HTTPException(status_code=404, detail=f"No log files found in directory: {dir_name}")
+
+        # Try to convert back to project path (best effort)
+        if dir_name.startswith("-"):
+            project_path = dir_name[1:].replace("-", "/")
+        else:
+            project_path = dir_name
 
     deps.current_project_path = project_path
     deps.current_log_path = str(log_path)

@@ -67,15 +67,15 @@ def _resolve_log_path(log_path: str | None) -> str:
     return path
 
 
-def _project_id_for(conn, path: str) -> int:
+def _project_ids_for(conn, path: str) -> list[int]:
     slug = Path(path).name
-    row = queries.get_project(conn, slug=slug)
-    if row is None:
+    rows = queries.get_projects_by_slug(conn, slug=slug)
+    if not rows:
         raise HTTPException(
             status_code=404,
             detail=f"Project '{slug}' not found in store — try /api/refresh first",
         )
-    return row.id
+    return [r.id for r in rows]
 
 
 def _preview(text: str, limit: int = 200) -> str:
@@ -171,8 +171,8 @@ async def get_commands(
 
     conn = db.connect(deps.store_path)
     try:
-        project_id = _project_id_for(conn, path)
-        dataset, _ = queries.build_enriched_dataset(conn, project_id=project_id)
+        project_ids = _project_ids_for(conn, path)
+        dataset, _ = queries.build_enriched_dataset(conn, project_id=project_ids)
     finally:
         conn.close()
 
@@ -215,9 +215,9 @@ async def get_tool_distribution(log_path: str | None = None, timezone_offset: in
     path = _resolve_log_path(log_path)
     conn = db.connect(deps.store_path)
     try:
-        project_id = _project_id_for(conn, path)
+        project_ids = _project_ids_for(conn, path)
         _, stats = queries.get_project_stats(
-            conn, project_id=project_id, tz_offset=timezone_offset
+            conn, project_id=project_ids, tz_offset=timezone_offset
         )
     finally:
         conn.close()

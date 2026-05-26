@@ -668,7 +668,7 @@ class _SessionEfficiencyCollector:
                     )
                 except (ValueError, TypeError):
                     duration_s = 0.0
-            for a, b in zip(times, times[1:]):
+            for a, b in zip(times, times[1:], strict=False):
                 try:
                     gap = (_parse_ts(b) - _parse_ts(a)).total_seconds()
                 except (ValueError, TypeError):

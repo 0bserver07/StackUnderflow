@@ -135,7 +135,7 @@ class ContinueAdapter:
 
             for row in rows:
                 rowid = row[0]
-                payload = dict(zip(cols, row[1:]))
+                payload = dict(zip(cols, row[1:], strict=False))
                 session_id = _extract_session_id(payload, fallback_rowid=rowid)
                 yield SessionRef(
                     provider=self.name,
@@ -206,7 +206,7 @@ class ContinueAdapter:
                 )
             for row in cur:
                 rowid = row[0]
-                payload = dict(zip(cols, row[1:]))
+                payload = dict(zip(cols, row[1:], strict=False))
                 try:
                     rec = _record_from_message(
                         rowid=rowid,

@@ -111,3 +111,28 @@ async def test_projects_route_under_100ms_with_100k_mart_rows(tmp_path, monkeypa
     body = json.loads(response.body.decode("utf-8"))
     assert len(body["projects"]) == 100
     assert elapsed_ms < 100, f"slow: {elapsed_ms:.1f}ms"
+
+
+@pytest.mark.asyncio
+async def test_set_project_by_dir_bypasses_fs_if_in_db(tmp_path, monkeypatch):
+    import stackunderflow.deps as deps
+    from stackunderflow.routes.projects import set_project_by_dir
+
+    store_db = tmp_path / "store.db"
+    conn = _connect(store_db)
+    _insert_project(conn, provider="antigravity", slug="test-antigravity-proj")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_project_path", None)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    response = await set_project_by_dir({"dir_name": "test-antigravity-proj"})
+    body = json.loads(response.body.decode("utf-8"))
+
+    assert body["status"] == "success"
+    assert deps.current_project_path == "test-antigravity-proj"
+    assert deps.current_log_path is not None
+    assert "test-antigravity-proj" in deps.current_log_path
+

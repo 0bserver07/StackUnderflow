@@ -35,6 +35,7 @@ from stackunderflow.routes import (
     playback,
     projects,
     qa,
+    quality,
     search,
     sessions,
     tags,
@@ -43,6 +44,9 @@ from stackunderflow.routes import (
 )
 from stackunderflow.routes import (
     export as export_routes,
+)
+from stackunderflow.routes import (
+    static_analysis as static_analysis_routes,
 )
 from stackunderflow.services.bookmark_service import BookmarkService
 from stackunderflow.services.pricing_service import PricingService
@@ -250,6 +254,8 @@ app.include_router(playback.router)
 app.include_router(meta_agent.router)
 app.include_router(live.router)
 app.include_router(webhooks.router)
+app.include_router(static_analysis_routes.router)
+app.include_router(quality.router)
 
 
 

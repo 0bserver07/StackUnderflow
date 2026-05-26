@@ -3818,6 +3818,234 @@ def ingest_webhook_serve_cmd(port: int, host: str):
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
 
 
+# ── per-session static analysis (Spec 21 — issue #93) ────────────────────────
+
+
+@cli.group("analyze")
+def analyze_group():
+    """Per-session static-analysis pass — complexity / lint / type-completeness deltas.
+
+    Reconstructs each session's pre/post file states (Playback v2),
+    runs per-language analyzers (Python / TypeScript / Go), and writes
+    findings to ``static_analysis_findings``. The results power
+    outcome attribution v2 ("session X reduced complexity by 20%")
+    and the comparative benchmark surface.
+
+    Optional dependencies (``pip install 'stackunderflow[analysis]'``
+    for ``radon`` + ``mypy``; ``tsc`` / ``eslint`` / ``go`` /
+    ``gocyclo`` need to be on PATH for those languages). Missing
+    tools produce a warning per language and skip cleanly — never
+    a hard failure.
+    """
+
+
+def _parse_analyze_since_arg(raw: str | None) -> str | None:
+    """``"30d"`` / ``"24h"`` / ``"1w"`` / ISO → ISO timestamp.
+
+    Reuses the discovery helper so the CLI's ``--since`` semantics
+    match the rest of the surface. ``None`` ⇒ no bound. (Helper name
+    is prefixed to avoid colliding with similar parsers spec 20 may
+    add — keeps the namespace clean for future merges.)
+    """
+    if not raw or not raw.strip():
+        return None
+    from stackunderflow.services.discovery import parse_since
+    return parse_since(raw)
+
+
+@analyze_group.command("session")
+@click.argument("session_id")
+@click.option(
+    "--language", "languages", multiple=True,
+    type=click.Choice(("python", "typescript", "go")),
+    help="Restrict to these languages (repeatable). Default: all supported.",
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(_VALID_FORMATS),
+    default="text", show_default=True, help="Output format.",
+)
+def analyze_session_cmd(session_id: str, languages: tuple[str, ...], fmt: str):
+    """Run analyzers on every file SESSION_ID touched; persist findings.
+
+    Idempotent — re-running overwrites prior rows for the same
+    (session, file, metric). The session's pre/post snapshots come
+    from Playback v2; analyzer subprocess calls are time-capped at
+    60s per file.
+    """
+    from stackunderflow.services import static_analysis
+
+    conn = _open_store()
+    try:
+        try:
+            outcome = static_analysis.analyze_session(
+                conn, session_id,
+                only_languages=languages or None,
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc)) from exc
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        from stackunderflow.services.static_analysis.runner import outcome_to_dict
+        click.echo(json.dumps(outcome_to_dict(outcome), indent=2, sort_keys=True))
+        return
+
+    click.echo(f"Session: {outcome.session_id}")
+    click.echo(f"  files analyzed: {outcome.files_analyzed}")
+    click.echo(f"  rows written:   {outcome.rows_written}")
+    click.echo(f"  languages:      {', '.join(outcome.languages) or '(none)'}")
+    if outcome.skipped_files:
+        click.echo("  skipped:")
+        for s in outcome.skipped_files:
+            click.echo(f"    - {s}")
+    if outcome.warnings:
+        click.echo("  warnings:")
+        for w in outcome.warnings[:10]:
+            click.echo(f"    - {w}")
+        if len(outcome.warnings) > 10:
+            click.echo(f"    ...and {len(outcome.warnings) - 10} more")
+
+
+@analyze_group.command("backfill")
+@click.option(
+    "--since", default="30d", show_default=True,
+    help="Only sessions whose last activity is newer than this. "
+         "'7d', '1w', '1m', '24h', or an ISO date.",
+)
+@click.option(
+    "-N", "--limit", type=click.IntRange(min=1), default=None,
+    help="Cap on candidates analyzed (default: no cap).",
+)
+@click.option(
+    "--concurrency", type=click.IntRange(min=1, max=16), default=None,
+    help="Worker count (default: min(4, cpu_count); analyzers fork shell processes).",
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(_VALID_FORMATS),
+    default="text", show_default=True, help="Output format.",
+)
+def analyze_backfill_cmd(
+    since: str | None, limit: int | None, concurrency: int | None, fmt: str,
+):
+    """Analyze every recent session lacking ``static_analysis_findings`` rows.
+
+    Idempotent — sessions that already have findings are skipped
+    (the candidate query filters them out via
+    ``NOT EXISTS (SELECT 1 FROM static_analysis_findings ...)``).
+    Each worker opens its own connection so the analyzers can run in
+    parallel without sqlite cross-thread issues.
+    """
+    from stackunderflow.services import static_analysis
+
+    try:
+        since_iso = _parse_analyze_since_arg(since)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--since") from exc
+
+    import stackunderflow.deps as deps
+    from stackunderflow.store import db, schema
+
+    def _factory():
+        c = db.connect(deps.store_path)
+        schema.apply(c)
+        return c
+
+    conn = _open_store()
+    try:
+        result = static_analysis.runner.backfill(
+            conn,
+            since=since_iso,
+            limit=limit,
+            concurrency=concurrency,
+            open_conn_factory=_factory,
+        )
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    click.echo("Backfill complete:")
+    click.echo(f"  candidates:    {result['candidates']}")
+    click.echo(f"  analyzed:      {result['analyzed']}")
+    click.echo(f"  rows written:  {result['rows_written']}")
+    click.echo(f"  warnings:      {result['warnings_count']}")
+
+
+@analyze_group.command("quality")
+@click.argument("session_id", required=False)
+@click.option(
+    "--all", "all_flag", is_flag=True,
+    help="Grade all sessions that have not been graded yet.",
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Force re-grading even if cached grade exists.",
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(_VALID_FORMATS),
+    default="text", show_default=True, help="Output format.",
+)
+def analyze_quality_cmd(session_id: str | None, all_flag: bool, force: bool, fmt: str):
+    """Grade session quality using a local Ollama model."""
+    if not session_id and not all_flag:
+        raise click.UsageError("Must specify either SESSION_ID or --all.")
+
+    from stackunderflow.services.grading import grade_session
+
+    conn = _open_store()
+    try:
+        if all_flag:
+            # Find all sessions that don't have grades and have a non-null first_ts
+            sessions = conn.execute(
+                "SELECT session_id FROM sessions "
+                "WHERE first_ts IS NOT NULL "
+                "  AND session_id NOT IN (SELECT session_id FROM session_quality_metrics)"
+            ).fetchall()
+
+            if not sessions:
+                if fmt == "text":
+                    click.echo("No ungraded sessions found.")
+                else:
+                    click.echo(json.dumps({"results": []}))
+                return
+
+            results = []
+            for row in sessions:
+                sid = row["session_id"]
+                grade = grade_session(conn, sid, force=force)
+                results.append(grade)
+                if fmt == "text":
+                    click.echo(f"Graded session {sid}: score={grade['overall_score']}")
+
+            if fmt == "json":
+                click.echo(json.dumps(results, indent=2))
+        else:
+            # First check if the session exists in sessions table
+            sess = conn.execute("SELECT id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+            if sess is None:
+                raise click.BadParameter(f"Session '{session_id}' not found in database.")
+
+            grade = grade_session(conn, session_id, force=force)
+            if fmt == "json":
+                click.echo(json.dumps(grade, indent=2))
+            else:
+                click.echo(f"Session: {grade['session_id']}")
+                click.echo(f"  Overall Score: {grade['overall_score']}/10.0")
+                click.echo("  Sub-grades:")
+                click.echo(f"    - Goal Clarity:         {grade['grades'].get('goal_clarity')}/10.0")
+                click.echo(f"    - Execution Efficiency: {grade['grades'].get('execution_efficiency')}/10.0")
+                click.echo(f"    - Success:              {grade['grades'].get('success')}/10.0")
+                click.echo(f"  Rationale: {grade['rationale']}")
+                click.echo("  Suggestions:")
+                for s in grade["suggestions"]:
+                    click.echo(f"    - {s}")
+    finally:
+        conn.close()
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_state_dir() -> None:

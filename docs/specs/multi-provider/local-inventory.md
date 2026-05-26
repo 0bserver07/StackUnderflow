@@ -258,6 +258,48 @@ This machine hosts extensive local data from multiple AI coding agents, with **T
 
 ---
 
+### 15. Antigravity (Google IDE + CLI)
+
+**Found?** Yes
+**Locations:**
+- Install: `/Users/<u>/.antigravity/` (symlinked to `/Applications/Antigravity.app/` when installed)
+- Data root: `~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, `~/.gemini/antigravity-cli/`
+- Backup mirror: `~/.gemini/antigravity-backup/` (byte-identical to `antigravity/`)
+- App support (VS Code-style state): `~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb`
+
+**Format Detected:** Mixed — plaintext metadata + encrypted protobuf payload
+
+**Item Count (sample machine, May 2026):**
+- IDE conversations: 5 `.pb` files (encrypted) + 1 `agyhub_summaries_proto.pb` (plaintext)
+- CLI conversations: 4 `.pb` files (encrypted) + `history.jsonl` (81 user prompts across 3 conversations)
+- Implicit context: 5 `.pb` files (encrypted)
+- Brain state: 5 per-conversation subdirs
+
+**Encryption block:** Per-message text and token counts are AES-encrypted at rest with a key in the macOS Keychain under `Antigravity Safe Storage / acct=Antigravity Key`. The key extracts as 16 bytes (base64). Standard schemes tested against a real `.pb` file all fail:
+
+- AES-GCM (nonce-first-12, nonce-last-12)
+- Chromium safe-storage PBKDF2 (b64-string and raw-bytes passwords, salt=`saltysalt`, 1003 iters, AES-128-CBC, IV=16 spaces)
+- AES-CTR with nonce offsets 0/4/8/16
+- ChaCha20-Poly1305 (12-byte nonce, key‖key for 32 bytes)
+- Tink prefix envelopes
+
+Entropy stays at 8.000 bits/byte after every attempt. The encryption is implemented inside the 134 MB Go binary at `~/.local/bin/agy` (symbols include `cipher.AEAD`, `*aesCtrWrapper`, `chacha20poly1305`, plus the string `"serializing trajectory: %w"`). Unblocking would require Ghidra/IDA reverse-engineering of the binary's read path. Out of scope for v1.
+
+**Plaintext data the adapter exposes:**
+- `agyhub_summaries_proto.pb` — `protoc --decode_raw` parses cleanly: repeated `ConversationSummary { uuid, title, start_ts, last_ts, workspace { uri, git_remote, branch }, ... }`.
+- `history.jsonl` — `{display, timestamp_ms, workspace, conversationId}` per line.
+- vscdb `antigravityUnifiedStateSync.trajectorySummaries` — nested base64 protobuf, IDE-side equivalent of the summaries.
+
+**Adapter status:** Implemented as beta (`STACKUNDERFLOW_BETA_ANTIGRAVITY=1`). Surfaces 9 conversations across 6 workspaces on the sample machine, 90 records total. All records carry `raw["cost_source"] = "encrypted"` and zero tokens — the cost layer should render "tokens unavailable" rather than infer dollars.
+
+**Value:** MEDIUM — project/workspace coverage and user prompt corpus are accessible; per-message text and token economics are not.
+
+**Recency:** May 23, 2026
+
+**Follow-up to unlock full data:** Reverse-engineer the trajectory read path inside `~/.local/bin/agy`. Specifically, locate the call sequence around `serializing trajectory:` and trace the cipher mode + key derivation. Could yield a stable parser; could also break on every Antigravity release.
+
+---
+
 ### 14. Claude.json (Top-level)
 
 **Found?** Yes

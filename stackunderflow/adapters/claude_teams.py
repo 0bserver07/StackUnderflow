@@ -284,6 +284,208 @@ def discover_teams(claude_root: Path) -> list[TeamRecord]:
     return out
 
 
+BUILDER_RE = re.compile(
+    r'You are `([^`]+)`\s*(?:,?\s*(?:teammate\s+)?(?:on|in\s+team)\s*)`([^`]+)`'
+)
+
+
+def discover_teams_from_jsonl(
+    claude_root: Path,
+) -> tuple[list[TeamRecord], dict[str, tuple[str, str]]]:
+    """Reconstruct TeamRecords by parsing tool-use blocks in session JSONLs.
+
+    Walks {claude_root}/projects/*/*.jsonl. For each file:
+      - Find every assistant record carrying a TeamCreate tool_use block.
+        Register {team_name, description, lead_session_id=this session, created_ts=record timestamp}.
+      - Find every Agent tool_use with that team_name. Register a member
+        {name=input.name, agent_type=input.subagent_type, prompt=input.prompt}.
+      - Optional but useful: count SendMessage(to=member_name) per member.
+
+    Walk worker JSONLs in the same projects: extract (session_id, teammate_name, team_name)
+    triples from each worker's first user message using BUILDER_RE.
+
+    Returns:
+      - list of synthetic TeamRecords (one per unique team_name seen in a TeamCreate)
+      - dict[worker_session_id, (teammate_name, team_name)] — used by the linker
+        to map worker JSONLs to teams.
+    """
+    projects_dir = claude_root / "projects"
+    if not projects_dir.is_dir():
+        return [], {}
+
+    teams_data: dict[str, dict[str, Any]] = {}
+    worker_map: dict[str, tuple[str, str]] = {}
+
+    try:
+        paths = list(projects_dir.glob("*/*.jsonl"))
+    except OSError:
+        return [], {}
+
+    for path in paths:
+        if not path.is_file():
+            continue
+        session_id = path.stem
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        first_user_text = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            # Fast pre-filter to avoid expensive json.loads on every line
+            if first_user_text is not None:
+                if '"TeamCreate"' not in line and '"Agent"' not in line:
+                    continue
+            else:
+                if '"user"' not in line and '"TeamCreate"' not in line and '"Agent"' not in line:
+                    continue
+
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+
+            t = rec.get("type")
+            if t == "user" and first_user_text is None:
+                msg = rec.get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, str):
+                    if content.strip():
+                        first_user_text = content
+                elif isinstance(content, list):
+                    text_parts = []
+                    for blk in content:
+                        if isinstance(blk, dict) and blk.get("type") == "text":
+                            text_parts.append(blk.get("text", ""))
+                    concatenated = "\n".join(text_parts)
+                    if concatenated.strip():
+                        first_user_text = concatenated
+
+            if t == "assistant":
+                msg = rec.get("message") or {}
+                content = msg.get("content") or []
+                if isinstance(content, list):
+                    for blk in content:
+                        if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                            name = blk.get("name")
+                            inp = blk.get("input") or {}
+                            if name == "TeamCreate":
+                                team_name = inp.get("team_name")
+                                if isinstance(team_name, str) and team_name:
+                                    desc = inp.get("description")
+                                    created_ts = rec.get("timestamp") or ""
+                                    teams_data.setdefault(
+                                        team_name,
+                                        {
+                                            "lead_session_id": session_id,
+                                            "description": desc if isinstance(desc, str) else None,
+                                            "created_ts": created_ts,
+                                            "members": {},
+                                        },
+                                    )
+                            elif name == "Agent":
+                                team_name = inp.get("team_name")
+                                member_name = inp.get("name")
+                                subagent_type = inp.get("subagent_type")
+                                if subagent_type == "Explore":
+                                    continue
+                                if (
+                                    isinstance(team_name, str)
+                                    and team_name
+                                    and isinstance(member_name, str)
+                                    and member_name
+                                ):
+                                    prompt = inp.get("prompt")
+                                    teams_data.setdefault(
+                                        team_name,
+                                        {
+                                            "lead_session_id": None,
+                                            "description": None,
+                                            "created_ts": rec.get("timestamp") or "",
+                                            "members": {},
+                                        },
+                                    )
+                                    teams_data[team_name]["members"][member_name] = MemberRecord(
+                                        agent_id=member_name,
+                                        name=member_name,
+                                        agent_type=subagent_type if isinstance(subagent_type, str) else None,
+                                        model=None,
+                                        cwd=None,
+                                        is_lead=False,
+                                        prompt=prompt if isinstance(prompt, str) else None,
+                                    )
+
+        if first_user_text:
+            m = BUILDER_RE.search(first_user_text)
+            if m:
+                teammate_name = m.group(1)
+                team_name = m.group(2)
+                worker_map[session_id] = (teammate_name, team_name)
+
+    synthetic_teams: list[TeamRecord] = []
+    for team_name, data in sorted(teams_data.items()):
+        if not data["lead_session_id"]:
+            continue
+
+        lead_member = MemberRecord(
+            agent_id="team-lead",
+            name="team-lead",
+            agent_type="orchestrator",
+            model=None,
+            cwd=None,
+            is_lead=True,
+            prompt=None,
+        )
+        members_list = [lead_member]
+        for m_name, m_record in sorted(data["members"].items()):
+            members_list.append(m_record)
+
+        created_epoch = 0
+        if data["created_ts"]:
+            try:
+                ts_str = data["created_ts"].replace("Z", "+00:00")
+                created_epoch = int(datetime.fromisoformat(ts_str).timestamp() * 1000)
+            except Exception:
+                pass
+
+        config_dict = {
+            "_source": "jsonl_fallback",
+            "leadSessionId": data["lead_session_id"],
+            "description": data["description"],
+            "createdAt": created_epoch,
+            "members": [
+                {
+                    "agentId": m.agent_id,
+                    "name": m.name,
+                    "agentType": m.agent_type,
+                    "model": m.model,
+                    "cwd": m.cwd,
+                    "isLead": m.is_lead,
+                    "prompt": m.prompt,
+                }
+                for m in members_list
+            ],
+        }
+
+        synthetic_teams.append(
+            TeamRecord(
+                team_id=team_name,
+                created_ts=data["created_ts"],
+                description=data["description"],
+                lead_session_id=data["lead_session_id"],
+                lead_agent_id="team-lead",
+                project_path=None,
+                members=tuple(members_list),
+                config_json=json.dumps(config_dict),
+            )
+        )
+
+    return synthetic_teams, worker_map
+
+
 # ── discover_tasks ───────────────────────────────────────────────────────────
 
 
@@ -379,6 +581,7 @@ def link_sessions_to_team(
     session_hints: list[SessionTeamHint],
     teams: list[TeamRecord],
     tasks_by_team: dict[str, list[TaskRecord]] | None = None,
+    worker_map: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, SessionTeamLink]:
     """Map ``session_id`` → :class:`SessionTeamLink` for every linkable session.
 
@@ -390,6 +593,8 @@ def link_sessions_to_team(
        comes from the matching member's ``prompt`` (or owning task's
        ``description``); ``None`` when the config doesn't list a matching
        ``agentId``.
+    2.5 **worker_map** — fallback for deleted team configs. Links worker JSONLs
+        using first-user prompt matched classmate metadata.
     3. **parent_uuid chain** — for sidechain sessions that carry no
        ``teamName`` (older transcripts), if the session's first message's
        ``parent_uuid`` resolves to a ``uuid`` inside an already-linked
@@ -431,6 +636,35 @@ def link_sessions_to_team(
             spawn_prompt=_spawn_prompt_for(hint, team, tasks_by_team.get(team.team_id, [])),
             parent_session_id=team.lead_session_id,
         )
+
+    # 2.5 worker_map fallback matches
+    if worker_map:
+        for hint in session_hints:
+            if hint.session_id in out:
+                continue
+            if hint.session_id not in worker_map:
+                continue
+            teammate_name, team_name = worker_map[hint.session_id]
+            team = team_by_name.get(team_name)
+            if team is None:
+                continue
+            if hint.session_id == team.lead_session_id:
+                continue  # already lead
+            if out.get(hint.session_id) and out[hint.session_id].role == ROLE_LEAD:
+                continue
+
+            spawn_prompt = None
+            for m in team.members:
+                if m.name == teammate_name or m.agent_id == teammate_name:
+                    spawn_prompt = m.prompt
+                    break
+
+            out[hint.session_id] = SessionTeamLink(
+                team_id=team.team_id,
+                role=ROLE_SUBAGENT,
+                spawn_prompt=spawn_prompt,
+                parent_session_id=team.lead_session_id,
+            )
 
     # 3. parent_uuid chain fallback (older transcripts without teamName)
     hint_by_id = {h.session_id: h for h in session_hints}
@@ -574,17 +808,33 @@ def materialize_team_metadata(
     member ``cwd``s don't map to a known project) are skipped this pass;
     they get picked up once those sessions land.
     """
+    orig_row_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
     claude_root = claude_root or (Path.home() / ".claude")
     report_teams_seen = 0
     report_materialized = 0
     report_linked = 0
 
     try:
-        teams = discover_teams(claude_root)
+        config_teams = discover_teams(claude_root)
     except OSError as exc:  # pragma: no cover - defensive
         _log.debug("claude_teams: discover_teams failed under %s: %s", claude_root, exc)
-        return MaterializeReport()
+        config_teams = []
+
+    try:
+        fallback_teams, worker_map = discover_teams_from_jsonl(claude_root)
+    except Exception as exc:
+        _log.debug("claude_teams: discover_teams_from_jsonl failed under %s: %s", claude_root, exc)
+        fallback_teams, worker_map = [], {}
+
+    # Merge: config wins on conflict
+    teams_dict: dict[str, TeamRecord] = {t.team_id: t for t in fallback_teams}
+    for t in config_teams:
+        teams_dict[t.team_id] = t
+    teams = list(teams_dict.values())
+
     if not teams:
+        conn.row_factory = orig_row_factory
         return MaterializeReport()
 
     conn.execute("BEGIN")
@@ -605,13 +855,21 @@ def materialize_team_metadata(
                 pid = _project_id_for_slug(conn, provider, slug_for_path(m.cwd))
                 if pid is not None:
                     candidate_pids.add(pid)
+
+            if worker_map:
+                for w_sid, (m_name, t_name) in worker_map.items():
+                    if t_name == team.team_id:
+                        w_pid = _project_id_for_session(conn, w_sid)
+                        if w_pid is not None:
+                            candidate_pids.add(w_pid)
+
             if not candidate_pids:
                 continue  # nothing ingested for this team yet
             team_project_id = lead_pid if lead_pid is not None else min(candidate_pids)
 
             hints = _build_hints_for_projects(conn, candidate_pids, team)
             tasks = discover_tasks(claude_root, team.team_id)
-            links = link_sessions_to_team(hints, [team], {team.team_id: tasks})
+            links = link_sessions_to_team(hints, [team], {team.team_id: tasks}, worker_map=worker_map)
             if not links:
                 continue
 
@@ -651,8 +909,10 @@ def materialize_team_metadata(
     except sqlite3.Error as exc:
         conn.execute("ROLLBACK")
         _log.warning("claude_teams: materialize_team_metadata rolled back: %s", exc)
+        conn.row_factory = orig_row_factory
         return MaterializeReport()
 
+    conn.row_factory = orig_row_factory
     if report_materialized:
         _log.info(
             "claude_teams: materialized %d/%d team(s), linked %d session(s)",

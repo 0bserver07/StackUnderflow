@@ -35,7 +35,6 @@ from __future__ import annotations
 
 from .base import ProviderPricer
 
-
 # (input $/M, output $/M, cache-write $/M, cache-read $/M).
 #
 # Gemini 3 preview ids (gemini-3-pro-preview / gemini-3.1-pro-preview /
