@@ -10,12 +10,14 @@ StackUnderflow ingests and indexes session logs from 17 coding agent providers t
   <kbd><img src="https://www.google.com/s2/favicons?domain=cursor.com&sz=64" width="16" valign="middle" /> Cursor</kbd> &nbsp;
   <kbd><img src="https://www.google.com/s2/favicons?domain=cline.bot&sz=64" width="16" valign="middle" /> Cline</kbd> &nbsp;
   <kbd><img src="https://www.google.com/s2/favicons?domain=github.com&sz=64" width="16" valign="middle" /> Copilot</kbd> &nbsp;
-  <kbd><img src="https://www.google.com/s2/favicons?domain=google.com&sz=64" width="16" valign="middle" /> Gemini / Antigravity</kbd> &nbsp;
+  <kbd><img src="https://www.google.com/s2/favicons?domain=gemini.google.com&sz=64" width="16" valign="middle" /> Gemini / Antigravity</kbd> &nbsp;
   <kbd><img src="https://www.google.com/s2/favicons?domain=continue.dev&sz=64" width="16" valign="middle" /> Continue</kbd> &nbsp;
   <kbd><img src="https://www.google.com/s2/favicons?domain=codeium.com&sz=64" width="16" valign="middle" /> Codeium</kbd> &nbsp;
-  <kbd><img src="https://www.google.com/s2/favicons?domain=alibaba.com&sz=64" width="16" valign="middle" /> Qwen</kbd> &nbsp;
-  <kbd><img src="https://www.google.com/s2/favicons?domain=github.com&sz=64" width="16" valign="middle" /> Roo Code</kbd> &nbsp;
-  <kbd><img src="https://www.google.com/s2/favicons?domain=github.com&sz=64" width="16" valign="middle" /> Hermes / OpenClaw / Pi</kbd>
+  <kbd><img src="https://www.google.com/s2/favicons?domain=qwen.ai&sz=64" width="16" valign="middle" /> Qwen</kbd> &nbsp;
+  <kbd><img src="https://www.google.com/s2/favicons?domain=roocode.com&sz=64" width="16" valign="middle" /> Roo Code</kbd> &nbsp;
+  <kbd><img src="https://www.google.com/s2/favicons?domain=hermes-agent.org&sz=64" width="16" valign="middle" /> Hermes</kbd> &nbsp;
+  <kbd><img src="https://www.google.com/s2/favicons?domain=openclaw.ai&sz=64" width="16" valign="middle" /> OpenClaw</kbd> &nbsp;
+  <kbd><img src="https://www.google.com/s2/favicons?domain=pi.ai&sz=64" width="16" valign="middle" /> Pi</kbd>
 </p>
 
 ### The Four Pillars
