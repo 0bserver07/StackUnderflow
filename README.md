@@ -30,7 +30,9 @@ StackUnderflow ingests and indexes session logs from 17 coding agent providers t
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
-![StackUnderflow Dashboard](assets/dashboard.png)
+![StackUnderflow — the projects overview across every coding agent the local store has indexed](assets/overview.png)
+
+*Writeup: [Building StackUnderflow](https://yad.codes/posts/building-stackunderflow/).*
 
 ---
 
@@ -172,6 +174,12 @@ See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source
 - **Model aliases** — for proxied model ids (OpenRouter, Replicate, internal gateways): `cfg model-alias set openrouter/claude-opus claude-opus-4-6` and the cost layer prices it at the canonical rate.
 - **Fast-mode multiplier** — Claude Opus priority tier (`service_tier="priority"`) bills at 6×; detected from the JSONL and threaded through the cost layer end-to-end.
 
+![The Cost tab: spend by agent, cache ROI, and an error-cost breakdown by tool](assets/cost.png)
+
+![Compare: per-model sessions, retry, cache, and unit economics side by side](assets/compare.png)
+
+![Tools ranked by cost and the token-composition donut](assets/tools.png)
+
 ### Search, Q&A, tags
 - **Full-text search** across every ingested message. Filter by date / model / role.
 - **Q&A pair extraction** — heuristic detection of question/answer pairs with resolution status (`resolved` / `looped` / `abandoned`).
@@ -180,9 +188,13 @@ See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source
 ### Meta agent (Ask StackUnderflow)
 A **right-docked sidebar** lets you talk to your local Ollama LLM about your own coding history. It calls a catalogue of read-only backend tools (search past decisions, find sessions touching a file, get a project's cost summary, replay a session's filesystem mutations, …) and answers in prose. Recommended models: `qwen2.5-coder`, `llama3.2`. Everything runs locally — there is **no fallback to a remote LLM**; if Ollama is down the sidebar surfaces a banner. See [docs/meta-agent.md](docs/meta-agent.md).
 
+![Ask StackUnderflow: a local model answering from your own session history via read-only tools](assets/agent-sidebar.png)
+
 ### Playback (time-travel)
 - **Event-stream timeline** — scrub through every tool call a session made, in order, with payload excerpts.
 - **Virtual-FS reconstruction** (v0.7.3+) — at any timestamp in the scrub, see the reconstructed content of every file the session touched. Replays Read / Write / Edit / MultiEdit / NotebookEdit calls; marks partial reconstructions where no initial Read was seen.
+
+![Step-by-step playback with the reconstructed file tree at each moment](assets/playback.png)
 
 ### Self-referential discovery (for coding agents)
 - **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI commands that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** (`pip install stackunderflow[embeddings]`) re-ranks by cosine similarity with a local sentence-transformers model.
@@ -192,6 +204,8 @@ A **right-docked sidebar** lets you talk to your local Ollama LLM about your own
 
 ### Real-time sync
 A `watchfiles`-backed daemon thread watches every registered adapter's source paths. On any change → ingest the new bytes → normalize → refresh marts. Source-file write to dashboard data fresh in ~400ms. Disable with `--no-watcher`.
+
+![The ETL pipeline panel: watcher status, event count, and per-mart watermarks](assets/etl.png)
 
 ### Export
 ```bash

@@ -111,6 +111,7 @@ const KNOWN_TOOL_MODEL_FRAGMENTS = [
   'mistral-nemo',
   'mistral-large',
   'mixtral',
+  'deepseek',
 ]
 
 export function modelLikelySupportsTools(name: string | undefined | null): boolean {

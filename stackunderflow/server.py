@@ -278,6 +278,12 @@ async def spa_settings():
     return FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))
 
 
+@app.get("/live")
+async def spa_live():
+    """Serve React SPA for /live client-side route."""
+    return FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))
+
+
 from stackunderflow.routes.data import refresh_all_projects, refresh_data  # noqa: E402, F401
 
 

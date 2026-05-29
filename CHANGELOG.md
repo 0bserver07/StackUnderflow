@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-28
+
+Patch release: two small runtime fixes, a meta-agent model-list update, and refreshed screenshots across the README and docs site.
+
+### Added
+
+- **`/live` SPA route** — direct loads and refreshes of `/live` now serve the React app instead of returning a 404.
+- **`deepseek` recognised as tool-capable** in the meta-agent sidebar, so the "tool-calling may not work" banner no longer fires for DeepSeek models.
+
+### Fixed
+
+- **Legacy-project last-active timestamp** no longer skews when other projects write to the shared `~/.claude/history.jsonl`. The Claude adapter now derives the session mtime from the project's own `.continuation_cache.json` (or the project directory) instead of the shared history file.
+
+### Docs
+
+- README and docs site refreshed with current dashboard screenshots: overview, cost, model compare, step-by-step playback, the Ask StackUnderflow sidebar, tools-by-cost, and the ETL pipeline panel.
+
 ## [0.9.1] - 2026-05-16
 
 Patch release: five fixes from a real-data audit. On a 95-session / 374-Task-call project, five dashboard tabs were broken or unusably slow.

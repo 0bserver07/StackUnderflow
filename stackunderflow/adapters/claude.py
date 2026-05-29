@@ -122,12 +122,26 @@ class ClaudeAdapter:
         if not history_file.is_file():
             return
         stat = history_file.stat()
+        
+        # Use the actual legacy project's continuation cache file modification time
+        # so that we don't skew the project's last active timestamp when other
+        # projects write to the centralized history.jsonl.
+        mtime = stat.st_mtime
+        cache_file = project_dir / ".continuation_cache.json"
+        if cache_file.is_file():
+            mtime = cache_file.stat().st_mtime
+        else:
+            try:
+                mtime = project_dir.stat().st_mtime
+            except OSError:
+                pass
+
         yield SessionRef(
             provider=self.name,
             project_slug=project_dir.name,
             session_id=f"legacy-{project_dir.name}",
             file_path=history_file,
-            file_mtime=stat.st_mtime,
+            file_mtime=mtime,
             file_size=stat.st_size,
         )
 

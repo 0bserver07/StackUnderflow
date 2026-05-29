@@ -5,7 +5,7 @@ template: splash
 hero:
   tagline: "Offline, local-first observability toolkit for AI coding agents. Ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback, and a searchable knowledge base."
   image:
-    file: ../../assets/dashboard.png
+    file: ../../assets/overview.png
   actions:
     - text: Install
       link: /StackUnderflow/installation/
@@ -36,6 +36,12 @@ StackUnderflow is an offline, local-first observability toolkit for AI coding ag
 - **Bookmarks + auto-tags** — save and categorise important sessions
 - **CLI reports** — `stackunderflow today`, `month`, `optimize`, `export`
 - **SQLite-backed** — incremental ingest, fast queries over hundreds of thousands of messages
+
+![The cost tab: spend by agent, cache ROI, and an error-cost breakdown by tool](../../assets/cost.png)
+
+![Step-by-step playback with the reconstructed file tree at each moment](../../assets/playback.png)
+
+![Ask StackUnderflow: a local model answering from your own session history](../../assets/agent-sidebar.png)
 
 ## Where to next
 
