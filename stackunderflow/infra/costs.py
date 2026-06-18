@@ -65,6 +65,7 @@ def compute_cost(
     provider: str = "anthropic",
     *,
     speed: str = "standard",
+    at_ts: str | None = None,
 ) -> dict[str, float]:
     """Return cost breakdown.
 
@@ -92,6 +93,11 @@ def compute_cost(
     rates are not multiplied by the speed flag because the overlay
     table is upstream-authoritative; users who want fast-tier overlay
     pricing should provide separate entries.
+
+    ``at_ts`` (ISO date string) prices the event at the manifest rate in
+    effect at that time (effective-dated price rows). It applies only to
+    manifest-priced models — the overlay is a single current snapshot with
+    no history, so ``at_ts`` is ignored for overlay-covered models.
     """
     model = resolve_model_alias(model, _user_aliases())
 
@@ -100,8 +106,10 @@ def compute_cost(
 
     overlay = _overlay_rates(model)
     if overlay is not None:
+        # Overlay (LiteLLM feed) is a single current snapshot with no
+        # effective-dated history, so ``at_ts`` does not apply here.
         return ProviderPricer._apply_overlay_rates(normalized, overlay)
-    return pricer.compute(normalized, model, speed=speed)
+    return pricer.compute(normalized, model, speed=speed, at_ts=at_ts)
 
 
 def format_dollars(amount: float) -> str:
@@ -117,9 +125,17 @@ def format_dollars(amount: float) -> str:
 
 # ── compat shims ─────────────────────────────────────────────────────────────
 
+# NOTE: this list feeds ``RATE_CARD``, whose membership is what the ETL
+# normalizers use to stamp ``cost_source`` (``rate_card`` vs ``unknown``).
+# For Anthropic/GLM, model identity + rates now live in the data manifest
+# (``stackunderflow/data/models.toml``); the Anthropic ids below duplicate the
+# manifest's families and must be kept in sync until the two are unified
+# (planned with the DB-backed registry). Adding a Claude model = a manifest
+# entry AND an id here.
 _CANONICAL_IDS = [
-    # Anthropic — current Opus / Sonnet / Haiku
-    "claude-opus-4-7",
+    # Anthropic — current Fable / Opus / Sonnet / Haiku
+    "claude-fable-5",
+    "claude-opus-4-8", "claude-opus-4-7",
     "claude-opus-4-6", "claude-sonnet-4-6",
     "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
     "claude-opus-4-20250514", "claude-sonnet-4-20250514",
@@ -127,12 +143,11 @@ _CANONICAL_IDS = [
     "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
     # Un-dated Anthropic aliases — emitted by adapters that normalize
     # vendor-shape model ids (e.g. Kiro's ``claude.3.5.sonnet`` →
-    # ``claude-3-5-sonnet``). The Anthropic pricer's family heuristic
-    # matches these via hyphen-split token set.
+    # ``claude-3-5-sonnet``). AnthropicPricer resolves these via the data
+    # manifest's per-family ``match`` tokens (stackunderflow/data/models.toml).
     "claude-3-5-sonnet",
-    # ZhipuAI GLM models surfaced behind a Claude-shape proxy. The
-    # AnthropicPricer's heuristic now routes these to dedicated GLM_5 /
-    # GLM_51 family rates (see providers/anthropic.py).
+    # ZhipuAI GLM models surfaced behind a Claude-shape proxy; the manifest
+    # routes them to dedicated GLM_5 / GLM_51 family rates.
     "glm-5", "glm-5.1",
     # OpenAI Codex + base GPT families
     "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",

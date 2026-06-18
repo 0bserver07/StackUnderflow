@@ -85,8 +85,9 @@ def test_compute_cost_no_aliases_is_unchanged(tmp_path):
             {"input": 1000, "output": 1000},
             "claude-opus-4-6",
         )
-    # Opus 4.6: input $15/M, output $75/M → 0.015 + 0.075 = 0.09
-    assert cost["total_cost"] == pytest.approx(0.09)
+    # Opus 4.6: input $5/M, output $25/M → 0.005 + 0.025 = 0.03
+    # (corrected from the stale $15/$75 that priced this at 0.09).
+    assert cost["total_cost"] == pytest.approx(0.03)
 
 
 def test_compute_cost_alias_to_known_canonical_resolves_to_nonzero(tmp_path):

@@ -75,6 +75,24 @@ Adapter source: `stackunderflow/adapters/cursor.py`, `stackunderflow/adapters/cl
 
 Provider chips render on the session table and project cards, color-coded per provider. When the same project slug is ingested through more than one adapter (the schema's `UNIQUE(provider, slug)` constraint allows one row per provider), the project card renders one chip per provider. Implementation: `stackunderflow-ui/src/components/common/ProviderChip.tsx`. The API surfaces the field on `/api/projects` (as `provider` plus a `providers` array) and on `/api/jsonl-files` (as `provider`).
 
+## Model manifest (Anthropic & GLM pricing)
+
+Anthropic and GLM model identity and rates are **data, not code**: they live in `stackunderflow/data/models.toml` and load via `stackunderflow/infra/model_manifest.py`. `AnthropicPricer` delegates to the manifest — there is no hardcoded rate dict or token-matching ladder in `infra/providers/anthropic.py` anymore.
+
+Each `[[model]]` entry has:
+
+- `family` — the canonical key `canonicalize()` returns (e.g. `OPUS_48`).
+- `match` — a token list; an id matches when every token is present after lowercasing and splitting on `-`/`.`. **Order matters**: more-specific entries come first and matching stops at the first hit, so `["opus","4","8"]` must precede `["opus","4"]`.
+- `fast_multiplier` (optional) — input/output multiplier for the Anthropic priority/fast tier (Opus = `6.0`; cache rates are never multiplied).
+- `fallback = true` (exactly one entry) — the family returned when nothing matches (Sonnet 3.5).
+- one or more `[[model.price]]` rows: `input` / `output` / `cache_write` / `cache_read` in $/M tokens, plus optional `effective_from` / `effective_until` (ISO `YYYY-MM-DD`).
+
+**Pricing is effective-dated.** `rates_for(family, provider, at_ts=...)` returns the row whose `[effective_from, effective_until)` window contains `at_ts`; omit `at_ts` for the current rate, and a row with no dates is always-current. This lets a historical event be priced at the rate in effect when it ran, and lets a vendor price change be recorded as a new dated row instead of overwriting history.
+
+**To add a model or correct a price**, edit `models.toml` — no code change. For Anthropic, also add the canonical id to `_CANONICAL_IDS` in `infra/costs.py` so `RATE_CARD` membership flips the normalizer's `cost_source` from `unknown` to `rate_card` (the two lists are slated to be unified with the DB-backed registry — see the note there).
+
+Rates are grounded in published sources: the cached LiteLLM feed (`~/.stackunderflow/cache/pricing.json`, the same feed the live overlay uses) and Anthropic's pricing page. The LiteLLM overlay still takes precedence over the manifest at compute time for models it covers.
+
 ## Cursor pricing
 
 Cursor publishes no general per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) prices each cursor model id one of four ways:

@@ -119,6 +119,7 @@ class Normalizer(ABC):
             model=model_value,
             speed=speed_value,
             cost_source=cost_source,
+            at_ts=ts_value,
         )
 
         return {
@@ -151,6 +152,7 @@ class Normalizer(ABC):
         model: str,
         speed: str,
         cost_source: str,
+        at_ts: str | None = None,
     ) -> float:
         """One-shot price lookup; never raises.
 
@@ -171,7 +173,7 @@ class Normalizer(ABC):
         try:
             breakdown = compute_cost(
                 tokens, model, provider=_provider_for(self.provider_name),
-                speed=speed,
+                speed=speed, at_ts=at_ts,
             )
         except Exception:  # noqa: BLE001 — pricing must never break ingest
             return 0.0

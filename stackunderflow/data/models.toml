@@ -1,0 +1,234 @@
+# Model manifest — the data-driven source of truth for model identity and
+# pricing. This replaces hardcoded Python rate dicts and the token-matching
+# `_identify` ladders that used to live in `infra/providers/*.py`.
+#
+# Adding a model, correcting a rate, or recording a price change is an edit to
+# THIS file — not a code change and not a release-gated branch.
+#
+# ── Schema ──────────────────────────────────────────────────────────────────
+# [[model]]
+#   family          stable canonical key returned by canonicalize() (e.g. OPUS_48)
+#   provider        pricer that owns it ("anthropic" — GLM is proxied as anthropic)
+#   match           token set; an id matches when ALL tokens are present after
+#                   splitting the lowercased id on "-" and "." (most-specific
+#                   entries MUST come first — matching stops at the first hit)
+#   fast_multiplier optional input/output multiplier for the priority/fast tier
+#   fallback        optional; the family returned when nothing else matches
+#   [[model.price]] one or more EFFECTIVE-DATED rate rows, $/M tokens:
+#                   input, output, cache_write, cache_read, and optional
+#                   effective_from / effective_until (ISO "YYYY-MM-DD" strings).
+#                   A row with no dates is always-current. Pass a timestamp to
+#                   price a historical event at the rate in effect then.
+#
+# Example of a price that changed over time (newest row open-ended):
+#   [[model.price]]
+#   effective_until = "2026-01-15"
+#   input = 15.0 ; output = 75.0 ; cache_write = 18.75 ; cache_read = 1.50
+#   [[model.price]]
+#   effective_from = "2026-01-15"
+#   input = 5.0  ; output = 25.0 ; cache_write = 6.25  ; cache_read = 0.50
+#
+# Cache-write defaults to 1.25× input and cache-read to 0.10× input under
+# Anthropic's billing convention; GLM is surfaced through an Anthropic-shape
+# proxy and follows the same multipliers.
+
+# ── ZhipuAI GLM (proxied as anthropic) — most specific first ────────────────
+[[model]]
+family = "GLM_51"
+provider = "anthropic"
+match = ["glm", "5", "1"]
+display_name = "GLM-5.1"
+  [[model.price]]
+  input = 1.40
+  output = 4.40
+  cache_write = 1.75
+  cache_read = 0.14
+
+[[model]]
+family = "GLM_5"
+provider = "anthropic"
+match = ["glm", "5"]
+display_name = "GLM-5"
+  [[model.price]]
+  input = 1.00
+  output = 3.20
+  cache_write = 1.25
+  cache_read = 0.10
+
+# ── Anthropic Claude ────────────────────────────────────────────────────────
+[[model]]
+family = "FABLE_5"
+provider = "anthropic"
+match = ["fable", "5"]
+display_name = "Claude Fable 5"
+  [[model.price]]
+  input = 10.0
+  output = 50.0
+  cache_write = 12.50
+  cache_read = 1.00
+
+[[model]]
+family = "OPUS_48"
+provider = "anthropic"
+match = ["opus", "4", "8"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 4.8"
+  [[model.price]]
+  input = 5.0
+  output = 25.0
+  cache_write = 6.25
+  cache_read = 0.50
+
+[[model]]
+family = "OPUS_47"
+provider = "anthropic"
+match = ["opus", "4", "7"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 4.7"
+  [[model.price]]
+  input = 5.0
+  output = 25.0
+  cache_write = 6.25
+  cache_read = 0.50
+
+[[model]]
+family = "OPUS_46"
+provider = "anthropic"
+match = ["opus", "4", "6"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 4.6"
+  # Corrected from a stale $15/$75 to the published $5/$25.
+  [[model.price]]
+  input = 5.0
+  output = 25.0
+  cache_write = 6.25
+  cache_read = 0.50
+
+[[model]]
+family = "SONNET_46"
+provider = "anthropic"
+match = ["sonnet", "4", "6"]
+display_name = "Claude Sonnet 4.6"
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+
+[[model]]
+family = "OPUS_45"
+provider = "anthropic"
+match = ["opus", "4", "5"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 4.5"
+  # $5/$25 — confirmed against the LiteLLM pricing feed (claude-opus-4-5 and
+  # claude-opus-4-5-20251101 both list 5/25). Opus left the legacy $15/$75
+  # tier at 4.5; the store's existing opus-4-5 events already cost at 5/25.
+  [[model.price]]
+  input = 5.0
+  output = 25.0
+  cache_write = 6.25
+  cache_read = 0.50
+
+[[model]]
+family = "SONNET_45"
+provider = "anthropic"
+match = ["sonnet", "4", "5"]
+display_name = "Claude Sonnet 4.5"
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+
+[[model]]
+family = "HAIKU_45"
+provider = "anthropic"
+match = ["haiku", "4", "5"]
+display_name = "Claude Haiku 4.5"
+  [[model.price]]
+  input = 1.0
+  output = 5.0
+  cache_write = 1.25
+  cache_read = 0.10
+
+[[model]]
+family = "SONNET_35"
+provider = "anthropic"
+match = ["sonnet", "3", "5"]
+fallback = true
+display_name = "Claude Sonnet 3.5"
+  # Also the provider fallback: unknown Claude ids price at these rates.
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+
+[[model]]
+family = "HAIKU_35"
+provider = "anthropic"
+match = ["haiku", "3", "5"]
+display_name = "Claude Haiku 3.5"
+  [[model.price]]
+  input = 1.0
+  output = 5.0
+  cache_write = 1.25
+  cache_read = 0.10
+
+[[model]]
+family = "OPUS_4"
+provider = "anthropic"
+match = ["opus", "4"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 4 / 4.1"
+  [[model.price]]
+  input = 15.0
+  output = 75.0
+  cache_write = 18.75
+  cache_read = 1.50
+
+[[model]]
+family = "SONNET_4"
+provider = "anthropic"
+match = ["sonnet", "4"]
+display_name = "Claude Sonnet 4"
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+
+[[model]]
+family = "OPUS_3"
+provider = "anthropic"
+match = ["opus", "3"]
+fast_multiplier = 6.0
+display_name = "Claude Opus 3"
+  [[model.price]]
+  input = 15.0
+  output = 75.0
+  cache_write = 18.75
+  cache_read = 1.50
+
+[[model]]
+family = "SONNET_3"
+provider = "anthropic"
+match = ["sonnet", "3"]
+display_name = "Claude Sonnet 3"
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+
+[[model]]
+family = "HAIKU_3"
+provider = "anthropic"
+match = ["haiku", "3"]
+display_name = "Claude Haiku 3"
+  [[model.price]]
+  input = 0.25
+  output = 1.25
+  cache_write = 0.30
+  cache_read = 0.03

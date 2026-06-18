@@ -174,7 +174,7 @@ Four string literals, declared in `stackunderflow/etl/normalize/base.py` as `COS
 | value | meaning |
 |---|---|
 | `live` | a usage / billing API was queried at write time and returned an exact dollar amount. Reserved — no shipped normalizer uses this today, but the slot exists so a future provider with a real billing endpoint can stamp it without a schema change. |
-| `rate_card` | tokens × the canonical per-million rate for `(provider, model, speed)`. Default for Claude / Codex / most providers. The rate card is `stackunderflow/infra/costs.RATE_CARD`. |
+| `rate_card` | tokens × the canonical per-million rate for `(provider, model, speed)`. Default for Claude / Codex / most providers. The rate card is `stackunderflow/infra/costs.RATE_CARD`; Anthropic/GLM rates and identity come from the data manifest `stackunderflow/data/models.toml` (effective-dated — see `docs/multi-provider.md`). |
 | `estimated` | tokens were not reported by the source — the normalizer fell back to a heuristic (typically `len(content_text) // 4`). Used by Kiro and any other provider whose on-disk format omits usage. Cost is best-effort; downstream UIs may de-emphasise these rows. |
 | `unknown` | the model id is not in the rate card. `cost_usd` is 0.0; the row counts toward token totals but contributes nothing to dollar totals. Distinguish from `rate_card`-with-known-model-but-zero-tokens. |
 

@@ -41,7 +41,8 @@ def test_normalize_tokens_handles_missing_keys():
 def test_rates_for_known_returns_tuple():
     p = AnthropicPricer()
     rates = p.rates_for("OPUS_46")
-    assert rates == (15.0, 75.0, 18.75, 1.50)
+    # Opus 4.6 corrected from a stale $15/$75 to its published $5/$25.
+    assert rates == (5.0, 25.0, 6.25, 0.50)
 
 
 def test_rates_for_unknown_falls_back_to_sonnet_35():
@@ -147,3 +148,75 @@ def test_compute_e2e_glm_5():
     # 1000 × $1/M + 500 × $3.20/M = 0.001 + 0.0016 = 0.0026
     assert cost["input_cost"] == 1000 * 1.0 / 1_000_000
     assert cost["output_cost"] == 500 * 3.20 / 1_000_000
+
+
+# ── Fable 5 + Opus 4.8 — pricing stopgap ────────────────────────────────────
+
+
+def test_canonicalize_fable_5():
+    """``claude-fable-5`` matches by name — never the Sonnet 3.5 fallback.
+
+    Before this fix the heuristic had no ``fable`` token rule, so Fable
+    fell through to Sonnet 3.5 ($3/$15) — ~3.3× understated vs its real
+    $10/$50.
+    """
+    assert AnthropicPricer().canonicalize("claude-fable-5") == "FABLE_5"
+
+
+def test_rates_for_fable_5_is_10_50():
+    """Fable 5 list price: $10 / $50 per MTok (cache 1.25× / 0.10×)."""
+    assert AnthropicPricer().rates_for("FABLE_5") == (10.0, 50.0, 12.50, 1.00)
+
+
+def test_compute_e2e_fable_5():
+    p = AnthropicPricer()
+    tokens = {"input": 1000, "output": 500, "cache_creation": 200, "cache_read": 800}
+    cost = p.compute(tokens, "claude-fable-5")
+    assert cost["input_cost"] == 1000 * 10.0 / 1_000_000
+    assert cost["output_cost"] == 500 * 50.0 / 1_000_000
+    assert cost["cache_creation_cost"] == 200 * 12.50 / 1_000_000
+    assert cost["cache_read_cost"] == 800 * 1.00 / 1_000_000
+
+
+def test_canonicalize_opus_48_resolves_to_own_family():
+    """``claude-opus-4-8`` must hit OPUS_48 — not the Opus 4 ($15/$75) fallback.
+
+    Before this fix the bare ``"4" in parts and has_opus`` branch swallowed
+    4-8 and priced it at legacy Opus 4 rates — 3× the real $5/$25.
+    """
+    assert AnthropicPricer().canonicalize("claude-opus-4-8") == "OPUS_48"
+
+
+def test_rates_for_opus_48_is_5_25():
+    assert AnthropicPricer().rates_for("OPUS_48") == (5.0, 25.0, 6.25, 0.50)
+
+
+def test_rates_for_opus_45_is_5_25_per_live_feed():
+    """Opus 4.5 is $5/$25, not the legacy $15/$75 — confirmed against the
+    LiteLLM pricing feed (claude-opus-4-5 / -20251101 both list 5/25). Guards
+    the manifest against regressing to a guessed legacy rate."""
+    assert AnthropicPricer().rates_for("OPUS_45") == (5.0, 25.0, 6.25, 0.50)
+
+
+def test_opus_48_fast_mode_uses_6x_multiplier():
+    """Opus 4.8 is in the fast-mode multiplier set (input/output × 6)."""
+    import pytest as _pytest
+    p = AnthropicPricer()
+    tokens = {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0}
+    standard = p.compute(tokens, "claude-opus-4-8", speed="standard")
+    fast = p.compute(tokens, "claude-opus-4-8", speed="fast")
+    assert fast["input_cost"] == _pytest.approx(standard["input_cost"] * 6.0)
+    assert fast["output_cost"] == _pytest.approx(standard["output_cost"] * 6.0)
+
+
+def test_opus_48_real_row_is_one_third_of_legacy_rate():
+    """Regression: the exact usage_events row that was 3× overstated.
+
+    131 in / 6074 out / 13174 cache-write / 36215 cache-read priced
+    $0.75885 at the legacy Opus 4 rate; OPUS_48 prices it $0.25295.
+    """
+    import pytest as _pytest
+    p = AnthropicPricer()
+    tokens = {"input": 131, "output": 6074, "cache_creation": 13174, "cache_read": 36215}
+    cost = p.compute(tokens, "claude-opus-4-8")
+    assert cost["total_cost"] == _pytest.approx(0.25295, abs=1e-6)

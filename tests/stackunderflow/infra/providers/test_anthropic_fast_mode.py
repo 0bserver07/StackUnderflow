@@ -25,8 +25,9 @@ def test_opus_standard_speed_uses_normal_rates() -> None:
     p = AnthropicPricer()
     tokens = {"input": 1_000_000, "output": 1_000_000,
               "cache_creation": 0, "cache_read": 0}
-    cost = p.compute(tokens, "claude-opus-4-5-20251101", speed="standard")
-    # OPUS_45 rates: 15 in, 75 out. 1M tokens of each = $15 + $75 = $90.
+    cost = p.compute(tokens, "claude-opus-4-20250514", speed="standard")
+    # OPUS_4 rates: 15 in, 75 out. 1M tokens of each = $15 + $75 = $90.
+    # (Opus 4.0 is the legacy $15/$75 tier; 4.5+ is $5/$25.)
     assert cost["input_cost"] == 15.0
     assert cost["output_cost"] == 75.0
     assert cost["total_cost"] == 90.0
@@ -36,7 +37,7 @@ def test_opus_fast_speed_applies_6x_to_input_and_output() -> None:
     p = AnthropicPricer()
     tokens = {"input": 1_000_000, "output": 1_000_000,
               "cache_creation": 0, "cache_read": 0}
-    cost = p.compute(tokens, "claude-opus-4-5-20251101", speed="fast")
+    cost = p.compute(tokens, "claude-opus-4-20250514", speed="fast")
     # 6× input + 6× output: 6×$15 + 6×$75 = $90 + $450 = $540.
     assert cost["input_cost"] == 90.0
     assert cost["output_cost"] == 450.0
@@ -47,8 +48,8 @@ def test_opus_fast_does_not_multiply_cache_rates() -> None:
     p = AnthropicPricer()
     tokens = {"input": 0, "output": 0,
               "cache_creation": 1_000_000, "cache_read": 1_000_000}
-    fast = p.compute(tokens, "claude-opus-4-5-20251101", speed="fast")
-    std = p.compute(tokens, "claude-opus-4-5-20251101", speed="standard")
+    fast = p.compute(tokens, "claude-opus-4-20250514", speed="fast")
+    std = p.compute(tokens, "claude-opus-4-20250514", speed="standard")
     # Cache rates are untouched by the fast-tier multiplier.
     assert fast["cache_creation_cost"] == std["cache_creation_cost"]
     assert fast["cache_read_cost"] == std["cache_read_cost"]
@@ -56,18 +57,19 @@ def test_opus_fast_does_not_multiply_cache_rates() -> None:
 
 def test_opus_fast_multiplier_applies_to_every_opus_family() -> None:
     """Opus 3, 4, 4.5, 4.6 all bill the 6× fast tier."""
+    import pytest
     p = AnthropicPricer()
     tokens = {"input": 1_000, "output": 1_000,
               "cache_creation": 0, "cache_read": 0}
     for opus_id in (
         "claude-3-opus-20240229",
         "claude-opus-4-20250514",
-        "claude-opus-4-5-20251101",
+        "claude-opus-4-20250514",
         "claude-opus-4-6",
     ):
         std = p.compute(tokens, opus_id, speed="standard")["total_cost"]
         fast = p.compute(tokens, opus_id, speed="fast")["total_cost"]
-        assert fast == std * 6.0, f"{opus_id} did not 6×"
+        assert fast == pytest.approx(std * 6.0), f"{opus_id} did not 6×"
 
 
 def test_sonnet_fast_speed_returns_standard_cost() -> None:
@@ -107,16 +109,16 @@ def test_unknown_model_fast_falls_back_to_standard_rates() -> None:
 def test_compute_cost_threads_speed_through_to_pricer() -> None:
     """The public ``compute_cost`` shim accepts ``speed`` and routes it."""
     tokens = {"input": 1_000_000, "output": 1_000_000}
-    std = compute_cost(tokens, "claude-opus-4-5-20251101")
-    fast = compute_cost(tokens, "claude-opus-4-5-20251101", speed="fast")
+    std = compute_cost(tokens, "claude-opus-4-20250514")
+    fast = compute_cost(tokens, "claude-opus-4-20250514", speed="fast")
     assert fast["total_cost"] == std["total_cost"] * 6.0
 
 
 def test_compute_cost_default_speed_is_standard() -> None:
     """Existing callers that don't pass ``speed`` keep their old prices."""
     tokens = {"input": 1_000_000, "output": 1_000_000}
-    no_kwarg = compute_cost(tokens, "claude-opus-4-5-20251101")
-    explicit = compute_cost(tokens, "claude-opus-4-5-20251101", speed="standard")
+    no_kwarg = compute_cost(tokens, "claude-opus-4-20250514")
+    explicit = compute_cost(tokens, "claude-opus-4-20250514", speed="standard")
     assert no_kwarg == explicit
 
 
@@ -127,7 +129,7 @@ def _opus_record(*, speed: str, tokens: int) -> Record:
         session_id="s1",
         kind="assistant",
         timestamp="2026-04-30T00:00:00Z",
-        model="claude-opus-4-5-20251101",
+        model="claude-opus-4-20250514",
         content="",
         tokens={"input": tokens, "output": tokens,
                 "cache_creation": 0, "cache_read": 0},
@@ -175,12 +177,12 @@ def test_aggregator_groups_by_speed_not_just_model() -> None:
     # is the per-speed sum.
     std_only = compute_cost(
         {"input": 10_000, "output": 10_000},
-        "claude-opus-4-5-20251101",
+        "claude-opus-4-20250514",
         speed="standard",
     )["total_cost"]
     fast_only = compute_cost(
         {"input": 10_000, "output": 10_000},
-        "claude-opus-4-5-20251101",
+        "claude-opus-4-20250514",
         speed="fast",
     )["total_cost"]
     assert abs(total - (std_only + fast_only)) < 1e-9
@@ -188,7 +190,7 @@ def test_aggregator_groups_by_speed_not_just_model() -> None:
     # standard) is strictly less than the correct one — sanity guard.
     wrong = compute_cost(
         {"input": 20_000, "output": 20_000},
-        "claude-opus-4-5-20251101",
+        "claude-opus-4-20250514",
         speed="standard",
     )["total_cost"]
     assert total > wrong

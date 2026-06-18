@@ -66,6 +66,7 @@ class ProviderPricer(ABC):
         model: str,
         *,
         speed: str = "standard",
+        at_ts: str | None = None,  # noqa: ARG002 — parity; static tables have no dated rates
     ) -> dict[str, float]:
         """Return cost breakdown — ``tokens × rates_for(canonicalize(model))``.
 
