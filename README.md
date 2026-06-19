@@ -2,7 +2,7 @@
 
 **Offline, local-first observability toolkit for AI coding agents.**
 
-StackUnderflow ingests and indexes session logs from 17 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
+StackUnderflow ingests and indexes session logs from 19 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
 
 <p align="center">
   <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> &nbsp;
@@ -23,10 +23,10 @@ StackUnderflow ingests and indexes session logs from 17 coding agent providers t
 ### The Four Pillars
 *   **Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
 *   **Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
-*   **Local Agent Memory**: Exposes a CLI and an MCP server so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
+*   **Local Agent Memory**: Exposes a CLI so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
 *   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
-17 providers supported (7 default-on, 10 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
+19 providers supported (7 default-on, 12 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
@@ -146,7 +146,7 @@ Past decisions matching 'cache' (14 session(s))
 ## What it does
 
 ### Multi-provider ingest
-17 coding agents have adapters in the registry. Four ship default-on:
+19 coding agents have adapters in the registry. Seven ship default-on:
 
 | Provider | Source |
 |---|---|
@@ -154,8 +154,11 @@ Past decisions matching 'cache' (14 session(s))
 | Codex | `~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl` |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
 | Cline | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` |
+| OpenClaw | `~/.openclaw/agents/` (+ clawdbot / moltbot / moldbot variants) |
+| Pi + OMP | `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/` |
+| Hermes | `~/.hermes/sessions/` |
 
-Thirteen more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi+OMP) opt in via env var:
+Twelve more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity) opt in via env var:
 
 ```bash
 STACKUNDERFLOW_BETA_GEMINI=1 STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
@@ -245,7 +248,7 @@ flowchart TD
     classDef agent fill:#805AD5,stroke:#9F7AEA,stroke-width:2px,color:#FFF;
 
     %% 1. Log Sources
-    subgraph Sources ["📁 Input Log Sources (17 Providers)"]
+    subgraph Sources ["📁 Input Log Sources (19 Providers)"]
         Logs["Local Session Logs<br/>• Claude Code JSONL<br/>• Cursor state.vscdb<br/>• Cline tasks JSON"]
     end
     class Logs source;
@@ -263,10 +266,9 @@ flowchart TD
     %% 3. Interfaces & Presentation
     subgraph Frontends ["🖥️ Interfaces & Presenters"]
         API["FastAPI REST Web Server<br/>• Serving /api/* routes"]
-        MCP["Model Context Protocol Server<br/>• Exposes tool history over stdio"]
-        CLI["Command Line Interface (CLI)<br/>• stackunderflow today / month<br/>• stackunderflow optimize / report"]
+        CLI["Command Line Interface (CLI)<br/>• stackunderflow today / month<br/>• stackunderflow optimize / report<br/>• stackunderflow memory (agent queries)"]
     end
-    class API,MCP interface;
+    class API interface;
     class CLI cli;
 
     %% 4. Client / End User Applications
@@ -290,21 +292,20 @@ flowchart TD
 
     %% Access Points
     Store --> API
-    Store --> MCP
     Store --> CLI
 
     %% Client Delivery
     API --> Dashboard
     API --> Ollama
-    MCP <-->|stdio feedback loop| Agent
+    CLI <-->|memory CLI queries| Agent
     CLI <-->|Developer CLI Reports| Dashboard
 ```
 
-Every dashboard route reads from the marts. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
+Most dashboard routes read from the marts when populated, falling back to a live aggregation pass otherwise. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
 
 ```
 stackunderflow/
-  adapters/         # 17 source-file parsers (4 default-on, 13 beta)
+  adapters/         # 19 source-file parsers (7 default-on, 12 beta)
   etl/              # ETL pipeline (v0.7+)
     normalize/      #   Normalizer ABC + per-provider transforms (18 normalizers — pi and omp register separately, one more than the 17 adapters)
     marts/          #   MartBuilder ABC + 8 mart builders
@@ -443,13 +444,16 @@ Env vars override the persisted file. The Python descriptor in `stackunderflow/s
 
 Everything runs locally. Nothing about your sessions, prompts, or code leaves the machine.
 
-**What StackUnderflow reads on disk** — only the source paths the registered adapters point at. The 4 default-on roots:
+**What StackUnderflow reads on disk** — only the source paths the registered adapters point at. The 7 default-on roots:
 - `~/.claude/projects/`, `~/.claude/history.jsonl` (legacy)
 - `~/.codex/sessions/`
 - `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
 - `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`
+- `~/.openclaw/agents/` (+ clawdbot / moltbot / moldbot variants)
+- `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`
+- `~/.hermes/sessions/`
 
-The 13 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
+The 12 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
 
 **What it writes** — `~/.stackunderflow/` only.
 - `store.db` — SQLite, WAL mode, the source of truth

@@ -46,8 +46,8 @@ To keep the dashboard fast (rendering in under 50ms), StackUnderflow runs a loca
 ### 🕒 Filesystem Playback (Time-Travel)
 When a coding tool runs edits on a project, it issues file-modification commands. StackUnderflow's playback engine parses these mutations (Read, Write, Edit, Multi-Edit, and Notebook edits) and reconstructs a sandboxed virtual directory at any specific millisecond in the timeline. You can scrub through a session's history and see exactly what the files looked like before and after each automated edit.
 
-### 🧠 Local Command & Session Memory (MCP Server)
-StackUnderflow runs a standard Model Context Protocol (MCP) server over `stdio` and exposes a local CLI. 
+### 🧠 Local Command & Session Memory (CLI)
+StackUnderflow exposes a local CLI — the `stackunderflow memory ...` command namespace. 
 * This allows active terminal tools to query their own local run history *before* starting a new task (e.g., running `stackunderflow memory file <path>` to see what previous runs changed in a file, or finding what actions succeeded/failed previously).
 * It provides programmatic, offline semantic search over command outputs using a local sentence-transformers model.
 
