@@ -89,27 +89,37 @@ def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
 
     rows = conn.execute(
         "SELECT s.project_id, "
+        "       p.provider, "
         "       COALESCE(m.model, ''), "
         "       COALESCE(m.speed, 'standard'), "
         "       SUM(m.input_tokens), SUM(m.output_tokens), "
         "       SUM(m.cache_read_tokens), SUM(m.cache_create_tokens) "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
+        "JOIN projects p ON p.id = s.project_id "
         "WHERE m.model IS NOT NULL AND m.model != '' AND m.model != '<synthetic>' "
-        "GROUP BY s.project_id, m.model, m.speed"
+        "GROUP BY s.project_id, p.provider, m.model, m.speed"
     ).fetchall()
     cost_by_pid: dict[int, float] = {}
     for r in rows:
         pid = int(r[0])
-        model = r[1] or ""
-        speed = r[2] or "standard"
+        # Price against the project's ACTUAL provider. Defaulting to anthropic
+        # (the old behaviour) mispriced every non-Anthropic model — e.g. a GPT
+        # model fell back to Sonnet rates. get_pricer() maps store provider
+        # strings (claude/codex/cursor/...) to the right pricer.
+        provider = r[1] or "anthropic"
+        model = r[2] or ""
+        speed = r[3] or "standard"
         tokens = {
-            "input": int(r[3] or 0),
-            "output": int(r[4] or 0),
-            "cache_read": int(r[5] or 0),
-            "cache_creation": int(r[6] or 0),
+            "input": int(r[4] or 0),
+            "output": int(r[5] or 0),
+            "cache_read": int(r[6] or 0),
+            "cache_creation": int(r[7] or 0),
         }
-        breakdown = compute_cost(tokens, model, speed=speed) if model else None
+        breakdown = (
+            compute_cost(tokens, model, provider=provider, speed=speed)
+            if model else None
+        )
         usd = float(breakdown["total_cost"]) if breakdown else 0.0
         cost_by_pid[pid] = cost_by_pid.get(pid, 0.0) + usd
     return cost_by_pid
@@ -355,27 +365,35 @@ def get_global_stats(conn: sqlite3.Connection) -> dict:
     # public API contract doesn't expose the speed dimension yet — frontend
     # update will follow.
     per_day_model = conn.execute(
-        "SELECT substr(timestamp,1,10) AS day, "
-        "       COALESCE(model,'') AS model, "
-        "       COALESCE(speed,'standard') AS speed, "
-        "       SUM(input_tokens) AS inp, SUM(output_tokens) AS out, "
-        "       SUM(cache_create_tokens) AS cache_create, "
-        "       SUM(cache_read_tokens) AS cache_read, "
+        "SELECT substr(m.timestamp,1,10) AS day, "
+        "       p.provider AS provider, "
+        "       COALESCE(m.model,'') AS model, "
+        "       COALESCE(m.speed,'standard') AS speed, "
+        "       SUM(m.input_tokens) AS inp, SUM(m.output_tokens) AS out, "
+        "       SUM(m.cache_create_tokens) AS cache_create, "
+        "       SUM(m.cache_read_tokens) AS cache_read, "
         "       COUNT(*) AS n "
-        "FROM messages GROUP BY day, model, speed ORDER BY day"
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "JOIN projects p ON p.id = s.project_id "
+        "GROUP BY day, provider, model, speed ORDER BY day"
     ).fetchall()
 
     daily_costs_map: dict[str, dict] = {}
     models: dict[str, dict] = {}
     for r in per_day_model:
         day, model, speed = r["day"], r["model"], r["speed"]
+        provider = r["provider"] or "anthropic"
         tokens = {
             "input": r["inp"] or 0,
             "output": r["out"] or 0,
             "cache_creation": r["cache_create"] or 0,
             "cache_read": r["cache_read"] or 0,
         }
-        cost = compute_cost(tokens, model, speed=speed)["total_cost"] if model else 0.0
+        cost = (
+            compute_cost(tokens, model, provider=provider, speed=speed)["total_cost"]
+            if model else 0.0
+        )
         bucket = daily_costs_map.setdefault(day, {"date": day, "cost": 0.0, "by_model": {}})
         bucket["cost"] += cost
         if model:
