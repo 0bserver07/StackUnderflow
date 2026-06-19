@@ -474,6 +474,62 @@ def model_day_totals(
     return out
 
 
+def model_day_series(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+) -> list[dict[str, Any]]:
+    """Per-(day, model) rows from ``model_day_mart`` for spend-over-time charts.
+
+    Unlike :func:`model_day_totals` (which collapses the day axis to per-model
+    totals), this keeps one row per ``(day, model)`` — summed across ``speed``
+    — ordered by day, so a caller can build a per-model cost time series.
+    ``since_iso`` / ``until_iso`` are ISO-8601 strings sliced to ``YYYY-MM-DD``
+    and pushed down as a ``day`` range so the mart's index does the work.
+    """
+    if not _table_exists(conn, "model_day_mart"):
+        return []
+    sql = (
+        "SELECT day, model, "
+        "       SUM(cost_usd) AS cost_usd, "
+        "       SUM(input_tokens) AS input_tokens, "
+        "       SUM(output_tokens) AS output_tokens, "
+        "       SUM(cache_read) AS cache_read, "
+        "       SUM(cache_create) AS cache_create, "
+        "       SUM(message_count) AS message_count, "
+        "       SUM(session_count) AS session_count "
+        "FROM model_day_mart WHERE 1=1"
+    )
+    params: list[Any] = []
+    day_from = _iso_to_day(since_iso)
+    day_to = _iso_to_day(until_iso)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY day, model ORDER BY day"
+    out: list[dict[str, Any]] = []
+    for row in conn.execute(sql, params).fetchall():
+        model = row["model"] or ""
+        if not model:
+            continue
+        out.append({
+            "day": row["day"],
+            "model": model,
+            "cost_usd": float(row["cost_usd"] or 0.0),
+            "input_tokens": int(row["input_tokens"] or 0),
+            "output_tokens": int(row["output_tokens"] or 0),
+            "cache_read": int(row["cache_read"] or 0),
+            "cache_create": int(row["cache_create"] or 0),
+            "message_count": int(row["message_count"] or 0),
+            "session_count": int(row["session_count"] or 0),
+        })
+    return out
+
+
 # ── session_mart reads ──────────────────────────────────────────────────────
 
 

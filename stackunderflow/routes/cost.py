@@ -530,3 +530,63 @@ def _serialise_record(rec) -> dict[str, Any]:
         "message_id": rec.message_id,
         "cwd": rec.cwd,
     }
+
+
+@router.get("/api/cost-data/by-model")
+async def get_cost_by_model(period: str = "month"):
+    """Per-model spend over time — powers the Cost tab's by-model chart.
+
+    Reads the pre-aggregated ``model_day_mart`` (one indexed scan over a tiny
+    table) and returns, per model, a daily cost/message series plus a total,
+    sorted by total cost descending. Cost figures are pre-converted into the
+    active currency, matching ``/api/cost-data/by-provider``.
+
+    Args:
+        period: One of ``today | week | month | all`` (default ``month``).
+
+    Returns:
+        ``{"period": ..., "models": [{model, total_cost, daily: [{date,
+        cost_usd, message_count}, ...]}, ...], "currency": {...}}``. Empty
+        ``models`` when the store has no data in window.
+    """
+    from stackunderflow.reports.scope import parse_period
+
+    spec = _BY_PROVIDER_PERIOD_MAP.get(period)
+    if spec is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown period '{period}'. "
+                f"Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"
+            ),
+        )
+    scope = parse_period(spec)
+
+    conn = db.connect(deps.store_path)
+    try:
+        rows = mart_queries.model_day_series(
+            conn, since_iso=scope.since, until_iso=scope.until
+        )
+    finally:
+        conn.close()
+
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+
+    models: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        bucket = models.setdefault(
+            r["model"], {"model": r["model"], "total_cost": 0.0, "daily": []}
+        )
+        cost = r["cost_usd"] * rate
+        bucket["total_cost"] += cost
+        bucket["daily"].append({
+            "date": r["day"],
+            "cost_usd": cost,
+            "message_count": r["message_count"],
+        })
+
+    out_models = sorted(
+        models.values(), key=lambda m: m["total_cost"], reverse=True
+    )
+    return {"period": period, "models": out_models, "currency": currency}
