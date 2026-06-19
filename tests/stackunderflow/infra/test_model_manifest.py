@@ -51,3 +51,56 @@ def test_compute_cost_threads_at_ts_to_manifest(monkeypatch):
     tok = {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_creation": 0}
     assert compute_cost(tok, "testm-1", at_ts="2026-01-01")["total_cost"] == 15.0
     assert compute_cost(tok, "testm-1", at_ts="2026-02-01")["total_cost"] == 5.0
+
+
+# ── loader hardening (audit fix #15) ─────────────────────────────────────────
+
+_GOOD_PRICE = {"input": 1.0, "output": 2.0, "cache_write": 3.0, "cache_read": 0.1}
+
+
+def test_valid_model_accepts_well_formed_entry():
+    assert model_manifest._valid_model(
+        {"family": "X", "match": ["x"], "price": [_GOOD_PRICE]}
+    )
+
+
+def test_valid_model_rejects_malformed_entries():
+    bad = [
+        "not-a-dict",
+        {},                                              # no family
+        {"family": "", "price": [_GOOD_PRICE]},          # empty family
+        {"family": "X"},                                 # no price
+        {"family": "X", "price": []},                    # empty price list
+        {"family": "X", "price": [{"input": 1.0}]},      # price row missing fields
+        {"family": "X", "price": [{**_GOOD_PRICE, "input": "nan"}]},  # non-numeric
+    ]
+    for entry in bad:
+        assert not model_manifest._valid_model(entry), entry
+
+
+def test_real_manifest_entries_are_all_valid():
+    """The shipped models.toml must contain only well-formed entries."""
+    models = model_manifest._models()
+    assert models, "manifest should not be empty"
+    assert all(model_manifest._valid_model(m) for m in models)
+
+
+def test_models_drops_malformed_entry_with_warning(monkeypatch, caplog):
+    """A malformed entry is dropped (never KeyErrors at lookup) and warned."""
+    import logging
+
+    good = {"family": "GOOD", "provider": "anthropic", "match": ["good"],
+            "fallback": True, "price": [_GOOD_PRICE]}
+    bad = {"family": "BAD", "provider": "anthropic", "match": ["bad"],
+           "price": [{"input": 1.0}]}  # missing output/cache fields
+    monkeypatch.setattr(model_manifest.tomllib, "load", lambda fh: {"model": [good, bad]})
+    model_manifest._models.cache_clear()
+    try:
+        with caplog.at_level(logging.WARNING):
+            models = model_manifest._models()
+        assert {m["family"] for m in models} == {"GOOD"}  # BAD dropped
+        assert any("malformed" in r.getMessage() for r in caplog.records)
+        # Looking up the dropped family must NOT raise — resolves to fallback.
+        assert model_manifest.rates_for("BAD", "anthropic") is not None
+    finally:
+        model_manifest._models.cache_clear()  # restore the real manifest

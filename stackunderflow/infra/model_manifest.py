@@ -17,23 +17,66 @@ logic and delegate identity + rates here.
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from functools import lru_cache
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 _MANIFEST_PATH = Path(__file__).resolve().parent.parent / "data" / "models.toml"
+
+_REQUIRED_PRICE_FIELDS = ("input", "output", "cache_write", "cache_read")
+
+
+def _valid_price_row(row: object) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return all(
+        isinstance(row.get(f), int | float) and not isinstance(row.get(f), bool)
+        for f in _REQUIRED_PRICE_FIELDS
+    )
+
+
+def _valid_model(entry: object) -> bool:
+    """A usable model entry: a non-empty ``family`` plus a non-empty ``price``
+    list whose every row carries numeric input/output/cache_write/cache_read.
+
+    Used to drop malformed manifest entries at load time so they can never
+    KeyError at lookup (where the error would be swallowed into a $0 cost).
+    """
+    if not isinstance(entry, dict):
+        return False
+    if not isinstance(entry.get("family"), str) or not entry.get("family"):
+        return False
+    prices = entry.get("price")
+    if not isinstance(prices, list) or not prices:
+        return False
+    return all(_valid_price_row(p) for p in prices)
 
 
 @lru_cache(maxsize=1)
 def _models() -> list[dict]:
-    """Parse and cache the manifest once.
+    """Parse, validate, and cache the manifest once.
 
     Order is preserved and load-bearing: ``canonicalize`` returns the first
     matching entry, so more-specific families must appear before broader ones.
+
+    Malformed entries (missing ``family``, or a price row lacking numeric
+    input/output/cache_write/cache_read) are DROPPED with a warning rather than
+    left to KeyError at lookup time — a silent pricing failure (the ingest
+    normalizer swallows exceptions → $0 cost) is worse than a loud, visible skip.
     """
     with open(_MANIFEST_PATH, "rb") as fh:
         data = tomllib.load(fh)
-    return data.get("model", [])
+    valid: list[dict] = []
+    for entry in data.get("model", []):
+        if _valid_model(entry):
+            valid.append(entry)
+        else:
+            fam = entry.get("family") if isinstance(entry, dict) else entry
+            logger.warning("model_manifest: dropping malformed model entry %r", fam)
+    return valid
 
 
 def _for_provider(provider: str) -> list[dict]:
