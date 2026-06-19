@@ -63,7 +63,7 @@ def _require_project() -> str:
     return deps.current_log_path
 
 
-def _get_project_ids(conn, log_path: str) -> list[int]:
+def _get_project_rows(conn, log_path: str) -> list:
     slug = Path(log_path).name
     rows = queries.get_projects_by_slug(conn, slug=slug)
     if not rows:
@@ -71,7 +71,29 @@ def _get_project_ids(conn, log_path: str) -> list[int]:
             status_code=404,
             detail=f"Project '{slug}' not found in store — try /api/refresh first",
         )
-    return [r.id for r in rows]
+    return rows
+
+
+def _get_project_ids(conn, log_path: str) -> list[int]:
+    return [r.id for r in _get_project_rows(conn, log_path)]
+
+
+def _filtered_project_ids(
+    conn, log_path: str, provider_filter: set[str] | None
+) -> list[int]:
+    """Project ids for the slug, narrowed to ``provider_filter`` when set.
+
+    A slug maps to one project per provider (``UNIQUE(provider, slug)``), so a
+    provider filter must check EVERY project row — not just the first. The old
+    code did ``get_project(slug)`` (a single ``fetchone``) and tested that one
+    arbitrary row, so a multi-provider project returned empty whenever an
+    earlier-listed provider was excluded. Returns ``[]`` (not 404) when the
+    filter excludes every provider, so callers serve a shape-stable empty body.
+    """
+    rows = _get_project_rows(conn, log_path)
+    if provider_filter is None:
+        return [r.id for r in rows]
+    return [r.id for r in rows if (r.provider or "").lower() in provider_filter]
 
 
 def _reindex_services(log_path: str, messages: list[dict]) -> None:
@@ -263,26 +285,24 @@ async def get_dashboard_data(
 
     conn = db.connect(deps.store_path)
     try:
-        project_ids = _get_project_ids(conn, log_path)
-        # Provider filter: if the active project's provider is excluded,
-        # short-circuit to an empty stats body. The UI's empty-state path
-        # already handles this gracefully.
-        if provider_filter is not None:
-            project_row = queries.get_project(conn, slug=slug)
-            if project_row is not None and (project_row.provider or "").lower() not in provider_filter:
-                currency = active_currency_payload()
-                return {
-                    "statistics": {},
-                    "messages_page": {"messages": [], "page": 1, "per_page": 50, "total": 0},
-                    "message_count": 0,
-                    "is_reindexing": deps.is_reindexing,
-                    "config": {
-                        "messages_initial_load": deps.config.get("messages_initial_load"),
-                        "max_date_range_days": deps.config.get("max_date_range_days"),
-                    },
-                    "currency": currency,
-                    "filtered": True,
-                }
+        # Provider filter: a slug maps to one project per provider, so narrow
+        # project_ids to the matching providers (checking every row, not just
+        # the first). Empty → no provider in scope → shape-stable empty body.
+        project_ids = _filtered_project_ids(conn, log_path, provider_filter)
+        if provider_filter is not None and not project_ids:
+            currency = active_currency_payload()
+            return {
+                "statistics": {},
+                "messages_page": {"messages": [], "page": 1, "per_page": 50, "total": 0},
+                "message_count": 0,
+                "is_reindexing": deps.is_reindexing,
+                "config": {
+                    "messages_initial_load": deps.config.get("messages_initial_load"),
+                    "max_date_range_days": deps.config.get("max_date_range_days"),
+                },
+                "currency": currency,
+                "filtered": True,
+            }
         sig = _dashboard_signature(conn, project_ids)
 
         with _DASHBOARD_CACHE_LOCK:
@@ -546,13 +566,11 @@ async def get_messages(
 
     conn = db.connect(deps.store_path)
     try:
-        project_ids = _get_project_ids(conn, log_path)
-        # Provider filter — short-circuit when the project is excluded.
-        if provider_filter is not None:
-            slug = Path(log_path).name
-            project_row = queries.get_project(conn, slug=slug)
-            if project_row is not None and (project_row.provider or "").lower() not in provider_filter:
-                return _empty_messages_page(page=page, per_page=per_page)
+        # Provider filter: narrow to matching providers across ALL project rows
+        # for the slug (not just the first). Empty → excluded → empty page.
+        project_ids = _filtered_project_ids(conn, log_path, provider_filter)
+        if provider_filter is not None and not project_ids:
+            return _empty_messages_page(page=page, per_page=per_page)
         # The store helper still loads every message — model filtering needs
         # to run before pagination so the page indices align with the
         # filtered list, not the raw one. The aggregator path is already

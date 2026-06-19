@@ -19,7 +19,6 @@ from stackunderflow.routes.cost import get_cost_by_provider
 from stackunderflow.routes.projects import get_projects, get_providers
 from stackunderflow.store import db, schema
 
-
 # ── seeding helper ──────────────────────────────────────────────────────────
 
 
@@ -298,3 +297,68 @@ async def test_cost_by_provider_empty_filter_preserves_all_rows(tmp_path, monkey
     payload = await get_cost_by_provider(period="all")
     providers_in_response = {r["provider"] for r in payload["rows"]}
     assert providers_in_response == {"claude", "codex"}
+
+
+# ── multi-provider SAME-slug filter (audit fix #8 / #3) ──────────────────────
+
+
+def test_filtered_project_ids_checks_every_provider_row(tmp_path):
+    """The helper must narrow by provider across ALL rows for a slug, not the
+    first. Regression for the get_project()/fetchone first-row-wins bug."""
+    from stackunderflow.routes.data import _filtered_project_ids
+
+    store_db = tmp_path / "store.db"
+    _seed(
+        store_db,
+        projects=[("claude", "shared"), ("codex", "shared")],  # same slug, 2 providers
+        messages=[
+            {"project_slug": "shared", "session_id": "A1",
+             "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
+            {"project_slug": "shared", "provider": "codex", "session_id": "C1",
+             "timestamp": "2026-04-02T10:00:00Z", "role": "user"},
+        ],
+    )
+    conn = db.connect(store_db)
+    try:
+        claude_ids = _filtered_project_ids(conn, "/x/shared", {"claude"})
+        codex_ids = _filtered_project_ids(conn, "/x/shared", {"codex"})
+        all_ids = _filtered_project_ids(conn, "/x/shared", None)
+        none_ids = _filtered_project_ids(conn, "/x/shared", {"cursor"})
+    finally:
+        conn.close()
+    assert len(claude_ids) == 1 and len(codex_ids) == 1
+    assert claude_ids != codex_ids
+    assert set(all_ids) == set(claude_ids) | set(codex_ids)
+    assert none_ids == []  # excluded → empty list, NOT a 404
+
+
+@pytest.mark.asyncio
+async def test_messages_multi_provider_same_slug(tmp_path, monkeypatch):
+    """A slug shared across providers: ?provider= returns THAT provider's
+    messages — not empty because a different provider's row sorted first."""
+    from stackunderflow.routes.data import get_messages
+
+    store_db = tmp_path / "store.db"
+    _seed(
+        store_db,
+        projects=[("claude", "shared"), ("codex", "shared")],
+        messages=[
+            {"project_slug": "shared", "session_id": "A1",
+             "timestamp": "2026-04-01T10:00:01Z", "role": "assistant",
+             "model": "claude-opus-4-8", "in_tok": 100, "out_tok": 50},
+            {"project_slug": "shared", "provider": "codex", "session_id": "C1",
+             "timestamp": "2026-04-02T10:00:01Z", "role": "assistant",
+             "model": "gpt-5", "in_tok": 100, "out_tok": 50},
+        ],
+    )
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", "/x/shared")
+
+    # codex is NOT the first-inserted row (claude is) — the old bug returned empty.
+    codex = await get_messages(provider=["codex"])
+    assert codex["total"] >= 1
+    claude = await get_messages(provider=["claude"])
+    assert claude["total"] >= 1
+    # A provider not present for this slug → shape-stable empty page.
+    absent = await get_messages(provider=["cursor"])
+    assert absent["total"] == 0
