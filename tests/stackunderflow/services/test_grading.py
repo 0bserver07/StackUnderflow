@@ -221,3 +221,90 @@ def test_cli_analyze_quality(tmp_path: Path, monkeypatch) -> None:
         result_all = runner.invoke(cli, ["analyze", "quality", "--all"])
         assert result_all.exit_code == 0, result_all.output
         assert "Graded session sess_xyz: score=9.2" in result_all.output
+
+
+def _seed_session(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO projects (id, provider, slug, display_name, first_seen, last_modified) "
+        "VALUES (1, 'claude', 'widget-repo', 'Widgets', 1.0, 1.0)"
+    )
+    conn.execute(
+        "INSERT INTO sessions (id, project_id, session_id, first_ts, last_ts, message_count) "
+        "VALUES (1, 1, 'sess_xyz', '2026-05-01T12:00:00Z', '2026-05-01T13:00:00Z', 1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, content_text, raw_json) "
+        "VALUES (1, 0, '2026-05-01T12:05:00Z', 'user', 'implement something', '{}')"
+    )
+    conn.commit()
+
+
+def test_fallback_grade_is_not_persisted_when_ollama_down(conn: sqlite3.Connection) -> None:
+    """Regression: a lazy grade while Ollama is unreachable must NOT write a
+    fabricated 5.0 into session_quality_metrics — it would be indistinguishable
+    from a real grade and then served from cache forever."""
+    _seed_session(conn)
+
+    mock_tags = MagicMock(status_code=200)
+    mock_tags.json.return_value = {"models": [{"name": "qwen2.5-coder:7b"}]}
+
+    with patch("httpx.get", return_value=mock_tags), \
+         patch("httpx.post", side_effect=RuntimeError("ollama offline")):
+        grade = grade_session(conn, "sess_xyz")
+
+    # Returned for display, clearly flagged …
+    assert grade["grade_source"] == "fallback"
+    assert grade["overall_score"] == 5.0
+    # … but NOT written to the store.
+    assert get_stored_grade(conn, "sess_xyz") is None
+
+
+def test_non_200_grade_is_not_persisted(conn: sqlite3.Connection) -> None:
+    """Same protection when Ollama answers with a non-200 status (the path that
+    previously fell straight through to the INSERT)."""
+    _seed_session(conn)
+
+    mock_tags = MagicMock(status_code=200)
+    mock_tags.json.return_value = {"models": [{"name": "qwen2.5-coder:7b"}]}
+    mock_chat = MagicMock(status_code=500)
+
+    with patch("httpx.get", return_value=mock_tags), \
+         patch("httpx.post", return_value=mock_chat):
+        grade = grade_session(conn, "sess_xyz")
+
+    assert grade["grade_source"] == "fallback"
+    assert get_stored_grade(conn, "sess_xyz") is None
+
+
+def test_fallback_self_heals_once_ollama_returns(conn: sqlite3.Connection) -> None:
+    """Because the fallback isn't cached, the next call recomputes a real grade."""
+    _seed_session(conn)
+
+    mock_tags = MagicMock(status_code=200)
+    mock_tags.json.return_value = {"models": [{"name": "qwen2.5-coder:7b"}]}
+
+    # First call: Ollama down → fallback, nothing stored.
+    with patch("httpx.get", return_value=mock_tags), \
+         patch("httpx.post", side_effect=RuntimeError("offline")):
+        first = grade_session(conn, "sess_xyz")
+    assert first["grade_source"] == "fallback"
+    assert get_stored_grade(conn, "sess_xyz") is None
+
+    # Second call: Ollama back → real grade, persisted, source "llm".
+    mock_chat = MagicMock(status_code=200)
+    mock_chat.json.return_value = {
+        "message": {"content": json.dumps({
+            "overall_score": 7.0,
+            "grades": {"goal_clarity": 7.0, "execution_efficiency": 7.0, "success": 7.0},
+            "rationale": "Good.",
+            "suggestions": [],
+        })}
+    }
+    with patch("httpx.get", return_value=mock_tags), \
+         patch("httpx.post", return_value=mock_chat):
+        second = grade_session(conn, "sess_xyz")
+    assert second["grade_source"] == "llm"
+    assert second["overall_score"] == 7.0
+    stored = get_stored_grade(conn, "sess_xyz")
+    assert stored is not None
+    assert stored["overall_score"] == 7.0

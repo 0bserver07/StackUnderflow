@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 20`).
+**Status:** v1 (pinned to `schema_version = 21`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 20`. The current migration set is:
+Pin to `schema_version = 21`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -43,6 +43,7 @@ Pin to `schema_version = 20`. The current migration set is:
 | 18 | `v018_static_analysis_findings.sql` | `static_analysis_findings` (Spec 21 — per-session static analysis pass) |
 | 19 | `v019_commit_session_link.sql` | `commit_session_link` (Spec 22 — link commits to sessions) |
 | 20 | `v020_session_quality_metrics.sql` | `session_quality_metrics` (Spec 23 — session quality metrics) |
+| 21 | `v021_grade_no_fabricated_fallback.sql` | purges fabricated 5.0 fallback grades left in `session_quality_metrics` |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -296,7 +297,7 @@ A more rigorous check parses this document for the column lists in each `CREATE 
 - **Additive only.** A new column gets a new `vNNN_*.sql` migration that bumps `PRAGMA user_version` and adds the column with a sensible `DEFAULT` (so old rows backfill cleanly).
 - **No drops, no renames, no type changes.** If a column needs to go away, deprecate it (document it as ignored) and stop writing to it. Removing it requires a new schema major version, which has not happened.
 - **Mart shape can change freely.** Marts are derivative — drop and rebuild. A breaking mart change still requires a migration, but consumers that read marts should expect their shape to evolve faster than the raw / normalised layers.
-- **Tools that target `schema_version = 20`** should keep working against future versions until a major bump is announced. Read the `PRAGMA user_version` and gracefully degrade if you encounter columns you don't recognise.
+- **Tools that target `schema_version = 21`** should keep working against future versions until a major bump is announced. Read the `PRAGMA user_version` and gracefully degrade if you encounter columns you don't recognise.
 
 ---
 

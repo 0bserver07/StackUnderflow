@@ -46,6 +46,8 @@ def get_stored_grade(conn: sqlite3.Connection, session_id: str) -> dict[str, Any
         "rationale": str(row["rationale"]),
         "suggestions": suggestions,
         "graded_at": str(row["graded_at"]),
+        # Only real (LLM) grades are ever persisted, so a stored row is "llm".
+        "grade_source": "llm",
     }
 
 
@@ -124,7 +126,7 @@ def grade_session(
         '    "goal_clarity": <float 1.0 to 10.0>,\n'
         '    "execution_efficiency": <float 1.0 to 10.0>,\n'
         '    "success": <float 1.0 to 10.0>\n'
-        '  },\n'
+        "  },\n"
         '  "rationale": "<brief explanation text>",\n'
         '  "suggestions": ["<suggestion 1>", "<suggestion 2>", ...]\n'
         "}"
@@ -157,9 +159,20 @@ def grade_session(
         if resp.status_code == 200:
             content_str = resp.json().get("message", {}).get("content", "")
             result_data = json.loads(content_str)
+        else:
+            logger.warning("Ollama API chat returned HTTP %s", resp.status_code)
     except Exception as e:
         logger.warning("Ollama API chat call failed: %s", e)
-        # Fallback dummy grade if Ollama is unreachable/fails
+
+    # A missing/malformed model response is a TRANSIENT fallback, not a real
+    # grade — whether Ollama threw, returned non-200, or sent unparseable JSON.
+    # We must NOT persist it: a lazy GET while Ollama is down would otherwise
+    # write a fabricated 5.0 into session_quality_metrics that is
+    # indistinguishable from a real grade and is then served from cache forever
+    # (corrupting every aggregate over grades). Instead we return it clearly
+    # flagged and uncached, so the next request recomputes it once Ollama is back.
+    is_fallback = not isinstance(result_data, dict)
+    if is_fallback:
         result_data = {
             "overall_score": 5.0,
             "grades": {
@@ -167,13 +180,9 @@ def grade_session(
                 "execution_efficiency": 5.0,
                 "success": 5.0,
             },
-            "rationale": "Fallback grade generated because local Ollama instance was offline or failed to grade.",
+            "rationale": "Fallback grade: local Ollama instance was offline or failed to grade.",
             "suggestions": ["Ensure local Ollama service is running on port 11434."],
         }
-
-    # Defensive validation of model outputs
-    if not isinstance(result_data, dict):
-        result_data = {}
 
     overall_score = float(result_data.get("overall_score", 5.0))
     grades = result_data.get("grades", {})
@@ -189,22 +198,25 @@ def grade_session(
         suggestions = [str(suggestions)] if suggestions else []
 
     graded_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    grade_source = "fallback" if is_fallback else "llm"
 
-    # 6. Save in database
-    conn.execute(
-        "INSERT OR REPLACE INTO session_quality_metrics "
-        "(session_id, overall_score, grades_json, rationale, suggestions_json, graded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            session_id,
-            overall_score,
-            json.dumps(grades),
-            rationale,
-            json.dumps(suggestions),
-            graded_at,
-        ),
-    )
-    conn.commit()
+    # 6. Persist ONLY real grades. Fallbacks are transient, so a later request
+    # recomputes them instead of leaving fabricated data behind in the store.
+    if not is_fallback:
+        conn.execute(
+            "INSERT OR REPLACE INTO session_quality_metrics "
+            "(session_id, overall_score, grades_json, rationale, suggestions_json, graded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                overall_score,
+                json.dumps(grades),
+                rationale,
+                json.dumps(suggestions),
+                graded_at,
+            ),
+        )
+        conn.commit()
 
     return {
         "session_id": session_id,
@@ -213,4 +225,5 @@ def grade_session(
         "rationale": rationale,
         "suggestions": suggestions,
         "graded_at": graded_at,
+        "grade_source": grade_source,
     }
