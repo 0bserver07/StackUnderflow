@@ -84,9 +84,13 @@ def _system_preamble(project_slug: str | None) -> str:
         "words; the user can expand the raw payload themselves.",
     ]
     if project_slug:
+        # json.dumps the slug so a crafted project name can't break out of
+        # the sentence and inject system-prompt instructions (audit: low-sev
+        # prompt injection). It's the user's own slug, but defense-in-depth.
         parts.append(
-            f"The user is currently viewing project ``{project_slug}``. "
-            "When they ask about 'this project' / 'here', use that slug "
+            "The user is currently viewing project "
+            + json.dumps(project_slug)
+            + ". When they ask about 'this project' / 'here', use that slug "
             "as the default scope."
         )
     parts.append(
@@ -189,8 +193,59 @@ async def _run_chat_stream(  # noqa: C901, PLR0912 — single complex orchestrat
                 if tools_enabled:
                     req["tools"] = meta_agent.TOOL_CATALOG
 
+                content_streamed = ""
+                tool_calls: list[Any] = []
+                # ``client.stream`` keeps the connection open and yields NDJSON
+                # rows as Ollama produces them — unlike ``client.post`` which
+                # buffered the entire body before we could iterate it (the
+                # "fake streaming" the audit flagged). Tokens are forwarded as
+                # they arrive; ``tool_calls`` are harvested off the ``done`` row.
                 try:
-                    response = await client.post(_OLLAMA_CHAT, json=req)
+                    async with client.stream(
+                        "POST", _OLLAMA_CHAT, json=req
+                    ) as response:
+                        if response.status_code >= 400:
+                            await response.aread()
+                            yield _ndjson(
+                                {
+                                    "type": "error",
+                                    "message": (
+                                        f"Ollama returned {response.status_code}: "
+                                        f"{response.text[:400]}"
+                                    ),
+                                    "ts": meta_agent.now_iso(),
+                                }
+                            )
+                            return
+                        async for line in response.aiter_lines():
+                            if not line or not line.strip():
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            msg = chunk.get("message") or {}
+                            delta = msg.get("content") or ""
+                            if delta:
+                                content_streamed += delta
+                                yield _ndjson(
+                                    {
+                                        "type": "token",
+                                        "delta": delta,
+                                        "ts": meta_agent.now_iso(),
+                                    }
+                                )
+                            # Some Ollama versions emit ``tool_calls`` per
+                            # chunk, others only on the terminal one.
+                            new_calls = msg.get("tool_calls")
+                            if new_calls:
+                                tool_calls = new_calls
+                            if chunk.get("done"):
+                                final_msg = chunk.get("message") or msg
+                                if final_msg.get("tool_calls"):
+                                    tool_calls = final_msg["tool_calls"]
+                                if not content_streamed and final_msg.get("content"):
+                                    content_streamed = str(final_msg["content"])
                 except httpx.RequestError as exc:
                     yield _ndjson(
                         {
@@ -200,58 +255,6 @@ async def _run_chat_stream(  # noqa: C901, PLR0912 — single complex orchestrat
                         }
                     )
                     return
-
-                if response.status_code >= 400:
-                    body = response.text
-                    yield _ndjson(
-                        {
-                            "type": "error",
-                            "message": (
-                                f"Ollama returned {response.status_code}: {body[:400]}"
-                            ),
-                            "ts": meta_agent.now_iso(),
-                        }
-                    )
-                    return
-
-                # Accumulate one full assistant turn from the streaming
-                # NDJSON body. We forward ``content`` deltas as tokens
-                # while we go, and harvest the ``tool_calls`` array off
-                # the final non-streaming chunk (Ollama emits a final
-                # ``done: true`` row that carries the full message).
-                content_streamed = ""
-                tool_calls: list[Any] = []
-                async for line in response.aiter_lines():
-                    if not line or not line.strip():
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    msg = chunk.get("message") or {}
-                    delta = msg.get("content") or ""
-                    if delta:
-                        content_streamed += delta
-                        yield _ndjson(
-                            {
-                                "type": "token",
-                                "delta": delta,
-                                "ts": meta_agent.now_iso(),
-                            }
-                        )
-                    # Some Ollama versions emit ``tool_calls`` per chunk,
-                    # others only on the terminal one. We accept either.
-                    new_calls = msg.get("tool_calls")
-                    if new_calls:
-                        tool_calls = new_calls
-                    if chunk.get("done"):
-                        # Final chunk: capture any tool_calls that only
-                        # showed up here, plus the consolidated content.
-                        final_msg = chunk.get("message") or msg
-                        if final_msg.get("tool_calls"):
-                            tool_calls = final_msg["tool_calls"]
-                        if not content_streamed and final_msg.get("content"):
-                            content_streamed = str(final_msg["content"])
 
                 if not tool_calls:
                     # No tool calls → the assistant turn is the final

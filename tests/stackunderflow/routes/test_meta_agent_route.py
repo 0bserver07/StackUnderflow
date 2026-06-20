@@ -488,6 +488,15 @@ class _FakeOllamaResponse:
         for line in self._lines:
             yield json.dumps(line)
 
+    async def aread(self) -> None:
+        return None
+
+    async def __aenter__(self) -> _FakeOllamaResponse:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
 
 class _FakeOllamaClient:
     """Stand-in for ``httpx.AsyncClient`` used inside the chat stream.
@@ -507,7 +516,7 @@ class _FakeOllamaClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def post(self, url: str, json: dict | None = None) -> _FakeOllamaResponse:  # noqa: A002
+    def _next(self) -> _FakeOllamaResponse:
         if self._post_count >= len(self._scripted):
             return _FakeOllamaResponse(
                 status_code=500, body_text="no more scripted responses"
@@ -515,6 +524,14 @@ class _FakeOllamaClient:
         resp = self._scripted[self._post_count]
         self._post_count += 1
         return resp
+
+    async def post(self, url: str, json: dict | None = None) -> _FakeOllamaResponse:  # noqa: A002
+        return self._next()
+
+    def stream(self, method: str, url: str, json: dict | None = None):  # noqa: A002
+        # httpx.AsyncClient.stream is sync and returns an async context
+        # manager; our fake response IS one (__aenter__/__aexit__ below).
+        return self._next()
 
 
 def _parse_stream(text: str) -> list[dict]:
