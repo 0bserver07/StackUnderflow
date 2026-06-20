@@ -278,13 +278,23 @@ def _latency_samples(
     if not _table_exists(conn, "message_tool_mart"):
         return {}
     cutoff = _now_utc() - timedelta(hours=window_hours)
+    # A LEAD() window over messages computes each row's next-in-session
+    # timestamp in a single pass, replacing a correlated subquery that
+    # re-scanned the session for every one of ~100K mart rows (the
+    # /api/live/stats hot spot — see audit). LEAD ordered by seq handles
+    # seq gaps exactly like the old ``seq > m.seq ... LIMIT 1`` did.
     rows = conn.execute(
-        "SELECT t.tool_name, m.timestamp AS ts1, "
-        "       (SELECT m2.timestamp FROM messages m2 "
-        "          WHERE m2.session_fk = m.session_fk AND m2.seq > m.seq "
-        "          ORDER BY m2.seq LIMIT 1) AS ts2 "
+        "WITH next_ts AS ("
+        "    SELECT id, "
+        "           timestamp AS msg_ts, "
+        "           LEAD(timestamp) OVER ("
+        "               PARTITION BY session_fk ORDER BY seq"
+        "           ) AS next_ts "
+        "      FROM messages"
+        ") "
+        "SELECT t.tool_name, n.msg_ts AS ts1, n.next_ts AS ts2 "
         "  FROM message_tool_mart t "
-        "  JOIN messages m ON m.id = t.message_id "
+        "  JOIN next_ts n ON n.id = t.message_id "
         " WHERE t.ts >= ?",
         (cutoff.isoformat(),),
     ).fetchall()
