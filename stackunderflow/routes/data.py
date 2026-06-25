@@ -12,7 +12,12 @@ from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.adapters import registered
-from stackunderflow.api.messages import get_messages_summary, get_paginated_messages
+from stackunderflow.api.messages import (
+    build_messages_page,
+    get_messages_summary,
+    get_paginated_messages,
+    page_bounds,
+)
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
 from stackunderflow.routes.cost import COST_KEYS, _convert_in_place
@@ -571,19 +576,30 @@ async def get_messages(
         project_ids = _filtered_project_ids(conn, log_path, provider_filter)
         if provider_filter is not None and not project_ids:
             return _empty_messages_page(page=page, per_page=per_page)
-        # The store helper still loads every message — model filtering needs
-        # to run before pagination so the page indices align with the
-        # filtered list, not the raw one. The aggregator path is already
-        # the slow part on big projects; paginating after this is constant
-        # time. Long-term fix is a paginated SQL query at the store layer.
-        messages = queries.get_project_messages(conn, project_id=project_ids)
+        # Pagination is pushed into SQL. The old path called
+        # ``get_project_messages`` — which materialised, enriched AND
+        # aggregated every message in the project — then sliced the result in
+        # Python, i.e. O(total) work per request even for one page. On a
+        # 44K-message project that was the dominant Messages-tab cost. Now we
+        # do one indexed COUNT for the envelope total and fetch + reconstruct
+        # ONLY the requested page (model filter pushed down too, so the page
+        # indices align with the filtered total).
+        total = queries.count_project_messages(conn, project_id=project_ids, model_filter=model_filter)
+        # Clamp the page against the real total so the SQL OFFSET matches the
+        # envelope ``build_messages_page`` reports (same math as the in-memory
+        # ``get_paginated_messages`` path used by /api/dashboard-data).
+        _page, _pages, start_index, _end = page_bounds(total, page, per_page)
+        page_messages = queries.get_project_messages_page(
+            conn,
+            project_id=project_ids,
+            offset=start_index,
+            limit=per_page,
+            model_filter=model_filter,
+        )
     finally:
         conn.close()
 
-    if model_filter is not None and messages:
-        messages = [m for m in messages if (m.get("model") or "").lower() in model_filter]
-
-    page_payload = get_paginated_messages(messages, page=page, per_page=per_page)
+    page_payload = build_messages_page(page_messages, total=total, page=page, per_page=per_page)
     deps.logger.debug(f"messages [store] {(time.time()-t0)*1000:.1f}ms")
     return page_payload
 

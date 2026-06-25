@@ -330,6 +330,152 @@ def get_project_messages(
     return messages
 
 
+def _normalise_project_ids(project_id: int | list[int]) -> list[int]:
+    return project_id if isinstance(project_id, list) else [project_id]
+
+
+def count_project_messages(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | list[int],
+    model_filter: set[str] | None = None,
+) -> int:
+    """Count message rows for a project, optionally narrowed by model.
+
+    This is the ``total`` the ``/api/messages`` envelope reports. Records are
+    1:1 with rows (``extract_records`` never merges or drops), so this equals
+    ``len(get_project_messages(...))`` — but it's a single indexed ``COUNT(*)``
+    instead of materialising, enriching and aggregating every message.
+
+    ``model_filter`` matches the lowercased ``model`` column (the same column
+    the ingest writer persists ``Record.model`` to), case-insensitively — the
+    parity the old in-Python ``(m.get("model") or "").lower() in filter`` pass
+    had for real model ids.
+    """
+    ids = _normalise_project_ids(project_id)
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    # Drive off ``session_fk`` via a LIST SUBQUERY rather than joining the
+    # ``sessions`` table directly: against the partitioned ``messages`` VIEW a
+    # join makes the planner materialise the whole view + build a transient
+    # index (~3.6s on a 44K-msg project). The subquery lets each partition use
+    # its ``(session_fk, seq)`` index instead (~5ms). Only the project ids are
+    # bound, so projects with thousands of sessions never hit the SQL
+    # variable-count limit.
+    sql = (
+        f"SELECT COUNT(*) FROM messages m "
+        f"WHERE m.session_fk IN "
+        f"(SELECT id FROM sessions WHERE project_id IN ({placeholders}))"
+    )
+    params: list = list(ids)
+    if model_filter:
+        model_ph = ",".join("?" for _ in model_filter)
+        sql += f" AND lower(COALESCE(m.model, '')) IN ({model_ph})"
+        params.extend(sorted(model_filter))
+    row = conn.execute(sql, params).fetchone()
+    return int(row[0]) if row else 0
+
+
+def get_project_messages_page(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | list[int],
+    offset: int,
+    limit: int,
+    model_filter: set[str] | None = None,
+) -> list[dict]:
+    """Reconstruct ONLY one page of a project's messages.
+
+    Pagination is pushed into SQL in two cheap steps instead of building the
+    whole-project dataset and slicing in Python:
+
+    1. Select the page's row ids over indexed columns
+       (``ORDER BY timestamp, id LIMIT/OFFSET``) — ``raw_json`` is never read
+       here, so the sort/offset cost is proportional to lightweight columns.
+    2. Hydrate ``raw_json`` for just those ids via primary-key lookups.
+
+    The page then runs through the SAME classifier + record parse + formatter
+    the full ``get_project_stats`` path uses, so each dict is identical to the
+    slice ``get_project_messages`` would have produced — minus the
+    ``interaction_*`` stamps, which require whole-project interaction grouping
+    and which no ``/api/messages`` consumer reads (they stay on the
+    ``get_project_stats`` path that feeds ``/api/dashboard-data``).
+
+    Ordering is ``(timestamp, id)``; ``id`` is a stable, globally-unique
+    tiebreaker so pages never overlap or skip rows when timestamps collide.
+    """
+    import json as _json
+
+    from stackunderflow.stats import classifier, enricher, formatter
+    from stackunderflow.stats.classifier import RawEntry
+    from stackunderflow.stats.enricher import EnrichedDataset
+
+    ids = _normalise_project_ids(project_id)
+    if not ids or limit <= 0:
+        return []
+    offset = max(0, offset)
+    placeholders = ",".join("?" for _ in ids)
+
+    # Step 1 — page row ids over indexed columns; no raw_json touched. Drive
+    # off ``session_fk`` via a LIST SUBQUERY (see count_project_messages): a
+    # direct join to ``sessions`` makes the planner materialise the whole
+    # partitioned VIEW (~3.6s/page); the subquery lets each partition seek its
+    # ``(session_fk, seq)`` index then merge-sort by timestamp (~35ms/page).
+    id_sql = (
+        f"SELECT m.id FROM messages m "
+        f"WHERE m.session_fk IN "
+        f"(SELECT id FROM sessions WHERE project_id IN ({placeholders}))"
+    )
+    id_params: list = list(ids)
+    if model_filter:
+        model_ph = ",".join("?" for _ in model_filter)
+        id_sql += f" AND lower(COALESCE(m.model, '')) IN ({model_ph})"
+        id_params.extend(sorted(model_filter))
+    id_sql += " ORDER BY m.timestamp, m.id LIMIT ? OFFSET ?"
+    id_params.extend([limit, offset])
+    page_ids = [r[0] for r in conn.execute(id_sql, id_params).fetchall()]
+    if not page_ids:
+        return []
+
+    # Step 2 — hydrate raw_json + provider for the page's rows only.
+    id_ph = ",".join("?" for _ in page_ids)
+    rows = conn.execute(
+        f"SELECT m.id AS id, m.raw_json AS raw_json, s.session_id AS session_id, "
+        f"       m.timestamp AS timestamp, p.provider AS provider "
+        f"FROM messages m "
+        f"JOIN sessions s ON s.id = m.session_fk "
+        f"JOIN projects p ON s.project_id = p.id "
+        f"WHERE m.id IN ({id_ph})",
+        page_ids,
+    ).fetchall()
+    by_id = {r["id"]: r for r in rows}
+
+    raw_entries = []
+    for mid in page_ids:  # restore (timestamp, id) order — IN() doesn't preserve it
+        r = by_id.get(mid)
+        if r is None:
+            continue
+        payload = _json.loads(r["raw_json"])
+        # Authoritative clean timestamp lives in the column; raw_json may hold
+        # epoch-millis ints from non-Claude adapters (mirrors build_enriched_dataset).
+        if r["timestamp"]:
+            payload["timestamp"] = r["timestamp"]
+        raw_entries.append(
+            RawEntry(
+                payload=payload,
+                session_id=r["session_id"],
+                origin=r["session_id"],
+                provider=r["provider"] or "anthropic",
+            )
+        )
+
+    tagged = classifier.tag(raw_entries)
+    records = [enricher.parse_record(te) for te in tagged]
+    dataset = EnrichedDataset(records=records, interactions=[], sessions={})
+    return formatter.to_dicts(dataset)
+
+
 def get_global_stats(conn: sqlite3.Connection) -> dict:
     """Return the cross-project stats shape the Overview page expects.
 

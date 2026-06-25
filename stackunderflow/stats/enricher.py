@@ -203,6 +203,18 @@ class _Builder:
 
 # ── record parsing ───────────────────────────────────────────────────────────
 
+def parse_record(te: TaggedEntry) -> Record:
+    """Parse a single tagged entry into a :class:`Record`.
+
+    Public wrapper over :func:`_parse_entry` — record parsing depends on
+    nothing but the one entry, so the paginated ``/api/messages`` store path
+    reconstructs a single page's records with it without building the
+    whole-project interaction graph. ``_Builder.extract_records`` uses the
+    same function, so the per-record shape has exactly one definition.
+    """
+    return _parse_entry(te)
+
+
 def _parse_entry(te: TaggedEntry) -> Record:
     raw = te.payload
     msg = raw.get("message") if isinstance(raw.get("message"), dict) else {}

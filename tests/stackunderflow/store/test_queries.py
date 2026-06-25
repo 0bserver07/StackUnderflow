@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
@@ -299,3 +300,152 @@ def test_get_global_stats_sonnet_fast_no_multiplier(conn) -> None:
         speed="standard",
     )["total_cost"]
     assert stats["models"]["claude-sonnet-4-6"]["cost"] == pytest.approx(standard_expected)
+
+
+# ── SQL-paginated /api/messages store path ───────────────────────────────
+#
+# ``count_project_messages`` + ``get_project_messages_page`` push the
+# Messages-tab pagination into SQL: the old path materialised, enriched AND
+# aggregated every message in the project on every page request. These tests
+# pin (a) byte-equivalence with the legacy full-list slice and (b) that only
+# the requested page is ever reconstructed — never the whole table.
+
+
+def _insert_full_message(
+    conn: sqlite3.Connection,
+    *,
+    session_fk: int,
+    seq: int,
+    timestamp: str,
+    role: str = "assistant",
+    model: str | None = None,
+    content: str = "",
+) -> None:
+    """Insert a message whose ``raw_json`` is consistent with its columns.
+
+    The reconstruction path reads ``raw_json`` (not the scalar columns), so the
+    fixture writes a realistic payload; ``model`` is mirrored into both the
+    column (used by the SQL model filter) and ``message.model`` (parsed back
+    into the dict) so the two stay in lockstep, as the ingest writer keeps them.
+    """
+    msg: dict = {"role": role, "content": content}
+    if model:
+        msg["model"] = model
+    raw = {"type": role, "timestamp": timestamp, "uuid": f"u{session_fk}-{seq}", "message": msg}
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, content_text, tools_json, raw_json, "
+        "is_sidechain, uuid, parent_uuid) "
+        "VALUES (?, ?, ?, ?, ?, 0, 0, ?, '[]', ?, 0, ?, NULL)",
+        (session_fk, seq, timestamp, role, model, content, json.dumps(raw), f"u{session_fk}-{seq}"),
+    )
+
+
+def test_count_project_messages_total_and_model_filter(conn) -> None:
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    for i in range(7):
+        _insert_full_message(
+            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:00:{i:02d}Z",
+            model="claude-opus-4-6" if i < 3 else "claude-sonnet-4-6",
+        )
+    conn.commit()
+    assert queries.count_project_messages(conn, project_id=pid) == 7
+    # Model filter is case-insensitive on the model column.
+    assert queries.count_project_messages(conn, project_id=pid, model_filter={"claude-opus-4-6"}) == 3
+    assert queries.count_project_messages(conn, project_id=pid, model_filter={"claude-sonnet-4-6"}) == 4
+    # Empty project id list → 0, no query needed.
+    assert queries.count_project_messages(conn, project_id=[]) == 0
+
+
+def test_get_project_messages_page_matches_full_slice(conn) -> None:
+    """Each SQL page equals the matching slice of the full materialised list."""
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    for i in range(50):
+        _insert_full_message(
+            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:{i:02d}:00Z",
+            content=f"msg {i}",
+        )
+    conn.commit()
+
+    full = queries.get_project_messages(conn, project_id=pid)
+    assert len(full) == 50
+    # first / middle / last-partial pages
+    for offset, limit in [(0, 20), (20, 20), (40, 20)]:
+        page = queries.get_project_messages_page(
+            conn, project_id=pid, offset=offset, limit=limit
+        )
+        expected = full[offset:offset + limit]
+        assert [m["uuid"] for m in page] == [m["uuid"] for m in expected]
+        assert [m["content"] for m in page] == [m["content"] for m in expected]
+    # last page is partial
+    assert len(queries.get_project_messages_page(conn, project_id=pid, offset=40, limit=20)) == 10
+    # offset past the end → empty
+    assert queries.get_project_messages_page(conn, project_id=pid, offset=99, limit=20) == []
+    # limit <= 0 → empty
+    assert queries.get_project_messages_page(conn, project_id=pid, offset=0, limit=0) == []
+
+
+def test_get_project_messages_page_orders_by_timestamp_across_sessions(conn) -> None:
+    """Pages are globally timestamp-ordered, not per-session — the property the
+    old in-Python ``to_dicts`` sort guaranteed and SQL pagination must keep."""
+    pid = _seed_project(conn)
+    s1 = _seed_session(conn, pid, "s1")
+    s2 = _seed_session(conn, pid, "s2")
+    # Interleave timestamps across the two sessions: s1 on even seconds, s2 odd.
+    for i in range(10):
+        _insert_full_message(conn, session_fk=s1, seq=i, timestamp=f"2026-05-01T00:00:{2*i:02d}Z", content=f"s1-{i}")
+        _insert_full_message(conn, session_fk=s2, seq=i, timestamp=f"2026-05-01T00:00:{2*i+1:02d}Z", content=f"s2-{i}")
+    conn.commit()
+
+    page = queries.get_project_messages_page(conn, project_id=pid, offset=0, limit=8)
+    ts = [m["timestamp"] for m in page]
+    assert ts == sorted(ts)
+    # The first 8 by global time alternate s1/s2 — proves cross-session ordering.
+    assert [m["content"] for m in page] == ["s1-0", "s2-0", "s1-1", "s2-1", "s1-2", "s2-2", "s1-3", "s2-3"]
+    # Page 2 continues without overlap or gaps.
+    page2 = queries.get_project_messages_page(conn, project_id=pid, offset=8, limit=8)
+    assert [m["timestamp"] for m in page2] == sorted(m["timestamp"] for m in page2)
+    assert {m["uuid"] for m in page}.isdisjoint(m["uuid"] for m in page2)
+
+
+def test_get_project_messages_page_reconstructs_only_the_page(conn, monkeypatch) -> None:
+    """The whole point: a page request reconstructs only ``per_page`` records,
+    never the full table. Counts calls into the record parser as the probe."""
+    from stackunderflow.stats import enricher
+
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    for i in range(300):
+        _insert_full_message(conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T{i // 60:02d}:{i % 60:02d}:00Z")
+    conn.commit()
+
+    calls = {"n": 0}
+    real = enricher.parse_record
+    monkeypatch.setattr(
+        enricher, "parse_record",
+        lambda te: (calls.__setitem__("n", calls["n"] + 1) or real(te)),
+    )
+    page = queries.get_project_messages_page(conn, project_id=pid, offset=100, limit=25)
+    assert len(page) == 25
+    # 25 reconstructed, not 300 — pagination happened in SQL.
+    assert calls["n"] == 25
+
+
+def test_get_project_messages_page_model_filter_aligns_with_count(conn) -> None:
+    pid = _seed_project(conn)
+    sid = _seed_session(conn, pid, "s1")
+    for i in range(20):
+        _insert_full_message(
+            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:{i:02d}:00Z",
+            model="claude-opus-4-6" if i % 2 == 0 else "claude-sonnet-4-6",
+        )
+    conn.commit()
+    mf = {"claude-opus-4-6"}
+    total = queries.count_project_messages(conn, project_id=pid, model_filter=mf)
+    assert total == 10
+    page = queries.get_project_messages_page(conn, project_id=pid, offset=0, limit=100, model_filter=mf)
+    assert len(page) == total
+    assert all(m["model"] == "claude-opus-4-6" for m in page)
+    assert [m["timestamp"] for m in page] == sorted(m["timestamp"] for m in page)
