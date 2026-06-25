@@ -26,9 +26,7 @@ def bulk_session_counts(conn: sqlite3.Connection) -> dict[int, int]:
     Replaces N+1 ``list_sessions(conn, project_id=…)`` loops over the
     full project list. ~30ms for ~1000 sessions vs N×10ms otherwise.
     """
-    rows = conn.execute(
-        "SELECT project_id, COUNT(*) FROM sessions GROUP BY project_id"
-    ).fetchall()
+    rows = conn.execute("SELECT project_id, COUNT(*) FROM sessions GROUP BY project_id").fetchall()
     return {int(r[0]): int(r[1]) for r in rows}
 
 
@@ -116,10 +114,7 @@ def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
             "cache_read": int(r[6] or 0),
             "cache_creation": int(r[7] or 0),
         }
-        breakdown = (
-            compute_cost(tokens, model, provider=provider, speed=speed)
-            if model else None
-        )
+        breakdown = compute_cost(tokens, model, provider=provider, speed=speed) if model else None
         usd = float(breakdown["total_cost"]) if breakdown else 0.0
         cost_by_pid[pid] = cost_by_pid.get(pid, 0.0) + usd
     return cost_by_pid
@@ -127,8 +122,7 @@ def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
 
 def get_project(conn: sqlite3.Connection, *, slug: str) -> ProjectRow | None:
     row = conn.execute(
-        "SELECT id, provider, slug, path, display_name, first_seen, last_modified "
-        "FROM projects WHERE slug = ?",
+        "SELECT id, provider, slug, path, display_name, first_seen, last_modified FROM projects WHERE slug = ?",
         (slug,),
     ).fetchone()
     return ProjectRow(**dict(row)) if row else None
@@ -136,8 +130,7 @@ def get_project(conn: sqlite3.Connection, *, slug: str) -> ProjectRow | None:
 
 def get_projects_by_slug(conn: sqlite3.Connection, *, slug: str) -> list[ProjectRow]:
     rows = conn.execute(
-        "SELECT id, provider, slug, path, display_name, first_seen, last_modified "
-        "FROM projects WHERE slug = ?",
+        "SELECT id, provider, slug, path, display_name, first_seen, last_modified FROM projects WHERE slug = ?",
         (slug,),
     ).fetchall()
     return [ProjectRow(**dict(r)) for r in rows]
@@ -178,10 +171,7 @@ def get_messages(
         "ORDER BY seq LIMIT ? OFFSET ?",
         (session_fk, limit, offset),
     ).fetchall()
-    return [
-        MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])})
-        for r in rows
-    ]
+    return [MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])}) for r in rows]
 
 
 def get_session_messages(conn: sqlite3.Connection, *, session_fk: int) -> list[MessageRow]:
@@ -193,10 +183,7 @@ def get_session_messages(conn: sqlite3.Connection, *, session_fk: int) -> list[M
         "FROM messages WHERE session_fk = ? ORDER BY seq",
         (session_fk,),
     ).fetchall()
-    return [
-        MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])})
-        for r in rows
-    ]
+    return [MessageRow(**{**dict(r), "is_sidechain": bool(r["is_sidechain"])}) for r in rows]
 
 
 def get_session_stats(conn: sqlite3.Connection, *, session_fk: int) -> dict:
@@ -242,14 +229,12 @@ def build_enriched_dataset(
         return None, ""
 
     first_id = project_id[0] if isinstance(project_id, list) else project_id
-    row = conn.execute(
-        "SELECT path, slug, provider FROM projects WHERE id = ?", (first_id,)
-    ).fetchone()
+    row = conn.execute("SELECT path, slug, provider FROM projects WHERE id = ?", (first_id,)).fetchone()
     if row is None:
         return None, ""
 
     log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
-    
+
     if isinstance(project_id, list):
         placeholders = ",".join("?" for _ in project_id)
         rows = conn.execute(
@@ -481,6 +466,119 @@ def get_global_stats(conn: sqlite3.Connection) -> dict:
 
     Keys: first_use_date, last_use_date, daily_token_usage, daily_costs,
     models, total_cache_read_tokens, total_cache_write_tokens.
+
+    Fast path — when the ETL marts are populated (``daily_mart`` has rows)
+    every figure is read from ``project_mart`` (lifetime totals + date
+    range) and ``daily_mart`` (per-(day, model) rollup): one indexed scan
+    each, ~9ms on the user's 200K-event store versus ~11s for the three
+    full ``messages``-view scans the raw path runs (measured 1016×). Cost
+    is read straight from the marts' stored ``cost_usd`` — the same figure
+    the project list sums out of ``project_mart`` — so the Overview
+    headline reconciles with the project list instead of being recomputed
+    at live rates that may have drifted since ingest.
+
+    Fallback — a store that has never run the ETL backfill (empty
+    ``daily_mart``) takes :func:`_global_stats_raw_scan`, which aggregates
+    the ``messages`` view directly. Both paths emit the identical shape; on
+    all-billable data they emit identical numbers. The marts deliberately
+    exclude non-billable rows (user turns, zero-token / ``<synthetic>``
+    assistant rows), so on a mixed real store the mart path reports
+    *billable* activity only — matching the Cost tab and the project list,
+    which read the same marts.
+    """
+    if _has_daily_mart_rows(conn):
+        return _global_stats_from_marts(conn)
+    return _global_stats_raw_scan(conn)
+
+
+def _has_daily_mart_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff the ``daily_mart`` table exists and has ≥1 row.
+
+    The gate for the Overview mart fast-path. We key on row presence (not
+    just table existence — the migration creates the table empty) so a
+    fresh, never-backfilled store falls through to the raw scan. A
+    partially-backfilled store (brief transient during the first backfill)
+    reports billable activity for the projects materialised so far, the
+    same convention the rest of the Wave 3A route migration follows.
+    """
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_mart'").fetchone()
+    if exists is None:
+        return False
+    return conn.execute("SELECT 1 FROM daily_mart LIMIT 1").fetchone() is not None
+
+
+def _global_stats_from_marts(conn: sqlite3.Connection) -> dict:
+    """Build the Overview stats from ``project_mart`` + ``daily_mart``.
+
+    See :func:`get_global_stats` for why this is the preferred path. The
+    per-(day, model) ``daily_mart`` rollup feeds ``daily_token_usage``,
+    ``daily_costs`` and the ``models`` map in a single grouped scan; the
+    lifetime totals + date range come from ``project_mart``.
+    """
+    # Lifetime totals + billable date range — one row per project.
+    prow = conn.execute(
+        "SELECT MIN(first_ts) AS first_ts, MAX(last_ts) AS last_ts, "
+        "       SUM(total_cache_read)   AS cache_read, "
+        "       SUM(total_cache_create) AS cache_write "
+        "FROM project_mart"
+    ).fetchone()
+    first_ts = (prow["first_ts"] or "")[:10] if prow else ""
+    last_ts = (prow["last_ts"] or "")[:10] if prow else ""
+
+    # Per-(day, model) rollup. ``cost_usd`` is the ETL-time stored cost —
+    # the same dollars ``project_mart.total_cost_usd`` sums — so the
+    # Overview headline (frontend sums ``daily_costs``) reconciles with the
+    # project list rather than diverging at live rates (RANK 37).
+    rows = conn.execute(
+        "SELECT day, COALESCE(model, '') AS model, "
+        "       SUM(input_tokens)  AS inp, SUM(output_tokens) AS out, "
+        "       SUM(cost_usd)      AS cost, SUM(message_count) AS n "
+        "FROM daily_mart GROUP BY day, model ORDER BY day"
+    ).fetchall()
+
+    daily_tokens_map: dict[str, dict] = {}
+    daily_costs_map: dict[str, dict] = {}
+    models: dict[str, dict] = {}
+    for r in rows:
+        day = r["day"]
+        model = r["model"] or ""
+        inp = int(r["inp"] or 0)
+        out = int(r["out"] or 0)
+        n = int(r["n"] or 0)
+        # Empty-model rows carry tokens but no priced cost — mirror the raw
+        # path's ``if model`` guard so an unpriced row never inflates spend.
+        cost = float(r["cost"] or 0.0) if model else 0.0
+
+        dt = daily_tokens_map.setdefault(day, {"date": day, "input": 0, "output": 0})
+        dt["input"] += inp
+        dt["output"] += out
+
+        bucket = daily_costs_map.setdefault(day, {"date": day, "cost": 0.0, "by_model": {}})
+        bucket["cost"] += cost
+        if model:
+            bucket["by_model"][model] = bucket["by_model"].get(model, 0.0) + cost
+            m = models.setdefault(model, {"count": 0, "cost": 0.0})
+            m["count"] += n
+            m["cost"] += cost
+
+    return {
+        "first_use_date": first_ts,
+        "last_use_date": last_ts,
+        "daily_token_usage": list(daily_tokens_map.values()),
+        "daily_costs": list(daily_costs_map.values()),
+        "models": models,
+        "total_cache_read_tokens": int(prow["cache_read"] or 0) if prow else 0,
+        "total_cache_write_tokens": int(prow["cache_write"] or 0) if prow else 0,
+    }
+
+
+def _global_stats_raw_scan(conn: sqlite3.Connection) -> dict:
+    """Aggregate the Overview stats straight off the ``messages`` view.
+
+    The pre-mart implementation, kept verbatim as the fallback for stores
+    that have not run the ETL backfill. Three full scans of the partitioned
+    ``messages`` view (~11s on a 200K-message store) — which is exactly why
+    :func:`get_global_stats` prefers the mart path when it can.
     """
     from stackunderflow.infra.costs import compute_cost
 
@@ -536,10 +634,7 @@ def get_global_stats(conn: sqlite3.Connection) -> dict:
             "cache_creation": r["cache_create"] or 0,
             "cache_read": r["cache_read"] or 0,
         }
-        cost = (
-            compute_cost(tokens, model, provider=provider, speed=speed)["total_cost"]
-            if model else 0.0
-        )
+        cost = compute_cost(tokens, model, provider=provider, speed=speed)["total_cost"] if model else 0.0
         bucket = daily_costs_map.setdefault(day, {"date": day, "cost": 0.0, "by_model": {}})
         bucket["cost"] += cost
         if model:

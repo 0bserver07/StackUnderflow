@@ -18,8 +18,7 @@ def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
 
 def _seed_project(conn: sqlite3.Connection, *, slug: str = "-a", provider: str = "claude") -> int:
     cur = conn.execute(
-        "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) VALUES (?, ?, ?, ?, ?)",
         (provider, slug, slug, 0.0, 0.0),
     )
     assert cur.lastrowid is not None
@@ -70,8 +69,7 @@ def test_get_messages_paginates(conn) -> None:
     sid = _seed_session(conn, pid, "s1")
     for i in range(5):
         conn.execute(
-            "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) VALUES (?, ?, ?, ?, ?)",
             (sid, i, f"2026-01-01T00:0{i}:00+00:00", "user", "{}"),
         )
     page = queries.get_messages(conn, session_fk=sid, limit=2, offset=1)
@@ -83,8 +81,7 @@ def test_get_session_messages(conn) -> None:
     sid = _seed_session(conn, pid, "s1")
     for i in range(3):
         conn.execute(
-            "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) VALUES (?, ?, ?, ?, ?)",
             (sid, i, f"2026-01-01T00:0{i}:00+00:00", "user", "{}"),
         )
     msgs = queries.get_session_messages(conn, session_fk=sid)
@@ -105,8 +102,7 @@ def test_get_session_stats(conn) -> None:
         "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
         "input_tokens, output_tokens, tools_json, raw_json) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (sid, 1, "2026-01-01T00:00:01+00:00", "assistant", "claude-sonnet-4-6",
-         5, 20, '[{"name":"bash"}]', "{}"),
+        (sid, 1, "2026-01-01T00:00:01+00:00", "assistant", "claude-sonnet-4-6", 5, 20, '[{"name":"bash"}]', "{}"),
     )
     stats = queries.get_session_stats(conn, session_fk=sid)
     assert stats["user_messages"] == 1
@@ -123,11 +119,13 @@ def test_cross_project_daily_totals(conn) -> None:
     pb = _seed_project(conn, slug="proj-b")
     sa = _seed_session(conn, pa, "s-a")
     sb = _seed_session(conn, pb, "s-b")
-    for seq, (ts, session_fk, model, inp, out) in enumerate([
-        ("2026-04-15T10:00:00+00:00", sa, "claude-3", 100, 50),
-        ("2026-04-16T10:00:00+00:00", sa, "claude-3", 200, 80),
-        ("2026-04-16T11:00:00+00:00", sb, "claude-3", 40, 20),
-    ]):
+    for seq, (ts, session_fk, model, inp, out) in enumerate(
+        [
+            ("2026-04-15T10:00:00+00:00", sa, "claude-3", 100, 50),
+            ("2026-04-16T10:00:00+00:00", sa, "claude-3", 200, 80),
+            ("2026-04-16T11:00:00+00:00", sb, "claude-3", 40, 20),
+        ]
+    ):
         conn.execute(
             "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
             "input_tokens, output_tokens, raw_json) VALUES (?,?,?,?,?,?,?,?)",
@@ -145,11 +143,13 @@ def test_cross_project_daily_totals(conn) -> None:
 def test_cross_project_daily_totals_since_filter(conn) -> None:
     pa = _seed_project(conn, slug="proj-a")
     sa = _seed_session(conn, pa, "s-a")
-    for seq, (ts, inp) in enumerate([
-        ("2026-04-14T10:00:00+00:00", 10),
-        ("2026-04-15T10:00:00+00:00", 20),
-        ("2026-04-16T10:00:00+00:00", 30),
-    ]):
+    for seq, (ts, inp) in enumerate(
+        [
+            ("2026-04-14T10:00:00+00:00", 10),
+            ("2026-04-15T10:00:00+00:00", 20),
+            ("2026-04-16T10:00:00+00:00", 30),
+        ]
+    ):
         conn.execute(
             "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
             "input_tokens, output_tokens, raw_json) VALUES (?,?,?,?,?,?,?,?)",
@@ -168,15 +168,13 @@ def test_cross_project_daily_totals_carries_speed(conn) -> None:
         "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
         "input_tokens, output_tokens, speed, raw_json) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
-        (sa, 0, "2026-04-15T10:00:00+00:00", "assistant",
-         "claude-opus-4-6", 100, 50, "fast", "{}"),
+        (sa, 0, "2026-04-15T10:00:00+00:00", "assistant", "claude-opus-4-6", 100, 50, "fast", "{}"),
     )
     conn.execute(
         "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
         "input_tokens, output_tokens, speed, raw_json) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
-        (sa, 1, "2026-04-15T11:00:00+00:00", "assistant",
-         "claude-opus-4-6", 100, 50, "standard", "{}"),
+        (sa, 1, "2026-04-15T11:00:00+00:00", "assistant", "claude-opus-4-6", 100, 50, "standard", "{}"),
     )
     rows = queries.cross_project_daily_totals(conn)
     speeds = sorted(r[6] for r in rows)
@@ -184,6 +182,7 @@ def test_cross_project_daily_totals_carries_speed(conn) -> None:
 
 
 # ── fast-mode cost path ──────────────────────────────────────────────────
+
 
 def _seed_assistant_message(
     conn: sqlite3.Connection,
@@ -216,17 +215,23 @@ def test_get_global_stats_applies_fast_mode_multiplier(conn) -> None:
     pa = _seed_project(conn, slug="proj-a")
     sa = _seed_session(conn, pa, "s-a")
     _seed_assistant_message(
-        conn, session_fk=sa, seq=0,
+        conn,
+        session_fk=sa,
+        seq=0,
         timestamp="2026-04-15T10:00:00+00:00",
         model="claude-opus-4-6",
-        input_tokens=1000, output_tokens=500,
+        input_tokens=1000,
+        output_tokens=500,
         speed="standard",
     )
     _seed_assistant_message(
-        conn, session_fk=sa, seq=1,
+        conn,
+        session_fk=sa,
+        seq=1,
         timestamp="2026-04-15T11:00:00+00:00",
         model="claude-opus-4-6",
-        input_tokens=1000, output_tokens=500,
+        input_tokens=1000,
+        output_tokens=500,
         speed="fast",
     )
 
@@ -264,10 +269,13 @@ def test_get_global_stats_standard_only_unchanged(conn) -> None:
     pa = _seed_project(conn, slug="proj-a")
     sa = _seed_session(conn, pa, "s-a")
     _seed_assistant_message(
-        conn, session_fk=sa, seq=0,
+        conn,
+        session_fk=sa,
+        seq=0,
         timestamp="2026-04-15T10:00:00+00:00",
         model="claude-sonnet-4-6",
-        input_tokens=2000, output_tokens=1000,
+        input_tokens=2000,
+        output_tokens=1000,
     )
     stats = queries.get_global_stats(conn)
     expected = compute_cost(
@@ -287,10 +295,13 @@ def test_get_global_stats_sonnet_fast_no_multiplier(conn) -> None:
     pa = _seed_project(conn, slug="proj-a")
     sa = _seed_session(conn, pa, "s-a")
     _seed_assistant_message(
-        conn, session_fk=sa, seq=0,
+        conn,
+        session_fk=sa,
+        seq=0,
         timestamp="2026-04-15T10:00:00+00:00",
         model="claude-sonnet-4-6",
-        input_tokens=1000, output_tokens=500,
+        input_tokens=1000,
+        output_tokens=500,
         speed="fast",
     )
     stats = queries.get_global_stats(conn)
@@ -300,6 +311,274 @@ def test_get_global_stats_sonnet_fast_no_multiplier(conn) -> None:
         speed="standard",
     )["total_cost"]
     assert stats["models"]["claude-sonnet-4-6"]["cost"] == pytest.approx(standard_expected)
+
+
+# ── Overview global stats: mart fast-path vs raw-scan fallback ────────────
+#
+# ``get_global_stats`` reads ``project_mart`` + ``daily_mart`` when the ETL
+# marts are populated (one indexed scan each — ~9ms vs ~11s for the three
+# ``messages``-view scans on the user's 200K-event store, measured 1016×) and
+# falls back to the raw ``messages`` scan when they are absent. On all-billable
+# data the two paths are number-for-number identical; these tests pin that
+# equivalence, the empty-mart fallback, and the cost reconciliation that
+# closes the live-vs-stored-rate gap (RANK 37).
+
+
+def _seed_billable(
+    conn: sqlite3.Connection,
+    *,
+    msg_id: int,
+    project_id: int,
+    session_fk: int,
+    session_id: str,
+    provider: str,
+    seq: int,
+    ts: str,
+    model: str,
+    speed: str = "standard",
+    inp: int,
+    out: int,
+    cache_read: int = 0,
+    cache_create: int = 0,
+) -> None:
+    """Insert a billable assistant message AND its mirroring ``usage_event``.
+
+    Keeps the raw-scan source (``messages``) and the mart source
+    (``usage_events``) in lockstep so both ``get_global_stats`` paths see the
+    same underlying data. ``cost_usd`` is stamped with the same
+    ``compute_cost`` the raw scan calls, so the stored mart cost equals the
+    live-recomputed cost.
+    """
+    from stackunderflow.infra.costs import compute_cost
+
+    conn.execute(
+        "INSERT INTO messages (id, session_fk, seq, timestamp, role, model, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, "
+        "speed, raw_json) "
+        "VALUES (?, ?, ?, ?, 'assistant', ?, ?, ?, ?, ?, ?, '{}')",
+        (msg_id, session_fk, seq, ts, model, inp, out, cache_read, cache_create, speed),
+    )
+    cost = compute_cost(
+        {"input": inp, "output": out, "cache_creation": cache_create, "cache_read": cache_read},
+        model,
+        provider=provider,
+        speed=speed,
+    )["total_cost"]
+    conn.execute(
+        "INSERT INTO usage_events (source_message_fk, provider, project_id, session_id, "
+        "ts, day, model, speed, input_tokens, output_tokens, cache_read_tokens, "
+        "cache_create_tokens, cost_usd, cost_source, role) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rate_card', 'assistant')",
+        (msg_id, provider, project_id, session_id, ts, ts[:10], model, speed, inp, out, cache_read, cache_create, cost),
+    )
+
+
+def _build_marts(conn: sqlite3.Connection) -> None:
+    from stackunderflow.etl.marts.daily import DailyMartBuilder
+    from stackunderflow.etl.marts.project import ProjectMartBuilder
+
+    DailyMartBuilder().rebuild_from_scratch(conn)
+    ProjectMartBuilder().rebuild_from_scratch(conn)
+
+
+def _approx_equal(a, b) -> bool:
+    """Recursive compare: floats via ``pytest.approx``, everything else exact."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == pytest.approx(b, rel=1e-9, abs=1e-12)
+    if isinstance(a, dict) and isinstance(b, dict):
+        return set(a) == set(b) and all(_approx_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_approx_equal(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+def test_global_stats_mart_path_matches_raw_scan(conn) -> None:
+    """Marts populated → ``get_global_stats`` reproduces the raw scan exactly.
+
+    Spans two projects / providers, two days, three models and the opus
+    fast-tier — the full shape the Overview consumes. Costs match to float
+    tolerance; every integer/string field (dates, token totals, model counts)
+    matches exactly.
+    """
+    pa = _seed_project(conn, slug="proj-a", provider="claude")
+    pb = _seed_project(conn, slug="proj-b", provider="codex")
+    sa = _seed_session(conn, pa, "s-a")
+    sb = _seed_session(conn, pb, "s-b")
+    _seed_billable(
+        conn,
+        msg_id=1,
+        project_id=pa,
+        session_fk=sa,
+        session_id="s-a",
+        provider="claude",
+        seq=0,
+        ts="2026-05-01T10:00:00+00:00",
+        model="claude-opus-4-6",
+        speed="standard",
+        inp=1000,
+        out=500,
+        cache_read=200,
+        cache_create=100,
+    )
+    _seed_billable(
+        conn,
+        msg_id=2,
+        project_id=pa,
+        session_fk=sa,
+        session_id="s-a",
+        provider="claude",
+        seq=1,
+        ts="2026-05-01T11:00:00+00:00",
+        model="claude-opus-4-6",
+        speed="fast",
+        inp=800,
+        out=400,
+    )
+    _seed_billable(
+        conn,
+        msg_id=3,
+        project_id=pa,
+        session_fk=sa,
+        session_id="s-a",
+        provider="claude",
+        seq=2,
+        ts="2026-05-02T09:00:00+00:00",
+        model="claude-sonnet-4-6",
+        speed="standard",
+        inp=2000,
+        out=1000,
+        cache_read=50,
+    )
+    _seed_billable(
+        conn,
+        msg_id=4,
+        project_id=pb,
+        session_fk=sb,
+        session_id="s-b",
+        provider="codex",
+        seq=0,
+        ts="2026-05-01T12:00:00+00:00",
+        model="gpt-5",
+        speed="standard",
+        inp=300,
+        out=150,
+    )
+    _build_marts(conn)
+
+    assert queries._has_daily_mart_rows(conn) is True
+    mart = queries._global_stats_from_marts(conn)
+    raw = queries._global_stats_raw_scan(conn)
+
+    assert _approx_equal(mart, raw), f"\nmart={mart}\nraw={raw}"
+    # Exact equivalence on every non-float field.
+    assert mart["first_use_date"] == raw["first_use_date"] == "2026-05-01"
+    assert mart["last_use_date"] == raw["last_use_date"] == "2026-05-02"
+    assert mart["total_cache_read_tokens"] == raw["total_cache_read_tokens"] == 250
+    assert mart["total_cache_write_tokens"] == raw["total_cache_write_tokens"] == 100
+    assert mart["daily_token_usage"] == raw["daily_token_usage"]
+    assert {m: v["count"] for m, v in mart["models"].items()} == {m: v["count"] for m, v in raw["models"].items()}
+    # opus standard + fast roll into one model bucket (2 messages).
+    assert mart["models"]["claude-opus-4-6"]["count"] == 2
+    # The dispatcher prefers the mart path when marts are present.
+    assert queries.get_global_stats(conn) == mart
+
+
+def test_global_stats_mart_path_aggregates_multi_message_cells(conn) -> None:
+    """Multiple messages in one (day, model, speed) cell sum to the raw total."""
+    pa = _seed_project(conn, slug="proj-a", provider="claude")
+    sa = _seed_session(conn, pa, "s-a")
+    for i in range(3):
+        _seed_billable(
+            conn,
+            msg_id=i + 1,
+            project_id=pa,
+            session_fk=sa,
+            session_id="s-a",
+            provider="claude",
+            seq=i,
+            ts=f"2026-05-03T0{i}:00:00+00:00",
+            model="claude-sonnet-4-6",
+            speed="standard",
+            inp=1000 + i,
+            out=500 + i,
+            cache_read=10 * i,
+        )
+    _build_marts(conn)
+
+    mart = queries._global_stats_from_marts(conn)
+    raw = queries._global_stats_raw_scan(conn)
+    assert _approx_equal(mart, raw), f"\nmart={mart}\nraw={raw}"
+    assert mart["models"]["claude-sonnet-4-6"]["count"] == 3
+    assert mart["daily_token_usage"][0]["input"] == 3003  # 1000+1001+1002
+
+
+def test_global_stats_falls_back_to_raw_scan_without_marts(conn) -> None:
+    """Empty ``daily_mart`` → dispatcher uses the raw scan, not the mart path."""
+    pa = _seed_project(conn, slug="proj-a", provider="claude")
+    sa = _seed_session(conn, pa, "s-a")
+    _seed_assistant_message(
+        conn,
+        session_fk=sa,
+        seq=0,
+        timestamp="2026-05-01T10:00:00+00:00",
+        model="claude-sonnet-4-6",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    # No usage_events / marts built — the gate must report "absent".
+    assert queries._has_daily_mart_rows(conn) is False
+    assert queries.get_global_stats(conn) == queries._global_stats_raw_scan(conn)
+    assert queries.get_global_stats(conn)["models"]["claude-sonnet-4-6"]["count"] == 1
+
+
+def test_global_stats_cost_reconciles_with_project_mart(conn) -> None:
+    """RANK 37: Overview headline (Σ daily_costs) == Σ project_mart.total_cost_usd.
+
+    The project list sums ``project_mart.total_cost_usd``; serving the Overview
+    cost from the same marts (not a live re-compute at possibly-drifted rates)
+    makes the two reconcile to the cent.
+    """
+    pa = _seed_project(conn, slug="proj-a", provider="claude")
+    pb = _seed_project(conn, slug="proj-b", provider="claude")
+    sa = _seed_session(conn, pa, "s-a")
+    sb = _seed_session(conn, pb, "s-b")
+    _seed_billable(
+        conn,
+        msg_id=1,
+        project_id=pa,
+        session_fk=sa,
+        session_id="s-a",
+        provider="claude",
+        seq=0,
+        ts="2026-05-01T10:00:00+00:00",
+        model="claude-opus-4-6",
+        speed="standard",
+        inp=1000,
+        out=500,
+    )
+    _seed_billable(
+        conn,
+        msg_id=2,
+        project_id=pb,
+        session_fk=sb,
+        session_id="s-b",
+        provider="claude",
+        seq=0,
+        ts="2026-05-02T10:00:00+00:00",
+        model="claude-sonnet-4-6",
+        speed="standard",
+        inp=2000,
+        out=1000,
+    )
+    _build_marts(conn)
+
+    stats = queries.get_global_stats(conn)
+    overview_headline = sum(d["cost"] for d in stats["daily_costs"])
+    project_mart_total = conn.execute("SELECT SUM(total_cost_usd) FROM project_mart").fetchone()[0]
+    assert overview_headline > 0
+    assert overview_headline == pytest.approx(project_mart_total)
 
 
 # ── SQL-paginated /api/messages store path ───────────────────────────────
@@ -346,7 +625,10 @@ def test_count_project_messages_total_and_model_filter(conn) -> None:
     sid = _seed_session(conn, pid, "s1")
     for i in range(7):
         _insert_full_message(
-            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:00:{i:02d}Z",
+            conn,
+            session_fk=sid,
+            seq=i,
+            timestamp=f"2026-05-01T00:00:{i:02d}Z",
             model="claude-opus-4-6" if i < 3 else "claude-sonnet-4-6",
         )
     conn.commit()
@@ -364,7 +646,10 @@ def test_get_project_messages_page_matches_full_slice(conn) -> None:
     sid = _seed_session(conn, pid, "s1")
     for i in range(50):
         _insert_full_message(
-            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:{i:02d}:00Z",
+            conn,
+            session_fk=sid,
+            seq=i,
+            timestamp=f"2026-05-01T00:{i:02d}:00Z",
             content=f"msg {i}",
         )
     conn.commit()
@@ -373,10 +658,8 @@ def test_get_project_messages_page_matches_full_slice(conn) -> None:
     assert len(full) == 50
     # first / middle / last-partial pages
     for offset, limit in [(0, 20), (20, 20), (40, 20)]:
-        page = queries.get_project_messages_page(
-            conn, project_id=pid, offset=offset, limit=limit
-        )
-        expected = full[offset:offset + limit]
+        page = queries.get_project_messages_page(conn, project_id=pid, offset=offset, limit=limit)
+        expected = full[offset : offset + limit]
         assert [m["uuid"] for m in page] == [m["uuid"] for m in expected]
         assert [m["content"] for m in page] == [m["content"] for m in expected]
     # last page is partial
@@ -395,8 +678,10 @@ def test_get_project_messages_page_orders_by_timestamp_across_sessions(conn) -> 
     s2 = _seed_session(conn, pid, "s2")
     # Interleave timestamps across the two sessions: s1 on even seconds, s2 odd.
     for i in range(10):
-        _insert_full_message(conn, session_fk=s1, seq=i, timestamp=f"2026-05-01T00:00:{2*i:02d}Z", content=f"s1-{i}")
-        _insert_full_message(conn, session_fk=s2, seq=i, timestamp=f"2026-05-01T00:00:{2*i+1:02d}Z", content=f"s2-{i}")
+        _insert_full_message(conn, session_fk=s1, seq=i, timestamp=f"2026-05-01T00:00:{2 * i:02d}Z", content=f"s1-{i}")
+        _insert_full_message(
+            conn, session_fk=s2, seq=i, timestamp=f"2026-05-01T00:00:{2 * i + 1:02d}Z", content=f"s2-{i}"
+        )
     conn.commit()
 
     page = queries.get_project_messages_page(conn, project_id=pid, offset=0, limit=8)
@@ -424,7 +709,8 @@ def test_get_project_messages_page_reconstructs_only_the_page(conn, monkeypatch)
     calls = {"n": 0}
     real = enricher.parse_record
     monkeypatch.setattr(
-        enricher, "parse_record",
+        enricher,
+        "parse_record",
         lambda te: (calls.__setitem__("n", calls["n"] + 1) or real(te)),
     )
     page = queries.get_project_messages_page(conn, project_id=pid, offset=100, limit=25)
@@ -438,7 +724,10 @@ def test_get_project_messages_page_model_filter_aligns_with_count(conn) -> None:
     sid = _seed_session(conn, pid, "s1")
     for i in range(20):
         _insert_full_message(
-            conn, session_fk=sid, seq=i, timestamp=f"2026-05-01T00:{i:02d}:00Z",
+            conn,
+            session_fk=sid,
+            seq=i,
+            timestamp=f"2026-05-01T00:{i:02d}:00Z",
             model="claude-opus-4-6" if i % 2 == 0 else "claude-sonnet-4-6",
         )
     conn.commit()

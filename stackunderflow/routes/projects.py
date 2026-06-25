@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
@@ -196,133 +197,159 @@ async def get_projects(
     """
     # Normalise provider filter: lowercase + drop empties so callers that
     # pass `?provider=Cursor` work without round-tripping through the URL
-    # canonicalisation in `services/filters.tsx`.
-    provider_filter: set[str] | None = None
-    if provider:
-        normed = {p.strip().lower() for p in provider if p and p.strip()}
-        if normed:
-            provider_filter = normed
+    # canonicalisation in `services/filters.tsx`. Cheap + pure, so it stays
+    # on the event loop; the blocking work is offloaded below.
+    provider_filter = _normalise_provider_filter(provider)
 
     try:
-        conn = db.connect(deps.store_path)
-        try:
-            project_rows = queries.list_projects(conn)
-            if provider_filter is not None:
-                project_rows = [
-                    p for p in project_rows
-                    if (p.provider or "").lower() in provider_filter
-                ]
-
-            # Wave 3A: prefer ``project_mart`` for the stats payload —
-            # one indexed scan over the materialised totals beats the
-            # bulk-aggregate pass (PR #65) which still touches every
-            # message row. The bulk helpers stay as the fallback so
-            # stores that haven't run the ETL pipeline keep working.
-            session_counts = queries.bulk_session_counts(conn)
-
-            mart_rows: dict[int, dict] = {}
-            if include_stats:
-                for row in mart_queries.list_project_mart(conn):
-                    mart_rows[int(row["project_id"])] = row
-
-            # Project ids whose mart row is missing fall back to the
-            # bulk SQL helpers — keeps the response shape stable while
-            # an in-flight ETL backfill is still working through the
-            # store.
-            uncovered_ids = {
-                p.id for p in project_rows if p.id not in mart_rows
-            }
-            if include_stats and uncovered_ids:
-                lite_stats = queries.bulk_project_lite_stats(conn)
-                cost_by_pid = queries.bulk_project_cost(conn)
-            else:
-                lite_stats = {}
-                cost_by_pid = {}
-
-            # Schema has UNIQUE(provider, slug) — same project used through
-            # multiple providers (e.g. claude + codex) yields multiple rows.
-            # Merge them so the user-facing list has one entry per slug.
-            slug_groups: dict[str, list] = defaultdict(list)
-            for p in project_rows:
-                slug_groups[p.slug].append(p)
-
-            projects = []
-            for slug, group in slug_groups.items():
-                primary = max(group, key=lambda p: p.last_modified)
-                log_path = _resolve_log_dir(primary.path, slug)
-                projects.append(
-                    {
-                        "dir_name": slug,
-                        "log_path": log_path,
-                        "file_count": sum(
-                            session_counts.get(p.id, 0) for p in group
-                        ),
-                        "total_size_mb": _dir_size_mb(log_path),
-                        "last_modified": max(p.last_modified for p in group),
-                        "first_seen": min(p.first_seen for p in group),
-                        "display_name": primary.display_name,
-                        "in_cache": False,
-                        "url_slug": slug,
-                        "stats": None,
-                        "provider": primary.provider,
-                        "providers": sorted({p.provider for p in group}),
-                        "_ids": [p.id for p in group],
-                    }
-                )
-
-            if sort_by == "last_modified":
-                projects.sort(key=lambda x: x["last_modified"], reverse=True)
-            elif sort_by == "first_seen":
-                projects.sort(key=lambda x: x["first_seen"])
-            elif sort_by == "size":
-                projects.sort(key=lambda x: x["total_size_mb"], reverse=True)
-            elif sort_by == "name":
-                projects.sort(key=lambda x: x["display_name"])
-
-            total_count = len(projects)
-            if limit:
-                projects = projects[offset : offset + limit]
-
-            if include_stats:
-                for proj in projects:
-                    proj["stats"] = _stats_for_ids(
-                        proj["_ids"],
-                        mart_rows=mart_rows,
-                        lite_stats=lite_stats,
-                        cost_by_pid=cost_by_pid,
-                    )
-
-            for proj in projects:
-                proj.pop("_ids", None)
-        finally:
-            conn.close()
-
-        currency = active_currency_payload()
-        rate = currency["rate_from_usd"]
-        if rate != 1.0 and include_stats:
-            for proj in projects:
-                stats = proj.get("stats")
-                if isinstance(stats, dict) and "total_cost" in stats:
-                    stats["total_cost"] = float(stats["total_cost"]) * rate
-
-        return JSONResponse(
-            {
-                "projects": projects,
-                "total_count": total_count,
-                "has_more": offset + limit < total_count if limit else False,
-                "cache_status": {
-                    "cached_count": 0,
-                    "total_projects": total_count,
-                },
-                "currency": currency,
-            }
+        # The store query, mart reads and the per-directory filesystem glob
+        # (`_dir_size_mb` over ~190 dirs) are blocking sync work. Run them in
+        # a worker thread so the event loop keeps serving other requests
+        # instead of stalling for the duration of the scan.
+        payload = await run_in_threadpool(
+            _compute_projects_payload,
+            include_stats=include_stats,
+            sort_by=sort_by,
+            limit=limit,
+            offset=offset,
+            provider_filter=provider_filter,
         )
-
+        return JSONResponse(payload)
     except Exception as e:
         import traceback
 
         traceback.print_exc()
         return JSONResponse({"error": f"Failed to get projects: {str(e)}"}, status_code=500)
+
+
+def _normalise_provider_filter(provider: list[str] | None) -> set[str] | None:
+    """Lowercase + drop empties so ``?provider=Cursor`` matches store rows."""
+    if not provider:
+        return None
+    normed = {p.strip().lower() for p in provider if p and p.strip()}
+    return normed or None
+
+
+def _compute_projects_payload(
+    *,
+    include_stats: bool,
+    sort_by: str,
+    limit: int | None,
+    offset: int,
+    provider_filter: set[str] | None,
+) -> dict:
+    """Blocking body of ``GET /api/projects`` — runs in a worker thread.
+
+    Opens its own SQLite connection (sqlite handles are single-thread, so
+    connecting here keeps connect/use/close on one thread), reads project
+    rows + marts, globs each project directory for its on-disk size, then
+    sorts / paginates and applies the active-currency conversion. Returns
+    the JSON payload dict the route ships verbatim.
+    """
+    conn = db.connect(deps.store_path)
+    try:
+        project_rows = queries.list_projects(conn)
+        if provider_filter is not None:
+            project_rows = [p for p in project_rows if (p.provider or "").lower() in provider_filter]
+
+        # Wave 3A: prefer ``project_mart`` for the stats payload —
+        # one indexed scan over the materialised totals beats the
+        # bulk-aggregate pass (PR #65) which still touches every
+        # message row. The bulk helpers stay as the fallback so
+        # stores that haven't run the ETL pipeline keep working.
+        session_counts = queries.bulk_session_counts(conn)
+
+        mart_rows: dict[int, dict] = {}
+        if include_stats:
+            for row in mart_queries.list_project_mart(conn):
+                mart_rows[int(row["project_id"])] = row
+
+        # Project ids whose mart row is missing fall back to the
+        # bulk SQL helpers — keeps the response shape stable while
+        # an in-flight ETL backfill is still working through the
+        # store.
+        uncovered_ids = {p.id for p in project_rows if p.id not in mart_rows}
+        if include_stats and uncovered_ids:
+            lite_stats = queries.bulk_project_lite_stats(conn)
+            cost_by_pid = queries.bulk_project_cost(conn)
+        else:
+            lite_stats = {}
+            cost_by_pid = {}
+
+        # Schema has UNIQUE(provider, slug) — same project used through
+        # multiple providers (e.g. claude + codex) yields multiple rows.
+        # Merge them so the user-facing list has one entry per slug.
+        slug_groups: dict[str, list] = defaultdict(list)
+        for p in project_rows:
+            slug_groups[p.slug].append(p)
+
+        projects = []
+        for slug, group in slug_groups.items():
+            primary = max(group, key=lambda p: p.last_modified)
+            log_path = _resolve_log_dir(primary.path, slug)
+            projects.append(
+                {
+                    "dir_name": slug,
+                    "log_path": log_path,
+                    "file_count": sum(session_counts.get(p.id, 0) for p in group),
+                    "total_size_mb": _dir_size_mb(log_path),
+                    "last_modified": max(p.last_modified for p in group),
+                    "first_seen": min(p.first_seen for p in group),
+                    "display_name": primary.display_name,
+                    "in_cache": False,
+                    "url_slug": slug,
+                    "stats": None,
+                    "provider": primary.provider,
+                    "providers": sorted({p.provider for p in group}),
+                    "_ids": [p.id for p in group],
+                }
+            )
+
+        if sort_by == "last_modified":
+            projects.sort(key=lambda x: x["last_modified"], reverse=True)
+        elif sort_by == "first_seen":
+            projects.sort(key=lambda x: x["first_seen"])
+        elif sort_by == "size":
+            projects.sort(key=lambda x: x["total_size_mb"], reverse=True)
+        elif sort_by == "name":
+            projects.sort(key=lambda x: x["display_name"])
+
+        total_count = len(projects)
+        if limit:
+            projects = projects[offset : offset + limit]
+
+        if include_stats:
+            for proj in projects:
+                proj["stats"] = _stats_for_ids(
+                    proj["_ids"],
+                    mart_rows=mart_rows,
+                    lite_stats=lite_stats,
+                    cost_by_pid=cost_by_pid,
+                )
+
+        for proj in projects:
+            proj.pop("_ids", None)
+    finally:
+        conn.close()
+
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    if rate != 1.0 and include_stats:
+        for proj in projects:
+            stats = proj.get("stats")
+            if isinstance(stats, dict) and "total_cost" in stats:
+                stats["total_cost"] = float(stats["total_cost"]) * rate
+
+    return {
+        "projects": projects,
+        "total_count": total_count,
+        "has_more": offset + limit < total_count if limit else False,
+        "cache_status": {
+            "cached_count": 0,
+            "total_projects": total_count,
+        },
+        "currency": currency,
+    }
 
 
 def _resolve_log_dir(path: str | None, slug: str) -> str:
@@ -395,7 +422,7 @@ def _stats_for_ids(
         "total_output_tokens": sum(p["total_output_tokens"] for p in parts),
         "total_cache_read": sum(p["total_cache_read"] for p in parts),
         "total_cache_write": sum(p["total_cache_write"] for p in parts),
-        "total_commands": sum(p["total_commands"] for p in parts),
+        "total_commands": _opt_sum_commands(parts),
         "avg_tokens_per_command": 0,
         "avg_steps_per_command": 0,
         "compact_summary_count": 0,
@@ -408,17 +435,27 @@ def _stats_for_ids(
 def _mart_row_to_stats(row: dict) -> dict:
     """Project ``project_mart`` row → ProjectStats UI shape.
 
-    Aggregator-only fields (avg_tokens_per_command, etc.) default to
-    zero/None — same as ``bulk_project_lite_stats``. The list view
-    doesn't surface them and the per-project detail view runs the full
-    aggregator separately.
+    ``total_commands`` is ``None`` (not ``0``): a "command" is a user turn,
+    but user turns never become ``usage_events`` (the normalizers only emit
+    billable assistant rows), so no mart — ``project_mart``,
+    ``session_mart.user_message_count``, etc. — carries the count. The only
+    source is a full ``role='user'`` scan of the partitioned ``messages``
+    view (~750ms on the user's store, no role index), which would reintroduce
+    exactly the cost the mart fast-path exists to avoid. Emitting ``None``
+    makes the UI render ``-`` ("not computed here", same as
+    ``avg_steps_per_command`` already does) rather than a misleading ``0``;
+    the real per-command analytics live in the per-project detail view,
+    which runs the full aggregator on demand.
+
+    Other aggregator-only fields (avg_tokens_per_command, etc.) default to
+    zero — same as ``bulk_project_lite_stats``.
     """
     return {
         "total_input_tokens": int(row.get("total_input_tokens", 0) or 0),
         "total_output_tokens": int(row.get("total_output_tokens", 0) or 0),
         "total_cache_read": int(row.get("total_cache_read", 0) or 0),
         "total_cache_write": int(row.get("total_cache_create", 0) or 0),
-        "total_commands": 0,
+        "total_commands": None,
         "avg_tokens_per_command": 0,
         "avg_steps_per_command": 0,
         "compact_summary_count": 0,
@@ -426,6 +463,19 @@ def _mart_row_to_stats(row: dict) -> dict:
         "last_message_date": row.get("last_ts"),
         "total_cost": float(row.get("total_cost_usd", 0.0) or 0.0),
     }
+
+
+def _opt_sum_commands(parts: list[dict]) -> int | None:
+    """Sum ``total_commands`` across merged parts, tolerating ``None``.
+
+    Mart-backed parts carry ``None`` ("unknown", see :func:`_mart_row_to_stats`)
+    while lite-backed parts carry an integer proxy. When every part is
+    unknown the merged slug is unknown too (``None`` → UI renders ``-``);
+    when at least one part has a real count we sum the known ones so a
+    mixed provider-duplicate slug still surfaces what it can.
+    """
+    known = [p["total_commands"] for p in parts if p.get("total_commands") is not None]
+    return sum(known) if known else None
 
 
 def _bulk_lite_merge(
@@ -543,7 +593,6 @@ def _project_stats_for_ui(conn, project_id: int) -> dict:
     }
 
 
-
 @router.get("/api/providers")
 async def get_providers():
     """List every provider currently active in the store.
@@ -589,17 +638,69 @@ async def get_providers():
 
 @router.get("/api/global-stats")
 async def get_global_stats():
-    """Aggregated statistics across all projects, backed by the session store."""
+    """Aggregated statistics across all projects, backed by the session store.
+
+    The (mart-backed, ~10ms) store query + currency read are blocking sync
+    work, so they run in a worker thread (``run_in_threadpool``) — the event
+    loop keeps serving other requests instead of stalling on the scan.
+    """
     try:
-        conn = db.connect(deps.store_path)
-        try:
-            stats = queries.get_global_stats(conn)
-        finally:
-            conn.close()
-        stats["config"] = {"max_date_range_days": deps.config.get("max_date_range_days")}
-        return JSONResponse(stats)
+        payload = await run_in_threadpool(_compute_global_stats)
+        return JSONResponse(payload)
     except Exception as e:
         return JSONResponse(
             {"error": f"Failed to get global stats: {str(e)}"},
             status_code=500,
         )
+
+
+def _compute_global_stats() -> dict:
+    """Blocking body of ``GET /api/global-stats`` — runs in a worker thread.
+
+    Reads the cross-project stats from the store, converts every USD cost
+    figure into the active display currency, and stamps on the ``currency``
+    + ``config`` blocks the Overview expects.
+    """
+    conn = db.connect(deps.store_path)
+    try:
+        stats = queries.get_global_stats(conn)
+    finally:
+        conn.close()
+
+    # The store records cost in USD; convert every cost figure into the
+    # active display currency (and ship the currency block) so the Overview
+    # never renders USD magnitudes under a € / £ symbol — parity with the
+    # project-list + cost-data routes.
+    currency = active_currency_payload()
+    rate = currency["rate_from_usd"]
+    if rate != 1.0:
+        _convert_global_stats_costs(stats, rate)
+    stats["currency"] = currency
+
+    stats["config"] = {"max_date_range_days": deps.config.get("max_date_range_days")}
+    return stats
+
+
+def _convert_global_stats_costs(stats: dict, rate: float) -> None:
+    """Scale every USD cost figure in the global-stats payload by ``rate``.
+
+    Touches the three cost-bearing shapes the Overview reads —
+    ``models[*].cost``, ``daily_costs[*].cost`` and the nested
+    ``daily_costs[*].by_model[*]`` — and leaves token counts, message
+    counts and dates untouched. (``cost.py``'s ``_convert_in_place`` keys on
+    a fixed set of field *names*, so it would miss the ``by_model`` leaves
+    whose keys are model ids, not ``"cost"`` — hence this purpose-built
+    walker.) Mutates ``stats`` in place.
+    """
+    for m in stats.get("models", {}).values():
+        if isinstance(m, dict) and "cost" in m:
+            m["cost"] = float(m["cost"]) * rate
+    for bucket in stats.get("daily_costs", []):
+        if not isinstance(bucket, dict):
+            continue
+        if "cost" in bucket:
+            bucket["cost"] = float(bucket["cost"]) * rate
+        by_model = bucket.get("by_model")
+        if isinstance(by_model, dict):
+            for key in list(by_model):
+                by_model[key] = float(by_model[key]) * rate
