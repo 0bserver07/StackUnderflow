@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -32,19 +32,23 @@ import ExportButton from '../components/common/ExportButton'
 import FilterBar from '../components/common/FilterBar'
 import { Breadcrumb, BackButton } from '../components/common/Breadcrumb'
 import { useFilters } from '../services/filters'
-import OverviewTab from '../components/dashboard/OverviewTab'
-import CommandsTab from '../components/dashboard/CommandsTab'
-import MessagesTab from '../components/dashboard/MessagesTab'
-import SearchTab from '../components/dashboard/SearchTab'
-import QATab from '../components/dashboard/QATab'
-import BookmarksTab from '../components/dashboard/BookmarksTab'
-import TagsTab from '../components/dashboard/TagsTab'
-import SessionsTab from '../components/dashboard/SessionsTab'
-import AgentsTab from '../components/dashboard/AgentsTab'
-import PlaybackTab from '../components/dashboard/PlaybackTab'
-import CostTab from '../components/dashboard/CostTab'
-import CompareTab from '../components/dashboard/CompareTab'
-import YieldTab from '../components/dashboard/YieldTab'
+// Tab bodies are code-split: each is fetched on first visit rather than
+// bundled into the dashboard entry chunk. They render one-at-a-time behind a
+// single <Suspense> below (only the active tab is mounted, so a shared
+// boundary is safe). All are default exports, so lazy() needs no .then shim.
+const OverviewTab = lazy(() => import('../components/dashboard/OverviewTab'))
+const CommandsTab = lazy(() => import('../components/dashboard/CommandsTab'))
+const MessagesTab = lazy(() => import('../components/dashboard/MessagesTab'))
+const SearchTab = lazy(() => import('../components/dashboard/SearchTab'))
+const QATab = lazy(() => import('../components/dashboard/QATab'))
+const BookmarksTab = lazy(() => import('../components/dashboard/BookmarksTab'))
+const TagsTab = lazy(() => import('../components/dashboard/TagsTab'))
+const SessionsTab = lazy(() => import('../components/dashboard/SessionsTab'))
+const AgentsTab = lazy(() => import('../components/dashboard/AgentsTab'))
+const PlaybackTab = lazy(() => import('../components/dashboard/PlaybackTab'))
+const CostTab = lazy(() => import('../components/dashboard/CostTab'))
+const CompareTab = lazy(() => import('../components/dashboard/CompareTab'))
+const YieldTab = lazy(() => import('../components/dashboard/YieldTab'))
 import { useBetaFeatures } from '../hooks/useBetaFeatures'
 import BetaBadge from '../components/common/BetaBadge'
 
@@ -328,21 +332,29 @@ export default function ProjectDashboard() {
         </div>
       )}
 
-      {/* Tab Content */}
+      {/* Tab Content — each tab body is a lazy chunk (see imports above).
+          Only the active tab is rendered, so a single Suspense boundary
+          covers the switch: it shows the spinner while that tab's chunk is
+          fetched on first visit, then the browser caches it for subsequent
+          switches. Tab state already resets on switch (conditional render),
+          so lazy loading changes nothing about the existing UX beyond the
+          one-time fetch. */}
       <div>
-        {activeTab === 'overview' && <OverviewTab stats={stats} />}
-        {activeTab === 'cost' && <CostTab stats={stats} />}
-        {activeTab === 'compare' && <CompareTab />}
-        {activeTab === 'yield' && <YieldTab />}
-        {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
-        {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
-        {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
-        {activeTab === 'qa' && <QATab projectName={name!} />}
-        {activeTab === 'bookmarks' && <BookmarksTab />}
-        {activeTab === 'tags' && <TagsTab />}
-        {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
-        {activeTab === 'agents' && <AgentsTab projectName={name!} />}
-        {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
+        <Suspense fallback={<LoadingSpinner size="md" message="Loading..." />}>
+          {activeTab === 'overview' && <OverviewTab stats={stats} />}
+          {activeTab === 'cost' && <CostTab stats={stats} />}
+          {activeTab === 'compare' && <CompareTab />}
+          {activeTab === 'yield' && <YieldTab />}
+          {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
+          {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
+          {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
+          {activeTab === 'qa' && <QATab projectName={name!} />}
+          {activeTab === 'bookmarks' && <BookmarksTab />}
+          {activeTab === 'tags' && <TagsTab />}
+          {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
+          {activeTab === 'agents' && <AgentsTab projectName={name!} />}
+          {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
+        </Suspense>
       </div>
     </div>
   )
