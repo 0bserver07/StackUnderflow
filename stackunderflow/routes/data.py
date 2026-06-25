@@ -62,6 +62,7 @@ def invalidate_dashboard_cache(slug: str | None = None) -> None:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _require_project() -> str:
     if not deps.current_log_path:
         raise HTTPException(status_code=400, detail="No project selected")
@@ -83,9 +84,7 @@ def _get_project_ids(conn, log_path: str) -> list[int]:
     return [r.id for r in _get_project_rows(conn, log_path)]
 
 
-def _filtered_project_ids(
-    conn, log_path: str, provider_filter: set[str] | None
-) -> list[int]:
+def _filtered_project_ids(conn, log_path: str, provider_filter: set[str] | None) -> list[int]:
     """Project ids for the slug, narrowed to ``provider_filter`` when set.
 
     A slug maps to one project per provider (``UNIQUE(provider, slug)``), so a
@@ -228,7 +227,7 @@ async def get_stats(
         _, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=timezone_offset)
     finally:
         conn.close()
-    deps.logger.debug(f"stats [store] {(time.time()-t0)*1000:.1f}ms")
+    deps.logger.debug(f"stats [store] {(time.time() - t0) * 1000:.1f}ms")
 
     if isinstance(stats, dict):
         # Cap daily_stats — default 90 days, ``days=0`` disables.
@@ -330,37 +329,40 @@ async def get_dashboard_data(
                 stats_copy = payload["statistics"]
                 if isinstance(stats_copy, dict) and isinstance(stats_copy.get("models"), dict):
                     import copy as _copy
+
                     stats_copy = _copy.deepcopy(stats_copy)
-                    stats_copy["models"] = {
-                        k: v for k, v in stats_copy["models"].items()
-                        if k.lower() in model_filter
-                    }
+                    stats_copy["models"] = {k: v for k, v in stats_copy["models"].items() if k.lower() in model_filter}
                     payload["statistics"] = stats_copy
             payload["currency"] = active_currency_payload()
-            deps.logger.debug(
-                f"dashboard-data [hit] {(time.time()-t0)*1000:.1f}ms"
-            )
+            deps.logger.debug(f"dashboard-data [hit] {(time.time() - t0) * 1000:.1f}ms")
             return payload
 
-        # Wave 3A: when the project is materialised in ``project_mart``,
-        # serve the dashboard payload from mart reads. Other keys
-        # (tools/errors/hourly_pattern/sessions/user_interactions) are
-        # not yet covered by marts — they get shape-stable empties so
-        # the JSON contract holds. The heavy detail blocks already
-        # live behind dedicated endpoints (/api/cost-data,
-        # /api/commands, /api/tool-distribution) that load lazily.
-        if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
+        # Wave 3A: when EVERY project row for this slug is materialised in
+        # ``project_mart``, serve the dashboard payload from mart reads. A
+        # slug maps to one project per provider (``UNIQUE(provider, slug)``),
+        # so a multi-provider project (claude + codex + antigravity + …) has
+        # several ids — we loop over all of them and merge the mart rows
+        # (summing additive totals) instead of bailing to the ~3.1s pipeline
+        # whenever ``len(project_ids) != 1`` (the old guard, which made every
+        # multi-provider slug pay the full scan on each cache miss).
+        #
+        # Gate on ALL ids being materialised: if any provider's id is missing
+        # a ``project_mart`` row (ETL hasn't caught up for that source yet) we
+        # fall through to the full pipeline rather than serve an undercounted
+        # merge. Blocks the marts genuinely don't carry (errors.by_category,
+        # interaction-grain ``user_interactions``, hour-of-day ``hourly_pattern``)
+        # stay shape-stable so the JSON contract holds; tools + cache + overview
+        # + daily + models are now sourced from marts (see _stats_from_marts).
+        if project_ids and all(mart_queries.mart_has_project_row(conn, project_id=pid) for pid in project_ids):
             stats = _stats_from_marts(
                 conn,
-                project_id=project_ids[0],
+                project_ids=project_ids,
                 provider_filter=provider_filter,
                 model_filter=None,  # model filter applied below for parity
             )
             messages = []  # dashboard-data only ever exposed first 50 — see §A3
         else:
-            messages, stats = queries.get_project_stats(
-                conn, project_id=project_ids, tz_offset=timezone_offset
-            )
+            messages, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=timezone_offset)
     finally:
         conn.close()
 
@@ -378,8 +380,7 @@ async def get_dashboard_data(
     ui = lean_stats.get("user_interactions")
     if isinstance(ui, dict):
         lean_stats["user_interactions"] = {
-            k: v for k, v in ui.items()
-            if k not in {"command_details", "tool_count_distribution"}
+            k: v for k, v in ui.items() if k not in {"command_details", "tool_count_distribution"}
         }
     # Apply model filter to the `models` map so the Overview tab's model
     # distribution card respects the active selection. We don't recompute
@@ -391,10 +392,7 @@ async def get_dashboard_data(
     if model_filter is not None:
         models = lean_stats.get("models")
         if isinstance(models, dict):
-            lean_stats["models"] = {
-                k: v for k, v in models.items()
-                if k.lower() in model_filter
-            }
+            lean_stats["models"] = {k: v for k, v in models.items() if k.lower() in model_filter}
     payload = {
         "statistics": lean_stats,
         "messages_page": first_page,
@@ -412,61 +410,164 @@ async def get_dashboard_data(
     payload = dict(payload)
     payload["statistics"] = _apply_currency_to_stats(payload["statistics"])
     payload["currency"] = active_currency_payload()
-    deps.logger.debug(f"dashboard-data [miss] {(time.time()-t0)*1000:.1f}ms")
+    deps.logger.debug(f"dashboard-data [miss] {(time.time() - t0) * 1000:.1f}ms")
     return payload
+
+
+# Additive ``project_mart`` columns — safe to SUM when merging the
+# per-provider rows of a single slug into one lifetime total.
+_PROJECT_MART_ADDITIVE: tuple[str, ...] = (
+    "total_messages",
+    "total_sessions",
+    "total_input_tokens",
+    "total_output_tokens",
+    "total_cache_read",
+    "total_cache_create",
+    "total_cost_usd",
+)
+
+
+def _merge_project_mart_rows(rows: list[dict | None]) -> dict | None:
+    """Merge per-provider ``project_mart`` rows into one lifetime total.
+
+    Sums the additive token/cost/message/session columns; takes the
+    earliest ``first_ts`` and latest ``last_ts`` across rows (ISO-8601
+    strings sort chronologically). A slug's providers never share a
+    session id (sessions are per-provider), so summing ``total_sessions``
+    needs no cross-provider dedup. Returns ``None`` for an empty list so
+    callers fall back to the daily-aggregate overview path.
+    """
+    present: list[dict] = [r for r in rows if r]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+    merged: dict = {k: 0 for k in _PROJECT_MART_ADDITIVE}
+    first_seen: list[str] = []
+    last_seen: list[str] = []
+    for r in present:
+        for k in _PROJECT_MART_ADDITIVE:
+            merged[k] += r.get(k) or 0
+        if r.get("first_ts"):
+            first_seen.append(r["first_ts"])
+        if r.get("last_ts"):
+            last_seen.append(r["last_ts"])
+    merged["first_ts"] = min(first_seen) if first_seen else None
+    merged["last_ts"] = max(last_seen) if last_seen else None
+    # Carry identity columns from the first row so the merged dict keeps a
+    # shape-stable contract (consumers only read the additive + ts fields).
+    for k in ("provider", "slug", "display_name"):
+        merged[k] = present[0].get(k)
+    return merged
+
+
+def _cache_block_from_mart(merged_row: dict | None) -> dict:
+    """Derive the ``cache`` block from ``project_mart`` cache-token totals.
+
+    Mirrors the dollar/ROI maths in ``aggregator._CacheCollector.result``
+    (``cost_saved = read·0.9 − created·0.25``; break-even when read >
+    created) so the Cache-ROI hero card renders its real headline metric
+    (ROI %, tokens saved, cost saved) off the mart.
+
+    ``hit_rate`` is left ``0.0``: it's ``messages_with_cache_read /
+    assistant_messages``, a per-message-flag ratio no mart materialises —
+    sourcing it faithfully would need the full enrich pass we're avoiding.
+    """
+    if not merged_row:
+        return {"hit_rate": 0.0}
+    created = int(merged_row.get("total_cache_create", 0) or 0)
+    read = int(merged_row.get("total_cache_read", 0) or 0)
+    return {
+        "total_created": created,
+        "total_read": read,
+        "tokens_saved": read - created,
+        "cost_saved_base_units": round(read * 0.9 - created * 0.25, 2),
+        "break_even_achieved": read > created,
+        "hit_rate": 0.0,  # per-message cache-read flag count not materialised
+    }
+
+
+def _tools_usage_from_marts(conn, project_ids: list[int]) -> dict[str, int]:
+    """Merge per-tool call counts across every project id into ``usage_counts``.
+
+    ``tool_mart`` carries the 1/N-attribution-unit call count per
+    ``(tool_name, project)``; we sum it across providers so the Overview
+    Tool-Use charts render real usage. ``error_counts`` / ``error_rates``
+    have no mart source (no per-tool error flag is materialised) so the
+    caller leaves them empty.
+    """
+    usage: dict[str, int] = {}
+    for pid in project_ids:
+        for name, t in mart_queries.tool_mart_for_project(conn, project_id=pid).items():
+            usage[name] = usage.get(name, 0) + int(t.get("calls", 0) or 0)
+    return usage
 
 
 def _stats_from_marts(
     conn,
     *,
-    project_id: int,
+    project_ids: list[int],
     provider_filter: set[str] | None = None,
     model_filter: set[str] | None = None,
 ) -> dict:
     """Build the dashboard ``statistics`` block from mart reads only.
 
-    Three mart sources combine into the legacy aggregator shape:
+    Loops over EVERY project id for the slug (one per provider) and merges
+    the mart rows so a multi-provider project gets correct lifetime totals
+    without falling through to the ~3.1s aggregator pipeline:
 
-    * ``project_mart`` → ``overview`` lifetime totals
-    * ``daily_mart``   → ``daily_stats`` time-series + ``models`` map
-    * cost / token rollups in both → keys consumed by the UI's Overview
-      cards
+    * ``project_mart`` (summed) → ``overview`` lifetime totals + ``cache``
+    * ``daily_mart``   (concatenated) → ``daily_stats`` + ``models`` map
+    * ``tool_mart``    (summed)  → ``tools.usage_counts``
 
-    Keys that depend on raw-message columns the marts don't carry —
-    ``tools``, ``errors``, ``hourly_pattern``, ``cache``, per-session
-    detail, ``user_interactions`` — are returned with shape-stable
-    empties. The heavy detail blocks already live behind dedicated
-    endpoints (``/api/cost-data``, ``/api/commands``,
-    ``/api/tool-distribution``) that the dashboard fetches lazily;
-    the trade-off here is sub-50ms initial paint vs slightly less
-    rich initial response.
+    Keys that depend on raw-message / interaction columns no mart carries —
+    ``errors.by_category``, hour-of-day ``hourly_pattern``, interaction-grain
+    ``user_interactions`` (command counts, tools-per-command, interruption
+    rate), and ``cache.hit_rate`` — are returned with shape-stable values so
+    the JSON contract holds. ``hourly_pattern`` is the ``{messages, tokens}``
+    dict the HourlyPatternChart expects (NOT a bare ``[]``, which is truthy
+    and would dodge the frontend's ``?? {messages, tokens}`` fallback,
+    rendering a blank chart). The heavy detail blocks live behind dedicated
+    lazy endpoints (``/api/cost-data``, ``/api/commands``,
+    ``/api/tool-distribution``).
     """
-    proj_row = mart_queries.get_project_mart_row(conn, project_id=project_id)
-    daily_rows = mart_queries.daily_for_project(
-        conn,
-        project_id=project_id,
-        provider_filter=provider_filter,
-        model_filter=model_filter,
-    )
+    proj_rows = [mart_queries.get_project_mart_row(conn, project_id=pid) for pid in project_ids]
+    merged_proj = _merge_project_mart_rows(proj_rows)
 
-    overview = mart_queries.daily_mart_to_overview(
-        daily_rows, project_mart_row=proj_row
-    )
+    # Concatenate daily rows across every provider id; daily_mart_by_day /
+    # _by_model fold the combined list, so multi-provider days merge cleanly.
+    daily_rows: list[dict] = []
+    for pid in project_ids:
+        daily_rows.extend(
+            mart_queries.daily_for_project(
+                conn,
+                project_id=pid,
+                provider_filter=provider_filter,
+                model_filter=model_filter,
+            )
+        )
+
+    overview = mart_queries.daily_mart_to_overview(daily_rows, project_mart_row=merged_proj)
     daily_stats = mart_queries.daily_mart_by_day(daily_rows)
     models = mart_queries.daily_mart_by_model(daily_rows)
+    tools_usage = _tools_usage_from_marts(conn, project_ids)
 
     return {
         "overview": overview,
-        "tools": {"usage_counts": {}, "error_counts": {}, "error_rates": {}},
+        "tools": {
+            "usage_counts": tools_usage,
+            "error_counts": {},
+            "error_rates": {},
+        },
         "sessions": {
-            "count": int(proj_row.get("total_sessions", 0)) if proj_row else 0,
+            "count": int(merged_proj.get("total_sessions", 0)) if merged_proj else 0,
         },
         "daily_stats": daily_stats,
-        "hourly_pattern": [],
+        "hourly_pattern": {"messages": {}, "tokens": {}},
         "errors": {"total": 0},
         "models": models,
         "user_interactions": {},
-        "cache": {"hit_rate": 0.0},
+        "cache": _cache_block_from_mart(merged_proj),
     }
 
 
@@ -479,6 +580,7 @@ def _apply_currency_to_stats(stats: dict) -> dict:
     # Deep-copy via JSON round-trip — _convert_in_place mutates, and we don't
     # want to scale the cached USD payload.
     import copy
+
     scaled = copy.deepcopy(stats)
     _convert_in_place(scaled, rate)
     return scaled
@@ -600,7 +702,7 @@ async def get_messages(
         conn.close()
 
     page_payload = build_messages_page(page_messages, total=total, page=page, per_page=per_page)
-    deps.logger.debug(f"messages [store] {(time.time()-t0)*1000:.1f}ms")
+    deps.logger.debug(f"messages [store] {(time.time() - t0) * 1000:.1f}ms")
     return page_payload
 
 
@@ -620,9 +722,11 @@ async def get_messages_summary_endpoint():
     conn = db.connect(deps.store_path)
     try:
         project_ids = _get_project_ids(conn, log_path)
-        mart_totals = mart_queries.project_mart_messages_summary_totals(
-            conn, project_id=project_ids[0]
-        ) if len(project_ids) == 1 else None
+        mart_totals = (
+            mart_queries.project_mart_messages_summary_totals(conn, project_id=project_ids[0])
+            if len(project_ids) == 1
+            else None
+        )
         messages = queries.get_project_messages(conn, project_id=project_ids)
     finally:
         conn.close()
@@ -665,6 +769,7 @@ async def refresh_data(request: dict):
         # bump on a filesystem that hasn't flushed yet.
         try:
             from stackunderflow.routes.optimize import invalidate_optimize_cache
+
             invalidate_optimize_cache()
         except ImportError:
             pass  # optimize route not registered (test environments)
@@ -682,16 +787,17 @@ async def refresh_data(request: dict):
             conn2.close()
 
     ms = int((time.time() - t0) * 1000)
-    return JSONResponse({
-        "status": "success",
-        "message": (
-            "Files changed - data refreshed successfully"
-            if new_msgs else "No changes detected - using cached data"
-        ),
-        "files_changed": new_msgs > 0,
-        "message_count": new_msgs,
-        "refresh_time_ms": ms,
-    })
+    return JSONResponse(
+        {
+            "status": "success",
+            "message": (
+                "Files changed - data refreshed successfully" if new_msgs else "No changes detected - using cached data"
+            ),
+            "files_changed": new_msgs > 0,
+            "message_count": new_msgs,
+            "refresh_time_ms": ms,
+        }
+    )
 
 
 async def refresh_all_projects(request: dict):
@@ -709,18 +815,18 @@ async def refresh_all_projects(request: dict):
         invalidate_dashboard_cache()
         try:
             from stackunderflow.routes.optimize import invalidate_optimize_cache
+
             invalidate_optimize_cache()
         except ImportError:
             pass  # optimize route not registered (test environments)
     ms = int((time.time() - t0) * 1000)
-    return JSONResponse({
-        "status": "success",
-        "message": (
-            f"Ingested {total_new} new records"
-            if total_new else "No changes detected"
-        ),
-        "files_changed": total_new > 0,
-        "refresh_time_ms": ms,
-        "projects_refreshed": total_new,
-        "total_projects": total_new,
-    })
+    return JSONResponse(
+        {
+            "status": "success",
+            "message": (f"Ingested {total_new} new records" if total_new else "No changes detected"),
+            "files_changed": total_new > 0,
+            "refresh_time_ms": ms,
+            "projects_refreshed": total_new,
+            "total_projects": total_new,
+        }
+    )
