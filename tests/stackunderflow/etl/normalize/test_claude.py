@@ -91,6 +91,10 @@ def test_unknown_model_stamps_cost_source_unknown() -> None:
     events = list(ClaudeNormalizer().normalize(row))
     assert len(events) == 1
     assert events[0]["cost_source"] == COST_SOURCE_UNKNOWN
+    # Spec invariant (docs/specs/session-schema-v1.md): an unknown model
+    # contributes 0 dollars — never a phantom Anthropic-heuristic fallback.
+    # Regression for the cost_source='unknown'-with-nonzero-cost drift.
+    assert events[0]["cost_usd"] == 0.0
 
 
 def test_speed_passes_through() -> None:
@@ -104,12 +108,15 @@ def test_speed_passes_through() -> None:
     assert events[0]["speed"] == "fast"
 
 
-@pytest.mark.parametrize("ts,expected_day", [
-    ("2026-04-25T10:30:00+00:00", "2026-04-25"),
-    ("2026-01-01T00:00:00Z", "2026-01-01"),
-    ("", ""),
-    ("not-a-date", ""),
-])
+@pytest.mark.parametrize(
+    "ts,expected_day",
+    [
+        ("2026-04-25T10:30:00+00:00", "2026-04-25"),
+        ("2026-01-01T00:00:00Z", "2026-01-01"),
+        ("", ""),
+        ("not-a-date", ""),
+    ],
+)
 def test_day_derived_from_timestamp(ts: str, expected_day: str) -> None:
     row = _msg_row(timestamp=ts, input_tokens=10, output_tokens=10)
     events = list(ClaudeNormalizer().normalize(row))

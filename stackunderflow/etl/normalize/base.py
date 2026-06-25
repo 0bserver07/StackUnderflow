@@ -53,12 +53,14 @@ COST_SOURCE_RATE_CARD = "rate_card"
 COST_SOURCE_ESTIMATED = "estimated"
 COST_SOURCE_UNKNOWN = "unknown"
 
-_VALID_COST_SOURCES = frozenset({
-    COST_SOURCE_LIVE,
-    COST_SOURCE_RATE_CARD,
-    COST_SOURCE_ESTIMATED,
-    COST_SOURCE_UNKNOWN,
-})
+_VALID_COST_SOURCES = frozenset(
+    {
+        COST_SOURCE_LIVE,
+        COST_SOURCE_RATE_CARD,
+        COST_SOURCE_ESTIMATED,
+        COST_SOURCE_UNKNOWN,
+    }
+)
 
 
 class Normalizer(ABC):
@@ -100,16 +102,11 @@ class Normalizer(ABC):
         is responsible for the actual ``INSERT``.
         """
         if cost_source not in _VALID_COST_SOURCES:
-            raise ValueError(
-                f"cost_source must be one of {_VALID_COST_SOURCES!r}; "
-                f"got {cost_source!r}"
-            )
+            raise ValueError(f"cost_source must be one of {_VALID_COST_SOURCES!r}; got {cost_source!r}")
         ts_value = ts if ts is not None else str(msg_row.get("timestamp") or "")
         model_value = model if model is not None else (msg_row.get("model") or "")
         role_value = role if role is not None else str(msg_row.get("role") or "")
-        speed_value = (
-            speed if speed is not None else str(msg_row.get("speed") or "standard")
-        )
+        speed_value = speed if speed is not None else str(msg_row.get("speed") or "standard")
 
         cost_usd = self._compute_cost_usd(
             input_tokens=input_tokens,
@@ -156,11 +153,16 @@ class Normalizer(ABC):
     ) -> float:
         """One-shot price lookup; never raises.
 
-        Returns 0.0 when the model has no rate-card entry — that case
-        is reflected in the ``cost_source='unknown'`` flag the caller
-        is expected to set.
+        Returns 0.0 when ``cost_source`` is ``'unknown'`` (the caller
+        determined the model is not in the rate card) or the model is
+        empty. Honoring the flag is required for spec compliance: an
+        unrecognized id falls through ``compute_cost`` to the Anthropic
+        family heuristic, which returns *non-zero* conservative rates, so
+        without this guard an ``unknown`` row would accrue phantom dollars
+        — violating ``docs/specs/session-schema-v1.md`` (``unknown`` ⇒
+        ``cost_usd`` 0.0) and inflating dollar totals.
         """
-        if not model:
+        if not model or cost_source == COST_SOURCE_UNKNOWN:
             return 0.0
         # Pricer expects the canonical 4-key tokens shape (see
         # ``infra/costs.py``). All four fields default to 0.
@@ -172,8 +174,11 @@ class Normalizer(ABC):
         }
         try:
             breakdown = compute_cost(
-                tokens, model, provider=_provider_for(self.provider_name),
-                speed=speed, at_ts=at_ts,
+                tokens,
+                model,
+                provider=_provider_for(self.provider_name),
+                speed=speed,
+                at_ts=at_ts,
             )
         except Exception:  # noqa: BLE001 — pricing must never break ingest
             return 0.0
@@ -194,7 +199,7 @@ _PROVIDER_TO_PRICER = {
     "codex": "openai",
     "openai": "openai",
     "cursor": "anthropic",  # Cursor uses Anthropic + OpenAI mix; default to Anthropic rates
-    "cline": "cline",       # Cline pricer routes by vendor prefix
+    "cline": "cline",  # Cline pricer routes by vendor prefix
     "kilocode": "kilocode",
     "roocode": "roocode",
     "opencode": "opencode",
@@ -233,6 +238,7 @@ def _day_from_ts(ts: str) -> str:
     # Last-ditch: try datetime.fromisoformat (handles ``Z`` suffix in
     # Python 3.11+ when normalised).
     from datetime import datetime
+
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
