@@ -15,6 +15,8 @@ Two endpoints live here:
 
 from __future__ import annotations
 
+import copy
+import threading
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -37,7 +39,17 @@ _COST_FIELDS_PER_ROW: tuple[str, ...] = (
     "total_cost",
     "estimated_retry_cost",
     "estimated_cost",
+    "estimated_wasted_cost",
+    "cost_per_command",
 )
+
+# Sub-trees whose numeric leaves are ratios / period-over-period percentages,
+# NOT absolute USD amounts — currency conversion must skip them wholesale.
+# ``trends.delta_pct`` carries ``cost`` / ``cost_per_command`` keys that are
+# percentage deltas (``(cur - prior) / prior * 100``); FX-scaling them would
+# silently distort the number the UI renders as a "%". We prune the whole
+# branch by parent name before any leaf reaches the cost whitelist.
+_NO_CONVERT_SUBTREES: frozenset[str] = frozenset({"delta_pct"})
 
 
 def _convert_amount(value: Any, rate: float) -> Any:
@@ -51,10 +63,14 @@ def _convert_in_place(node: Any, rate: float) -> Any:
 
     We deliberately key on field names — touching every numeric value would
     incorrectly scale token counts, durations, and retry counts that share
-    a parent dict with cost figures.
+    a parent dict with cost figures. Sub-trees named in
+    ``_NO_CONVERT_SUBTREES`` (e.g. ``trends.delta_pct``) hold percentages,
+    not dollars, so we prune them rather than descend.
     """
     if isinstance(node, dict):
         for key, val in list(node.items()):
+            if key in _NO_CONVERT_SUBTREES:
+                continue
             if key in _COST_FIELDS_PER_ROW:
                 node[key] = _convert_amount(val, rate)
             else:
@@ -101,6 +117,72 @@ def _project_ids_for(conn, path: str) -> list[int]:
     return [r.id for r in rows]
 
 
+# ── project-stats memo (perf, RANK 11) ────────────────────────────────────────
+
+# ``/api/cost-data`` and ``/api/tool-distribution`` both need the full,
+# uncached ``queries.get_project_stats`` sweep (the collector pipeline —
+# 1.4-4s on big projects). Without a memo the Overview tab pays that cost
+# 2-3x over: ``/api/dashboard-data`` runs the pipeline, then ``/api/cost-data``
+# runs it again, then ``/api/tool-distribution`` a third time. We memoize the
+# raw (USD, pre-overlay) stats dict keyed on (store, slug, tz_offset) plus a
+# sessions signature (max ``last_ts``, summed ``message_count``). The signature
+# moves the instant ingest writes new rows, so a stale entry can't outlive a
+# refresh — the same self-invalidation contract data.py's ``_DASHBOARD_CACHE``
+# relies on. (Pricing-config edits don't bump the signature; those are rare and
+# self-heal on the next ingest — matching the dashboard cache's blast radius.)
+_STATS_CACHE: dict[tuple[str, str, int], tuple[tuple[str | None, int], dict]] = {}
+_STATS_CACHE_LOCK = threading.Lock()
+
+
+def _stats_signature(conn, project_ids: list[int]) -> tuple[str | None, int]:
+    """(max last_ts, summed message_count) over the project's sessions.
+
+    Mirrors ``routes.data._dashboard_signature`` — replicated rather than
+    imported because data.py imports from this module (importing back would
+    cycle).
+    """
+    if not project_ids:
+        return (None, 0)
+    placeholders = ",".join("?" for _ in project_ids)
+    row = conn.execute(
+        f"SELECT MAX(last_ts) AS max_ts, COALESCE(SUM(message_count), 0) AS n "
+        f"FROM sessions WHERE project_id IN ({placeholders})",
+        tuple(project_ids),
+    ).fetchone()
+    return (row["max_ts"], int(row["n"] or 0))
+
+
+def _invalidate_stats_cache(slug: str | None = None) -> None:
+    """Drop memoized stats. ``slug=None`` clears every entry."""
+    with _STATS_CACHE_LOCK:
+        if slug is None:
+            _STATS_CACHE.clear()
+            return
+        for key in list(_STATS_CACHE):
+            if key[1] == slug:
+                del _STATS_CACHE[key]
+
+
+def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset: int) -> dict:
+    """Memoized ``queries.get_project_stats`` → stats dict (USD, pre-overlay).
+
+    Returns a deep copy so the caller may mutate freely (mart overlay,
+    currency conversion) without poisoning the shared cache entry. On a
+    signature mismatch (new ingest) or cold cache the full pipeline runs and
+    the result is cached for the next reader.
+    """
+    sig = _stats_signature(conn, project_ids)
+    cache_key = (str(deps.store_path), slug, tz_offset)
+    with _STATS_CACHE_LOCK:
+        cached = _STATS_CACHE.get(cache_key)
+    if cached is not None and cached[0] == sig:
+        return copy.deepcopy(cached[1])
+    _, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=tz_offset)
+    with _STATS_CACHE_LOCK:
+        _STATS_CACHE[cache_key] = (sig, stats)
+    return copy.deepcopy(stats)
+
+
 @router.get("/api/cost-data")
 async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
     """Return only the 9 cost/analytics sections split off from dashboard-data.
@@ -110,12 +192,13 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
     without guarding for undefined sections.
     """
     path = _resolve_log_path(log_path)
+    slug = Path(path).name
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path)
-        _, stats = queries.get_project_stats(
-            conn, project_id=project_ids, tz_offset=timezone_offset
-        )
+        # RANK 11: memoize the heavy pipeline so repeat Overview/Cost loads
+        # (and the sibling /api/tool-distribution call) skip the recompute.
+        stats = _project_stats_cached(conn, project_ids=project_ids, slug=slug, tz_offset=timezone_offset)
         # Wave 3A: when the project is materialised, overlay the
         # token_composition.daily/totals blocks with daily_mart-derived
         # values. Per-session / per-command / per-tool detail blocks
@@ -126,9 +209,7 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
         # the period split (current vs prior) needs interaction-level
         # correlations the daily mart can\'t see by itself.
         if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
-            stats = _overlay_mart_rollups(
-                conn, project_id=project_ids[0], stats=stats
-            )
+            stats = _overlay_mart_rollups(conn, project_id=project_ids[0], stats=stats)
     finally:
         conn.close()
 
@@ -218,7 +299,8 @@ def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
     # mart → keep whatever the aggregator emitted (default fallback).
     if mart_queries.mart_has_tool_rows(conn):
         tool_rows = mart_queries.tool_mart_for_project(
-            conn, project_id=project_id,
+            conn,
+            project_id=project_id,
         )
         if tool_rows:
             stats["tool_costs"] = _tool_mart_to_aggregator_shape(tool_rows)
@@ -281,6 +363,7 @@ _BY_PROVIDER_PERIOD_MAP: dict[str, str] = {
 
 @router.get("/api/cost-data/by-provider")
 async def get_cost_by_provider(
+    log_path: str | None = None,
     period: str = "month",
     provider: Annotated[list[str] | None, Query()] = None,
 ):
@@ -292,6 +375,11 @@ async def get_cost_by_provider(
     so the frontend never multiplies by an FX rate.
 
     Args:
+        log_path: Optional project log path; defaults to
+            ``deps.current_log_path``. When a project is active the rollup is
+            scoped to THAT project (RANK 19 fix) — the card lives on a
+            project's Cost tab and must not leak cross-project spend. With no
+            project selected the rollup spans the whole store.
         period: One of ``today | week | month | all``. Defaults to ``month``
             so the card lines up with the Compare tab's default view.
 
@@ -307,10 +395,7 @@ async def get_cost_by_provider(
     if spec is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Unknown period '{period}'. "
-                f"Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"
-            ),
+            detail=(f"Unknown period '{period}'. Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"),
         )
     scope = parse_period(spec)
 
@@ -320,21 +405,35 @@ async def get_cost_by_provider(
     day_from = scope.since[:10] if scope.since else None
     day_to = scope.until[:10] if scope.until else None
 
+    # RANK 19: when a project is active this card must show THAT project's
+    # per-provider spend, not the whole store's. ``provider_day_mart`` is
+    # keyed (day, provider) with no project_id, so it can only answer the
+    # all-projects question — a project-scoped request therefore bypasses the
+    # mart and rolls up the project-filtered ``messages`` table instead. With
+    # no project selected we keep the fast global mart path (the cross-project
+    # dashboard view + existing callers).
+    path = log_path or deps.current_log_path
+
     conn = db.connect(deps.store_path)
     try:
-        # Wave 3A: when ``provider_day_mart`` has rows in window, the
-        # rollup is one indexed scan over a tiny pre-aggregated table.
-        # We still fall back to the messages-table sweep when the mart
-        # is empty so a half-finished backfill keeps working.
-        mart_rows_pd = mart_queries.provider_day_rollup(
-            conn, day_from=day_from, day_to=day_to
-        )
-        if mart_rows_pd:
-            out_rows = _build_by_provider_rows_from_mart(mart_rows_pd)
-        else:
+        if path:
+            project_ids = _project_ids_for(conn, path)
             out_rows = _build_by_provider_rows_from_messages(
-                conn, scope=scope, compute_cost=compute_cost
+                conn,
+                scope=scope,
+                compute_cost=compute_cost,
+                project_ids=project_ids,
             )
+        else:
+            # Wave 3A: when ``provider_day_mart`` has rows in window, the
+            # rollup is one indexed scan over a tiny pre-aggregated table.
+            # We still fall back to the messages-table sweep when the mart
+            # is empty so a half-finished backfill keeps working.
+            mart_rows_pd = mart_queries.provider_day_rollup(conn, day_from=day_from, day_to=day_to)
+            if mart_rows_pd:
+                out_rows = _build_by_provider_rows_from_mart(mart_rows_pd)
+            else:
+                out_rows = _build_by_provider_rows_from_messages(conn, scope=scope, compute_cost=compute_cost)
     finally:
         conn.close()
 
@@ -385,22 +484,26 @@ def _build_by_provider_rows_from_messages(
     *,
     scope,
     compute_cost,
+    project_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregator-path rollup over the raw ``messages`` table.
 
-    Used as the fallback when ``provider_day_mart`` is empty. Mirrors
-    the v0.6.1 implementation byte-for-byte so the JSON contract is
-    stable regardless of which path produced the row.
+    Used as the fallback when ``provider_day_mart`` is empty AND as the
+    project-scoped path (RANK 19) — passing ``project_ids`` narrows the sweep
+    to one project's sessions so the by-provider card stops leaking the whole
+    store's spend. The global (no ``project_ids``) shape mirrors the v0.6.1
+    implementation byte-for-byte so the JSON contract is stable regardless of
+    which path produced the row.
     """
     sql = (
         "SELECT projects.provider AS provider, "
         "       sessions.id AS session_id, "
-        "       COALESCE(messages.model, \'\') AS model, "
+        "       COALESCE(messages.model, '') AS model, "
         "       COALESCE(messages.input_tokens, 0) AS input_tokens, "
         "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
         "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
         "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
-        "       COALESCE(messages.speed, \'standard\') AS speed, "
+        "       COALESCE(messages.speed, 'standard') AS speed, "
         "       messages.role AS role "
         "FROM messages "
         "JOIN sessions ON sessions.id = messages.session_fk "
@@ -408,6 +511,10 @@ def _build_by_provider_rows_from_messages(
         "WHERE 1=1 "
     )
     params: list[Any] = []
+    if project_ids:
+        placeholders = ",".join("?" for _ in project_ids)
+        sql += f"AND sessions.project_id IN ({placeholders}) "
+        params.extend(project_ids)
     if scope.since is not None:
         sql += "AND messages.timestamp >= ? "
         params.append(scope.since)
@@ -453,6 +560,77 @@ def _build_by_provider_rows_from_messages(
         }
         for prov, bucket in per_provider.items()
     ]
+
+
+def _build_by_model_rows_from_messages(
+    conn,
+    *,
+    scope,
+    compute_cost,
+    project_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-(day, model) rollup over the project-filtered ``messages`` table.
+
+    The project-scoped sibling of ``mart_queries.model_day_series`` (which is
+    global-grain — keyed (day, model, speed) with no project_id — and so can't
+    be project-filtered). Returns the same row shape the by-model route
+    consumes: ``{day, model, cost_usd, message_count}``, one row per
+    (day, model), summed across speed, ordered by day. Only assistant rows
+    carrying a real model contribute — mirroring the mart, where user rows
+    have no model. ``cost_usd`` is USD; the route applies the FX rate.
+    """
+    sql = (
+        "SELECT projects.provider AS provider, "
+        "       substr(messages.timestamp, 1, 10) AS day, "
+        "       COALESCE(messages.model, '') AS model, "
+        "       COALESCE(messages.input_tokens, 0) AS input_tokens, "
+        "       COALESCE(messages.output_tokens, 0) AS output_tokens, "
+        "       COALESCE(messages.cache_create_tokens, 0) AS cache_create_tokens, "
+        "       COALESCE(messages.cache_read_tokens, 0) AS cache_read_tokens, "
+        "       COALESCE(messages.speed, 'standard') AS speed, "
+        "       messages.role AS role "
+        "FROM messages "
+        "JOIN sessions ON sessions.id = messages.session_fk "
+        "JOIN projects ON projects.id = sessions.project_id "
+        "WHERE 1=1 "
+    )
+    params: list[Any] = []
+    if project_ids:
+        placeholders = ",".join("?" for _ in project_ids)
+        sql += f"AND sessions.project_id IN ({placeholders}) "
+        params.extend(project_ids)
+    if scope.since is not None:
+        sql += "AND messages.timestamp >= ? "
+        params.append(scope.since)
+    if scope.until is not None:
+        sql += "AND messages.timestamp <= ? "
+        params.append(scope.until)
+    rows = conn.execute(sql, params).fetchall()
+
+    per_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        model = r["model"]
+        if r["role"] != "assistant" or not model or model == "N/A":
+            continue
+        day = r["day"] or ""
+        bucket = per_key.setdefault(
+            (day, model),
+            {"day": day, "model": model, "cost_usd": 0.0, "message_count": 0},
+        )
+        bucket["message_count"] += 1
+        bucket["cost_usd"] += compute_cost(
+            {
+                "input": r["input_tokens"],
+                "output": r["output_tokens"],
+                "cache_creation": r["cache_create_tokens"],
+                "cache_read": r["cache_read_tokens"],
+            },
+            model,
+            provider=r["provider"] or "anthropic",
+            speed=r["speed"] or "standard",
+        )["total_cost"]
+
+    return sorted(per_key.values(), key=lambda b: b["day"])
 
 
 @router.get("/api/interaction/{interaction_id}")
@@ -533,7 +711,7 @@ def _serialise_record(rec) -> dict[str, Any]:
 
 
 @router.get("/api/cost-data/by-model")
-async def get_cost_by_model(period: str = "month"):
+async def get_cost_by_model(log_path: str | None = None, period: str = "month"):
     """Per-model spend over time — powers the Cost tab's by-model chart.
 
     Reads the pre-aggregated ``model_day_mart`` (one indexed scan over a tiny
@@ -542,6 +720,12 @@ async def get_cost_by_model(period: str = "month"):
     active currency, matching ``/api/cost-data/by-provider``.
 
     Args:
+        log_path: Optional project log path; defaults to
+            ``deps.current_log_path``. When a project is active the series is
+            scoped to THAT project (RANK 19 fix) — ``model_day_mart`` is
+            global-grain (no project_id), so a project-scoped request rolls up
+            the project-filtered messages table instead. With no project
+            selected the series spans the whole store via the mart.
         period: One of ``today | week | month | all`` (default ``month``).
 
     Returns:
@@ -549,24 +733,31 @@ async def get_cost_by_model(period: str = "month"):
         cost_usd, message_count}, ...]}, ...], "currency": {...}}``. Empty
         ``models`` when the store has no data in window.
     """
+    from stackunderflow.infra.costs import compute_cost
     from stackunderflow.reports.scope import parse_period
 
     spec = _BY_PROVIDER_PERIOD_MAP.get(period)
     if spec is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Unknown period '{period}'. "
-                f"Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"
-            ),
+            detail=(f"Unknown period '{period}'. Valid: {', '.join(sorted(_BY_PROVIDER_PERIOD_MAP))}"),
         )
     scope = parse_period(spec)
 
+    path = log_path or deps.current_log_path
+
     conn = db.connect(deps.store_path)
     try:
-        rows = mart_queries.model_day_series(
-            conn, since_iso=scope.since, until_iso=scope.until
-        )
+        if path:
+            project_ids = _project_ids_for(conn, path)
+            rows = _build_by_model_rows_from_messages(
+                conn,
+                scope=scope,
+                compute_cost=compute_cost,
+                project_ids=project_ids,
+            )
+        else:
+            rows = mart_queries.model_day_series(conn, since_iso=scope.since, until_iso=scope.until)
     finally:
         conn.close()
 
@@ -575,18 +766,16 @@ async def get_cost_by_model(period: str = "month"):
 
     models: dict[str, dict[str, Any]] = {}
     for r in rows:
-        bucket = models.setdefault(
-            r["model"], {"model": r["model"], "total_cost": 0.0, "daily": []}
-        )
+        bucket = models.setdefault(r["model"], {"model": r["model"], "total_cost": 0.0, "daily": []})
         cost = r["cost_usd"] * rate
         bucket["total_cost"] += cost
-        bucket["daily"].append({
-            "date": r["day"],
-            "cost_usd": cost,
-            "message_count": r["message_count"],
-        })
+        bucket["daily"].append(
+            {
+                "date": r["day"],
+                "cost_usd": cost,
+                "message_count": r["message_count"],
+            }
+        )
 
-    out_models = sorted(
-        models.values(), key=lambda m: m["total_cost"], reverse=True
-    )
+    out_models = sorted(models.values(), key=lambda m: m["total_cost"], reverse=True)
     return {"period": period, "models": out_models, "currency": currency}

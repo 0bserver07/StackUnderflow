@@ -35,8 +35,7 @@ def _seed(store_db, *, projects, messages):
     project_pk: dict[tuple[str, str], int] = {}
     for prov, slug in projects:
         cur = conn.execute(
-            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) VALUES (?, ?, ?, ?, ?)",
             (prov, slug, slug, 0.0, 0.0),
         )
         project_pk[(prov, slug)] = cur.lastrowid
@@ -64,10 +63,21 @@ def _seed(store_db, *, projects, messages):
             " content_text, tools_json, raw_json, is_sidechain, uuid, parent_uuid) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                sfk, seq, m["timestamp"], m["role"], m.get("model"),
-                m.get("in_tok", 0), m.get("out_tok", 0),
-                m.get("cache_w", 0), m.get("cache_r", 0),
-                "", "[]", "{}", 0, None, None,
+                sfk,
+                seq,
+                m["timestamp"],
+                m["role"],
+                m.get("model"),
+                m.get("in_tok", 0),
+                m.get("out_tok", 0),
+                m.get("cache_w", 0),
+                m.get("cache_r", 0),
+                "",
+                "[]",
+                "{}",
+                0,
+                None,
+                None,
             ),
         )
     conn.commit()
@@ -86,19 +96,34 @@ async def test_returns_one_row_per_provider(tmp_path, monkeypatch):
         projects=[("claude", "alpha"), ("codex", "gamma")],
         messages=[
             # Claude session — bigger token counts, so it should outspend codex.
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:01Z", "role": "assistant",
-             "model": "claude-sonnet-4-5", "in_tok": 10000, "out_tok": 5000},
+            {"project_slug": "alpha", "session_id": "A1", "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
+            {
+                "project_slug": "alpha",
+                "session_id": "A1",
+                "timestamp": "2026-04-01T10:00:01Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 10000,
+                "out_tok": 5000,
+            },
             # Codex session.
-            {"project_slug": "gamma", "provider": "codex",
-             "session_id": "C1",
-             "timestamp": "2026-04-02T10:00:00Z", "role": "user"},
-            {"project_slug": "gamma", "provider": "codex",
-             "session_id": "C1",
-             "timestamp": "2026-04-02T10:00:01Z", "role": "assistant",
-             "model": "gpt-5", "in_tok": 100, "out_tok": 50},
+            {
+                "project_slug": "gamma",
+                "provider": "codex",
+                "session_id": "C1",
+                "timestamp": "2026-04-02T10:00:00Z",
+                "role": "user",
+            },
+            {
+                "project_slug": "gamma",
+                "provider": "codex",
+                "session_id": "C1",
+                "timestamp": "2026-04-02T10:00:01Z",
+                "role": "assistant",
+                "model": "gpt-5",
+                "in_tok": 100,
+                "out_tok": 50,
+            },
         ],
     )
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
@@ -171,15 +196,18 @@ async def test_user_messages_dont_double_count_cost(tmp_path, monkeypatch):
         projects=[("claude", "alpha")],
         messages=[
             # Three user messages, one assistant message — same session.
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:01Z", "role": "user"},
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:02Z", "role": "user"},
-            {"project_slug": "alpha", "session_id": "A1",
-             "timestamp": "2026-04-01T10:00:03Z", "role": "assistant",
-             "model": "claude-sonnet-4-5", "in_tok": 1000, "out_tok": 500},
+            {"project_slug": "alpha", "session_id": "A1", "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
+            {"project_slug": "alpha", "session_id": "A1", "timestamp": "2026-04-01T10:00:01Z", "role": "user"},
+            {"project_slug": "alpha", "session_id": "A1", "timestamp": "2026-04-01T10:00:02Z", "role": "user"},
+            {
+                "project_slug": "alpha",
+                "session_id": "A1",
+                "timestamp": "2026-04-01T10:00:03Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 1000,
+                "out_tok": 500,
+            },
         ],
     )
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
@@ -212,13 +240,25 @@ async def test_period_filter_excludes_out_of_window_messages(tmp_path, monkeypat
         projects=[("claude", "alpha")],
         messages=[
             # Old message — outside any reasonable today/week/month window.
-            {"project_slug": "alpha", "session_id": "OLD",
-             "timestamp": "2020-01-01T00:00:00Z", "role": "assistant",
-             "model": "claude-sonnet-4-5", "in_tok": 99999, "out_tok": 99999},
+            {
+                "project_slug": "alpha",
+                "session_id": "OLD",
+                "timestamp": "2020-01-01T00:00:00Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 99999,
+                "out_tok": 99999,
+            },
             # Today's message — should be the only one in the rollup.
-            {"project_slug": "alpha", "session_id": "NEW",
-             "timestamp": now, "role": "assistant",
-             "model": "claude-sonnet-4-5", "in_tok": 100, "out_tok": 50},
+            {
+                "project_slug": "alpha",
+                "session_id": "NEW",
+                "timestamp": now,
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 100,
+                "out_tok": 50,
+            },
         ],
     )
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
@@ -229,3 +269,99 @@ async def test_period_filter_excludes_out_of_window_messages(tmp_path, monkeypat
     row = payload["rows"][0]
     assert row["message_count"] == 1
     assert row["session_count"] == 1
+
+
+# ── RANK 19: project scoping (the cross-project $ leak fix) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_by_provider_scopes_to_current_project(tmp_path, monkeypatch):
+    """The card lives on a PROJECT's Cost tab — it must show that project's
+    per-provider spend, not the whole store's (RANK 19).
+
+    Two projects, same provider + identical tokens, so the global rollup is
+    exactly 2x either project. Scoping to one must halve cost / message /
+    session counts.
+    """
+    store_db = tmp_path / "store.db"
+    _seed(
+        store_db,
+        projects=[("claude", "alpha"), ("claude", "beta")],
+        messages=[
+            {"project_slug": "alpha", "session_id": "A1", "timestamp": "2026-04-01T10:00:00Z", "role": "user"},
+            {
+                "project_slug": "alpha",
+                "session_id": "A1",
+                "timestamp": "2026-04-01T10:00:01Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 10000,
+                "out_tok": 5000,
+            },
+            {"project_slug": "beta", "session_id": "B1", "timestamp": "2026-04-02T10:00:00Z", "role": "user"},
+            {
+                "project_slug": "beta",
+                "session_id": "B1",
+                "timestamp": "2026-04-02T10:00:01Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 10000,
+                "out_tok": 5000,
+            },
+        ],
+    )
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+
+    # No project selected → global rollup spans BOTH projects.
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+    global_payload = await get_cost_by_provider(period="all")
+    global_claude = next(r for r in global_payload["rows"] if r["provider"] == "claude")
+    assert global_claude["message_count"] == 4
+    assert global_claude["session_count"] == 2
+
+    # current_log_path = alpha → only alpha's spend (no beta leak).
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", "/fake/alpha")
+    scoped_payload = await get_cost_by_provider(period="all")
+    scoped_claude = next(r for r in scoped_payload["rows"] if r["provider"] == "claude")
+    assert scoped_claude["message_count"] == 2  # alpha only
+    assert scoped_claude["session_count"] == 1
+    assert scoped_claude["cost_usd"] == pytest.approx(global_claude["cost_usd"] / 2)
+    assert scoped_claude["cost_usd"] > 0
+
+
+@pytest.mark.asyncio
+async def test_by_provider_explicit_log_path_scopes_without_current_project(tmp_path, monkeypatch):
+    """Explicit ``log_path`` scopes even with no ``current_log_path`` set."""
+    store_db = tmp_path / "store.db"
+    _seed(
+        store_db,
+        projects=[("claude", "alpha"), ("claude", "beta")],
+        messages=[
+            {
+                "project_slug": "alpha",
+                "session_id": "A1",
+                "timestamp": "2026-04-01T10:00:01Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 10000,
+                "out_tok": 5000,
+            },
+            {
+                "project_slug": "beta",
+                "session_id": "B1",
+                "timestamp": "2026-04-02T10:00:01Z",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "in_tok": 999,
+                "out_tok": 1,
+            },
+        ],
+    )
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    payload = await get_cost_by_provider(log_path="/anywhere/beta", period="all")
+    rows = payload["rows"]
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "claude"
+    assert rows[0]["message_count"] == 1  # beta's single message only

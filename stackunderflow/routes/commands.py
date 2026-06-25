@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException
 import stackunderflow.deps as deps
 from stackunderflow.infra.costs import compute_cost
 from stackunderflow.infra.currency import active_currency_payload
+from stackunderflow.routes.cost import _project_stats_cached
 from stackunderflow.stats.enricher import Interaction
 from stackunderflow.store import db, queries
 
@@ -45,11 +46,11 @@ router = APIRouter()
 # ``if/elif`` chain inside the route handler and makes "supported sort keys"
 # self-documenting at the top of the module.
 _SORT_KEYS: dict[str, Any] = {
-    "cost":   lambda c: c["cost"],
+    "cost": lambda c: c["cost"],
     "tokens": lambda c: sum(c["tokens"].values()),
-    "tools":  lambda c: c["tools_used"],
-    "steps":  lambda c: c["steps"],
-    "time":   lambda c: c["timestamp"] or "",
+    "tools": lambda c: c["tools_used"],
+    "steps": lambda c: c["steps"],
+    "time": lambda c: c["timestamp"] or "",
 }
 
 _DEFAULT_LIMIT = 50
@@ -111,8 +112,7 @@ def _interaction_to_command(ix: Interaction) -> dict[str, Any]:
                 m[k] += v
 
     cost = sum(
-        compute_cost(dict(tok_c), model, speed=speed)["total_cost"]
-        for (model, speed), tok_c in by_model.items()
+        compute_cost(dict(tok_c), model, speed=speed)["total_cost"] for (model, speed), tok_c in by_model.items()
     )
 
     return {
@@ -213,12 +213,13 @@ async def get_tool_distribution(log_path: str | None = None, timezone_offset: in
     Missing data resolves to ``{}`` so the chart renders its empty state.
     """
     path = _resolve_log_path(log_path)
+    slug = Path(path).name
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path)
-        _, stats = queries.get_project_stats(
-            conn, project_id=project_ids, tz_offset=timezone_offset
-        )
+        # RANK 11: share the memoized stats sweep with /api/cost-data so the
+        # Overview tab doesn't recompute the full pipeline a third time.
+        stats = _project_stats_cached(conn, project_ids=project_ids, slug=slug, tz_offset=timezone_offset)
     finally:
         conn.close()
 

@@ -4,6 +4,7 @@ These tests exercise the full FX-conversion path: set ``currency=GBP``,
 seed Frankfurter rate cache, hit the route, assert the response carries
 the active-currency payload AND that dollar figures are scaled in place.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,10 +26,14 @@ def gbp_environment(tmp_path, monkeypatch):
     cache_dir = tmp_path / ".stackunderflow" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "exchange-rate.json"
-    cache_file.write_text(json.dumps({
-        "fetched_at": datetime.now(UTC).isoformat(),
-        "rates": {"GBP": 0.80, "EUR": 0.93},
-    }))
+    cache_file.write_text(
+        json.dumps(
+            {
+                "fetched_at": datetime.now(UTC).isoformat(),
+                "rates": {"GBP": 0.80, "EUR": 0.93},
+            }
+        )
+    )
     return tmp_path
 
 
@@ -36,8 +41,7 @@ def _seed_project(store_db, slug: str) -> None:
     conn = db.connect(store_db)
     schema.apply(conn)
     conn.execute(
-        "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) VALUES (?, ?, ?, ?, ?)",
         ("claude", slug, slug, 0.0, 0.0),
     )
     conn.commit()
@@ -49,7 +53,7 @@ def _stats_with_costs() -> dict:
     return {
         "session_costs": [
             {"session_id": "s1", "cost": 10.00, "tokens": {"input": 100}},
-            {"session_id": "s2", "cost": 5.00,  "tokens": {"input": 50}},
+            {"session_id": "s2", "cost": 5.00, "tokens": {"input": 50}},
         ],
         "command_costs": [{"interaction_id": "i1", "cost": 1.00}],
         "tool_costs": {"Read": {"calls": 5, "cost": 0.50}},
@@ -92,6 +96,67 @@ async def test_cost_data_converts_dollar_figures_to_gbp(gbp_environment, tmp_pat
     # Token counts and other non-cost fields are NOT scaled
     assert payload["session_costs"][0]["tokens"]["input"] == 100
     assert payload["tool_costs"]["Read"]["calls"] == 5
+
+
+def _stats_with_new_cost_fields() -> dict:
+    """Stats exercising the two RANK 41 fields plus a full ``trends`` block.
+
+    ``trends.current_week``/``prior_week`` carry USD ``cost_per_command``;
+    ``trends.delta_pct`` carries percentage deltas (``cost`` / ``cost_per_command``)
+    that must NOT be FX-scaled. ``retry_signals[].estimated_wasted_cost`` is USD.
+    """
+    return {
+        "session_costs": [],
+        "command_costs": [],
+        "tool_costs": {},
+        "token_composition": {"daily": {}, "totals": {}, "per_session": {}},
+        "outliers": {},
+        "retry_signals": [
+            {"interaction_id": "i1", "tool": "Bash", "estimated_wasted_tokens": 1000, "estimated_wasted_cost": 4.00},
+        ],
+        "session_efficiency": [],
+        "error_cost": {},
+        "trends": {
+            "current_week": {"cost_per_command": 2.00, "cost": 10.00, "errors_per_command": 0.5, "commands": 5},
+            "prior_week": {"cost_per_command": 1.00, "cost": 5.00, "errors_per_command": 0.2, "commands": 5},
+            "delta_pct": {"cost_per_command": 100.0, "cost": 100.0, "errors_per_command": 150.0, "commands": 0},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_cost_data_converts_new_cost_fields_and_skips_delta_pct(gbp_environment, tmp_path, monkeypatch):
+    """RANK 41: ``estimated_wasted_cost`` + ``cost_per_command`` are USD and must
+    FX-scale; the ``trends.delta_pct`` percentages must be left alone."""
+    store_db = tmp_path / "store.db"
+    slug = "-gbp-fields"
+    _seed_project(store_db, slug)
+
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], _stats_with_new_cost_fields()),
+    )
+
+    payload = await get_cost_data()
+    assert payload["currency"]["rate_from_usd"] == 0.80
+
+    # Newly-whitelisted USD fields scale by 0.80.
+    assert payload["retry_signals"][0]["estimated_wasted_cost"] == pytest.approx(3.20)
+    assert payload["trends"]["current_week"]["cost_per_command"] == pytest.approx(1.60)
+    assert payload["trends"]["prior_week"]["cost_per_command"] == pytest.approx(0.80)
+    # Pre-existing ``cost`` field still scales under current_week/prior_week.
+    assert payload["trends"]["current_week"]["cost"] == pytest.approx(8.00)
+
+    # delta_pct holds PERCENTAGES — FX-scaling them would corrupt the "%" tiles.
+    assert payload["trends"]["delta_pct"]["cost_per_command"] == 100.0
+    assert payload["trends"]["delta_pct"]["cost"] == 100.0
+
+    # Non-cost ratios / counts are never touched.
+    assert payload["retry_signals"][0]["estimated_wasted_tokens"] == 1000
+    assert payload["trends"]["current_week"]["errors_per_command"] == 0.5
+    assert payload["trends"]["current_week"]["commands"] == 5
 
 
 @pytest.mark.asyncio
