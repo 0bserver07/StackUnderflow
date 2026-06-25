@@ -27,7 +27,7 @@ export default function InterruptionRateChart({ dailyStats }: InterruptionRateCh
   const data = Object.entries(dailyStats)
     .map(([date, d]) => ({
       date,
-      interruption_rate: parseFloat((d.interruption_rate * 100).toFixed(1)),
+      interruption_rate: parseFloat(d.interruption_rate.toFixed(1)),
       user_commands: d.user_commands,
       interrupted_commands: d.interrupted_commands,
     }))

@@ -27,7 +27,7 @@ export default function ErrorRateChart({ dailyStats }: ErrorRateChartProps) {
   const data = Object.entries(dailyStats)
     .map(([date, d]) => ({
       date,
-      error_rate: parseFloat((d.error_rate * 100).toFixed(1)),
+      error_rate: parseFloat(d.error_rate.toFixed(1)),
       errors: d.errors,
       messages: d.messages,
     }))
