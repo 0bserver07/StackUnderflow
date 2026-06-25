@@ -152,12 +152,105 @@ def recent_tool_calls(
 
 # ── burn rate ───────────────────────────────────────────────────────────
 
+# Today/MTD burn is recomputed at most this often within a single stream.
+# Those figures crawl upward as cost accrues over minutes, so a few seconds
+# of staleness is invisible — and it spares the ``idx_events_day`` scan on
+# every 5s burn tick. ``window_cost`` is never cached: it stays live.
+BURN_TODAY_CACHE_TTL_SECONDS = 30.0
+
+
+def _day_str(dt: datetime) -> str:
+    """UTC ``YYYY-MM-DD`` key for the ``idx_events_day`` prefilter."""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _burn_cutoffs(
+    now_dt: datetime, window_minutes: int, tz_offset: int
+) -> tuple[datetime, datetime, datetime, datetime]:
+    """Return ``(window, today, month, local_now)`` cutoffs, tz-aware.
+
+    ``tz_offset`` is minutes *added* to a UTC timestamp to reach local
+    wall-clock time — the exact convention ``aggregator._local_day``
+    uses. Computing the day/month boundaries with the same offset keeps
+    the live Today/MTD/projection figures aligned with the Cost and
+    Overview tabs around local midnight and the 1st of the month
+    (instead of bucketing on UTC midnight, which made non-UTC users see
+    Live disagree with the rest of the app).
+
+    The returned ``today``/``month`` cutoffs are the *UTC instants* of
+    the local day/month start, so they compare directly against the
+    stored ISO-8601 UTC ``ts`` values.
+    """
+    local_now = now_dt + timedelta(minutes=tz_offset)
+    local_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_month = local_today.replace(day=1)
+    today_cutoff = local_today - timedelta(minutes=tz_offset)
+    month_cutoff = local_month - timedelta(minutes=tz_offset)
+    window_cutoff = now_dt - timedelta(minutes=window_minutes)
+    return window_cutoff, today_cutoff, month_cutoff, local_now
+
+
+def _window_cost(conn: sqlite3.Connection, window_cutoff: datetime) -> float:
+    """Sum ``cost_usd`` over the rolling window — always live, indexed.
+
+    ``day >= ?`` lets ``idx_events_day`` skip every prior day so the
+    scan touches only the current (and, straddling midnight, previous)
+    UTC day rather than the whole ~200K-row table.
+    """
+    row = conn.execute(
+        "SELECT SUM(cost_usd) FROM usage_events WHERE day >= ? AND ts >= ?",
+        (_day_str(window_cutoff), window_cutoff.isoformat()),
+    ).fetchone()
+    return float(row[0] or 0.0)
+
+
+def _today_month_cost(
+    conn: sqlite3.Connection,
+    today_cutoff: datetime,
+    month_cutoff: datetime,
+    *,
+    now: datetime,
+    cache: dict[str, Any] | None = None,
+) -> tuple[float, float]:
+    """Return ``(today_cost, month_to_date)`` — indexed + cached.
+
+    Both sums fold into one ``idx_events_day``-bounded scan (``day >=``
+    the month-start day, a safe lower bound: any counted row has
+    ``ts >= month_cutoff`` hence ``day >= month_cutoff``'s day). When a
+    ``cache`` dict is supplied (the SSE stream owns one) the result is
+    reused across burn ticks until either the day/month boundary moves
+    or ``BURN_TODAY_CACHE_TTL_SECONDS`` elapses.
+    """
+    key = (today_cutoff.isoformat(), month_cutoff.isoformat())
+    if cache is not None:
+        hit = cache.get("today_month")
+        if hit is not None:
+            ckey, cached_at, ctoday, cmonth = hit
+            age = (now - cached_at).total_seconds()
+            if ckey == key and 0 <= age < BURN_TODAY_CACHE_TTL_SECONDS:
+                return ctoday, cmonth
+
+    row = conn.execute(
+        "SELECT "
+        "  SUM(CASE WHEN ts >= ? THEN cost_usd ELSE 0 END) AS today_cost, "
+        "  SUM(CASE WHEN ts >= ? THEN cost_usd ELSE 0 END) AS month_cost "
+        "FROM usage_events WHERE day >= ?",
+        (today_cutoff.isoformat(), month_cutoff.isoformat(), _day_str(month_cutoff)),
+    ).fetchone()
+    today_cost = float(row[0] or 0.0)
+    month_cost = float(row[1] or 0.0)
+    if cache is not None:
+        cache["today_month"] = (key, now, today_cost, month_cost)
+    return today_cost, month_cost
+
 
 def rolling_burn(
     conn: sqlite3.Connection,
     *,
     window_minutes: int = 5,
     now: datetime | None = None,
+    tz_offset: int = 0,
+    cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return rolling burn metrics over ``usage_events.cost_usd``.
 
@@ -168,20 +261,31 @@ def rolling_burn(
           "window_cost": float,           # last N min total
           "per_minute": float,            # window_cost / window_minutes
           "per_hour": float,              # per_minute * 60
-          "today_cost": float,            # sum since UTC midnight
-          "month_to_date": float,         # sum since UTC month start
+          "today_cost": float,            # sum since *local* midnight
+          "month_to_date": float,         # sum since *local* month start
           "projected_month_end": float,   # MTD + (avg-daily * days_left)
           "ts": str,                      # ISO timestamp the snapshot was taken
         }
+
+    ``tz_offset`` (minutes east of UTC, ``aggregator._local_day``'s
+    convention) shifts the Today/MTD/projection day boundaries to the
+    caller's local timezone so the live tab agrees with Cost/Overview.
 
     Cost source: ``usage_events.cost_usd`` per the post-v0.8.0
     real-store contract. The legacy ``messages`` recompute path is not
     used here — that lived in the aggregator and is a known-stale cost
     surface for live data.
+
+    Performance: the three sums are split into a live window query and a
+    cached today/MTD query, both bounded by ``idx_events_day`` so a burn
+    tick never full-scans ``usage_events``. Pass a ``cache`` dict (the
+    SSE loop does) to memoize today/MTD between ticks.
     """
     now_dt = now if now is not None else _now_utc()
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=UTC)
+
+    window_cutoff, today_cutoff, month_cutoff, local_now = _burn_cutoffs(now_dt, window_minutes, tz_offset)
 
     if not _table_exists(conn, "usage_events"):
         return {
@@ -195,29 +299,8 @@ def rolling_burn(
             "ts": now_dt.isoformat(),
         }
 
-    window_cutoff = now_dt - timedelta(minutes=window_minutes)
-    today_cutoff = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    month_cutoff = today_cutoff.replace(day=1)
-
-    # Three SUMs in one trip — sqlite is happy to fold them into the
-    # same scan via conditional aggregation. ``ts`` is ISO 8601 UTC so
-    # string comparison is timezone-safe (lexicographic == temporal).
-    row = conn.execute(
-        "SELECT "
-        "  SUM(CASE WHEN ts >= ? THEN cost_usd ELSE 0 END) AS window_cost, "
-        "  SUM(CASE WHEN ts >= ? THEN cost_usd ELSE 0 END) AS today_cost, "
-        "  SUM(CASE WHEN ts >= ? THEN cost_usd ELSE 0 END) AS month_cost "
-        "FROM usage_events",
-        (
-            window_cutoff.isoformat(),
-            today_cutoff.isoformat(),
-            month_cutoff.isoformat(),
-        ),
-    ).fetchone()
-
-    window_cost = float(row[0] or 0.0)
-    today_cost = float(row[1] or 0.0)
-    month_cost = float(row[2] or 0.0)
+    window_cost = _window_cost(conn, window_cutoff)
+    today_cost, month_cost = _today_month_cost(conn, today_cutoff, month_cutoff, now=now_dt, cache=cache)
 
     per_minute = window_cost / max(window_minutes, 1)
     per_hour = per_minute * 60.0
@@ -225,9 +308,11 @@ def rolling_burn(
     # Month-end projection: average daily burn so far × days remaining.
     # Same approach as ``services.plans.project_month_end`` (used by the
     # plan tab) but seeded from real-time MTD, not aggregated daily mart.
-    days_in_month = calendar.monthrange(now_dt.year, now_dt.month)[1]
-    days_so_far = max(now_dt.day, 1)  # day 1 → divide-by-zero guard
-    days_left = max(days_in_month - now_dt.day, 0)
+    # Uses the *local* calendar so "days so far" / "days left" match the
+    # local-midnight buckets above.
+    days_in_month = calendar.monthrange(local_now.year, local_now.month)[1]
+    days_so_far = max(local_now.day, 1)  # day 1 → divide-by-zero guard
+    days_left = max(days_in_month - local_now.day, 0)
     avg_daily = month_cost / days_so_far
     projected = month_cost + avg_daily * days_left
 
@@ -278,24 +363,36 @@ def _latency_samples(
     if not _table_exists(conn, "message_tool_mart"):
         return {}
     cutoff = _now_utc() - timedelta(hours=window_hours)
-    # A LEAD() window over messages computes each row's next-in-session
-    # timestamp in a single pass, replacing a correlated subquery that
-    # re-scanned the session for every one of ~100K mart rows (the
-    # /api/live/stats hot spot — see audit). LEAD ordered by seq handles
-    # seq gaps exactly like the old ``seq > m.seq ... LIMIT 1`` did.
+    # The LEAD() window resolves each row's next-in-session timestamp,
+    # but ``messages`` is a UNION-ALL view over monthly partitions, so an
+    # *unbounded* CTE materializes the window across every partition —
+    # ~333K rows scanned on every /api/live/stats poll (~5s; the audit
+    # hot spot). We bound it instead: ``win`` is the small set of
+    # in-window mart rows, and the window only spans messages with
+    # ``id >= MIN(in-window source id)``. A message's next-in-session row
+    # always has a higher id (seq increases with insertion order), so the
+    # bound never drops a needed neighbour, yet it lets SQLite skip every
+    # partition below the cutoff via each ``idx_messages_<part>_session_seq``.
+    # MIN over an empty ``win`` is NULL, so ``id >= NULL`` matches nothing
+    # and the result is an empty set — the cold-window fast path.
     rows = conn.execute(
-        "WITH next_ts AS ("
+        "WITH win AS ("
+        "    SELECT message_id, tool_name "
+        "      FROM message_tool_mart "
+        "     WHERE ts >= ?"
+        "), "
+        "next_ts AS ("
         "    SELECT id, "
         "           timestamp AS msg_ts, "
         "           LEAD(timestamp) OVER ("
         "               PARTITION BY session_fk ORDER BY seq"
         "           ) AS next_ts "
-        "      FROM messages"
+        "      FROM messages "
+        "     WHERE id >= (SELECT MIN(message_id) FROM win)"
         ") "
-        "SELECT t.tool_name, n.msg_ts AS ts1, n.next_ts AS ts2 "
-        "  FROM message_tool_mart t "
-        "  JOIN next_ts n ON n.id = t.message_id "
-        " WHERE t.ts >= ?",
+        "SELECT w.tool_name, n.msg_ts AS ts1, n.next_ts AS ts2 "
+        "  FROM win w "
+        "  JOIN next_ts n ON n.id = w.message_id",
         (cutoff.isoformat(),),
     ).fetchall()
 
@@ -361,18 +458,20 @@ def snapshot(
     burn_window_minutes: int = 5,
     latency_window_hours: int = 24,
     top_tools: int = 6,
+    tz_offset: int = 0,
 ) -> dict[str, Any]:
     """One-shot snapshot used by ``GET /api/live/stats``.
 
     Returns the burn block, the latency table, and the current
     ``max_event_id`` / ``max_tool_call_id`` watermarks so the SSE
     consumer can resume from the snapshot without missing rows.
+
+    ``tz_offset`` (minutes east of UTC) is forwarded to
+    :func:`rolling_burn` so Today/MTD bucket on the caller's local day.
     """
     return {
-        "burn": rolling_burn(conn, window_minutes=burn_window_minutes),
-        "tool_latency": tool_latency_percentiles(
-            conn, window_hours=latency_window_hours, top_n=top_tools
-        ),
+        "burn": rolling_burn(conn, window_minutes=burn_window_minutes, tz_offset=tz_offset),
+        "tool_latency": tool_latency_percentiles(conn, window_hours=latency_window_hours, top_n=top_tools),
         "watermarks": {
             "event_id": max_event_id(conn),
             "tool_call_id": max_tool_call_id(conn),

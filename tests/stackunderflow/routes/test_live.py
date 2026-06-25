@@ -22,11 +22,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import stackunderflow.deps as deps
+from stackunderflow.routes import live as live_routes
 from stackunderflow.routes.live import (
     _format_sse,
     _stream_loop,
     router as live_router,
 )
+from stackunderflow.services import live as live_svc
 from stackunderflow.store import db, schema
 
 
@@ -44,8 +46,7 @@ def _project(conn, *, slug: str = "-alpha") -> int:
 
 def _session(conn, *, project_id: int, sid: str = "s1") -> int:
     cur = conn.execute(
-        "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, message_count) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, message_count) VALUES (?, ?, ?, ?, ?)",
         (project_id, sid, "2026-04-01T00:00:00Z", "2026-04-01T00:00:00Z", 1),
     )
     return int(cur.lastrowid)
@@ -66,13 +67,12 @@ def _message(conn, *, session_fk: int, ts: str = "2026-05-15T12:00:00Z") -> int:
         " 0, 0, 0, 0, '', '[]', '{}', 0)",
         (session_fk, s, ts),
     )
-    return int(conn.execute(
-        "SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1"
-    ).fetchone()[0])
+    return int(conn.execute("SELECT next_id - 1 FROM _messages_id_seq WHERE rowid_kind = 1").fetchone()[0])
 
 
-def _event(conn, *, source_message_fk: int, project_id: int,
-           ts: str = "2026-05-15T12:00:00Z", cost_usd: float = 0.0) -> int:
+def _event(
+    conn, *, source_message_fk: int, project_id: int, ts: str = "2026-05-15T12:00:00Z", cost_usd: float = 0.0
+) -> int:
     cur = conn.execute(
         "INSERT INTO usage_events "
         "(source_message_fk, provider, account, project_id, session_id, ts, day, "
@@ -85,9 +85,15 @@ def _event(conn, *, source_message_fk: int, project_id: int,
     return int(cur.lastrowid)
 
 
-def _tool_call(conn, *, message_id: int, project_id: int,
-               ts: str = "2026-05-15T12:00:00Z",
-               tool_name: str = "Read", call_index: int = 0) -> int:
+def _tool_call(
+    conn,
+    *,
+    message_id: int,
+    project_id: int,
+    ts: str = "2026-05-15T12:00:00Z",
+    tool_name: str = "Read",
+    call_index: int = 0,
+) -> int:
     cur = conn.execute(
         "INSERT INTO message_tool_mart "
         "(message_id, project_id, session_id, ts, day, "
@@ -215,9 +221,9 @@ def _parse_sse(chunks: list[str]) -> list[tuple[str, dict]]:
         data = None
         for line in c.splitlines():
             if line.startswith("event: "):
-                ev = line[len("event: "):]
+                ev = line[len("event: ") :]
             elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
+                data = json.loads(line[len("data: ") :])
         if ev is not None and data is not None:
             out.append((ev, data))
     return out
@@ -238,9 +244,7 @@ class TestStreamLoop:
     @pytest.mark.asyncio
     async def test_emits_ready_event_first(self, store):
         req = _FakeRequest(disconnect_after_iters=0)
-        chunks = await _drain(_stream_loop(
-            req, poll_interval=0.01, burn_interval=999, max_iterations=1
-        ))
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=1))
         events = _parse_sse(chunks)
         assert events[0][0] == "ready"
         assert events[0][1]["type"] == "ready"
@@ -274,24 +278,17 @@ class TestStreamLoop:
                     # After the first iteration, append a new event so
                     # the next cycle has something to emit.
                     c2 = db.connect(store)
-                    pid2 = c2.execute(
-                        "SELECT id FROM projects LIMIT 1"
-                    ).fetchone()[0]
-                    sfk2 = c2.execute(
-                        "SELECT id FROM sessions LIMIT 1"
-                    ).fetchone()[0]
+                    pid2 = c2.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+                    sfk2 = c2.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
                     m3 = _message(c2, session_fk=sfk2)
-                    _event(c2, source_message_fk=m3, project_id=pid2,
-                           cost_usd=0.99)
+                    _event(c2, source_message_fk=m3, project_id=pid2, cost_usd=0.99)
                     c2.commit()
                     c2.close()
                 # Stop after two iterations so the test terminates.
                 return self.calls > 5
 
         req = _AdvancingRequest()
-        chunks = await _drain(_stream_loop(
-            req, poll_interval=0.01, burn_interval=999, max_iterations=4
-        ))
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=4))
         events = _parse_sse(chunks)
         # ready + exactly one new event (the seeded ones are below the seed watermark).
         event_payloads = [p for ev, p in events if ev == "event"]
@@ -303,9 +300,7 @@ class TestStreamLoop:
         # last_burn_at starts at 0.0 → first cycle should emit one tick
         # regardless of the burn_interval value.
         req = _FakeRequest(disconnect_after_iters=1)
-        chunks = await _drain(_stream_loop(
-            req, poll_interval=0.01, burn_interval=999, max_iterations=2
-        ))
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=2))
         events = _parse_sse(chunks)
         burn_ticks = [p for ev, p in events if ev == "burn_tick"]
         assert len(burn_ticks) == 1
@@ -316,9 +311,7 @@ class TestStreamLoop:
     async def test_disconnect_stops_loop_cleanly(self, store):
         # Disconnect on the very first check after the ready event.
         req = _FakeRequest(disconnect_after_iters=0)
-        chunks = await _drain(_stream_loop(
-            req, poll_interval=0.01, burn_interval=999, max_iterations=10
-        ))
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=10))
         # We should still get the ready event and then exit.
         events = _parse_sse(chunks)
         ready_count = sum(1 for ev, _ in events if ev == "ready")
@@ -326,3 +319,57 @@ class TestStreamLoop:
         # Loop should exit immediately — no event/tool_call/burn_tick.
         non_ready = [ev for ev, _ in events if ev != "ready"]
         assert non_ready == []
+
+
+# ── /api/live/stream — single reused connection (RANK 28) ──────────────
+
+
+class TestStreamConnectionReuse:
+    @pytest.mark.asyncio
+    async def test_one_connection_for_the_whole_stream(self, store, monkeypatch):
+        """The loop opens (and ``schema.apply``-s) exactly one connection for
+        its lifetime — not a fresh one every ~2s cycle."""
+        calls = {"n": 0}
+        real_open = live_routes._open_conn
+
+        def counting():
+            calls["n"] += 1
+            return real_open()
+
+        monkeypatch.setattr(live_routes, "_open_conn", counting)
+        req = _FakeRequest(disconnect_after_iters=6)
+        await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=4))
+        # Pre-fix this would have been 1 (seed) + 1 per cycle. Now: 1, reused.
+        assert calls["n"] == 1
+
+
+# ── /api/live/stats — timezone-aware Today bucket (RANK 35) ────────────
+
+
+class TestStatsTimezone:
+    def test_timezone_offset_shifts_today_bucket(self, app_client, monkeypatch):
+        client, store = app_client
+        now = datetime(2026, 5, 15, 1, 30, tzinfo=UTC)
+        monkeypatch.setattr(live_svc, "_now_utc", lambda: now)
+
+        conn = db.connect(store)
+        pid = _project(conn)
+        sfk = _session(conn, project_id=pid)
+        # Event 2.5h before "now": yesterday in UTC, today in UTC+2.
+        m = _message(conn, session_fk=sfk, ts="2026-05-14T23:00:00+00:00")
+        _event(
+            conn,
+            source_message_fk=m,
+            project_id=pid,
+            ts="2026-05-14T23:00:00+00:00",
+            cost_usd=1.0,
+        )
+        conn.commit()
+        conn.close()
+
+        # UTC bucketing: event is "yesterday" → not in today_cost.
+        body0 = client.get("/api/live/stats?timezone_offset=0").json()
+        assert body0["burn"]["today_cost"] == pytest.approx(0.0)
+        # +120 min: event shares the local day with "now" → counted today.
+        body2 = client.get("/api/live/stats?timezone_offset=120").json()
+        assert body2["burn"]["today_cost"] == pytest.approx(1.0)
