@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   IconArrowLeft,
@@ -27,6 +27,7 @@ import SessionEfficiencyTable from '../cost/SessionEfficiencyTable'
 import { formatModelName } from '../../services/format'
 import SessionCompareView from '../cost/SessionCompareView'
 import { NAV_EVENT, getParam, clearParam, type NavDetail } from '../../services/navigation'
+import { useIncrementalRender } from '../../hooks/useIncrementalRender'
 
 interface SessionsTabProps {
   projectName: string
@@ -34,6 +35,22 @@ interface SessionsTabProps {
 }
 
 const PAGE_SIZE = 30
+
+// How many session cards to mount initially and per scroll batch. The full list
+// can hold thousands of sessions; rendering them all at once janks the tab, so
+// we window with `useIncrementalRender` (see the session list below).
+const SESSION_BATCH = 60
+
+// Debounce hook — mirrors the pattern in SearchTab.tsx. Kept local so the
+// conversation search can throttle the (expensive) per-line content scan.
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
 
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -186,32 +203,39 @@ function fmtModel(m: string | null | undefined): string {
   return formatModelName(m)
 }
 
-function SessionCard({
+const SessionCard = memo(function SessionCard({
   file,
   selected,
-  onClick,
+  onSelect,
   compareMode = false,
   checked = false,
   checkboxDisabled = false,
   onCheckToggle,
   highlighted = false,
-  rowRef,
+  registerRow,
   sessionId,
 }: {
   file: JsonlFile
   selected: boolean
-  onClick: () => void
+  onSelect: (fileName: string) => void
   compareMode?: boolean
   checked?: boolean
   checkboxDisabled?: boolean
-  onCheckToggle?: () => void
+  onCheckToggle?: (sessionId: string) => void
   highlighted?: boolean
-  rowRef?: (el: HTMLDivElement | null) => void
+  registerRow?: (sessionId: string, el: HTMLDivElement | null) => void
   sessionId: string
 }) {
   const duration = file.modified - file.created
   const durationMins = duration / 60
   const totalTokens = (file.input_tokens ?? 0) + (file.output_tokens ?? 0)
+
+  // Stable ref callback so `registerRow` (stable from the parent) doesn't churn
+  // the row-ref map on every re-render — keeps memo + deep-link scroll intact.
+  const handleRef = useCallback(
+    (el: HTMLDivElement | null) => registerRow?.(sessionId, el),
+    [registerRow, sessionId],
+  )
 
   const baseClasses =
     'w-full text-left rounded-lg border transition-colors p-4 flex items-start gap-3'
@@ -227,11 +251,11 @@ function SessionCard({
   const handleRootClick = () => {
     if (compareMode) {
       if (!checkboxDisabled || checked) {
-        onCheckToggle?.()
+        onCheckToggle?.(sessionId)
       }
       return
     }
-    onClick()
+    onSelect(file.name)
   }
 
   const contents = (
@@ -244,7 +268,7 @@ function SessionCard({
             disabled={checkboxDisabled && !checked}
             onChange={(e) => {
               e.stopPropagation()
-              onCheckToggle?.()
+              onCheckToggle?.(sessionId)
             }}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Select session ${sessionId} to compare`}
@@ -329,7 +353,7 @@ function SessionCard({
   if (compareMode) {
     return (
       <div
-        ref={rowRef}
+        ref={handleRef}
         role="button"
         tabIndex={0}
         data-session-id={sessionId}
@@ -352,7 +376,7 @@ function SessionCard({
 
   return (
     <div
-      ref={rowRef}
+      ref={handleRef}
       data-session-id={sessionId}
       data-testid={`session-row-${sessionId}`}
       className={highlightClasses ? `rounded-lg${highlightClasses}` : undefined}
@@ -365,7 +389,7 @@ function SessionCard({
       </button>
     </div>
   )
-}
+})
 
 // ── Conversation Message ────────────────────────────────────────────────────
 
@@ -498,7 +522,17 @@ function SessionViewer({
   const [showRaw, setShowRaw] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search, 200)
   const [page, setPage] = useState(0)
+
+  // Precompute lowercased content per line ONCE per session. getContent() is
+  // expensive (it JSON-stringifies tool inputs), so scanning it on every
+  // keystroke janks typing — instead we derive it once and look it up by line.
+  const contentLowerByLine = useMemo(() => {
+    const m = new Map<Record<string, unknown>, string>()
+    for (const l of data.lines) m.set(l, getContent(l).toLowerCase())
+    return m
+  }, [data.lines])
 
   const filtered = useMemo(() => {
     // Always filter out noise (progress, file-history, system, etc.)
@@ -508,12 +542,12 @@ function SessionViewer({
     } else if (typeFilter !== 'all') {
       lines = lines.filter(l => getRole(l) === typeFilter)
     }
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      lines = lines.filter(l => getContent(l).toLowerCase().includes(q))
+    const q = debouncedSearch.trim().toLowerCase()
+    if (q) {
+      lines = lines.filter(l => (contentLowerByLine.get(l) ?? '').includes(q))
     }
     return lines
-  }, [data.lines, typeFilter, search])
+  }, [data.lines, typeFilter, debouncedSearch, contentLowerByLine])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const p = Math.min(page, totalPages - 1)
@@ -673,6 +707,10 @@ function toSessionId(fileName: string): string {
   return fileName.replace(/\.jsonl$/i, '')
 }
 
+// Stable empty reference so the list memo below isn't invalidated every render
+// while the query is still loading.
+const EMPTY_FILES: JsonlFile[] = []
+
 export default function SessionsTab({ projectName, sessionEfficiency }: SessionsTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<'modified' | 'created' | 'size'>('modified')
@@ -704,16 +742,12 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
   })
   const currentLogPath = projectInfoQuery.data?.log_path ?? ''
 
-  // Highlight + scroll helper — drives both the `?session=` deep-link and
-  // cross-tab NAV_EVENT handling.
+  // Highlight helper — drives both the `?session=` deep-link and cross-tab
+  // NAV_EVENT handling. Setting `highlightedSession` triggers the reveal+scroll
+  // effect below; here we just flag it and auto-clear the pulse after 2s.
   const highlightSession = useCallback((sessionId: string | null) => {
     if (!sessionId) return
     setHighlightedSession(sessionId)
-    // Wait a tick for the DOM to render the row, then scroll to it.
-    requestAnimationFrame(() => {
-      const el = rowRefs.current.get(sessionId)
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    })
     window.setTimeout(() => {
       setHighlightedSession((curr) => (curr === sessionId ? null : curr))
     }, 2000)
@@ -765,21 +799,71 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
 
   const resetCompareSelection = useCallback(() => setComparePair([]), [])
 
+  // Stable per-row callbacks (each takes the row's id) so memoized SessionCards
+  // don't re-render when an unrelated row's selection/highlight changes.
+  const handleSelectFile = useCallback((fileName: string) => setSelectedFile(fileName), [])
+  const registerRow = useCallback((sid: string, el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(sid, el)
+    else rowRefs.current.delete(sid)
+  }, [])
+
+  // Filtered + sorted session list. Computed here — before the early returns
+  // below — so the windowing hook always runs (Rules of Hooks); `data` may be
+  // absent mid-load, hence the EMPTY_FILES fallback.
+  const allFiles = filesQuery.data?.files ?? EMPTY_FILES
+  const visibleFiles = useMemo(() => {
+    // Model filter is client-side — the backend route doesn't accept ?model=
+    // and adding it would require joining messages → sessions in SQL. The list
+    // is already scoped to one project, so the filter cost is negligible.
+    let list = allFiles
+    if (filters.models.length > 0) {
+      const wanted = new Set(filters.models)
+      list = list.filter((f) => f.model != null && wanted.has(f.model.toLowerCase()))
+    }
+    return [...list].sort((a, b) => {
+      if (sortBy === 'size') return b.size - a.size
+      if (sortBy === 'created') return b.created - a.created
+      return b.modified - a.modified
+    })
+  }, [allFiles, filters.models, sortBy])
+
+  // Windowed rendering — mount one batch and append more as the user scrolls,
+  // instead of mounting all (potentially thousands of) cards up front. Reset to
+  // the top whenever sort/provider/model filters change the list identity.
+  const listResetKey = `${sortBy}|${filters.providers.join(',')}|${filters.models.join(',')}`
+  const { visibleCount, sentinelRef, hasMore, revealUpTo } = useIncrementalRender({
+    total: visibleFiles.length,
+    initialCount: SESSION_BATCH,
+    step: SESSION_BATCH,
+    resetKey: listResetKey,
+  })
+
+  // Deep-link / cross-tab highlight: when a session is targeted, make sure it's
+  // within the rendered window (it may rank past the initial batch), then scroll
+  // it into view. Kept separate from `highlightSession` so that callback stays
+  // identity-stable for the event-listener effects above. The bounded rAF retry
+  // covers the gap between revealing more rows and React mounting them.
+  useEffect(() => {
+    if (!highlightedSession) return
+    const idx = visibleFiles.findIndex((f) => toSessionId(f.name) === highlightedSession)
+    if (idx < 0) return
+    revealUpTo(idx + 1)
+    let raf = 0
+    let tries = 0
+    const tick = () => {
+      const el = rowRefs.current.get(highlightedSession)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      if (tries++ < 12) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [highlightedSession, visibleFiles, revealUpTo])
+
   if (filesQuery.isLoading) return <LoadingSpinner message="Loading sessions..." />
   if (filesQuery.isError) return <div className="text-red-400 p-4">Failed to load sessions</div>
-
-  // /api/jsonl-files returns {files, currency} since v0.6.0; unwrap the
-  // files list. The currency block is propagated app-wide via the
-  // CurrencyProvider, so we don't need to thread it from here.
-  let files = filesQuery.data!.files
-  // Apply model filter client-side — backend route doesn't accept ?model=
-  // and adding it would require joining messages → sessions in the SQL.
-  // The list is already paginated to one project, so the filter cost is
-  // negligible.
-  if (filters.models.length > 0) {
-    const wanted = new Set(filters.models)
-    files = files.filter((f) => f.model != null && wanted.has(f.model.toLowerCase()))
-  }
 
   // Session content view — exit early, skips compare UI while viewing one session.
   if (selectedFile) {
@@ -797,15 +881,9 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
     }
   }
 
-  if (files.length === 0) {
+  if (visibleFiles.length === 0) {
     return <EmptyState title="No sessions" description="No session files found." />
   }
-
-  const sorted = [...files].sort((a, b) => {
-    if (sortBy === 'size') return b.size - a.size
-    if (sortBy === 'created') return b.created - a.created
-    return b.modified - a.modified
-  })
 
   const bothSelected = comparePair.length === 2
   const [aId, bId] = comparePair
@@ -828,7 +906,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <IconHash size={14} />
-          <span><span className="text-gray-900 dark:text-gray-100 font-medium">{files.length}</span> sessions</span>
+          <span><span className="text-gray-900 dark:text-gray-100 font-medium">{visibleFiles.length}</span> sessions</span>
           {compareMode && (
             <span className="text-xs text-indigo-400">
               · {comparePair.length}/2 selected
@@ -871,7 +949,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
       </div>
 
       <div className="space-y-1.5">
-        {sorted.map((f) => {
+        {visibleFiles.slice(0, visibleCount).map((f) => {
           const sid = toSessionId(f.name)
           const isChecked = comparePair.includes(sid)
           return (
@@ -880,19 +958,18 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
               file={f}
               sessionId={sid}
               selected={selectedFile === f.name}
-              onClick={() => setSelectedFile(f.name)}
+              onSelect={handleSelectFile}
               compareMode={compareMode}
               checked={isChecked}
               checkboxDisabled={comparePair.length >= 2}
-              onCheckToggle={() => toggleCompareSelection(sid)}
+              onCheckToggle={toggleCompareSelection}
               highlighted={highlightedSession === sid}
-              rowRef={(el) => {
-                if (el) rowRefs.current.set(sid, el)
-                else rowRefs.current.delete(sid)
-              }}
+              registerRow={registerRow}
             />
           )
         })}
+        {/* Sentinel: when it scrolls into view the next batch is appended. */}
+        {hasMore && <div ref={sentinelRef} aria-hidden="true" className="h-1" />}
       </div>
     </div>
   )
