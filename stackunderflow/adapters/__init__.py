@@ -15,7 +15,7 @@ Default-on adapters (always registered):
   - Pi+OMP (shared format) — promoted out of beta in v0.9.2
   - Hermes (recursive JSONL) — promoted out of beta in v0.9.2
 
-Beta adapters are gated by environment variables (default: off). The 10 below
+Beta adapters are gated by environment variables (default: off). The 13 below
 remain opt-in pending broader real-world validation:
 
   STACKUNDERFLOW_BETA_KILOCODE=1       # opt into the KiloCode adapter (Cline parser)
@@ -37,6 +37,11 @@ remain opt-in pending broader real-world validation:
                                        #   are encrypted; this adapter surfaces
                                        #   plaintext metadata only (titles,
                                        #   workspaces, CLI user prompts).
+  STACKUNDERFLOW_BETA_GROK=1           # opt into the Grok (xAI grok CLI) adapter
+                                       #   (~/.grok/sessions JSONL). No token
+                                       #   usage in the source, so tokens are
+                                       #   estimated from content length and
+                                       #   Records carry cost_source=estimated.
 """
 
 import os
@@ -181,3 +186,13 @@ if _beta_enabled("ANTIGRAVITY"):
     from .antigravity import AntigravityAdapter as _AntigravityAdapter  # noqa: E402
 
     register(_AntigravityAdapter())
+
+# Beta: Grok (xAI ``grok`` CLI). Off by default — set
+# STACKUNDERFLOW_BETA_GROK=1 to enable. Portable dotfile root
+# (~/.grok/sessions); no token usage in the source, so tokens are
+# estimated from content length and Records carry
+# ``raw["cost_source"] = "estimated"``.
+if _beta_enabled("GROK"):
+    from .grok import GrokAdapter as _GrokAdapter  # noqa: E402
+
+    register(_GrokAdapter())
