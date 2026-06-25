@@ -36,6 +36,117 @@ def _duration_minutes(first: str | None, last: str | None) -> float | None:
         return None
 
 
+def _session_fk_subquery(project_ids: list[int]) -> str:
+    """``session_fk IN (SELECT id FROM sessions WHERE project_id IN (?, ?...))``.
+
+    Driving every ``messages`` read off this list subquery — rather than
+    joining ``sessions`` to the partitioned ``messages`` view — keeps each
+    monthly partition on its ``(session_fk, seq)`` index instead of forcing
+    the planner to materialise the whole UNION-ALL view.
+    """
+    placeholders = ",".join("?" for _ in project_ids)
+    return f"session_fk IN (SELECT id FROM sessions WHERE project_id IN ({placeholders}))"
+
+
+def _bulk_session_aggregates(conn, project_ids: list[int]) -> dict[int, dict]:
+    """Per-session message/token/model/tool aggregates in ONE grouped query.
+
+    Column-for-column equivalent to running ``queries.get_session_stats`` per
+    session, but as a single ``GROUP BY session_fk`` over the project's
+    messages — so the cost is O(1) queries, not O(sessions).
+    """
+    if not project_ids:
+        return {}
+    sql = (
+        "SELECT session_fk, "
+        "  SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_messages, "
+        "  SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) AS assistant_messages, "
+        "  COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "  COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+        "  MAX(CASE WHEN model IS NOT NULL AND model != '' THEN model END) AS model, "
+        "  COALESCE(SUM(json_array_length(tools_json)), 0) AS tool_calls "
+        "FROM messages "
+        f"WHERE {_session_fk_subquery(project_ids)} "
+        "GROUP BY session_fk"
+    )
+    return {r["session_fk"]: r for r in conn.execute(sql, tuple(project_ids))}
+
+
+def _bulk_session_titles(conn, project_ids: list[int]) -> dict[int, str]:
+    """First non-empty user message (the title) per session, in ONE pass.
+
+    A ``ROW_NUMBER()`` window partitioned by ``session_fk`` and ordered by
+    ``seq`` reproduces the old per-session ``ORDER BY seq LIMIT 1`` exactly,
+    for every session at once.
+    """
+    if not project_ids:
+        return {}
+    sql = (
+        "SELECT session_fk, content_text FROM ("
+        "  SELECT session_fk, content_text, "
+        "    ROW_NUMBER() OVER (PARTITION BY session_fk ORDER BY seq) AS rn "
+        "  FROM messages "
+        f"  WHERE {_session_fk_subquery(project_ids)} "
+        "    AND role = 'user' AND content_text IS NOT NULL AND content_text != '' "
+        ") WHERE rn = 1"
+    )
+    return {r["session_fk"]: r["content_text"] for r in conn.execute(sql, tuple(project_ids))}
+
+
+def _session_costs_for_sessions(conn, sess_rows, provider_map, log_dir) -> list[dict]:
+    """Run the per-session cost collectors over ONLY ``sess_rows``.
+
+    Reconstructs pipeline ``RawEntry`` objects from just these sessions'
+    ``raw_json`` (driven off ``session_fk`` so the partitioned ``messages``
+    view stays on its per-partition index), then runs the standard classify →
+    enrich → aggregate chain. Returns the ``session_costs`` list — one entry
+    per session, identical to what the whole-project pipeline produces for
+    those sessions, at a fraction of the work.
+    """
+    import json as _json
+
+    from stackunderflow.stats import aggregator, classifier, enricher
+    from stackunderflow.stats.classifier import RawEntry
+
+    fk_to_sid = {r["id"]: r["session_id"] for r in sess_rows}
+    fk_to_provider = {r["id"]: provider_map.get(r["project_id"], "anthropic") for r in sess_rows}
+    fks = list(fk_to_sid)
+    if not fks:
+        return []
+
+    fk_ph = ",".join("?" for _ in fks)
+    rows = conn.execute(
+        f"SELECT session_fk, raw_json, timestamp FROM messages "
+        f"WHERE session_fk IN ({fk_ph}) ORDER BY timestamp",
+        fks,
+    ).fetchall()
+
+    raw_entries = []
+    for r in rows:
+        sid = fk_to_sid.get(r["session_fk"], "")
+        payload = _json.loads(r["raw_json"])
+        # Authoritative clean timestamp lives in the column; raw_json may hold
+        # epoch-millis ints from non-Claude adapters (mirrors
+        # queries.build_enriched_dataset).
+        if r["timestamp"]:
+            payload["timestamp"] = r["timestamp"]
+        raw_entries.append(
+            RawEntry(
+                payload=payload,
+                session_id=sid,
+                origin=sid,
+                provider=fk_to_provider.get(r["session_fk"], "anthropic"),
+            )
+        )
+
+    if not raw_entries:
+        return []
+    tagged = classifier.tag(raw_entries)
+    dataset = enricher.build(tagged, log_dir)
+    stats = aggregator.summarise(dataset, log_dir)
+    return stats.get("session_costs", []) or []
+
+
 @router.get("/api/jsonl-files")
 async def get_jsonl_files(
     project: str | None = None,
@@ -82,24 +193,44 @@ async def get_jsonl_files(
             provider_map = {r.id: (r.provider or "anthropic") for r in project_rows}
             sessions = queries.list_sessions(conn, project_id=project_ids)
 
+            # Per-session aggregates + titles in TWO grouped passes instead of
+            # the old N+1 (2 queries + a compute_cost per session, ~3.7K queries
+            # for ~1.8K sessions). Both reads drive off ``session_fk IN (SELECT
+            # id FROM sessions WHERE project_id IN (...))`` rather than joining
+            # ``sessions`` to the partitioned ``messages`` view directly — the
+            # list subquery lets each monthly partition seek its
+            # ``(session_fk, seq)`` index instead of materialising the whole
+            # UNION-ALL view (see queries.count_project_messages for the same
+            # pattern). Only the project ids are bound, so a project with
+            # thousands of sessions never approaches the SQL variable limit.
+            agg_by_fk = _bulk_session_aggregates(conn, project_ids)
+            title_by_fk = _bulk_session_titles(conn, project_ids)
+
             files = []
             for session in sessions:
-                stats = queries.get_session_stats(conn, session_fk=session.id)
+                agg = agg_by_fk.get(session.id)
+                if agg is not None:
+                    user_messages = agg["user_messages"] or 0
+                    assistant_messages = agg["assistant_messages"] or 0
+                    input_tokens = agg["input_tokens"] or 0
+                    output_tokens = agg["output_tokens"] or 0
+                    model = agg["model"]
+                    tool_calls = agg["tool_calls"] or 0
+                else:
+                    # Session row with zero message rows — mirrors the all-zero
+                    # shape the old per-session get_session_stats returned.
+                    user_messages = assistant_messages = 0
+                    input_tokens = output_tokens = tool_calls = 0
+                    model = None
 
-                first_msg_row = conn.execute(
-                    "SELECT content_text FROM messages "
-                    "WHERE session_fk = ? AND role = 'user' "
-                    "  AND content_text IS NOT NULL AND content_text != '' "
-                    "ORDER BY seq LIMIT 1",
-                    (session.id,),
-                ).fetchone()
-                title = first_msg_row["content_text"][:150] if first_msg_row else None
+                title_text = title_by_fk.get(session.id)
+                title = title_text[:150] if title_text else None
 
                 estimated_cost = 0.0
-                if stats["model"] and (stats["input_tokens"] or stats["output_tokens"]):
+                if model and (input_tokens or output_tokens):
                     cost_data = compute_cost(
-                        {"input": stats["input_tokens"], "output": stats["output_tokens"]},
-                        stats["model"],
+                        {"input": input_tokens, "output": output_tokens},
+                        model,
                     )
                     estimated_cost = cost_data.get("total_cost", 0.0)
 
@@ -111,13 +242,13 @@ async def get_jsonl_files(
                     "modified": _iso_to_ts(session.last_ts),
                     "size": 0,
                     "messages": session.message_count,
-                    "user_messages": stats["user_messages"],
-                    "assistant_messages": stats["assistant_messages"],
-                    "input_tokens": stats["input_tokens"],
-                    "output_tokens": stats["output_tokens"],
-                    "model": stats["model"],
+                    "user_messages": user_messages,
+                    "assistant_messages": assistant_messages,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "model": model,
                     "title": title,
-                    "tool_calls": stats["tool_calls"],
+                    "tool_calls": tool_calls,
                     "estimated_cost": round(estimated_cost, 4),
                     "provider": provider_map.get(session.project_id, "anthropic"),
                 })
@@ -142,8 +273,13 @@ async def get_jsonl_files(
 async def compare_sessions(a: str, b: str, log_path: str | None = None):
     """Compare two sessions — returns cost/token/duration diffs per spec §1.10.
 
-    Reuses ``session_costs`` from the standard dashboard payload so both
-    sides share the exact same cost-attribution logic as the Cost tab.
+    Each side's ``SessionCost`` comes from the SAME aggregator collectors the
+    Cost tab uses, but run over ONLY the two sessions' messages instead of the
+    whole-project pipeline (which materialised + enriched + aggregated every
+    message, ~3.4s on a large project just to diff two rows). Every
+    ``_SessionCostCollector`` field is keyed by ``session_id`` and the
+    interaction-derived ``commands`` count is a per-session user-command tally,
+    so restricting the dataset to a and b yields byte-identical rows for them.
     """
     path = log_path or deps.current_log_path
     if not path:
@@ -157,7 +293,29 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
             if not project_rows:
                 raise HTTPException(status_code=404, detail=f"Project '{slug}' not found in store")
             project_ids = [r.id for r in project_rows]
-            _, stats = queries.get_project_stats(conn, project_id=project_ids)
+            provider_map = {r.id: (r.provider or "anthropic") for r in project_rows}
+            log_dir = project_rows[0].path or str(Path.home() / ".claude" / "projects" / slug)
+
+            # Resolve the two requested session ids to their integer PKs (+ the
+            # provider their project priced under) up front. A missing id 404s
+            # here, before any message is read.
+            placeholders = ",".join("?" for _ in project_ids)
+            sess_rows = conn.execute(
+                f"SELECT id, session_id, project_id FROM sessions "
+                f"WHERE project_id IN ({placeholders}) AND session_id IN (?, ?)",
+                (*project_ids, a, b),
+            ).fetchall()
+            found_sids = {r["session_id"] for r in sess_rows}
+            missing = [sid for sid in (a, b) if sid not in found_sids]
+            if missing:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Session(s) not found: {', '.join(missing)}",
+                )
+
+            session_costs = _session_costs_for_sessions(
+                conn, sess_rows, provider_map, log_dir
+            )
         finally:
             conn.close()
     except HTTPException:
@@ -165,7 +323,6 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load stats: {e}") from e
 
-    session_costs = stats.get("session_costs", []) or []
     by_id = {s["session_id"]: s for s in session_costs}
     sa = by_id.get(a)
     sb = by_id.get(b)
