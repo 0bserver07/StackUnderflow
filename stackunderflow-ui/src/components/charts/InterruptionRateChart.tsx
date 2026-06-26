@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import {
   ComposedChart,
   Bar,
@@ -10,83 +11,84 @@ import {
   Legend,
 } from 'recharts'
 import type { DailyData } from '../../types/api'
+import { formatNumber } from '../../services/format'
+import { ChartCard, EmptyChartCard, useChartTheme, CHART_HEIGHT } from './chartTheme'
 
 interface InterruptionRateChartProps {
   dailyStats: Record<string, DailyData>
 }
 
-function formatNumber(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`
-  return String(v)
+const BAR_RADIUS: [number, number, number, number] = [2, 2, 0, 0]
+const ACTIVE_DOT = { r: 5 }
+const LINE_DOT = { r: 3, fill: '#F59E0B' }
+const pctTickFormatter = (v: number) => `${v}%`
+const countTickFormatter = (v: number) => formatNumber(v)
+const tooltipFormatter = (value: number, name: string) => {
+  if (name === 'Interruption Rate') return [`${value}%`, name] as [string, string]
+  return [value.toLocaleString(), name] as [string, string]
 }
+const legendFormatter = (value: string) => (
+  <span className="text-gray-600 dark:text-gray-400">{value}</span>
+)
 
-export default function InterruptionRateChart({ dailyStats }: InterruptionRateChartProps) {
-  if (!dailyStats || Object.keys(dailyStats).length === 0) return null
+function InterruptionRateChart({ dailyStats }: InterruptionRateChartProps) {
+  const palette = useChartTheme()
 
-  const data = Object.entries(dailyStats)
-    .map(([date, d]) => ({
-      date,
-      interruption_rate: parseFloat(d.interruption_rate.toFixed(1)),
-      user_commands: d.user_commands,
-      interrupted_commands: d.interrupted_commands,
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date))
+  const data = useMemo(() => {
+    if (!dailyStats) return []
+    return Object.entries(dailyStats)
+      .map(([date, d]) => ({
+        date,
+        interruption_rate: parseFloat(d.interruption_rate.toFixed(1)),
+        user_commands: d.user_commands,
+        interrupted_commands: d.interrupted_commands,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }, [dailyStats])
 
-  if (data.length === 0) return null
+  if (data.length === 0) return <EmptyChartCard title="Interruption Rate Over Time" />
 
   return (
-    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Interruption Rate Over Time</h3>
-      <ResponsiveContainer width="100%" height={280}>
+    <ChartCard title="Interruption Rate Over Time">
+      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <ComposedChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
           />
           <YAxis
             yAxisId="left"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={(v) => `${v}%`}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={pctTickFormatter}
             domain={[0, 'auto']}
           />
           <YAxis
             yAxisId="right"
             orientation="right"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={formatNumber}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={countTickFormatter}
           />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
-            formatter={(value: number, name: string) => {
-              if (name === 'Interruption Rate') return [`${value}%`, name]
-              return [value.toLocaleString(), name]
-            }}
+            contentStyle={palette.tooltipContent}
+            labelStyle={palette.tooltipLabel}
+            formatter={tooltipFormatter}
           />
-          <Legend
-            wrapperStyle={{ fontSize: '11px' }}
-            formatter={(value: string) => <span className="text-gray-600 dark:text-gray-400">{value}</span>}
-          />
+          <Legend wrapperStyle={palette.legend} formatter={legendFormatter} />
           <Bar
             yAxisId="right"
             dataKey="user_commands"
             name="User Commands"
             fill="#818CF8"
             fillOpacity={0.5}
-            radius={[2, 2, 0, 0]}
+            radius={BAR_RADIUS}
+            isAnimationActive={false}
           />
           <Bar
             yAxisId="right"
@@ -94,7 +96,8 @@ export default function InterruptionRateChart({ dailyStats }: InterruptionRateCh
             name="Interrupted"
             fill="#F87171"
             fillOpacity={0.7}
-            radius={[2, 2, 0, 0]}
+            radius={BAR_RADIUS}
+            isAnimationActive={false}
           />
           <Line
             yAxisId="left"
@@ -103,11 +106,14 @@ export default function InterruptionRateChart({ dailyStats }: InterruptionRateCh
             name="Interruption Rate"
             stroke="#F59E0B"
             strokeWidth={2}
-            dot={{ r: 3, fill: '#F59E0B' }}
-            activeDot={{ r: 5 }}
+            dot={LINE_DOT}
+            activeDot={ACTIVE_DOT}
+            isAnimationActive={false}
           />
         </ComposedChart>
       </ResponsiveContainer>
-    </div>
+    </ChartCard>
   )
 }
+
+export default memo(InterruptionRateChart)

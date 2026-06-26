@@ -68,16 +68,34 @@ export default function Live() {
 
   // Combined event/tool_call stream: interleave by ts so the user sees
   // chronological order, not two parallel walls. Capped at 100.
+  //
+  // Both source buffers already arrive newest-first (useEventStream prepends
+  // each new row), so we merge them with a single linear pass instead of
+  // concatenating and re-sorting all ~200 rows on every SSE frame. Equal
+  // timestamps keep events ahead of tool_calls, matching the previous stable
+  // sort. String compare on ISO timestamps == chronological, same as before.
   const merged = useMemo(() => {
     type Item =
       | { kind: 'event'; ts: string; row: typeof stream.events[number] }
       | { kind: 'tool_call'; ts: string; row: typeof stream.toolCalls[number] }
-    const items: Item[] = [
-      ...stream.events.map((row) => ({ kind: 'event' as const, ts: row.ts, row })),
-      ...stream.toolCalls.map((row) => ({ kind: 'tool_call' as const, ts: row.ts, row })),
-    ]
-    items.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
-    return items.slice(0, 100)
+    const { events, toolCalls } = stream
+    const out: Item[] = []
+    let i = 0
+    let j = 0
+    while (out.length < 100 && (i < events.length || j < toolCalls.length)) {
+      const e = i < events.length ? events[i] : null
+      const t = j < toolCalls.length ? toolCalls[j] : null
+      if (e && (!t || e.ts >= t.ts)) {
+        out.push({ kind: 'event', ts: e.ts, row: e })
+        i++
+      } else if (t) {
+        out.push({ kind: 'tool_call', ts: t.ts, row: t })
+        j++
+      } else {
+        break
+      }
+    }
+    return out
   }, [stream.events, stream.toolCalls])
 
   if (isLoading && !stream.connected) {

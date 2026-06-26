@@ -5,10 +5,18 @@
 // Kept separate from ``ChatMessageList`` so the legacy plain-Ollama
 // chat path stays binary-compatible with its existing message type.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, lazy, Suspense } from 'react'
 import type { MetaAgentMessage } from '../../types/metaAgent'
-import Markdown from '../common/Markdown'
 import ToolCallSurface from './ToolCallSurface'
+
+// Markdown statically pulls in react-markdown + react-syntax-highlighter
+// (a large chunk). The meta-agent sidebar is mounted on every route, so a
+// static import would pin those libs into the eager first-paint bundle.
+// Lazy-load it instead: the chunk fetches only when an assistant message
+// actually renders, and the Suspense fallback shows the raw text so
+// streaming output stays visible while the chunk loads (it resolves once,
+// then React caches it — no flicker on subsequent token updates).
+const Markdown = lazy(() => import('../common/Markdown'))
 
 interface MetaAgentMessageListProps {
   messages: MetaAgentMessage[]
@@ -82,7 +90,13 @@ function MetaAgentMessageBubble({ message }: MetaAgentMessageBubbleProps) {
         {(message.content || message.error) && (
           <div className="rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
             <div className="text-sm break-words">
-              {message.content && <Markdown content={message.content} />}
+              {message.content && (
+                <Suspense
+                  fallback={<p className="whitespace-pre-wrap">{message.content}</p>}
+                >
+                  <Markdown content={message.content} />
+                </Suspense>
+              )}
               {message.error && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-1">
                   Error: {message.error}

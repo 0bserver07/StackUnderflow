@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   IconHash,
   IconCurrencyDollar,
@@ -12,19 +12,17 @@ import {
   IconMessage,
   IconCalendar,
 } from '@tabler/icons-react'
-import type { DashboardStats, Trends, ToolDistributionResponse } from '../../types/api'
+import type { DashboardStats, Trends, ToolDistributionResponse, HourlyPattern } from '../../types/api'
 import StatsCards from '../analytics/StatsCards'
 import TokenUsageChart from '../charts/TokenUsageChart'
 import DailyCostChart from '../charts/DailyCostChart'
 import ModelDistributionChart from '../charts/ModelDistributionChart'
 import HourlyPatternChart from '../charts/HourlyPatternChart'
 import ErrorDistributionChart from '../charts/ErrorDistributionChart'
-import ToolUsageChart from '../charts/ToolUsageChart'
 import ToolUsageBarChart from '../charts/ToolUsageBarChart'
 import CommandToolDistChart from '../charts/CommandToolDistChart'
 import InterruptionRateChart from '../charts/InterruptionRateChart'
 import ErrorRateChart from '../charts/ErrorRateChart'
-import ErrorCategoryChart from '../charts/ErrorCategoryChart'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
 import TokenCompositionDonut from '../cost/TokenCompositionDonut'
@@ -60,6 +58,13 @@ function formatDateRange(iso: string): string {
 
 import { formatCost, formatModelName } from '../../services/format'
 import { useCurrency } from '../../services/currency'
+import { useFilters } from '../../services/filters'
+
+// Hoisted empty fallbacks so the (memoised) chart children receive a stable
+// reference every render instead of a fresh `{}` / `{messages,tokens}` literal
+// — without this, `?? {}` defeats React.memo on every parent re-render (#8).
+const EMPTY_RECORD: Record<string, never> = {}
+const EMPTY_HOURLY_PATTERN: HourlyPattern = { messages: {}, tokens: {} }
 
 interface MiniStatCardProps {
   icon: React.ReactNode
@@ -84,6 +89,9 @@ function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-600 dar
 
 export default function OverviewTab({ stats }: OverviewTabProps) {
   const { currency } = useCurrency()
+  // #33: the command/tool-count distribution must honour the active
+  // provider/model filter. `queryString` is `&provider=…&model=…` (or '').
+  const { queryString } = useFilters()
   // Trends moved off /api/dashboard-data into /api/cost-data (spec §A3) — lazy
   // fetch them in a non-blocking effect so the rest of the overview renders
   // immediately. `stats.trends` will normally be undefined here; we still seed
@@ -123,7 +131,11 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/tool-distribution')
+    // FLAG (backend): /api/tool-distribution (routes/commands.py) currently
+    // ignores ?provider/?model — it must apply the same filter the rest of the
+    // dashboard uses, or this chart stays project-wide while the others narrow.
+    const qs = queryString ? `?${queryString.slice(1)}` : ''
+    fetch(`/api/tool-distribution${qs}`)
       .then((res) => (res.ok ? (res.json() as Promise<ToolDistributionResponse>) : null))
       .then((data) => {
         if (cancelled || !data) return
@@ -136,7 +148,29 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
     return () => {
       cancelled = true
     }
+  }, [queryString])
+
+  // §C22 trend strip click → Cost tab. Memoised so the strip (and the rest of
+  // the memoised children) aren't handed a fresh closure every render (#8).
+  const handleTrendTileClick = useCallback(() => {
+    setTab('cost')
   }, [])
+
+  // `token_composition` also moved to /api/cost-data; per task brief, prefer
+  // the simpler fallback derived from the still-present overview.total_tokens.
+  // Memoised so TokenCompositionDonut's `totals` prop stays referentially
+  // stable across unrelated re-renders (#8).
+  const tokenTotals = useMemo(() => {
+    const t = stats.overview?.total_tokens ?? { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
+    return (
+      stats.token_composition?.totals ?? {
+        input: t.input,
+        output: t.output,
+        cache_read: t.cache_read,
+        cache_creation: t.cache_creation,
+      }
+    )
+  }, [stats.token_composition, stats.overview])
 
   if (!stats?.overview) return null
 
@@ -151,22 +185,6 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
   const assistantMessages = messageTypes['assistant'] ?? 0
   const toolUseMessages = messageTypes['tool_use'] ?? 0
   const toolResultMessages = messageTypes['tool_result'] ?? 0
-
-  // `token_composition` also moved to /api/cost-data; per task brief, prefer
-  // the simpler fallback derived from the still-present overview.total_tokens.
-  const tokenTotals = stats.token_composition?.totals ?? {
-    input: tokens.input,
-    output: tokens.output,
-    cache_read: tokens.cache_read,
-    cache_creation: tokens.cache_creation,
-  }
-
-  // Click on any TrendDeltaStrip tile → jump to the Cost tab. The strip also
-  // dispatches a `stackunderflow:filter-window` event independently; the Cost
-  // tab can pick that up to apply a date filter once it lands.
-  const handleTrendTileClick = () => {
-    setTab('cost')
-  }
 
   return (
     <div className="space-y-6">
@@ -269,19 +287,21 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
         />
       </div>
 
-      {/* Charts section - 2 column grid */}
+      {/* Charts section - 2 column grid.
+          #18: ToolUsageChart was rendered right beside ToolUsageBarChart on
+          the same `usage_counts` dataset — dropped the duplicate, kept the bar.
+          #53: a second "Error Categories" panel (ErrorCategoryChart pie) showed
+          the identical `by_category` field — dropped it. */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <TokenUsageChart dailyStats={stats.daily_stats ?? {}} />
-        <DailyCostChart dailyStats={stats.daily_stats ?? {}} />
-        <ToolUsageChart toolStats={stats.tools?.usage_counts ?? {}} />
-        <ToolUsageBarChart toolStats={stats.tools?.usage_counts ?? {}} />
-        <ModelDistributionChart modelStats={stats.models ?? {}} />
-        <HourlyPatternChart hourlyPattern={stats.hourly_pattern ?? { messages: {}, tokens: {} }} />
+        <TokenUsageChart dailyStats={stats.daily_stats ?? EMPTY_RECORD} />
+        <DailyCostChart dailyStats={stats.daily_stats ?? EMPTY_RECORD} />
+        <ToolUsageBarChart toolStats={stats.tools?.usage_counts ?? EMPTY_RECORD} />
+        <ModelDistributionChart modelStats={stats.models ?? EMPTY_RECORD} />
+        <HourlyPatternChart hourlyPattern={stats.hourly_pattern ?? EMPTY_HOURLY_PATTERN} />
         <CommandToolDistChart toolCountDist={toolCountDist} />
-        <InterruptionRateChart dailyStats={stats.daily_stats ?? {}} />
-        <ErrorDistributionChart errorCategories={stats.errors?.by_category ?? {}} />
-        <ErrorRateChart dailyStats={stats.daily_stats ?? {}} />
-        <ErrorCategoryChart errorCategories={stats.errors?.by_category ?? {}} />
+        <InterruptionRateChart dailyStats={stats.daily_stats ?? EMPTY_RECORD} />
+        <ErrorDistributionChart errorCategories={stats.errors?.by_category ?? EMPTY_RECORD} />
+        <ErrorRateChart dailyStats={stats.daily_stats ?? EMPTY_RECORD} />
       </div>
     </div>
   )

@@ -1,22 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import {
-  IconRefresh,
-  IconLayoutDashboard,
-  IconFolders,
-  IconCurrencyDollar,
-  IconTerminal2,
-  IconMessageCircle,
-  IconSearch,
-  IconHelpCircle,
-  IconBookmark,
-  IconTag,
-  IconScale,
-  IconGitBranch,
-  IconHierarchy3,
-  IconHistory,
-} from '@tabler/icons-react'
+import { IconRefresh } from '@tabler/icons-react'
 import { setProjectByDir, getDashboardData, refreshData } from '../services/api'
 import { formatProjectName, getNameMode } from '../services/nameMode'
 import {
@@ -28,6 +13,7 @@ import {
 } from '../services/navigation'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
+import ErrorBoundary from '../components/common/ErrorBoundary'
 import ExportButton from '../components/common/ExportButton'
 import FilterBar from '../components/common/FilterBar'
 import { Breadcrumb, BackButton } from '../components/common/Breadcrumb'
@@ -49,36 +35,16 @@ const PlaybackTab = lazy(() => import('../components/dashboard/PlaybackTab'))
 const CostTab = lazy(() => import('../components/dashboard/CostTab'))
 const CompareTab = lazy(() => import('../components/dashboard/CompareTab'))
 const YieldTab = lazy(() => import('../components/dashboard/YieldTab'))
-import { useBetaFeatures } from '../hooks/useBetaFeatures'
+import {
+  useBetaFeatures,
+  BETA_ENABLED_KEY,
+  DEFAULT_BETA_ENABLED,
+} from '../hooks/useBetaFeatures'
 import BetaBadge from '../components/common/BetaBadge'
-
-type Tab = {
-  id: string
-  label: string
-  icon: typeof IconLayoutDashboard
-  beta?: boolean
-}
-
-const TABS: readonly Tab[] = [
-  { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
-  { id: 'sessions', label: 'Sessions', icon: IconFolders },
-  { id: 'agents', label: 'Agents', icon: IconHierarchy3 },
-  // Playback slots between Sessions and Cost (same band as Agents). Both
-  // tabs handle the empty-data case via their own EmptyState components —
-  // see PlaybackTab.tsx and AgentsTab.tsx.
-  { id: 'playback', label: 'Playback', icon: IconHistory },
-  { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
-  // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
-  // and Commands. Both call dedicated /api/compare and /api/yield routes.
-  { id: 'compare', label: 'Compare', icon: IconScale },
-  { id: 'yield', label: 'Yield', icon: IconGitBranch },
-  { id: 'commands', label: 'Commands', icon: IconTerminal2 },
-  { id: 'messages', label: 'Messages', icon: IconMessageCircle },
-  { id: 'search', label: 'Search', icon: IconSearch },
-  { id: 'qa', label: 'Q&A', icon: IconHelpCircle },
-  { id: 'bookmarks', label: 'Bookmarks', icon: IconBookmark },
-  { id: 'tags', label: 'Tags', icon: IconTag },
-] as const
+// Tab catalogue lives in its own module so Settings can consume the exact same
+// list without coupling the two (lazy-loaded) route bundles together. `isBeta`
+// is what the beta-features toggle gates.
+import { TABS } from '../config/dashboardTabs'
 
 type TabId = typeof TABS[number]['id']
 
@@ -121,11 +87,37 @@ export default function ProjectDashboard() {
 
   // Beta-features toggle + per-tab overrides from localStorage.
   // Filter TABS once per render so the tab bar and the fallback logic agree.
-  const { isTabVisible } = useBetaFeatures()
+  const { isTabVisible, betaEnabled, setBetaEnabled } = useBetaFeatures()
   const visibleTabs = useMemo(
-    () => TABS.filter(t => isTabVisible(t.id, t.beta ?? false)),
+    () => TABS.filter(t => isTabVisible(t.id, t.isBeta ?? false)),
     [isTabVisible],
   )
+
+  // Re-sync the beta toggle when it changes in another tab/window. The
+  // `storage` event only fires cross-document, so within this document a
+  // Settings → Dashboard navigation already remounts and re-reads; this keeps
+  // an *already-open* dashboard in step. (Ideally this lives in
+  // useBetaFeatures so per-tab overrides sync too — flagged as a follow-up
+  // since that hook is outside this change's scope.)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== BETA_ENABLED_KEY) return
+      let next = DEFAULT_BETA_ENABLED
+      try {
+        const raw = window.localStorage.getItem(BETA_ENABLED_KEY)
+        if (raw !== null) {
+          const parsed = JSON.parse(raw)
+          if (typeof parsed === 'boolean') next = parsed
+        }
+      } catch {
+        /* malformed/unavailable storage — keep the default */
+      }
+      if (next !== betaEnabled) setBetaEnabled(next)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [betaEnabled, setBetaEnabled])
 
   // If the current tab was hidden (user toggled beta off or added a "hidden"
   // override), fall back to 'overview' so the content area isn't blank.
@@ -146,13 +138,29 @@ export default function ProjectDashboard() {
   // Load dashboard data — include the active filter set in the query key so
   // toggling a provider/model chip triggers a refetch (and avoids React
   // Query serving stale, unfiltered data).
-  const { data: dashboardData, isLoading: loadingData, error: dataError } = useQuery({
+  const {
+    data: dashboardData,
+    isLoading: loadingData,
+    isFetching: fetchingData,
+    error: dataError,
+  } = useQuery({
     queryKey: ['dashboardData', name, filters.providers, filters.models],
     queryFn: () => getDashboardData(new Date().getTimezoneOffset(), {
       providers: filters.providers,
       models: filters.models,
     }),
     enabled: !!name && !settingProject,
+    // Keep the previously-loaded dashboard on screen while a filter change
+    // refetches. Without this, the query-key change dropped `data` to
+    // undefined, the full-screen spinner took over, and the whole tab subtree
+    // (active tab included) unmounted/remounted on every chip toggle.
+    // Scoped to the SAME project: on a project switch the name in the key
+    // changes, so we return undefined and the first-load spinner shows instead
+    // of briefly flashing the old project's numbers under the new header.
+    // `loadingData` (isLoading) is then true only on first load; the inline
+    // indicator covers same-project background refetches.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey?.[1] === name ? prev : undefined,
   })
 
   const refreshMutation = useMutation({
@@ -219,8 +227,12 @@ export default function ProjectDashboard() {
 
   const displayName = name ? formatProjectName(name, undefined, getNameMode()) : ''
 
+  // Full-screen spinner is gated to the first load only: `loadingData`
+  // (isLoading) is false once we have data to keep on screen during refetch.
   if (settingProject || loadingData) return <LoadingSpinner message={`Loading ${displayName}...`} />
-  if (setError || dataError) {
+  // Only blank to the error screen when there's nothing to show. A failed
+  // background refetch (data still present) surfaces as an inline pill below.
+  if (setError || (dataError && !dashboardData)) {
     const err = setError || dataError
     return (
       <div className="p-6">
@@ -271,6 +283,22 @@ export default function ProjectDashboard() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Inline refetch indicator — replaces the old full-screen spinner
+              when a filter change refetches in the background (#9). */}
+          {fetchingData && !loadingData && (
+            <span
+              className="flex items-center gap-1.5 text-xs text-gray-500"
+              aria-live="polite"
+            >
+              <IconRefresh size={12} className="animate-spin" />
+              Updating…
+            </span>
+          )}
+          {dataError && dashboardData && (
+            <span className="text-xs text-red-600 dark:text-red-400" role="status">
+              Refresh failed
+            </span>
+          )}
           {dashboardData.is_reindexing && (
             <span className="text-xs text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 px-2 py-1 rounded">Reindexing...</span>
           )}
@@ -304,7 +332,7 @@ export default function ProjectDashboard() {
               >
                 <Icon size={14} />
                 {tab.label}
-                {tab.beta === true && <BetaBadge className="ml-1.5" />}
+                {tab.isBeta === true && <BetaBadge className="ml-1.5" />}
               </button>
             )
           })}
@@ -339,22 +367,33 @@ export default function ProjectDashboard() {
           switches. Tab state already resets on switch (conditional render),
           so lazy loading changes nothing about the existing UX beyond the
           one-time fetch. */}
-      <div>
-        <Suspense fallback={<LoadingSpinner size="md" message="Loading..." />}>
-          {activeTab === 'overview' && <OverviewTab stats={stats} />}
-          {activeTab === 'cost' && <CostTab stats={stats} />}
-          {activeTab === 'compare' && <CompareTab />}
-          {activeTab === 'yield' && <YieldTab />}
-          {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
-          {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
-          {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
-          {activeTab === 'qa' && <QATab projectName={name!} />}
-          {activeTab === 'bookmarks' && <BookmarksTab />}
-          {activeTab === 'tags' && <TagsTab />}
-          {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
-          {activeTab === 'agents' && <AgentsTab projectName={name!} />}
-          {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
-        </Suspense>
+      {/* `aria-busy` + dim signal a background refetch without unmounting the
+          tab. The ErrorBoundary is keyed by `activeTab` so a render error in
+          one tab shows a scoped fallback (not a blank window) and switching
+          tabs resets it (#49). */}
+      <div
+        aria-busy={fetchingData && !loadingData}
+        className={`transition-opacity duration-200 ${
+          fetchingData && !loadingData ? 'opacity-60' : ''
+        }`}
+      >
+        <ErrorBoundary key={activeTab}>
+          <Suspense fallback={<LoadingSpinner size="md" message="Loading..." />}>
+            {activeTab === 'overview' && <OverviewTab stats={stats} />}
+            {activeTab === 'cost' && <CostTab stats={stats} />}
+            {activeTab === 'compare' && <CompareTab />}
+            {activeTab === 'yield' && <YieldTab />}
+            {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
+            {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
+            {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}
+            {activeTab === 'qa' && <QATab projectName={name!} />}
+            {activeTab === 'bookmarks' && <BookmarksTab />}
+            {activeTab === 'tags' && <TagsTab />}
+            {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
+            {activeTab === 'agents' && <AgentsTab projectName={name!} />}
+            {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
+          </Suspense>
+        </ErrorBoundary>
       </div>
     </div>
   )

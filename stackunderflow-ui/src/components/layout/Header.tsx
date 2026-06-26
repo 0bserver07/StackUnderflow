@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   IconStack2,
   IconSearch,
@@ -41,7 +42,15 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { addProvider } = useFilters()
-  const [projects, setProjects] = useState<Project[]>([])
+  // Project list via React Query so the Header shares the cache with the rest
+  // of the app (deduped across mounts) instead of firing its own fetch on
+  // every render of the component tree.
+  const { data: projectsData } = useQuery({
+    queryKey: ['projects', false],
+    queryFn: () => getProjects(false),
+    staleTime: 60_000,
+  })
+  const projects: Project[] = projectsData?.projects ?? []
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
@@ -68,10 +77,6 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
 
   const projectMatch = location.pathname.match(/^\/project\/(.+?)(?:\/|$)/)
   const currentProject = projectMatch ? decodeURIComponent(projectMatch[1]!) : null
-
-  useEffect(() => {
-    getProjects(false).then(res => setProjects(res.projects)).catch(() => {})
-  }, [])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

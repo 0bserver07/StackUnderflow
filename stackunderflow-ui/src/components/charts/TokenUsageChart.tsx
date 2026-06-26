@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import {
   AreaChart,
   Area,
@@ -6,93 +7,123 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from 'recharts'
 import type { DailyData } from '../../types/api'
+import { formatTokens } from '../../services/format'
+import { ChartCard, EmptyChartCard, useChartTheme, CHART_HEIGHT } from './chartTheme'
 
 interface TokenUsageChartProps {
   dailyStats: Record<string, DailyData>
 }
 
-export default function TokenUsageChart({ dailyStats }: TokenUsageChartProps) {
-  if (!dailyStats || Object.keys(dailyStats).length === 0) return null
+const tokenTickFormatter = (v: number) => formatTokens(v)
+// #54: include the series name in the tooltip (the old formatter dropped it,
+// returning `undefined`, so 4 stacked series were indistinguishable on hover).
+const tokenTooltipFormatter = (value: number, name: string) =>
+  [value.toLocaleString(), name] as [string, string]
 
-  const data = Object.entries(dailyStats)
-    .map(([date, d]) => ({
-      date,
-      input: d.tokens.input,
-      output: d.tokens.output,
-      cache_read: d.tokens.cache_read,
-      cache_creation: d.tokens.cache_creation,
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date))
+function TokenUsageChart({ dailyStats }: TokenUsageChartProps) {
+  const palette = useChartTheme()
+
+  const data = useMemo(() => {
+    if (!dailyStats) return []
+    return Object.entries(dailyStats)
+      .map(([date, d]) => ({
+        date,
+        input: d.tokens.input,
+        output: d.tokens.output,
+        cache_read: d.tokens.cache_read,
+        cache_creation: d.tokens.cache_creation,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }, [dailyStats])
+
+  if (data.length === 0) return <EmptyChartCard title="Daily Token Usage" />
 
   return (
-    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Daily Token Usage</h3>
-      <ResponsiveContainer width="100%" height={280}>
+    <ChartCard title="Daily Token Usage">
+      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <AreaChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+          />
+          {/* #54: input/output (small) and cache (huge) get separate scales so
+              the non-cache series don't collapse into the axis. */}
+          <YAxis
+            yAxisId="io"
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={tokenTickFormatter}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))}
+            yAxisId="cache"
+            orientation="right"
+            tick={palette.tickMuted}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={tokenTickFormatter}
           />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
-            itemStyle={{ color: '#D1D5DB' }}
-            formatter={(value: number) => [value.toLocaleString(), undefined]}
+            contentStyle={palette.tooltipContent}
+            labelStyle={palette.tooltipLabel}
+            itemStyle={palette.tooltipItem}
+            formatter={tokenTooltipFormatter}
           />
+          <Legend wrapperStyle={palette.legend} />
           <Area
+            yAxisId="io"
             type="monotone"
             dataKey="input"
-            stackId="1"
+            stackId="io"
             stroke="#818CF8"
             fill="#818CF8"
             fillOpacity={0.4}
             name="Input Tokens"
+            isAnimationActive={false}
           />
           <Area
+            yAxisId="io"
             type="monotone"
             dataKey="output"
-            stackId="1"
+            stackId="io"
             stroke="#34D399"
             fill="#34D399"
             fillOpacity={0.4}
             name="Output Tokens"
+            isAnimationActive={false}
           />
           <Area
+            yAxisId="cache"
             type="monotone"
             dataKey="cache_read"
-            stackId="1"
+            stackId="cache"
             stroke="#F59E0B"
             fill="#F59E0B"
-            fillOpacity={0.4}
+            fillOpacity={0.25}
             name="Cache Read"
+            isAnimationActive={false}
           />
           <Area
+            yAxisId="cache"
             type="monotone"
             dataKey="cache_creation"
-            stackId="1"
+            stackId="cache"
             stroke="#FB923C"
             fill="#FB923C"
-            fillOpacity={0.4}
+            fillOpacity={0.25}
             name="Cache Creation"
+            isAnimationActive={false}
           />
         </AreaChart>
       </ResponsiveContainer>
-    </div>
+    </ChartCard>
   )
 }
+
+export default memo(TokenUsageChart)

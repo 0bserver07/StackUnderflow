@@ -32,12 +32,22 @@ function dispatch(detail: NavDetail): void {
  * Push a new URL with the given query params, preserving the path/hash.
  * No-op (besides the event) if the resulting URL matches the current one,
  * so repeated calls don't pollute the history stack.
+ *
+ * Existing query params are PRESERVED — only the keys the caller passes are
+ * overwritten, and any keys listed in `clear` are removed first. This keeps
+ * the FilterBar's `provider`/`model` selection alive across programmatic
+ * navigation. (It previously reset the entire query string, which silently
+ * wiped active filters from the URL on every cross-tab jump.)
  */
-function pushParams(params: Record<string, string>): string {
+function pushParams(
+  params: Record<string, string>,
+  clear: readonly string[] = [],
+): string {
   if (!hasWindow()) return ''
   const url = new URL(window.location.href)
-  // Reset existing params so callers get the exact set they asked for.
-  url.search = ''
+  for (const key of clear) {
+    url.searchParams.delete(key)
+  }
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value)
   }
@@ -56,7 +66,9 @@ function pushParams(params: Record<string, string>): string {
  * and emits a {@link NAV_EVENT} CustomEvent so listeners can react.
  */
 export function openInteraction(interactionId: string): void {
-  pushParams({ tab: 'messages', interaction: interactionId })
+  // Drop any stale `session` deep-link so the two detail views stay mutually
+  // exclusive; provider/model filters are preserved.
+  pushParams({ tab: 'messages', interaction: interactionId }, ['session'])
   dispatch({ tab: 'messages', interaction: interactionId })
 }
 
@@ -66,7 +78,8 @@ export function openInteraction(interactionId: string): void {
  * Updates the URL to `?tab=sessions&session=<id>` and emits {@link NAV_EVENT}.
  */
 export function openSession(sessionId: string): void {
-  pushParams({ tab: 'sessions', session: sessionId })
+  // Drop any stale `interaction` deep-link (see openInteraction); filters kept.
+  pushParams({ tab: 'sessions', session: sessionId }, ['interaction'])
   dispatch({ tab: 'sessions', session: sessionId })
 }
 
@@ -77,7 +90,10 @@ export function openSession(sessionId: string): void {
  */
 export function setTab(tab: string, extraParams?: Record<string, string>): void {
   const params: Record<string, string> = { tab, ...(extraParams ?? {}) }
-  pushParams(params)
+  // A bare tab switch drops any active session/interaction detail view (unless
+  // the caller re-supplies one via extraParams) but keeps provider/model
+  // filters intact.
+  pushParams(params, ['session', 'interaction'])
   dispatch(params as NavDetail)
 }
 

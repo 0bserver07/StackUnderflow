@@ -80,6 +80,33 @@ function rangeLabel(range: DateRange, firstUse: string | undefined): string {
   return preset ? `Last ${preset.label}` : ''
 }
 
+// Debounce a fast-changing value (the search box) so the filter/sort memos and
+// chart re-renders don't fire on every keystroke. Mirrors the dep-free local
+// hook in SessionsTab.
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
+
+// #58: trend-chart date helpers. Accept either an epoch-ms number (the
+// time-scaled token axis) or a `YYYY-MM-DD` string (the categorical cost axis).
+// A bare `YYYY-MM-DD` parses as UTC midnight, which `toLocaleDateString` then
+// shifts a day backwards west of UTC — appending `T00:00:00` forces local
+// parsing so the label always matches the underlying calendar day.
+function toLocalDate(value: number | string): Date {
+  return typeof value === 'number' ? new Date(value) : new Date(`${value}T00:00:00`)
+}
+function formatAxisDate(value: number | string): string {
+  return toLocalDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+function formatTooltipDate(value: number | string): string {
+  return toLocalDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 export default function Overview() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -96,18 +123,41 @@ export default function Overview() {
   // filter is active.
   const { filters } = useFilters()
   const selectedModel = filters.models[0] ?? 'all'
+  // #57: the model filter only has data to scope COST (daily_costs.by_model).
+  // Tokens/commands/table have no per-model breakdown, so this label drives the
+  // "all models" markers that say which widgets ignore the filter.
+  const modelFilterLabel = selectedModel !== 'all' ? formatModelName(selectedModel) : null
   const [nameMode, setNameModeLocal] = useState<NameMode>(getNameMode())
   const setNameModeAndPersist = (m: NameMode) => { setNameModeLocal(m); persistNameMode(m) }
+  // #13/#12: debounce search so typing doesn't re-filter/re-sort/re-render
+  // charts on every keystroke.
+  const debouncedSearch = useDebounce(search, 200)
 
-  const { data: projectsData, isLoading } = useQuery({
+  const {
+    data: projectsData,
+    isLoading: projectsLoading,
+    isError: projectsError,
+    refetch: refetchProjects,
+  } = useQuery({
     queryKey: ['projects', true],
     queryFn: () => getProjects(true),
   })
 
-  const { data: globalStats } = useQuery({
+  // #50: globalStats now tracks its own loading/error. Previously its state was
+  // ignored, so a slow stats fetch flashed 0-value KPI cards and a failed fetch
+  // fell through to the "No projects found" empty state (projects === []).
+  const {
+    data: globalStats,
+    isLoading: statsLoading,
+    isError: statsError,
+    refetch: refetchStats,
+  } = useQuery({
     queryKey: ['globalStats'],
     queryFn: getGlobalStats,
   })
+
+  const isLoading = projectsLoading || statsLoading
+  const isError = projectsError || statsError
 
   const refreshMutation = useMutation({
     mutationFn: () => refreshData(new Date().getTimezoneOffset()),
@@ -145,14 +195,23 @@ export default function Overview() {
   const projectDisplayName = (p: Project, index: number): string =>
     formatProjectName(p.dir_name, index, nameMode)
 
-  // Filter daily data by date range
-  const cutoff = rangeCutoff(dateRange)
+  // Filter daily data by date range.
+  // #13: cutoff was a fresh `new Date()` every render (via rangeCutoff →
+  // daysAgo), so its reference changed each render and defeated the three
+  // downstream useMemos below. Memoizing on `dateRange` makes the reference
+  // stable so the memos actually cache.
+  const cutoff = useMemo(() => rangeCutoff(dateRange), [dateRange])
   const dailyTokens = useMemo(() => {
-    if (!cutoff) return allDailyTokens
-    return allDailyTokens.filter(d => new Date(d.date) >= cutoff)
+    const rows = cutoff ? allDailyTokens.filter(d => new Date(d.date) >= cutoff) : allDailyTokens
+    // #58: carry a numeric epoch-ms `ts` (local midnight, matching the axis
+    // label parsing) so the chart can use a time-scaled X axis — idle days get
+    // real horizontal spacing instead of collapsing.
+    return rows.map(d => ({ ...d, ts: new Date(`${d.date}T00:00:00`).getTime() }))
   }, [allDailyTokens, cutoff])
 
-  // Filter daily costs by date range AND model
+  // Filter daily costs by date range AND model. #57: cost is the only metric
+  // with a per-model breakdown (`by_model`), so the model filter is applied
+  // here and nowhere else — tokens/commands/table have no per-model data.
   const dailyCosts = useMemo(() => {
     let data = allDailyCosts
     if (cutoff) {
@@ -184,11 +243,17 @@ export default function Overview() {
     const inputTok = dailyTokens.reduce((s, d) => s + d.input, 0)
     const outputTok = dailyTokens.reduce((s, d) => s + d.output, 0)
     const cost = dailyCosts.reduce((s, d) => s + (d.cost ?? 0), 0)
+    // #25: per-day command counts aren't in /api/global-stats, so this is a
+    // LIFETIME sum of total_commands over the in-range projects (it ties out
+    // with the table's Commands column). Labelled "lifetime" on the card.
+    // Backend follow-up: a per-day commands field would let this window.
     const cmds = dateFilteredProjects.reduce((s, p) => s + (p.stats?.total_commands ?? 0), 0)
-    // For "all time", include cache tokens; for filtered ranges, just show input+output
+    // #39: cache tokens are only available as an all-time total (no per-day
+    // breakdown), so they NEVER enter the windowed headline. Surfaced as a
+    // lifetime note, and only on the "all" preset where window == lifetime.
     const cacheTokens = dateRange === 'all' ? totalCacheRead + totalCacheWrite : 0
     return {
-      totalTokens: inputTok + outputTok + cacheTokens,
+      totalTokens: inputTok + outputTok,
       inputTokens: inputTok,
       outputTokens: outputTok,
       cacheTokens,
@@ -198,11 +263,13 @@ export default function Overview() {
     }
   }, [dailyTokens, dailyCosts, dateFilteredProjects, dateRange, totalCacheRead, totalCacheWrite])
 
-  // Search & sort on date-filtered projects
+  // Search & sort on date-filtered projects (#12: memoized so the full
+  // client-side filter+sort only re-runs when its inputs change, not on every
+  // render; search is debounced).
   const filtered = useMemo(() => {
     let result = dateFilteredProjects
-    if (search) {
-      const q = search.toLowerCase()
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase()
       result = result.filter(p => p.display_name.toLowerCase().includes(q) || p.dir_name.toLowerCase().includes(q))
     }
     result = [...result].sort((a, b) => {
@@ -221,13 +288,15 @@ export default function Overview() {
       return 0
     })
     return result
-  }, [dateFilteredProjects, search, sortField, sortDir])
+  }, [dateFilteredProjects, debouncedSearch, sortField, sortDir])
 
-  // Pagination
-  const totalPages = Math.ceil(filtered.length / perPage)
-  const paged = filtered.slice((page - 1) * perPage, page * perPage)
+  // Pagination — memoized so unrelated re-renders (hover, etc.) don't re-slice.
+  // #12: this is full-list client-side paging over the ~276-project payload;
+  // true server-side limit/offset is flagged as a backend follow-up.
+  const totalPages = useMemo(() => Math.ceil(filtered.length / perPage), [filtered.length, perPage])
+  const paged = useMemo(() => filtered.slice((page - 1) * perPage, page * perPage), [filtered, page, perPage])
 
-  useEffect(() => { setPage(1) }, [search, sortField, sortDir, perPage, dateRange])
+  useEffect(() => { setPage(1) }, [debouncedSearch, sortField, sortDir, perPage, dateRange])
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -245,7 +314,29 @@ export default function Overview() {
       : <IconArrowDown size={12} className="inline ml-0.5" />
   }
 
+  // #50: distinguish loading / error / empty. Both queries must settle before
+  // we trust `projects` — a slow globalStats otherwise flashes 0-value cards,
+  // and a failed fetch (projects === []) would masquerade as "No projects".
   if (isLoading) return <LoadingSpinner message="Loading projects..." />
+  if (isError) {
+    return (
+      <div className="max-w-7xl mx-auto p-6">
+        <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+          <h3 className="text-gray-700 dark:text-gray-300 font-medium text-sm">Couldn't load dashboard data</h3>
+          <p className="text-gray-500 text-xs max-w-sm">
+            The projects or global-stats request failed. Make sure the StackUnderflow server is running, then retry.
+          </p>
+          <button
+            onClick={() => { refetchProjects(); refetchStats() }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded text-sm border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600"
+          >
+            <IconRefresh size={14} />
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
   if (projects.length === 0) return <EmptyState title="No projects found" description="Make sure you have Claude Code sessions in ~/.claude/projects/" />
 
   return (
@@ -310,18 +401,31 @@ export default function Overview() {
           <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatTokens(filteredStats.totalTokens)}</div>
           <div className="text-[10px] text-gray-500 mt-0.5">
             In: {formatTokens(filteredStats.inputTokens)} / Out: {formatTokens(filteredStats.outputTokens)}
-            {filteredStats.cacheTokens > 0 && <> / Cache: {formatTokens(filteredStats.cacheTokens)}</>}
+            {filteredStats.cacheTokens > 0 && <> / Cache: {formatTokens(filteredStats.cacheTokens)} (lifetime)</>}
+          </div>
+          {/* #39: headline is input+output only (cache excluded across all
+              presets); #57: tokens have no per-model data, so flag "all models"
+              when a model filter is active. */}
+          <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">
+            Input + output · {rangeLabel(dateRange, firstUseDate)}{modelFilterLabel ? ' · all models' : ''}
           </div>
         </div>
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Est. API Cost</div>
           <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{formatCost(filteredStats.totalCost, currency)}</div>
-          <div className="text-[10px] text-gray-500 mt-0.5">{rangeLabel(dateRange, firstUseDate)}</div>
+          {/* #57: cost is the one widget the model filter scopes — show it. */}
+          <div className="text-[10px] text-gray-500 mt-0.5">
+            {rangeLabel(dateRange, firstUseDate)}{modelFilterLabel ? ` · ${modelFilterLabel}` : ''}
+          </div>
           <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">pay-per-token equivalent</div>
         </div>
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Commands</div>
           <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{filteredStats.totalCommands.toLocaleString()}</div>
+          {/* #25: lifetime (no per-day data); #57: no per-model data. */}
+          <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">
+            lifetime{modelFilterLabel ? ' · all models' : ''}
+          </div>
         </div>
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Cached</div>
@@ -334,18 +438,31 @@ export default function Overview() {
       {/* Token Usage Chart — full width */}
       {dailyTokens.length > 0 && (
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Token Usage Over Time</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            Token Usage Over Time{modelFilterLabel ? ' · all models' : ''}
+          </h3>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={dailyTokens}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9CA3AF' }} />
+              {/* #58: time-scaled axis so idle days are spaced by real elapsed
+                  time instead of collapsing; minTickGap thins crowded labels. */}
+              <XAxis
+                dataKey="ts"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                tickFormatter={formatAxisDate}
+                minTickGap={40}
+              />
               <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={formatTokens} />
               <Tooltip
                 contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
+                labelFormatter={formatTooltipDate}
                 formatter={(value: number) => [value.toLocaleString(), undefined]}
               />
-              <Area type="monotone" dataKey="input" stackId="1" stroke="#818CF8" fill="#818CF8" fillOpacity={0.4} name="Input" />
-              <Area type="monotone" dataKey="output" stackId="1" stroke="#34D399" fill="#34D399" fillOpacity={0.4} name="Output" />
+              <Area type="monotone" dataKey="input" stackId="1" stroke="#818CF8" fill="#818CF8" fillOpacity={0.4} name="Input" isAnimationActive={false} />
+              <Area type="monotone" dataKey="output" stackId="1" stroke="#34D399" fill="#34D399" fillOpacity={0.4} name="Output" isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -354,14 +471,30 @@ export default function Overview() {
       {/* Daily Cost Chart — full width */}
       {dailyCosts.length > 0 && (
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Daily Cost</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            Daily Cost{modelFilterLabel ? ` · ${modelFilterLabel}` : ''}
+          </h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={dailyCosts}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9CA3AF' }} />
-              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={v => `${currency?.symbol ?? '$'}${v}`} />
-              <Tooltip contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }} formatter={(v: number) => [formatCost(v, currency), 'Cost']} />
-              <Bar dataKey="cost" fill="#818CF8" radius={[2, 2, 0, 0]} />
+              {/* #58: bars stay on a categorical date axis (so width renders
+                  reliably), but a compact tick formatter + minTickGap +
+                  preserveStartEnd fix the overcrowded labels. */}
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                tickFormatter={formatAxisDate}
+                minTickGap={40}
+                interval="preserveStartEnd"
+              />
+              {/* #58: Y axis now goes through formatCost (was a raw `${symbol}${v}`). */}
+              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={(v: number) => formatCost(v, currency)} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
+                labelFormatter={formatTooltipDate}
+                formatter={(v: number) => [formatCost(v, currency), 'Cost']}
+              />
+              <Bar dataKey="cost" fill="#818CF8" radius={[2, 2, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -406,6 +539,15 @@ export default function Overview() {
           <option value={100}>100</option>
         </select>
       </div>
+
+      {/* #38: the date range filters which projects are LISTED (by last
+          activity); the per-project figures in each row are lifetime totals,
+          not windowed — spelled out so the windowed KPI headline above and the
+          all-time table below don't read as the same scope. */}
+      <p className="text-xs text-gray-500">
+        Per-project values below are lifetime totals; the date range filters which projects appear (by last activity)
+        {modelFilterLabel ? <> · the <span className="font-medium">{modelFilterLabel}</span> model filter applies to cost only</> : null}.
+      </p>
 
       {/* Projects Table */}
       <div className="bg-gray-100/50 dark:bg-gray-800/30 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">

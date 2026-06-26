@@ -29,29 +29,11 @@ import {
 } from '../services/api'
 import BetaBadge from '../components/common/BetaBadge'
 import ContextBudgetCard from '../components/settings/ContextBudgetCard'
-
-// Hardcoded mirror of pages/ProjectDashboard.tsx TABS. Keep in sync when that
-// list changes. Order and beta flags from docs/specs/beta-features.md §Design.
-interface TabMeta {
-  id: string
-  label: string
-  isBeta: boolean
-}
-
-const TABS: readonly TabMeta[] = [
-  { id: 'overview', label: 'Overview', isBeta: false },
-  { id: 'sessions', label: 'Sessions', isBeta: false },
-  { id: 'cost', label: 'Cost', isBeta: false },
-  // v0.6.0 follow-up tabs.
-  { id: 'compare', label: 'Compare', isBeta: false },
-  { id: 'yield', label: 'Yield', isBeta: true },
-  { id: 'commands', label: 'Commands', isBeta: false },
-  { id: 'messages', label: 'Messages', isBeta: false },
-  { id: 'search', label: 'Search', isBeta: false },
-  { id: 'qa', label: 'Q&A', isBeta: true },
-  { id: 'tags', label: 'Tags', isBeta: true },
-  { id: 'bookmarks', label: 'Bookmarks', isBeta: false },
-] as const
+// Single source of truth for the dashboard tab catalogue (id/label/icon/isBeta).
+// Consumed here for the Tab-visibility list so it can never drift from what the
+// dashboard actually renders. Standalone module — importing it does not pull in
+// the ProjectDashboard route bundle.
+import { TABS } from '../config/dashboardTabs'
 
 // Common currencies always shown in the dropdown. Anything else can be
 // typed into the "Other" input. Mirrors the backend's _COMMON_CURRENCIES
@@ -70,6 +52,11 @@ function CurrencySection() {
     staleTime: 60 * 60_000, // FX list is stable enough to cache for an hour
   })
   const [otherCode, setOtherCode] = useState('')
+  // Reveals the free-text ISO-code input when the user picks "Other…" from the
+  // dropdown. Without this, selecting "Other" was a dead-end: handleSelect just
+  // returned and the input only appeared when the *active* currency was already
+  // a non-common one.
+  const [showOther, setShowOther] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
@@ -78,7 +65,11 @@ function CurrencySection() {
 
   const handleSelect = async (code: string) => {
     setError(null)
-    if (code === 'OTHER') return
+    if (code === 'OTHER') {
+      setShowOther(true)
+      return
+    }
+    setShowOther(false)
     setPending(true)
     try {
       await setCurrencyCode(code)
@@ -100,6 +91,7 @@ function CurrencySection() {
     try {
       await setCurrencyCode(code)
       setOtherCode('')
+      setShowOther(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to set currency')
     } finally {
@@ -131,7 +123,7 @@ function CurrencySection() {
           </div>
         </div>
         <select
-          value={isOther ? 'OTHER' : current}
+          value={isOther || showOther ? 'OTHER' : current}
           onChange={e => handleSelect(e.target.value)}
           disabled={pending}
           className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
@@ -144,7 +136,7 @@ function CurrencySection() {
         </select>
       </div>
 
-      {(isOther || otherCode.length > 0) && (
+      {(isOther || showOther) && (
         <div className="mt-3 flex items-center gap-2">
           <input
             type="text"
@@ -152,6 +144,7 @@ function CurrencySection() {
             onChange={e => setOtherCode(e.target.value.toUpperCase())}
             placeholder={isOther ? current : 'e.g. CZK'}
             maxLength={3}
+            autoFocus
             className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300 placeholder-gray-500 focus:outline-none focus:border-indigo-500 font-mono w-24"
             aria-label="Custom ISO 4217 currency code"
           />

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useParams } from 'react-router-dom'
 import {
   IconAlertTriangle,
   IconCalendar,
@@ -82,6 +84,22 @@ interface CostData {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * #10: the heavy `/api/cost-data` payload is now fetched through React Query
+ * (see the `useQuery` call below) so re-visiting the Cost tab within the
+ * 30s staleTime serves the cached payload instead of re-downloading it.
+ * The server resolves `log_path` from `deps.current_log_path`, so no params
+ * are needed here — the project identity is folded into the query key.
+ */
+async function fetchCostData(): Promise<CostData> {
+  const res = await fetch('/api/cost-data')
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
+  }
+  return res.json() as Promise<CostData>
+}
 
 function parseTs(iso: string | undefined | null): number | null {
   if (!iso) return null
@@ -255,9 +273,25 @@ function ErrorBanner({ message, onRetry }: ErrorBannerProps) {
 // ── main component ──────────────────────────────────────────────────────────
 
 export default function CostTab({ stats }: CostTabProps) {
-  const [data, setData] = useState<CostData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // #10: route the heavy payload through React Query. `name` (the project
+  // slug from the router) scopes the cache key so switching projects doesn't
+  // serve the previous project's cost data from cache. staleTime mirrors the
+  // app-wide default (main.tsx) — re-visiting within 30s is a cache hit.
+  const { name } = useParams<{ name: string }>()
+  const {
+    data,
+    isLoading: loading,
+    error: queryError,
+    refetch,
+  } = useQuery({
+    queryKey: ['costData', name ?? null],
+    queryFn: fetchCostData,
+    staleTime: 30_000,
+  })
+  const error = queryError instanceof Error ? queryError.message : queryError ? String(queryError) : null
+  const reload = useCallback(() => {
+    void refetch()
+  }, [refetch])
   // §D4: seed from URL so a reload / shared link restores filter state.
   // Params: ?range=7d|30d|all · ?session=<id> · ?tool=<name>
   const [filter, setFilter] = useState<FilterState>(() => ({
@@ -265,32 +299,6 @@ export default function CostTab({ stats }: CostTabProps) {
     sessionFilter: getParam('session'),
     toolFilter: getParam('tool'),
   }))
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      // Server resolves log_path from deps.current_log_path (set by the
-      // preceding /api/project-by-dir call that mounts ProjectDashboard).
-      const res = await fetch('/api/cost-data')
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
-      }
-      const json = (await res.json()) as CostData
-      setData(json)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setData(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  // Fetch on mount
-  useEffect(() => {
-    load()
-  }, [load])
 
   // §D4: mirror filter state into the URL via `replaceState` (never push),
   // so filter toggles don't balloon the history stack or trap back-nav.
@@ -367,13 +375,56 @@ export default function CostTab({ stats }: CostTabProps) {
         : {}
       : data.tool_costs ?? {}
 
+    // #32: the Token Composition donut must reflect the active filter rather
+    // than always showing all-time totals. When a range/session filter is on
+    // and the payload carries `per_session` token maps, sum them over the
+    // sessions left after windowing. Otherwise fall back to the all-time
+    // `totals` (or legacy overview.total_tokens when the section is absent).
+    const tokenComp = data.token_composition as TokenComposition | undefined
+    const overviewTokens = stats?.overview?.total_tokens
+    const allTimeTotals: Record<string, number> =
+      tokenComp?.totals ??
+      (overviewTokens
+        ? {
+            input: overviewTokens.input ?? 0,
+            output: overviewTokens.output ?? 0,
+            cache_read: overviewTokens.cache_read ?? 0,
+            cache_creation: overviewTokens.cache_creation ?? 0,
+          }
+        : {})
+    const isScoped = filter.range !== 'all' || !!filter.sessionFilter
+    let tokenTotals = allTimeTotals
+    if (isScoped && tokenComp?.per_session) {
+      const summed: Record<string, number> = {}
+      for (const s of filteredSessions) {
+        const m = tokenComp.per_session[s.session_id]
+        if (!m) continue
+        for (const [k, v] of Object.entries(m)) summed[k] = (summed[k] ?? 0) + (v ?? 0)
+      }
+      tokenTotals = summed
+    }
+
     return {
       sessions: filteredSessions,
       commands: filteredCommands,
       retries: filteredRetries,
       tools: toolCosts,
+      tokenTotals,
     }
-  }, [data, filter])
+  }, [data, filter, stats])
+
+  // #48/#63: CacheRoiCard renders a ROI sparkline from per-day cache token
+  // ratios, but CostData has no `daily_stats` field — the per-day token maps
+  // live under `token_composition.daily`. Re-shape them into the
+  // `{date: {tokens: {...}}}` form the card expects. Memoised for a stable
+  // prop ref (and kept all-time — the card's headline cache figures are too).
+  const cacheDailyStats = useMemo(() => {
+    const daily = (data?.token_composition as TokenComposition | undefined)?.daily
+    if (!daily) return undefined
+    const out: Record<string, { tokens: Record<string, number> }> = {}
+    for (const [date, toks] of Object.entries(daily)) out[date] = { tokens: toks }
+    return out
+  }, [data])
 
   // ── callbacks wired into Wave-B components ────────────────────────────────
 
@@ -413,26 +464,17 @@ export default function CostTab({ stats }: CostTabProps) {
           onClearSession={handleClearSession}
           onClearTool={handleClearTool}
         />
-        <ErrorBanner message={error ?? 'No data returned from /api/cost-data'} onRetry={load} />
+        <ErrorBanner message={error ?? 'No data returned from /api/cost-data'} onRetry={reload} />
       </div>
     )
   }
 
-  // Token totals: prefer the composition payload; fall back to legacy
-  // overview.total_tokens from the stats prop when the new section is empty.
-  const tokenComp = data.token_composition as TokenComposition | undefined
-  const tokenTotals =
-    tokenComp?.totals ??
-    (stats?.overview?.total_tokens
-      ? {
-          input: stats.overview.total_tokens.input ?? 0,
-          output: stats.overview.total_tokens.output ?? 0,
-          cache_read: stats.overview.total_tokens.cache_read ?? 0,
-          cache_creation: stats.overview.total_tokens.cache_creation ?? 0,
-        }
-      : {})
-
   const f = filtered!
+  // #32: filter-aware token totals (computed in the `filtered` memo — sums
+  // per-session token maps over the windowed sessions, else all-time).
+  const tokenComp = data.token_composition as TokenComposition | undefined
+  const tokenTotals = f.tokenTotals
+
   const trends = (data.trends ?? undefined) as Trends | undefined
   const errorCost = (data.error_cost ?? undefined) as ErrorCost | undefined
   const outliers = (data.outliers ?? undefined) as Outliers | undefined
@@ -462,9 +504,16 @@ export default function CostTab({ stats }: CostTabProps) {
       {/* 1. Trend strip full-width */}
       <TrendDeltaStrip trends={trends} />
 
-      {/* 2. Cache ROI · Error cost two-column */}
+      {/* 2. Cache ROI · Error cost two-column.
+          #48/#63: feed the card `session_costs` (drives the "Top cache savers"
+          breakdown) and per-day token data (drives the ROI sparkline) so both
+          previously-dead surfaces render. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <CacheRoiCard cache={(data.cache ?? stats?.cache ?? undefined) as never} />
+        <CacheRoiCard
+          cache={(data.cache ?? stats?.cache ?? undefined) as never}
+          sessionCosts={data.session_costs}
+          dailyStats={cacheDailyStats}
+        />
         <ErrorCostCard errorCost={errorCost} />
       </div>
 
@@ -480,9 +529,26 @@ export default function CostTab({ stats }: CostTabProps) {
       {/* 4. Command cost list — clicking a row deep-links to the interaction */}
       <CommandCostList data={f.commands} onOpen={handleOpenInteraction} />
 
-      {/* 5. Tool cost · Token donut two-column */}
+      {/* 5. Tool cost · Token donut two-column.
+          #24: per-tool costs come from an all-time mart with no per-row
+          timestamps, so the date-range filter can't be applied client-side.
+          Surface an "all time" badge when a range is active rather than
+          silently mislabelling all-time totals as "Last 7/30 days".
+          FLAG (backend): give `tool_mart_for_project` (routes/cost.py)
+          start/end params so /api/cost-data can return windowed tool costs. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ToolCostBarChart data={f.tools} />
+        <div>
+          {filter.range !== 'all' && (
+            <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-400">
+              <IconAlertTriangle size={11} />
+              <span>
+                Tool costs are <span className="font-semibold">all-time</span> — the date-range
+                filter isn’t applied here yet.
+              </span>
+            </div>
+          )}
+          <ToolCostBarChart data={f.tools} />
+        </div>
         <TokenCompositionDonut totals={tokenTotals} />
       </div>
 

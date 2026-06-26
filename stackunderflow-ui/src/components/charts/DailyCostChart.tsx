@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import {
   BarChart,
   Bar,
@@ -9,106 +10,112 @@ import {
   Legend,
 } from 'recharts'
 import type { DailyData } from '../../types/api'
+import { ChartCard, EmptyChartCard, useChartTheme, CHART_HEIGHT } from './chartTheme'
 
 interface DailyCostChartProps {
   dailyStats: Record<string, DailyData>
 }
 
-export default function DailyCostChart({ dailyStats }: DailyCostChartProps) {
-  if (!dailyStats || Object.keys(dailyStats).length === 0) return null
+// Hoisted so identities stay stable across renders of the memoized chart.
+const TOOLTIP_LABELS: Record<string, string> = {
+  input_cost: 'Input Cost',
+  output_cost: 'Output Cost',
+  cache_cost: 'Cache Cost',
+}
+const LEGEND_LABELS: Record<string, string> = {
+  input_cost: 'Input',
+  output_cost: 'Output',
+  cache_cost: 'Cache',
+}
+const FLAT_RADIUS: [number, number, number, number] = [0, 0, 0, 0]
+const TOP_RADIUS: [number, number, number, number] = [4, 4, 0, 0]
+const costTickFormatter = (v: number) => `$${v.toFixed(2)}`
+const costTooltipFormatter = (value: number, name: string) =>
+  [`$${value.toFixed(4)}`, TOOLTIP_LABELS[name] ?? name] as [string, string]
+const legendFormatter = (value: string) => LEGEND_LABELS[value] ?? value
 
-  const data = Object.entries(dailyStats)
-    .map(([date, d]) => {
-      let inputCost = 0
-      let outputCost = 0
-      let cacheCost = 0
+function DailyCostChart({ dailyStats }: DailyCostChartProps) {
+  const palette = useChartTheme()
 
-      if (d.cost.by_model) {
-        for (const modelCost of Object.values(d.cost.by_model)) {
-          inputCost += modelCost.input_cost
-          outputCost += modelCost.output_cost
-          cacheCost += modelCost.cache_creation_cost + modelCost.cache_read_cost
+  const data = useMemo(() => {
+    if (!dailyStats) return []
+    return Object.entries(dailyStats)
+      .map(([date, d]) => {
+        let inputCost = 0
+        let outputCost = 0
+        let cacheCost = 0
+
+        if (d.cost.by_model) {
+          for (const modelCost of Object.values(d.cost.by_model)) {
+            inputCost += modelCost.input_cost
+            outputCost += modelCost.output_cost
+            cacheCost += modelCost.cache_creation_cost + modelCost.cache_read_cost
+          }
         }
-      }
 
-      return {
-        date,
-        input_cost: inputCost,
-        output_cost: outputCost,
-        cache_cost: cacheCost,
-      }
-    })
-    .sort((a, b) => a.date.localeCompare(b.date))
+        return {
+          date,
+          input_cost: inputCost,
+          output_cost: outputCost,
+          cache_cost: cacheCost,
+        }
+      })
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }, [dailyStats])
+
+  if (data.length === 0) return <EmptyChartCard title="Daily Cost" />
 
   return (
-    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Daily Cost</h3>
-      <ResponsiveContainer width="100%" height={280}>
+    <ChartCard title="Daily Cost">
+      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <BarChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={(v) => `$${v.toFixed(2)}`}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={costTickFormatter}
           />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
-            formatter={(value: number, name: string) => {
-              const labels: Record<string, string> = {
-                input_cost: 'Input Cost',
-                output_cost: 'Output Cost',
-                cache_cost: 'Cache Cost',
-              }
-              return [`$${value.toFixed(4)}`, labels[name] ?? name]
-            }}
+            contentStyle={palette.tooltipContent}
+            labelStyle={palette.tooltipLabel}
+            formatter={costTooltipFormatter}
           />
-          <Legend
-            wrapperStyle={{ fontSize: '11px', color: '#9CA3AF' }}
-            formatter={(value: string) => {
-              const labels: Record<string, string> = {
-                input_cost: 'Input',
-                output_cost: 'Output',
-                cache_cost: 'Cache',
-              }
-              return labels[value] ?? value
-            }}
-          />
+          <Legend wrapperStyle={palette.legend} formatter={legendFormatter} />
           <Bar
             dataKey="input_cost"
             stackId="cost"
             fill="#818CF8"
-            radius={[0, 0, 0, 0]}
+            radius={FLAT_RADIUS}
             name="input_cost"
+            isAnimationActive={false}
           />
           <Bar
             dataKey="output_cost"
             stackId="cost"
             fill="#34D399"
-            radius={[0, 0, 0, 0]}
+            radius={FLAT_RADIUS}
             name="output_cost"
+            isAnimationActive={false}
           />
           <Bar
             dataKey="cache_cost"
             stackId="cost"
             fill="#F59E0B"
-            radius={[4, 4, 0, 0]}
+            radius={TOP_RADIUS}
             name="cache_cost"
+            isAnimationActive={false}
           />
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </ChartCard>
   )
 }
+
+export default memo(DailyCostChart)

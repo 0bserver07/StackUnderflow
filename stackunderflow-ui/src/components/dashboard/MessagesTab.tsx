@@ -54,14 +54,13 @@ function truncateSessionId(id: string): string {
   return id.slice(0, 8) + '...'
 }
 
+// #45: rely on the structured error signal the backend already stamps onto
+// each message (`error` mirrors the tool_result `is_error` flag — see
+// stats/formatter.py) plus an explicit `error` type. The old substring scan
+// for "error"/"traceback"/"exception" flagged any message that merely
+// mentioned the words (e.g. "no errors found"), massively over-counting.
 function isErrorMessage(msg: Message): boolean {
-  return (
-    msg.error ||
-    msg.type === 'error' ||
-    msg.content.toLowerCase().includes('error') ||
-    msg.content.toLowerCase().includes('traceback') ||
-    msg.content.toLowerCase().includes('exception')
-  )
+  return msg.error === true || msg.type === 'error'
 }
 
 function escapeCsvField(value: string): string {
@@ -495,6 +494,19 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
           />
           Errors only
         </label>
+
+        {/* #36: Type, Errors-only and the table search all run against the
+            current server page (≤500 messages), not the whole project. Make
+            that explicit when the project spans more than one server page so
+            the counts above aren't read as project-wide.
+            FLAG (backend + services/api.ts): to filter across all pages, push
+            `q` / `type` / `errors` to /api/messages (routes/data.py) and apply
+            them before pagination, then add the params to getMessages(). */}
+        {totalServerPages > 1 && (
+          <span className="text-[11px] text-gray-400 dark:text-gray-500 italic">
+            filters apply to this page only
+          </span>
+        )}
       </div>
 
       {error && (
@@ -508,7 +520,7 @@ export default function MessagesTab({ data, projectName }: MessagesTabProps) {
         data={filteredMessages}
         keyFn={(row) => row.message_id || (row.session_id + '_' + row.timestamp + '_' + row.type)}
         searchable
-        searchPlaceholder="Search message content..."
+        searchPlaceholder="Search this page…"
         searchFn={(row, query) =>
           row.content.toLowerCase().includes(query) ||
           row.type.toLowerCase().includes(query) ||

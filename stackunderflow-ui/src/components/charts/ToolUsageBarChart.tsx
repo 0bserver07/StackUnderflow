@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import {
   BarChart,
   Bar,
@@ -8,6 +9,8 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
+import { formatNumber } from '../../services/format'
+import { ChartCard, EmptyChartCard, useChartTheme } from './chartTheme'
 
 interface ToolUsageBarChartProps {
   toolStats: Record<string, number>
@@ -17,65 +20,61 @@ const COLORS = [
   '#818CF8', '#34D399', '#F59E0B', '#F87171', '#A78BFA',
   '#38BDF8', '#FB923C', '#E879F9', '#2DD4BF', '#FCD34D',
 ]
+const CHART_MARGIN = { left: 20 }
+const BAR_RADIUS: [number, number, number, number] = [0, 4, 4, 0]
+const countTickFormatter = (v: number) => formatNumber(v)
+const tooltipFormatter = (value: number) => [value.toLocaleString(), 'Uses'] as [string, string]
 
-function formatNumber(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`
-  return String(v)
-}
+function ToolUsageBarChart({ toolStats }: ToolUsageBarChartProps) {
+  const palette = useChartTheme()
 
-export default function ToolUsageBarChart({ toolStats }: ToolUsageBarChartProps) {
-  if (!toolStats || Object.keys(toolStats).length === 0) return null
+  const { data, leftMargin } = useMemo(() => {
+    if (!toolStats) return { data: [], leftMargin: 20 }
+    const rows = Object.entries(toolStats)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+    // Compute left margin based on longest tool name.
+    const maxLabelLen = rows.length ? Math.max(...rows.map((d) => d.name.length)) : 0
+    return { data: rows, leftMargin: Math.min(maxLabelLen * 6, 160) }
+  }, [toolStats])
 
-  const data = Object.entries(toolStats)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10)
-
-  if (data.length === 0) return null
-
-  // Compute left margin based on longest tool name
-  const maxLabelLen = Math.max(...data.map((d) => d.name.length))
-  const leftMargin = Math.min(maxLabelLen * 6, 160)
+  if (data.length === 0) return <EmptyChartCard title="Top Tools by Usage" />
 
   return (
-    <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Top Tools by Usage</h3>
+    <ChartCard title="Top Tools by Usage">
       <ResponsiveContainer width="100%" height={Math.min(420, Math.max(280, data.length * 28))}>
-        <BarChart data={data} layout="vertical" margin={{ left: 20 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
+        <BarChart data={data} layout="vertical" margin={CHART_MARGIN}>
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} horizontal={false} />
           <XAxis
             type="number"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
-            tickFormatter={formatNumber}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
+            tickFormatter={countTickFormatter}
           />
           <YAxis
             type="category"
             dataKey="name"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
             width={leftMargin}
           />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
-            formatter={(value: number) => [value.toLocaleString(), 'Uses']}
+            contentStyle={palette.tooltipContent}
+            labelStyle={palette.tooltipLabel}
+            formatter={tooltipFormatter}
           />
-          <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-            {data.map((_entry, index) => (
-              <Cell key={index} fill={COLORS[index % COLORS.length]} />
+          <Bar dataKey="count" radius={BAR_RADIUS} isAnimationActive={false}>
+            {data.map((entry, index) => (
+              <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
             ))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </ChartCard>
   )
 }
+
+export default memo(ToolUsageBarChart)
