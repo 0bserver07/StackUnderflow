@@ -40,6 +40,7 @@ pre-converted to the active currency just like ``usage`` so the UI can
 
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -136,6 +137,69 @@ def _spend_daily_window(
     return out
 
 
+# ── spend-rollup memo (#27) ──────────────────────────────────────────────────
+#
+# ``/api/plan`` is hit on every Overview render *and* on a poll timer, but the
+# spend rollup it needs costs ~0.6s: ``build_report`` sums every project's cost
+# across the billing window and ``_spend_daily_window`` walks the per-day series
+# — plus each opens a connection and runs ``schema.apply``. Both inputs only
+# move when a new event is ingested, which bumps ``store.db``'s mtime, so we
+# memoise the USD-denominated ``(used, daily_costs)`` pair keyed on
+# ``(store_path, period_start, period_end)`` and validate it against the store
+# mtime (the same self-evicting pattern as the optimize-route cache). On a hit
+# we never open a connection — ``build_report`` and ``schema.apply`` are
+# skipped. Currency conversion and plan banding run per-request off these cached
+# USD numbers, so a currency switch is a cheap rescale and the cache never has
+# to be flushed on a settings write.
+_SPEND_CACHE: dict[tuple[str, str, str], tuple[int, tuple[float, list[float]]]] = {}
+_SPEND_CACHE_LOCK = threading.Lock()
+_SPEND_CACHE_MAX = 8
+
+
+def _store_mtime_ns() -> int:
+    """Return ``store.db`` mtime in nanoseconds, or 0 when missing."""
+    try:
+        return deps.store_path.stat().st_mtime_ns
+    except (OSError, AttributeError):
+        return 0
+
+
+def invalidate_plan_cache() -> None:
+    """Drop every memoised spend rollup. Cheap — the cache is tiny."""
+    with _SPEND_CACHE_LOCK:
+        _SPEND_CACHE.clear()
+
+
+def _spend_for_window(period_start: str, period_end: str) -> tuple[float, list[float]]:
+    """Return the memoised ``(used_usd, daily_costs_usd)`` for the window.
+
+    Both halves are read from one ``store.db`` revision — the scalar total
+    from :func:`_spend_in_window`, the per-day series from
+    :func:`_spend_daily_window` — and cached against the store mtime. Repeat
+    polls inside one revision skip the ~0.6s ``build_report`` pass (and the
+    per-request ``schema.apply``); a fresh ingest bumps the mtime and the
+    entry drifts out naturally.
+    """
+    key = (str(deps.store_path), period_start, period_end)
+    mtime = _store_mtime_ns()
+    with _SPEND_CACHE_LOCK:
+        hit = _SPEND_CACHE.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+
+    used = _spend_in_window(period_start, period_end)
+    daily = _spend_daily_window(period_start, period_end)
+
+    with _SPEND_CACHE_LOCK:
+        if key not in _SPEND_CACHE and len(_SPEND_CACHE) >= _SPEND_CACHE_MAX:
+            # Tiny FIFO trim — the key space is one entry per active window.
+            oldest = next(iter(_SPEND_CACHE), None)
+            if oldest is not None:
+                _SPEND_CACHE.pop(oldest, None)
+        _SPEND_CACHE[key] = (mtime, (used, daily))
+    return used, daily
+
+
 @router.get("/api/plan")
 async def get_plan_status() -> dict:
     """Return the active plan and current usage, or ``{plan: null, usage: null}``."""
@@ -151,16 +215,16 @@ async def get_plan_status() -> dict:
         }
 
     # First call resolves the period window; the ``used=0`` argument is a
-    # throwaway — we re-call with the real number once we know which dates
-    # to sum over.
+    # throwaway. The window depends only on the plan + today (not on spend),
+    # so it's stable enough to key the spend memo on.
     window = plans_mod.compute_usage(plan, 0.0)
-    used = _spend_in_window(window["period_start"], window["period_end"])
+    # Both the scalar spend and the per-day series come from one memoised
+    # store revision (#27) — repeat polls skip the ~0.6s build_report pass.
+    # ``build_projection`` (below) is pure and picks linear vs weighted-7d
+    # from the per-day sample count, so it runs fresh off the cached series.
+    used, daily = _spend_for_window(window["period_start"], window["period_end"])
     usage = plans_mod.compute_usage(plan, used)
 
-    # Burn-projector v2: pull the per-day series so the weighted-7d
-    # projection has the right shape. ``build_projection`` is pure — it
-    # picks the method (linear vs weighted-7d) based on sample count.
-    daily = _spend_daily_window(usage["period_start"], usage["period_end"])
     thresholds = Settings().get("plan_alert_thresholds") or list(burn.DEFAULT_THRESHOLDS)
     projection_usd = burn.build_projection(
         daily_costs=daily,

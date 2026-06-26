@@ -130,11 +130,13 @@ def test_model_aliases_rejects_empty_fields(client):
     assert r.status_code == 400
 
 
-def test_set_currency_invalidates_dashboard_cache(client, monkeypatch):
-    """Changing the currency must drop any cached dashboard payloads.
+def test_set_currency_does_not_invalidate_dashboard_cache(client, monkeypatch):
+    """Changing the currency must NOT flush the dashboard cache (#31).
 
-    Otherwise the next /api/dashboard-data response would still serve a
-    USD-scaled body for the old hot-cache key.
+    Cached dashboard payloads are stored USD-denominated and the active
+    currency is re-applied on every response, so a currency switch is a
+    cheap per-request rescale. Flushing would force a full re-aggregation
+    of every project for a change that never touches the cached numbers.
     """
     called: list[str | None] = []
     monkeypatch.setattr(
@@ -143,5 +145,24 @@ def test_set_currency_invalidates_dashboard_cache(client, monkeypatch):
         lambda slug=None: called.append(slug),
     )
     r = client.post("/api/cfg/currency", json={"code": "EUR"})
+    assert r.status_code == 200
+    assert r.json()["currency"]["code"] == "EUR"
+    # No flush — the cache stays warm across a currency change.
+    assert called == []
+
+
+def test_set_model_alias_still_invalidates_dashboard_cache(client, monkeypatch):
+    """Model-alias writes DO change aggregation grouping, so they must
+    still flush the dashboard cache (the kept half of #31)."""
+    called: list[str | None] = []
+    monkeypatch.setattr(
+        cfg_routes,
+        "invalidate_dashboard_cache",
+        lambda slug=None: called.append(slug),
+    )
+    r = client.post(
+        "/api/cfg/model-aliases",
+        json={"from": "openrouter/claude-opus", "to": "claude-opus-4-6"},
+    )
     assert r.status_code == 200
     assert called == [None]

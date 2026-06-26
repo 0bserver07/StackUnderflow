@@ -9,10 +9,12 @@ surfaces never disagree about whether the pipeline is "live", "syncing",
 Design goals
 ------------
 
-* **Fast (<50ms).** Every count is a ``SELECT COUNT(*)`` on an indexed
-  column, every per-mart watermark is a primary-key lookup, and the
-  watcher state is read off a thread-local handle in ``deps``. No
-  pipeline / aggregator / formatter passes.
+* **Fast (<50ms).** The event totals collapse into a single
+  ``GROUP BY provider, cost_source`` pass — no separate unindexed
+  ``cost_source`` full scan — ``max(id)`` and every per-mart watermark
+  are primary-key lookups, and the watcher state is read off a
+  thread-local handle in ``deps``. No pipeline / aggregator / formatter
+  passes.
 * **Degrades gracefully.** The watcher handle may be ``None`` (CLI
   invocations don't bring up the FastAPI lifespan, the dashboard may
   have started with ``--no-watcher``, or Wave 2C may not have exposed
@@ -191,32 +193,38 @@ def _events_summary(conn: sqlite3.Connection) -> dict[str, Any]:
             "by_cost_source": {},
         }
 
-    # Single-pass aggregation — one SELECT per metric, all on indexed
-    # columns. With idx_events_provider/idx_events_day, even on a
-    # 1M-event store the round-trip stays <10ms.
-    row = conn.execute(
-        "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m FROM usage_events"
+    # ``max(id)`` is an O(1) primary-key lookup. The two breakdowns
+    # (``by_provider`` / ``by_cost_source``) used to be two separate
+    # ``GROUP BY`` passes — and ``GROUP BY cost_source`` had no index to
+    # ride, so it was a full table scan on every 10s poll (#43). Folding
+    # them into one ``GROUP BY provider, cost_source`` pass yields a tiny
+    # cross-tab (one row per distinct pair) that we sum in Python: one
+    # table scan instead of three, and the unindexed ``cost_source`` scan
+    # is gone. ``total`` falls out of the same pass (sum of every group),
+    # so the standalone ``COUNT(*)`` scan disappears too.
+    max_row = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) AS m FROM usage_events"
     ).fetchone()
-    total = int(row["n"]) if hasattr(row, "keys") else int(row[0])
-    max_id = int(row["m"]) if hasattr(row, "keys") else int(row[1])
+    max_id = int(max_row["m"]) if hasattr(max_row, "keys") else int(max_row[0])
 
+    total = 0
     by_provider: dict[str, int] = {}
-    for r in conn.execute(
-        "SELECT provider, COUNT(*) AS n FROM usage_events GROUP BY provider"
-    ):
-        prov = r["provider"] if hasattr(r, "keys") else r[0]
-        n = int(r["n"]) if hasattr(r, "keys") else int(r[1])
-        if prov:
-            by_provider[prov] = n
-
     by_cost_source: dict[str, int] = {}
     for r in conn.execute(
-        "SELECT cost_source, COUNT(*) AS n FROM usage_events GROUP BY cost_source"
+        "SELECT provider, cost_source, COUNT(*) AS n "
+        "FROM usage_events GROUP BY provider, cost_source"
     ):
-        src = r["cost_source"] if hasattr(r, "keys") else r[0]
-        n = int(r["n"]) if hasattr(r, "keys") else int(r[1])
+        prov = r["provider"] if hasattr(r, "keys") else r[0]
+        src = r["cost_source"] if hasattr(r, "keys") else r[1]
+        n = int(r["n"]) if hasattr(r, "keys") else int(r[2])
+        # ``total`` counts every event, including rows whose provider or
+        # cost_source is blank/NULL — sum before the truthiness filters so
+        # it stays identical to the old ``COUNT(*)``.
+        total += n
+        if prov:
+            by_provider[prov] = by_provider.get(prov, 0) + n
         if src:
-            by_cost_source[src] = n
+            by_cost_source[src] = by_cost_source.get(src, 0) + n
 
     return {
         "total": total,

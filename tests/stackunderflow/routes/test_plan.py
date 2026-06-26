@@ -31,6 +31,16 @@ def _patch_settings_dir(tmpdir: Path):
     )
 
 
+@pytest.fixture(autouse=True)
+def _clear_spend_cache():
+    """Keep the module-level spend memo (#27) hermetic between tests."""
+    from stackunderflow.routes import plan as plan_mod
+
+    plan_mod.invalidate_plan_cache()
+    yield
+    plan_mod.invalidate_plan_cache()
+
+
 @pytest.fixture()
 def app_client(tmp_path, monkeypatch):
     """Mount only the plan router with an empty store."""
@@ -394,3 +404,65 @@ class TestProjectionBlock:
             assert proj["daily_burn_usd"] == pytest.approx(5.0)
             # Dimensionless fields stay as-is.
             assert proj["thresholds"] == [50, 75, 90]
+
+
+# ── spend memo (#27) ─────────────────────────────────────────────────────────
+
+
+class TestSpendMemo:
+    """``/api/plan`` memoises the ~0.6s spend rollup per store revision (#27).
+
+    The memo is validated against ``store.db``'s mtime: repeat polls inside
+    one revision serve cached USD numbers (no ``build_report`` / ``schema.apply``
+    re-run), and a fresh ingest — which bumps the mtime — busts it. We pin
+    ``_store_mtime_ns`` so the revision boundary is deterministic.
+    """
+
+    def test_repeat_call_serves_cached_spend(self, app_client, tmp_path, monkeypatch):
+        from stackunderflow.routes import plan as plan_mod
+
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with p1, p2:
+            plans_mod.set_plan("claude-pro")
+            # Pin the store revision so both polls share one memo key.
+            monkeypatch.setattr(plan_mod, "_store_mtime_ns", lambda: 111)
+
+            calls = {"n": 0}
+            real_spend = plan_mod._spend_in_window
+
+            def _counting(start, end):
+                calls["n"] += 1
+                return real_spend(start, end)
+
+            monkeypatch.setattr(plan_mod, "_spend_in_window", _counting)
+
+            r1 = client.get("/api/plan")
+            r2 = client.get("/api/plan")
+            assert r1.status_code == 200 and r2.status_code == 200
+            # build_report ran exactly once; the second poll hit the memo.
+            assert calls["n"] == 1
+            assert r1.json()["usage"]["used"] == r2.json()["usage"]["used"]
+
+    def test_new_ingest_busts_cache(self, app_client, tmp_path, monkeypatch):
+        from stackunderflow.routes import plan as plan_mod
+
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with p1, p2:
+            plans_mod.set_plan("claude-pro")  # $20 budget
+
+            mtime = {"v": 1}
+            monkeypatch.setattr(plan_mod, "_store_mtime_ns", lambda: mtime["v"])
+            # Two distinct rollups; only consumed on a cache MISS.
+            spends = iter([5.0, 9.0])
+            monkeypatch.setattr(plan_mod, "_spend_in_window", lambda s, e: next(spends))
+            monkeypatch.setattr(plan_mod, "_spend_daily_window", lambda s, e: [1.0])
+
+            # First poll → miss → 5.0, cached for revision 1.
+            assert client.get("/api/plan").json()["usage"]["used"] == pytest.approx(5.0)
+            # Same revision → hit → still 5.0 (the iterator's 9.0 is untouched).
+            assert client.get("/api/plan").json()["usage"]["used"] == pytest.approx(5.0)
+            # A fresh ingest bumps store.db's mtime → miss → recompute → 9.0.
+            mtime["v"] = 2
+            assert client.get("/api/plan").json()["usage"]["used"] == pytest.approx(9.0)

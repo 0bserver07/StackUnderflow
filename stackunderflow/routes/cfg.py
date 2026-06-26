@@ -16,9 +16,12 @@ path segment because alias keys often contain slashes (``openrouter/...``)
 which would need double-encoding to round-trip a path component.
 
 All writes go through ``Settings().persist`` so validators run and the
-config file on disk stays the single source of truth. After any change
-the dashboard cache is invalidated so the next ``/api/dashboard-data``
-fetch reflects the new currency / alias map.
+config file on disk stays the single source of truth. Writes that change
+how data is *aggregated* (model aliases) invalidate the dashboard cache so
+the next ``/api/dashboard-data`` fetch reflects the new grouping. A
+currency change does **not** flush the cache: cached payloads are stored
+in USD and the active currency is re-applied per response, so switching
+currency is a cheap rescale rather than a full re-aggregation (#31).
 """
 
 from __future__ import annotations
@@ -84,7 +87,12 @@ async def set_currency(data: dict) -> JSONResponse:
         Settings().persist("currency", code.strip())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    invalidate_dashboard_cache()
+    # Deliberately NOT invalidating the dashboard cache here (#31). Cached
+    # payloads are stored USD-denominated and every response re-applies the
+    # active currency (routes/data._apply_currency_to_stats), so a currency
+    # switch is a cheap per-request rescale — flushing would force a full
+    # re-aggregation of every project for a change that never touches the
+    # cached numbers. Aggregation-affecting writes (model aliases) still flush.
     return JSONResponse({
         "currency": active_currency_payload(),
     })
