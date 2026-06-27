@@ -28,6 +28,20 @@ from .base import Record, SessionRef
 _log = logging.getLogger(__name__)
 
 
+def _claude_home() -> Path:
+    """Return Claude Code's config dir, honoring ``CLAUDE_CONFIG_DIR``.
+
+    Claude Code relocates ``~/.claude`` when ``CLAUDE_CONFIG_DIR`` is set
+    — e.g. to index Windows-side sessions from inside WSL, or a custom
+    install location. Mirrors the ``FACTORY_DIR`` override in ``droid.py``.
+    Falls back to ``~/.claude``. The opt-in variant homes
+    (``~/.claude-opus`` etc.) are separate installs and stay relative to
+    ``Path.home()``.
+    """
+    env = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return Path(env).expanduser() if env else Path.home() / ".claude"
+
+
 class ClaudeAdapter:
     name = "claude"
 
@@ -52,7 +66,7 @@ class ClaudeAdapter:
         to ``watchfiles``, so missing roots here are a clean no-op.
         """
         home = Path.home()
-        roots: list[Path] = [home / ".claude" / "projects"]
+        roots: list[Path] = [_claude_home() / "projects"]
         for variant in self._VARIANT_HOMES:
             candidate = home / variant / "projects"
             if candidate.is_dir():
@@ -60,7 +74,7 @@ class ClaudeAdapter:
         return roots
 
     def enumerate(self) -> Iterable[SessionRef]:
-        root = Path.home() / ".claude" / "projects"
+        root = _claude_home() / "projects"
         if not root.is_dir():
             return
 
@@ -95,7 +109,7 @@ class ClaudeAdapter:
 
         from .claude_teams import materialize_team_metadata
 
-        materialize_team_metadata(conn, provider=self.name)
+        materialize_team_metadata(conn, claude_root=_claude_home(), provider=self.name)
         link_commits_to_sessions(conn)
 
     # ── internals ─────────────────────────────────────────────────────
@@ -118,11 +132,11 @@ class ClaudeAdapter:
     def _refs_from_history(self, project_dir: Path) -> Iterable[SessionRef]:
         # One synthetic ref per legacy project; all history entries for that
         # project get yielded by read() as one pseudo-session.
-        history_file = Path.home() / ".claude" / "history.jsonl"
+        history_file = _claude_home() / "history.jsonl"
         if not history_file.is_file():
             return
         stat = history_file.stat()
-        
+
         # Use the actual legacy project's continuation cache file modification time
         # so that we don't skew the project's last active timestamp when other
         # projects write to the centralized history.jsonl.
@@ -160,7 +174,8 @@ class ClaudeAdapter:
         (128 MB) are skipped with a warning rather than parsed.
         """
         for line_offset, raw_line in iter_jsonl_lines(
-            ref.file_path, since_offset=since_offset,
+            ref.file_path,
+            since_offset=since_offset,
         ):
             # `since_offset == 0` means "fresh read, yield everything".
             # Otherwise, the caller already saw the record at exactly
@@ -255,16 +270,12 @@ class ClaudeAdapter:
 
 
 def _slug_for(project_path: str) -> str:
-    return (
-        os.path.abspath(project_path)
-        .rstrip(os.sep)
-        .replace(os.sep, "-")
-        .replace("_", "-")
-    )
+    return os.path.abspath(project_path).rstrip(os.sep).replace(os.sep, "-").replace("_", "-")
 
 
 def _epoch_ms_to_iso(ts_ms: int) -> str:
     from datetime import datetime
+
     return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
 
 

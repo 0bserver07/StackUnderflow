@@ -120,6 +120,8 @@ ignore = [
 "tests/**/*.py" = ["T201", "S101"]
 "test_*.py" = ["T201", "S101"]
 "*_test.py" = ["T201", "S101"]
+# CI helper scripts print status by design.
+"scripts/**/*.py" = ["T201"]
 # Long regex patterns and SQL strings
 "stackunderflow/services/tag_service.py" = ["E501"]
 # rsync backup uses subprocess with constrained args, not user input

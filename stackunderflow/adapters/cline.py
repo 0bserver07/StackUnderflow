@@ -1,7 +1,10 @@
 """Cline-family (VS Code globalStorage) session adapters.
 
-Reads tasks Cline-compatible VS Code extensions write under
-``~/Library/Application Support/Code/User/globalStorage/{extensionId}/tasks/``.
+Reads tasks Cline-compatible VS Code extensions write under VS Code's
+``globalStorage/{extensionId}/tasks/`` directory. The globalStorage root is
+resolved per-platform by ``_vscode_global_storage()`` — macOS
+``~/Library/Application Support/Code/User/globalStorage``, Windows
+``%APPDATA%\\Code\\User\\globalStorage``, Linux ``~/.config/Code/User/globalStorage``.
 Each task is a directory ``{taskId}/`` containing two JSON files:
 
 - ``ui_messages.json`` — flat array of UI events. We treat ``type=="say"``
@@ -30,7 +33,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,15 +44,8 @@ from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
 
-# Root of VS Code's globalStorage on macOS — extension directories live below.
-_VSCODE_GLOBAL_STORAGE_MACOS = (
-    Path.home() / "Library" / "Application Support" / "Code" / "User"
-    / "globalStorage"
-)
-# Windows / Linux roots kept here for documentation only — untested on this
-# machine and not exercised by enumerate() in v1. See spec §5.
-# _VSCODE_GLOBAL_STORAGE_WINDOWS = Path(...)  # untested
-# _VSCODE_GLOBAL_STORAGE_LINUX = Path(...)    # untested
+# VS Code's per-platform ``globalStorage`` root is resolved at call time in
+# ``_vscode_global_storage()`` below (reads ``APPDATA`` live on Windows).
 
 # Anthropic-shape default when no <model> tag is present.
 _DEFAULT_MODEL = "cline-auto"
@@ -56,9 +54,23 @@ _DEFAULT_MODEL = "cline-auto"
 _MODEL_TAG_RE = re.compile(r"<model>([^<]+)</model>", re.IGNORECASE)
 
 
+def _vscode_global_storage() -> Path:
+    """Return the platform-appropriate VS Code ``globalStorage`` root.
+
+    Mirrors the ``cursor.py`` / ``copilot.py`` platform-branch shape;
+    ``APPDATA`` is read at call time so tests can monkeypatch it.
+    """
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", "")) / "Code" / "User" / "globalStorage"
+    if sys.platform.startswith("linux"):
+        return Path.home() / ".config" / "Code" / "User" / "globalStorage"
+    # macOS (darwin) and any other POSIX fallback
+    return Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage"
+
+
 def _default_tasks_root(extension_id: str) -> Path:
-    """Return the macOS tasks root for the given VS Code extension id."""
-    return _VSCODE_GLOBAL_STORAGE_MACOS / extension_id / "tasks"
+    """Return the tasks root for the given VS Code extension id."""
+    return _vscode_global_storage() / extension_id / "tasks"
 
 
 class _VsCodeClineAdapter:

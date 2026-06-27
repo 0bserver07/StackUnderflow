@@ -71,6 +71,8 @@ jobs:
         python-version: ["3.11", "3.12"]
 
     steps:
+    - uses: actions/checkout@v5  # needed for scripts/smoke_discovery.py
+
     - name: Download build artifact
       uses: actions/download-artifact@v5
       with:
@@ -99,3 +101,9 @@ jobs:
         stackunderflow --version
         stackunderflow --help
         stackunderflow cfg ls
+
+    # Exercises the real OS-specific path code (Path.home / CLAUDE_CONFIG_DIR
+    # resolution + JSONL discovery + parse) on every OS — the cross-platform
+    # surface the Linux-only pytest matrix can't cover on Windows.
+    - name: Discovery smoke
+      run: python scripts/smoke_discovery.py

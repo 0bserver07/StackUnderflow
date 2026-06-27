@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -54,14 +56,20 @@ from .base import Record, SessionRef
 
 _log = logging.getLogger(__name__)
 
-# macOS path; spec §3. Linux/Windows constants kept here for documentation
-# only — untested on this machine and not exercised by enumerate() in v1.
-_KIRO_GLOBAL_STORAGE_MACOS = (
-    Path.home() / "Library" / "Application Support" / "Kiro" / "User"
-    / "globalStorage" / "kiro.kiroagent"
-)
-# _KIRO_GLOBAL_STORAGE_WINDOWS = Path(...)  # untested
-# _KIRO_GLOBAL_STORAGE_LINUX = Path(...)    # untested
+
+def _kiro_global_storage() -> Path:
+    """Return the platform-appropriate Kiro ``globalStorage`` root.
+
+    Same platform-branch shape as the VS Code adapters; ``APPDATA`` is
+    read at call time so tests can monkeypatch it. Real-box validation on
+    Windows/Linux is still pending (catalog §3).
+    """
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", "")) / "Kiro" / "User" / "globalStorage" / "kiro.kiroagent"
+    if sys.platform.startswith("linux"):
+        return Path.home() / ".config" / "Kiro" / "User" / "globalStorage" / "kiro.kiroagent"
+    return Path.home() / "Library" / "Application Support" / "Kiro" / "User" / "globalStorage" / "kiro.kiroagent"
+
 
 _DEFAULT_MODEL = "kiro-auto"
 
@@ -72,7 +80,7 @@ class KiroAdapter:
     name = "kiro"
 
     def __init__(self, storage_root: Path | None = None) -> None:
-        self._root = storage_root or _KIRO_GLOBAL_STORAGE_MACOS
+        self._root = storage_root or _kiro_global_storage()
 
     # ── enumeration ───────────────────────────────────────────────────
 

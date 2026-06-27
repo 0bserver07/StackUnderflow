@@ -22,15 +22,13 @@ on:
 
 jobs:
   test:
-    # Tests run on Ubuntu only. Windows runs the `build` workflow's
-    # wheel-install + `--version` / `--help` / `cfg ls` smoke test
-    # (which exercises the real cross-platform code paths the user
-    # actually hits — lock, watcher entry points, settings I/O).
-    # Adding the Windows pytest matrix back is tracked as HANDOFF #4
-    # follow-up: the test suite has POSIX-shaped path fixtures
-    # (hard-coded `/Users/...` literals, raw `Path.resolve()` that
-    # drive-prefixes on Windows) and a Windows port needs a path-
-    # comparison helper + per-test fixtures, not just a CI matrix.
+    # The full suite runs on Ubuntu. A Windows pytest foothold lives in the
+    # `test-windows` job below (cross-platform path tests). The remaining
+    # suite stays Ubuntu-only because of POSIX-shaped fixtures (hard-coded
+    # `/Users/...` literals — mostly inert recorded session data — and raw
+    # `Path.resolve()` that drive-prefixes on Windows). Port more modules to
+    # the Windows job using `tests/conftest.py::assert_same_path`; tracked as
+    # HANDOFF #4 follow-up.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -60,3 +58,31 @@ jobs:
       run: |
         # Fail if coverage is below 60%
         coverage report --fail-under=60
+
+  test-windows:
+    # Windows pytest foothold. Runs the cross-platform path-resolution tests
+    # on a real Windows runner to lock in the per-OS storage-root branches
+    # (Cline / Kiro / Cursor / Copilot) and the CLAUDE_CONFIG_DIR override.
+    # Expand the pytest target as more modules are ported (see the `test`
+    # job comment + tests/conftest.py::assert_same_path).
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Run cross-platform path tests
+      run: python -m pytest tests/stackunderflow/adapters/test_platform_paths.py -v --tb=short

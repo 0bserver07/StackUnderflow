@@ -32,3 +32,25 @@ def set_home_env(monkeypatch, home: Path | str) -> None:
         if drive:
             monkeypatch.setenv("HOMEDRIVE", drive)
             monkeypatch.setenv("HOMEPATH", tail or "\\")
+
+
+def _norm_path(p: Path | str) -> str:
+    """Normalise a path for cross-platform equality.
+
+    ``os.path.normcase`` lowercases and flips separators on Windows (a
+    no-op on POSIX); ``normpath`` collapses ``.``/``..``. Neither touches
+    the filesystem, so this works on non-existent paths.
+    """
+    return os.path.normcase(os.path.normpath(str(p)))
+
+
+def assert_same_path(actual: Path | str, expected: Path | str) -> None:
+    """Assert two paths are logically equal regardless of separator/case.
+
+    Use instead of ``assert Path(a) == Path(b)`` when either side may have
+    been through ``.resolve()`` — which drive-prefixes and may re-case on
+    Windows — or built from a forward-slash string literal. This is the
+    lever for porting the POSIX-shaped path assertions flagged in
+    ``test.yml`` to the Windows matrix.
+    """
+    assert _norm_path(actual) == _norm_path(expected), f"{actual!r} != {expected!r}"
