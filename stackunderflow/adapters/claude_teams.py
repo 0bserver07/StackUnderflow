@@ -38,6 +38,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
