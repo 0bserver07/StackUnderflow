@@ -1,1 +1,0 @@
-import{j as t}from"./react-vendor-G_LhX__J.js";import{m as a,l as i,B as l}from"./index-D7-U4m2w.js";function c({provider:o,size:r="sm"}){const e=a(o),s=i(o);return t.jsx(l,{color:e,size:r,children:s})}export{c as P};
