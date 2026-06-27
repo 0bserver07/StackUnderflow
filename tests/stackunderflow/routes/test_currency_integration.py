@@ -252,3 +252,103 @@ async def test_cost_data_uses_snapshot_when_frankfurter_403(tmp_path, monkeypatc
     assert payload["currency"]["warning"] is not None
     # Costs scaled by the snapshot rate (USD * snap)
     assert payload["session_costs"][0]["cost"] == pytest.approx(10.0 * snap)
+
+
+# ── #21 — daily_stats nested cost must FX-convert ─────────────────────────────
+
+
+def test_convert_in_place_scales_nested_daily_cost_both_shapes():
+    """#21 — ``_convert_in_place`` must descend into the daily ``cost`` subtree
+    (a dict, not a scalar) and scale every USD leaf, for BOTH the aggregator
+    shape (``by_model[model] = {*_cost}``) and the mart shape
+    (``by_model[model] = float``). Token counts stay untouched.
+
+    Before the fix the whitelist treated ``cost`` as a leaf, ``_convert_amount``
+    no-op'd on the dict, and recursion was skipped — so the DailyCost chart's
+    bars summed raw USD under a foreign symbol.
+    """
+    from stackunderflow.routes.cost import _convert_in_place
+
+    payload = {
+        "daily_stats": {
+            "d1": {  # aggregator shape — per-model dict of cost components
+                "tokens": {"input": 100},
+                "cost": {
+                    "total": 10.0,
+                    "by_model": {"m1": {"input_cost": 6.0, "total_cost": 10.0}},
+                },
+            },
+            "d2": {  # mart shape — by_model leaf is a bare float
+                "tokens": {"input": 200},
+                "cost": {"total": 20.0, "by_model": {"m1": 20.0}},
+            },
+        }
+    }
+    _convert_in_place(payload, 0.5)
+
+    d1 = payload["daily_stats"]["d1"]
+    assert d1["cost"]["total"] == pytest.approx(5.0)
+    assert d1["cost"]["by_model"]["m1"]["input_cost"] == pytest.approx(3.0)
+    assert d1["cost"]["by_model"]["m1"]["total_cost"] == pytest.approx(5.0)
+    assert d1["tokens"]["input"] == 100  # token counts NOT scaled
+
+    d2 = payload["daily_stats"]["d2"]
+    assert d2["cost"]["total"] == pytest.approx(10.0)
+    assert d2["cost"]["by_model"]["m1"] == pytest.approx(10.0)
+    assert d2["tokens"]["input"] == 200  # token counts NOT scaled
+
+
+@pytest.mark.asyncio
+async def test_stats_route_converts_nested_daily_costs_to_gbp(gbp_environment, tmp_path, monkeypatch):
+    """#21 end-to-end: ``/api/stats`` must ship ``daily_stats[day].cost`` (and
+    its nested ``by_model`` leaves) pre-converted into the active currency."""
+    from stackunderflow.routes.data import get_stats
+
+    store_db = tmp_path / "store.db"
+    slug = "-gbp-daily"
+    _seed_project(store_db, slug)
+
+    daily_stats = {
+        "2026-04-01": {
+            "messages": 3,
+            "tokens": {"input": 100, "output": 50, "cache_read": 0, "cache_creation": 0},
+            "cost": {
+                "total": 10.0,
+                "by_model": {
+                    "claude-sonnet-4-20250514": {
+                        "input_cost": 6.0,
+                        "output_cost": 3.0,
+                        "cache_creation_cost": 0.5,
+                        "cache_read_cost": 0.5,
+                        "total_cost": 10.0,
+                    }
+                },
+            },
+        }
+    }
+    stats = {"daily_stats": daily_stats, "overview": {"total_cost": 10.0}}
+
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    monkeypatch.setattr(
+        "stackunderflow.routes.data.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], stats),
+    )
+
+    result = await get_stats()
+
+    assert result["currency"]["rate_from_usd"] == 0.80
+    day = result["daily_stats"]["2026-04-01"]
+    # Nested daily cost leaves scaled by 0.80.
+    assert day["cost"]["total"] == pytest.approx(8.0)
+    bm = day["cost"]["by_model"]["claude-sonnet-4-20250514"]
+    assert bm["input_cost"] == pytest.approx(4.8)
+    assert bm["output_cost"] == pytest.approx(2.4)
+    assert bm["cache_creation_cost"] == pytest.approx(0.4)
+    assert bm["cache_read_cost"] == pytest.approx(0.4)
+    assert bm["total_cost"] == pytest.approx(8.0)
+    # Token counts and message counts are NOT scaled.
+    assert day["tokens"]["input"] == 100
+    assert day["messages"] == 3
+    # The whitelisted scalar overview.total_cost still scales as before.
+    assert result["overview"]["total_cost"] == pytest.approx(8.0)

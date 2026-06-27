@@ -21,6 +21,7 @@ from stackunderflow.api.messages import (
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
 from stackunderflow.routes.cost import COST_KEYS, _convert_in_place
+from stackunderflow.stats.aggregator import cache_cost_saved_base_units
 from stackunderflow.store import db, mart_queries, queries, schema
 
 router = APIRouter()
@@ -468,13 +469,16 @@ def _merge_project_mart_rows(rows: list[dict | None]) -> dict | None:
     return merged
 
 
-def _cache_block_from_mart(merged_row: dict | None) -> dict:
+def _cache_block_from_mart(merged_row: dict | None, cost_saved_units: float = 0.0) -> dict:
     """Derive the ``cache`` block from ``project_mart`` cache-token totals.
 
-    Mirrors the dollar/ROI maths in ``aggregator._CacheCollector.result``
-    (``cost_saved = read·0.9 − created·0.25``; break-even when read >
-    created) so the Cache-ROI hero card renders its real headline metric
-    (ROI %, tokens saved, cost saved) off the mart.
+    ``total_created`` / ``total_read`` / ``tokens_saved`` / ``break_even`` come
+    from the merged ``project_mart`` row (lifetime totals). ``cost_saved`` is
+    priced separately at real per-model rates (``cost_saved_units``, from
+    ``_cache_cost_saved_units_from_marts``) rather than the old flat
+    ``read·0.9 − created·0.25`` magic constants (#40) — the same
+    ``compute_cost`` basis the aggregator's ``_CacheCollector`` now uses, so
+    the dollar figure tracks ``tokens_saved`` instead of disagreeing in sign.
 
     ``hit_rate`` is left ``0.0``: it's ``messages_with_cache_read /
     assistant_messages``, a per-message-flag ratio no mart materialises —
@@ -488,10 +492,36 @@ def _cache_block_from_mart(merged_row: dict | None) -> dict:
         "total_created": created,
         "total_read": read,
         "tokens_saved": read - created,
-        "cost_saved_base_units": round(read * 0.9 - created * 0.25, 2),
+        "cost_saved_base_units": round(cost_saved_units, 2),
         "break_even_achieved": read > created,
         "hit_rate": 0.0,  # per-message cache-read flag count not materialised
     }
+
+
+def _cache_cost_saved_units_from_marts(conn, project_ids: list[int]) -> float:
+    """Lifetime cache cost-saved (base units) priced per model from ``daily_mart``.
+
+    ``project_mart`` carries only the cache-token *totals* (no model
+    breakdown), so the dollar saving is priced from ``daily_mart`` rows —
+    which DO carry ``(provider, model, speed, cache_read, cache_create)`` —
+    through the shared ``cache_cost_saved_base_units`` helper. That uses the
+    same real-rate ``compute_cost`` basis as the aggregator's
+    ``_CacheCollector`` (replacing the old flat 0.9/0.25 constants, #40).
+    Unfiltered (lifetime) to stay consistent with the merged ``project_mart``
+    totals the rest of the cache block reports.
+    """
+    entries: list[tuple[str, str, str, int, int]] = []
+    for pid in project_ids:
+        for r in mart_queries.daily_for_project(conn, project_id=pid):
+            model = r.get("model") or ""
+            read = int(r.get("cache_read", 0) or 0)
+            created = int(r.get("cache_create", 0) or 0)
+            if not model or (not read and not created):
+                continue
+            entries.append(
+                (r.get("provider") or "anthropic", model, r.get("speed") or "standard", read, created)
+            )
+    return cache_cost_saved_base_units(entries)
 
 
 def _tools_usage_from_marts(conn, project_ids: list[int]) -> dict[str, int]:
@@ -584,7 +614,9 @@ def _stats_from_marts(
             if merged_proj
             else 0,
         },
-        "cache": _cache_block_from_mart(merged_proj),
+        "cache": _cache_block_from_mart(
+            merged_proj, _cache_cost_saved_units_from_marts(conn, project_ids)
+        ),
     }
 
 

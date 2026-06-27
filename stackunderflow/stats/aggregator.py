@@ -10,6 +10,7 @@ pattern used elsewhere.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -41,7 +42,7 @@ def summarise(
     models_c      = _ModelsCollector()
     sessions_c    = _SessionsCollector()
     errors_c      = _ErrorsCollector()
-    cache_c       = _CacheCollector()
+    cache_c       = _CacheCollector(provider=provider)
 
     # analytics-expansion collectors (§1.1 – §1.8)
     sess_cost_c   = _SessionCostCollector(provider=provider)
@@ -888,9 +889,59 @@ def _preview(text: str, limit: int) -> str:
     return text.replace("\n", " ").replace("\r", " ").strip()[:limit]
 
 
+# Frontend ``CacheRoiCard`` divides ``cost_saved_base_units`` by 1e6 to get
+# dollars (pricing rates in ``infra/costs.py`` are $/token, so a dollar figure
+# built from them is rescaled by the card's ``TOKEN_RATE_DIVISOR``). We keep
+# that wire contract: emit the REAL USD saving × 1e6.
+_CACHE_COST_BASE_UNIT_SCALE = 1_000_000.0
+
+
+def cache_cost_saved_base_units(
+    entries: Iterable[tuple[str, str, str, int, int]],
+) -> float:
+    """Dollars saved by prompt caching, priced per ``(provider, model, speed)``.
+
+    ``entries`` yields ``(provider, model, speed, read_tokens,
+    created_tokens)``. Replaces the old flat ``read*0.9 − created*0.25`` magic
+    constants (#40): each model's cache tokens are priced through
+    ``compute_cost`` — the same pricer basis every other cost figure uses — so
+    the saving reflects real per-model input / cache-read / cache-write rates
+    and tracks ``tokens_saved`` (read − created) instead of an arbitrary blend.
+
+    With one ``compute_cost`` call per entry the net saving is
+    ``input_cost − cache_read_cost − cache_creation_cost`` evaluated on
+    ``{input: read+created, cache_read: read, cache_creation: created}``, which
+    expands to ``read·(input−cache_read) − created·(cache_write−input)`` — the
+    read-side saving minus the write premium paid to populate the cache.
+    Negative below break-even (more written than read back), matching the sign
+    of ``tokens_saved``'s intent.
+
+    Returned in the frontend's ``cost_saved_base_units`` convention
+    (real USD × 1e6) so ``CacheRoiCard``'s ``/1e6`` recovers dollars.
+    """
+    total_usd = 0.0
+    for provider, model, speed, read, created in entries:
+        read = int(read or 0)
+        created = int(created or 0)
+        if (not read and not created) or not model or model == "N/A":
+            continue
+        cb = compute_cost(
+            {"input": read + created, "output": 0, "cache_read": read, "cache_creation": created},
+            model,
+            provider=provider or "anthropic",
+            speed=speed or "standard",
+        )
+        total_usd += cb["input_cost"] - cb["cache_read_cost"] - cb["cache_creation_cost"]
+    return round(total_usd * _CACHE_COST_BASE_UNIT_SCALE, 2)
+
+
 class _CacheCollector:
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str = "anthropic") -> None:
         self.created = self.read = self.w_created = self.w_read = self.asst = 0
+        self._provider = provider
+        # Cache tokens per (model, speed) so cost-saved prices at each model's
+        # real rates (not flat constants) — see ``cache_cost_saved_base_units``.
+        self._cache_by_ms: dict[tuple[str, str], dict[str, int]] = {}
 
     def ingest(self, r: Record) -> None:
         if r.kind != "assistant":
@@ -904,13 +955,20 @@ class _CacheCollector:
         if cr:
             self.w_read += 1
             self.read += cr
+        if (cc or cr) and r.model and r.model != "N/A":
+            b = self._cache_by_ms.setdefault((r.model, r.speed), {"read": 0, "created": 0})
+            b["read"] += cr
+            b["created"] += cc
 
     def result(self) -> dict:
         hr = (self.w_read / self.asst * 100) if self.asst else 0
         eff = (self.read / self.created * 100) if self.created else 0
         roi = ((self.read / self.created - 1) * 100) if self.created else 0
         saved = self.read - self.created
-        cost_saved = self.read * 0.9 - self.created * 0.25
+        cost_saved = cache_cost_saved_base_units(
+            (self._provider, model, speed, b["read"], b["created"])
+            for (model, speed), b in self._cache_by_ms.items()
+        )
         return {
             "total_created": self.created,
             "total_read": self.read,
@@ -920,7 +978,7 @@ class _CacheCollector:
             "hit_rate": round(hr, 1),
             "efficiency": round(min(100, eff), 1),
             "tokens_saved": saved,
-            "cost_saved_base_units": round(cost_saved, 2),
+            "cost_saved_base_units": cost_saved,
             "break_even_achieved": self.read > self.created,
             "cache_roi": round(roi, 1),
         }

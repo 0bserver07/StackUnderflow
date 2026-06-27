@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from stackunderflow.infra.costs import compute_cost
 from stackunderflow.stats.aggregator import (
     _CacheCollector,
     _CommandCostCollector,
@@ -26,6 +27,7 @@ from stackunderflow.stats.aggregator import (
     _local_hour,
     _time_bounds,
     _trends,
+    cache_cost_saved_base_units,
     recompute_tz_stats,
     summarise,
 )
@@ -126,7 +128,9 @@ def test_tools_collector_empty():
 
 def test_models_collector_accumulates_tokens():
     c = _ModelsCollector()
-    c.ingest(_rec(kind="assistant", model=_MODEL, tokens={"input": 100, "output": 50, "cache_creation": 0, "cache_read": 0}))
+    c.ingest(
+        _rec(kind="assistant", model=_MODEL, tokens={"input": 100, "output": 50, "cache_creation": 0, "cache_read": 0})
+    )
     r = c.result()
     assert _MODEL in r
     assert r[_MODEL]["input_tokens"] == 100
@@ -274,6 +278,65 @@ def test_cache_collector_skips_non_assistant():
     c = _CacheCollector()
     c.ingest(_rec(kind="user", tokens={"input": 0, "output": 0, "cache_creation": 1000, "cache_read": 1000}))
     assert c.result()["assistant_messages"] == 0
+
+
+def test_cache_collector_cost_saved_uses_real_rates():
+    """#40 — cost_saved is priced through compute_cost (real per-model rates),
+    NOT the retired flat ``read*0.9 - created*0.25`` constants."""
+    model = "claude-sonnet-4-20250514"
+    c = _CacheCollector(provider="anthropic")
+    c.ingest(_rec(model=model, tokens={"input": 0, "output": 0, "cache_creation": 1000, "cache_read": 5000}))
+    cb = compute_cost(
+        {"input": 6000, "output": 0, "cache_read": 5000, "cache_creation": 1000},
+        model,
+        provider="anthropic",
+        speed="standard",
+    )
+    expected = round((cb["input_cost"] - cb["cache_read_cost"] - cb["cache_creation_cost"]) * 1_000_000, 2)
+    r = c.result()
+    assert r["cost_saved_base_units"] == pytest.approx(expected)
+    # The retired magic-constant value must NOT be what we emit.
+    assert r["cost_saved_base_units"] != pytest.approx(5000 * 0.9 - 1000 * 0.25)
+
+
+def test_cache_collector_cost_saved_negative_below_break_even():
+    """#40 — below break-even (more written than read back) the dollar figure
+    goes negative, so it can't disagree in sign with ``tokens_saved``."""
+    model = "claude-sonnet-4-20250514"
+    c = _CacheCollector(provider="anthropic")
+    c.ingest(_rec(model=model, tokens={"input": 0, "output": 0, "cache_creation": 5000, "cache_read": 100}))
+    r = c.result()
+    assert r["break_even_achieved"] is False
+    assert r["tokens_saved"] == 100 - 5000
+    assert r["cost_saved_base_units"] < 0
+
+
+def test_cache_collector_cost_saved_zero_when_model_unpriceable():
+    """N/A-model cache tokens can't be priced → 0.0 dollars (tokens still counted)."""
+    c = _CacheCollector(provider="anthropic")
+    c.ingest(_rec(model="N/A", tokens={"input": 0, "output": 0, "cache_creation": 100, "cache_read": 200}))
+    r = c.result()
+    assert r["tokens_saved"] == 100  # 200 - 100; token bookkeeping unaffected
+    assert r["cost_saved_base_units"] == 0.0
+
+
+def test_cache_cost_saved_base_units_helper_sums_per_model():
+    """The shared helper prices each (provider, model, speed) entry through
+    compute_cost and sums; empty / unpriceable entries contribute nothing."""
+    entries = [
+        ("anthropic", "claude-sonnet-4-20250514", "standard", 5000, 1000),
+        ("anthropic", "N/A", "standard", 9999, 9999),  # skipped (no model)
+        ("anthropic", "claude-sonnet-4-20250514", "standard", 0, 0),  # skipped (no tokens)
+    ]
+    one = compute_cost(
+        {"input": 6000, "output": 0, "cache_read": 5000, "cache_creation": 1000},
+        "claude-sonnet-4-20250514",
+        provider="anthropic",
+        speed="standard",
+    )
+    expected = round((one["input_cost"] - one["cache_read_cost"] - one["cache_creation_cost"]) * 1_000_000, 2)
+    assert cache_cost_saved_base_units(entries) == pytest.approx(expected)
+    assert cache_cost_saved_base_units([]) == 0.0
 
 
 # ── time helpers ──────────────────────────────────────────────────────────────

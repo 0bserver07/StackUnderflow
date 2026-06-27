@@ -58,6 +58,29 @@ def _convert_amount(value: Any, rate: float) -> Any:
     return value
 
 
+def _scale_all_numbers(node: Any, rate: float) -> Any:
+    """Scale EVERY numeric leaf under ``node`` by ``rate``.
+
+    Used once we're already inside a cost-named subtree (e.g.
+    ``daily_stats[day]["cost"] = {"total", "by_model"}``) where every number
+    is a USD amount but the leaf keys — ``total``, the model ids under
+    ``by_model``, and each model's ``input_cost`` / ``output_cost`` /
+    ``cache_*_cost`` components (a bare float on the mart path) — don't match
+    the field-name whitelist ``_convert_in_place`` keys on. Mutates dicts in
+    place; rebuilds lists. ``delta_pct`` is still pruned so a percentage
+    subtree that ever lands under a cost key is never FX-scaled.
+    """
+    if isinstance(node, dict):
+        for key, val in list(node.items()):
+            if key in _NO_CONVERT_SUBTREES:
+                continue
+            node[key] = _scale_all_numbers(val, rate)
+        return node
+    if isinstance(node, list):
+        return [_scale_all_numbers(item, rate) for item in node]
+    return _convert_amount(node, rate)
+
+
 def _convert_in_place(node: Any, rate: float) -> Any:
     """Recursively scale every cost-named numeric leaf by ``rate``.
 
@@ -72,7 +95,19 @@ def _convert_in_place(node: Any, rate: float) -> Any:
             if key in _NO_CONVERT_SUBTREES:
                 continue
             if key in _COST_FIELDS_PER_ROW:
-                node[key] = _convert_amount(val, rate)
+                # ``cost`` is a scalar on session/command/tool rows but a
+                # nested USD subtree on ``daily_stats[day]`` —
+                # ``{"total", "by_model": {model: {input_cost, ...}}}`` from
+                # the aggregator, or ``{"total", "by_model": {model: <float>}}``
+                # on the mart path. #21: that subtree shipped unconverted
+                # because ``_convert_amount`` no-ops on a dict and the whitelist
+                # skips recursion, so EUR/GBP DailyCost bars summed raw USD.
+                # Inside a known-cost subtree every numeric leaf is dollars, so
+                # scale them all regardless of leaf-key name.
+                if isinstance(val, (dict, list)):
+                    node[key] = _scale_all_numbers(val, rate)
+                else:
+                    node[key] = _convert_amount(val, rate)
             else:
                 _convert_in_place(val, rate)
     elif isinstance(node, list):

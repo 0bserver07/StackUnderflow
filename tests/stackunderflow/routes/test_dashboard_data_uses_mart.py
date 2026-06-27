@@ -558,6 +558,20 @@ async def test_dashboard_data_tools_and_cache_sourced_from_marts(tmp_path, monke
     )
     _insert_tool_mart(conn, project_id=pid, day="2026-04-02", provider="claude", tool_name="Read", event_count=9)
     _insert_tool_mart(conn, project_id=pid, day="2026-04-02", provider="claude", tool_name="Bash", event_count=5)
+    # #40: cost_saved is now priced from daily_mart's per-model cache tokens
+    # (real rates), not flat 0.9/0.25 constants. Seed daily rows whose cache
+    # totals match the project_mart lifetime totals (5000 read / 1000 create).
+    _insert_daily_mart(
+        conn,
+        project_id=pid,
+        day="2026-04-02",
+        provider="claude",
+        model="claude-sonnet-4-20250514",
+        cache_read=5000,
+        cache_create=1000,
+        message_count=12,
+        cost_usd=3.0,
+    )
     conn.commit()
     conn.close()
 
@@ -575,8 +589,22 @@ async def test_dashboard_data_tools_and_cache_sourced_from_marts(tmp_path, monke
     assert cache["total_read"] == 5000
     assert cache["tokens_saved"] == 4000  # 5000 - 1000
     assert cache["break_even_achieved"] is True  # read > created
-    # cost_saved mirrors aggregator: read*0.9 - created*0.25
-    assert cache["cost_saved_base_units"] == pytest.approx(5000 * 0.9 - 1000 * 0.25)
+    # #40: cost_saved is priced through compute_cost (real per-model rates),
+    # NOT the old flat read*0.9 - created*0.25 magic constants. Pin to the
+    # pricer basis: input_cost - cache_read_cost - cache_creation_cost, in the
+    # frontend's base-units convention (USD * 1e6).
+    from stackunderflow.infra.costs import compute_cost
+
+    cb = compute_cost(
+        {"input": 6000, "output": 0, "cache_read": 5000, "cache_creation": 1000},
+        "claude-sonnet-4-20250514",
+        provider="claude",
+        speed="standard",
+    )
+    expected = round((cb["input_cost"] - cb["cache_read_cost"] - cb["cache_creation_cost"]) * 1_000_000, 2)
+    assert cache["cost_saved_base_units"] == pytest.approx(expected)
+    # Regression guard: the new basis must differ from the retired constants.
+    assert cache["cost_saved_base_units"] != pytest.approx(5000 * 0.9 - 1000 * 0.25)
 
 
 @pytest.mark.asyncio
