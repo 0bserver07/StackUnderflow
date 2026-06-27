@@ -47,14 +47,8 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: 'tokens', label: 'Tokens' },
 ]
 
-import { formatCost } from '../../services/format'
+import { formatCost, formatNumber } from '../../services/format'
 import { useCurrency } from '../../services/currency'
-
-function formatShort(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
 
 function formatPct(p: number): string {
   if (!isFinite(p) || p <= 0) return '—'
@@ -66,6 +60,25 @@ function formatPct(p: number): string {
 export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChartProps) {
   const { currency } = useCurrency()
   const [sortKey, setSortKey] = useState<SortKey>('cost')
+
+  // #20: tool_mart doesn't materialise cache-token columns (backend FLAG —
+  // routes/cost.py `_tool_mart_to_aggregator_shape` hardcodes them to 0), so on
+  // the mart fast-path cache reads/writes arrive as 0 even though cache is ~99%
+  // of token volume. Only offer the "Tokens" sort + the cache tooltip line when
+  // the payload actually carries cache data; otherwise both are misleading zeroes.
+  const hasCacheData = useMemo(
+    () =>
+      !!data &&
+      Object.values(data).some(
+        (s) => (s?.cache_read_tokens ?? 0) > 0 || (s?.cache_creation_tokens ?? 0) > 0,
+      ),
+    [data],
+  )
+  const sorts = useMemo(
+    () => (hasCacheData ? SORTS : SORTS.filter((s) => s.key !== 'tokens')),
+    [hasCacheData],
+  )
+  const effectiveSortKey: SortKey = sortKey === 'tokens' && !hasCacheData ? 'cost' : sortKey
 
   const chartData = useMemo<ChartRow[]>(() => {
     if (!data) return []
@@ -88,26 +101,26 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
       })
       .filter((d) => d.cost > 0 || d.calls > 0 || d.tokens > 0)
 
-    const totalForSort = rows.reduce((s, r) => s + (r[sortKey] || 0), 0)
+    const totalForSort = rows.reduce((s, r) => s + (r[effectiveSortKey] || 0), 0)
     const sorted = [...rows]
-      .sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0))
+      .sort((a, b) => (b[effectiveSortKey] || 0) - (a[effectiveSortKey] || 0))
       .slice(0, 12)
 
     return sorted.map<ChartRow>((r) => {
-      const raw = r[sortKey] || 0
+      const raw = r[effectiveSortKey] || 0
       const pct = totalForSort > 0 ? (raw / totalForSort) * 100 : 0
-      const primary = sortKey === 'cost' ? formatCost(r.cost, currency) : formatShort(raw)
+      const primary = effectiveSortKey === 'cost' ? formatCost(r.cost, currency) : formatNumber(raw)
       return {
         ...r,
         pctOfTotal: pct,
         label: `${primary} · ${formatPct(pct)}`,
       }
     })
-  }, [data, sortKey, currency])
+  }, [data, effectiveSortKey, currency])
 
   const hasData = chartData.length > 0
 
-  const headerTitle = `Tools by ${SORTS.find((s) => s.key === sortKey)?.label ?? 'Cost'}`
+  const headerTitle = `Tools by ${SORTS.find((s) => s.key === effectiveSortKey)?.label ?? 'Cost'}`
 
   const header = (
     <div className="flex items-center justify-between mb-3 gap-3">
@@ -117,8 +130,8 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
         aria-label="Sort tools"
         className="inline-flex items-center rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-900/60 p-0.5 text-[11px]"
       >
-        {SORTS.map((s) => {
-          const active = s.key === sortKey
+        {sorts.map((s) => {
+          const active = s.key === effectiveSortKey
           return (
             <button
               key={s.key}
@@ -150,7 +163,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
     )
   }
 
-  const dataKey: SortKey = sortKey
+  const dataKey: SortKey = effectiveSortKey
   const maxLabelLen = Math.max(...chartData.map((d) => d.name.length))
   const leftMargin = Math.min(maxLabelLen * 6, 160)
 
@@ -173,9 +186,9 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
   }
 
   const xTickFormatter =
-    sortKey === 'cost' ? (v: number) => formatCost(v, currency) : (v: number) => formatShort(v)
+    effectiveSortKey === 'cost' ? (v: number) => formatCost(v, currency) : (v: number) => formatNumber(v)
 
-  const sortLabelLower = (SORTS.find((s) => s.key === sortKey)?.label ?? 'cost').toLowerCase()
+  const sortLabelLower = (SORTS.find((s) => s.key === effectiveSortKey)?.label ?? 'cost').toLowerCase()
 
   return (
     <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
@@ -212,12 +225,24 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
             formatter={(_value: number, _name: string, props: any) => {
               const p = props?.payload as ChartRow | undefined
               if (!p) return ['', '']
-              const lines = [
-                `${formatCost(p.cost, currency)} · ${formatPct(p.pctOfTotal)} of ${sortLabelLower}`,
-                `calls: ${formatShort(p.calls)}`,
-                `input: ${formatShort(p.input)} · output: ${formatShort(p.output)}`,
-                `cache read: ${formatShort(p.cacheRead)} · cache creation: ${formatShort(p.cacheCreation)}`,
-              ]
+              // #61: lead with the ACTIVE sort metric + its share so the % never
+              // pairs with a different metric; keep cost on its own line.
+              const metricValue =
+                effectiveSortKey === 'cost'
+                  ? formatCost(p.cost, currency)
+                  : formatNumber(p[effectiveSortKey])
+              const lines = [`${metricValue} · ${formatPct(p.pctOfTotal)} of ${sortLabelLower}`]
+              if (effectiveSortKey !== 'cost') {
+                lines.push(`cost: ${formatCost(p.cost, currency)}`)
+              }
+              lines.push(`calls: ${formatNumber(p.calls)}`)
+              lines.push(`input: ${formatNumber(p.input)} · output: ${formatNumber(p.output)}`)
+              // #20: only surface cache when the payload actually carries it.
+              if (hasCacheData) {
+                lines.push(
+                  `cache read: ${formatNumber(p.cacheRead)} · cache creation: ${formatNumber(p.cacheCreation)}`,
+                )
+              }
               return [lines.join('\n'), 'Details']
             }}
           />

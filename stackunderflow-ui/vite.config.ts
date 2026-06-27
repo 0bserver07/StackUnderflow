@@ -42,6 +42,13 @@ export default defineConfig({
         // undefined and falls back to Rollup's default chunking, which keeps
         // async-only modules in async chunks (never forced eager).
         manualChunks(id) {
+          // Vite's preload helper (vite/preload-helper) is statically imported
+          // by the entry (it wraps every lazy import()). If Rollup co-locates it
+          // in the syntax-highlighter chunk, the entry statically imports that
+          // chunk — dragging sh (and markdown, via refractor's hast deps) into
+          // first paint. Pin it to react-vendor (already eager) so neither lazy
+          // vendor chunk is forced eager. See docs/ui-perf-audit.md.
+          if (id.includes('vite/preload-helper')) return 'react-vendor'
           if (!id.includes('node_modules')) return undefined
           // Syntax highlighting (react-syntax-highlighter + refractor/prism).
           if (/[\\/]node_modules[\\/](react-syntax-highlighter|refractor|highlight\.js|lowlight|prismjs|parse-entities|character-entities[\w-]*|fault|format)[\\/]/.test(id)) {

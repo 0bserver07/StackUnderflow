@@ -27,7 +27,7 @@ function shortSession(sid: string): string {
   return sid.length > 8 ? sid.slice(0, 8) : sid
 }
 
-import { formatCost, formatModelName } from '../../services/format'
+import { formatCost, formatModelName, formatTokens } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import type { CurrencyInfo } from '../../types/api'
 
@@ -38,13 +38,6 @@ function formatDuration(totalSeconds: number): string {
   const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
   return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`
-}
-
-function formatTokens(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toLocaleString()
 }
 
 interface ChartDatum {
@@ -213,6 +206,19 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
     })
 
   const maxCost = chartData.reduce((m, d) => (d.cost > m ? d.cost : m), 0)
+
+  // #62: an all-zero-cost dataset would render Y-axis labels next to invisible
+  // (zero-width) bars. Show an explicit empty state instead of a ghost chart;
+  // this also guards the label-threshold maths below (only runs when maxCost>0).
+  if (maxCost <= 0) {
+    return (
+      <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Top Sessions by Cost</h3>
+        <div className="text-xs text-gray-500 py-8 text-center">No cost recorded for these sessions</div>
+      </div>
+    )
+  }
+
   // Only label bars that are > 10% of the chart max.
   const labelThreshold = maxCost * 0.1
 

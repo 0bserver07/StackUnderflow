@@ -8,9 +8,20 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
+import { formatTokens } from '../../services/format'
+
+type RangeKey = '7d' | '30d' | 'all'
 
 interface TokenCompositionStackProps {
   daily: Record<string, Record<string, number>>
+  /**
+   * #23: active date range from the Cost tab's FilterBar. When provided it
+   * drives the date-cutoff filter and the in-card range buttons are hidden
+   * (they used to duplicate the tab filter). When omitted the card keeps a
+   * local control as a fallback. Either way the filter selects the last-N
+   * *days* by a real date cutoff — not the last-N rows.
+   */
+  range?: RangeKey
 }
 
 const SERIES: { key: string; color: string; label: string }[] = [
@@ -20,19 +31,13 @@ const SERIES: { key: string; color: string; label: string }[] = [
   { key: 'cache_creation', color: '#FB923C', label: 'Cache Creation' },
 ]
 
-type RangeKey = '7d' | '30d' | 'all'
+const DAY_MS = 24 * 60 * 60 * 1000
 
 const RANGES: { key: RangeKey; label: string }[] = [
   { key: '7d', label: '7d' },
   { key: '30d', label: '30d' },
   { key: 'all', label: 'All' },
 ]
-
-function formatTokens(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`
-  return String(v)
-}
 
 interface DailyRow {
   date: string
@@ -95,8 +100,12 @@ function RichTooltip({ active, label, payload }: RichTooltipProps) {
   )
 }
 
-export default function TokenCompositionStack({ daily }: TokenCompositionStackProps) {
-  const [range, setRange] = useState<RangeKey>('all')
+export default function TokenCompositionStack({ daily, range: rangeProp }: TokenCompositionStackProps) {
+  // #23: when the tab FilterBar drives the range (prop present) the in-card
+  // buttons are hidden; otherwise a local control is kept as a fallback.
+  const rangeControlled = rangeProp !== undefined
+  const [localRange, setLocalRange] = useState<RangeKey>('all')
+  const range = rangeProp ?? localRange
   // isolated series key — when set, only that series renders
   const [isolated, setIsolated] = useState<string | null>(null)
 
@@ -113,10 +122,23 @@ export default function TokenCompositionStack({ daily }: TokenCompositionStackPr
       .sort((a, b) => a.date.localeCompare(b.date))
   }, [daily])
 
+  // #23: filter by a real date cutoff (last-N *days*) instead of slicing the
+  // last-N rows. Anchor to the most recent day present so an idle project
+  // doesn't collapse to nothing — replicates CostTab's `computeCutoff` formula
+  // (module-private there, so the maths is repeated rather than imported).
   const filteredData: DailyRow[] = useMemo(() => {
     if (range === 'all') return allData
-    const take = range === '7d' ? 7 : 30
-    return allData.slice(-take)
+    const stamps = allData
+      .map((d) => Date.parse(d.date))
+      .filter((t) => !Number.isNaN(t))
+    if (stamps.length === 0) return allData
+    const anchor = Math.max(...stamps)
+    const days = range === '7d' ? 7 : 30
+    const cutoff = anchor - days * DAY_MS
+    return allData.filter((d) => {
+      const t = Date.parse(d.date)
+      return Number.isNaN(t) ? true : t >= cutoff
+    })
   }, [allData, range])
 
   if (!daily || Object.keys(daily).length === 0) {
@@ -144,32 +166,36 @@ export default function TokenCompositionStack({ daily }: TokenCompositionStackPr
     >
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Daily Token Composition</h3>
-        <div
-          className="flex items-center gap-1"
-          role="group"
-          aria-label="Date range filter"
-          data-testid="token-stack-range"
-        >
-          {RANGES.map((r) => {
-            const active = range === r.key
-            return (
-              <button
-                key={r.key}
-                type="button"
-                onClick={() => setRange(r.key)}
-                data-testid={`token-stack-range-${r.key}`}
-                aria-pressed={active}
-                className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
-                  active
-                    ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-200 dark:border-indigo-700'
-                    : 'bg-gray-100/90 dark:bg-gray-800/80 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600'
-                }`}
-              >
-                {r.label}
-              </button>
-            )
-          })}
-        </div>
+        {/* #23: fallback control only — hidden when the tab FilterBar drives the
+            range (it used to be a duplicate of that control). */}
+        {!rangeControlled && (
+          <div
+            className="flex items-center gap-1"
+            role="group"
+            aria-label="Date range filter"
+            data-testid="token-stack-range"
+          >
+            {RANGES.map((r) => {
+              const active = range === r.key
+              return (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => setLocalRange(r.key)}
+                  data-testid={`token-stack-range-${r.key}`}
+                  aria-pressed={active}
+                  className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
+                    active
+                      ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-200 dark:border-indigo-700'
+                      : 'bg-gray-100/90 dark:bg-gray-800/80 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-400 dark:hover:border-gray-600'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {filteredData.length === 0 ? (

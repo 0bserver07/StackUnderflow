@@ -42,15 +42,7 @@ interface RoiPoint {
   ratio: number
 }
 
-function formatNumber(n: number | null | undefined): string {
-  if (!Number.isFinite(n)) return '0'
-  const v = n as number
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`
-  return v.toLocaleString()
-}
-
-import { formatCost } from '../../services/format'
+import { formatCost, formatNumber } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 
 /**
@@ -165,8 +157,13 @@ export default function CacheRoiCard({
   const tokensSaved = cache.tokens_saved ?? 0
   const tokensCreated = cache.total_created ?? 0
   const roiPct = tokensCreated > 0 ? (tokensSaved / tokensCreated) * 100 : 0
-  const costSaved = tokensToDollars(cache.cost_saved_base_units ?? 0)
   const breakEven = cache.break_even_achieved === true
+  // #40: below break-even (more tokens written to cache than read back) the
+  // backend's modeled dollar figure can still come out positive while
+  // `tokens_saved` is negative — painting a green "+$" beside a negative token
+  // delta. Clamp so the two stats can never disagree in sign.
+  const rawCostSaved = tokensToDollars(cache.cost_saved_base_units ?? 0)
+  const costSaved = breakEven ? rawCostSaved : Math.min(rawCostSaved, 0)
   const hitRate = cache.hit_rate ?? 0
 
   const canToggle = topSavers.length > 0
@@ -239,7 +236,17 @@ export default function CacheRoiCard({
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Cost Saved</div>
-          <div className="text-lg font-semibold text-green-700 dark:text-green-300 mt-0.5">{formatCost(costSaved, currency)}</div>
+          <div
+            className={`text-lg font-semibold mt-0.5 ${
+              costSaved > 0
+                ? 'text-green-700 dark:text-green-300'
+                : costSaved < 0
+                  ? 'text-red-700 dark:text-red-300'
+                  : 'text-gray-900 dark:text-gray-100'
+            }`}
+          >
+            {formatCost(costSaved, currency)}
+          </div>
         </div>
         <div>
           <div className="text-[10px] text-gray-500 uppercase tracking-wider">Hit Rate</div>

@@ -9,6 +9,7 @@ import {
   Label,
   Sector,
 } from 'recharts'
+import { formatTokens } from '../../services/format'
 
 interface TokenCompositionDonutProps {
   totals: Record<string, number>
@@ -23,13 +24,6 @@ const SERIES: { key: string; color: string; label: string }[] = [
 
 // Slices below this share of total have no inline % label (avoids overlap on thin arcs).
 const LABEL_MIN_PCT = 0.03
-
-function formatTokens(v: number): string {
-  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`
-  return v.toLocaleString()
-}
 
 // Inline % label renderer. Places text at the radial midpoint of each slice,
 // but only when the slice is wide enough to show it cleanly.
