@@ -13,6 +13,41 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
+from stackunderflow.etl import marts as _marts
+from stackunderflow.etl import normalize as _normalize
+
+# Snapshot the import-time ETL registries ONCE, before any test runs. The mart
+# and normalize registries are populated purely as import side-effects (no
+# loader fn), so once a test calls their ``_clear()`` the only way back is to
+# re-apply these defaults. Capturing here — at conftest import, while the
+# registries are still pristine — makes the restore in ``_restore_etl_registries``
+# order-independent (it never snapshots a state a polluting fixture already
+# cleared).
+_MART_DEFAULTS = _marts.all()
+_NORMALIZE_DEFAULTS = _normalize.all()
+
+
+@pytest.fixture(autouse=True)
+def _restore_etl_registries():
+    """Stop a test's ``marts._clear()`` / ``normalize._clear()`` from leaking.
+
+    Several ingest/etl tests clear these process-global registries to exercise
+    dispatch in isolation, re-register a subset, and leave them cleared at
+    teardown. That silently poisons every later test relying on the import-time
+    defaults — e.g. the multi-provider mart fast-path test calls
+    ``refresh_all_marts``, which iterates the mart registry and materialises
+    nothing if it's empty, so its ``project_mart`` rows never appear and the
+    route falls through to the (patched-to-explode) full pipeline. Restoring the
+    known-good defaults after every test confines a ``_clear()`` to its owner.
+    """
+    yield
+    _marts._REGISTRY.clear()
+    _marts._REGISTRY.update(_MART_DEFAULTS)
+    _normalize._REGISTRY.clear()
+    _normalize._REGISTRY.update(_NORMALIZE_DEFAULTS)
+
 
 def set_home_env(monkeypatch, home: Path | str) -> None:
     """Redirect ``Path.home()`` to ``home`` on POSIX and Windows.
