@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconRefresh, IconArrowUp, IconArrowDown, IconSearch } from '@tabler/icons-react'
@@ -9,9 +9,12 @@ import type { Project } from '../types/api'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import EmptyState from '../components/common/EmptyState'
 import ProviderChip from '../components/common/ProviderChip'
-import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts'
+// The two trend charts are recharts-backed (~444KB). Lazy-load them so landing
+// on "/" paints the page shell, KPI cards, filters and table immediately while
+// the charts stream in behind a <Suspense> boundary — recharts is no longer a
+// static import of the Overview chunk, only of these async chart chunks.
+const OverviewTokenChart = lazy(() => import('./OverviewTokenChart'))
+const OverviewCostChart = lazy(() => import('./OverviewCostChart'))
 
 type SortField = 'display_name' | 'last_modified' | 'total_cost' | 'total_commands' | 'total_size_mb'
 type SortDir = 'asc' | 'desc'
@@ -90,21 +93,6 @@ function useDebounce<T>(value: T, delay: number): T {
     return () => clearTimeout(timer)
   }, [value, delay])
   return debounced
-}
-
-// #58: trend-chart date helpers. Accept either an epoch-ms number (the
-// time-scaled token axis) or a `YYYY-MM-DD` string (the categorical cost axis).
-// A bare `YYYY-MM-DD` parses as UTC midnight, which `toLocaleDateString` then
-// shifts a day backwards west of UTC — appending `T00:00:00` forces local
-// parsing so the label always matches the underlying calendar day.
-function toLocalDate(value: number | string): Date {
-  return typeof value === 'number' ? new Date(value) : new Date(`${value}T00:00:00`)
-}
-function formatAxisDate(value: number | string): string {
-  return toLocalDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
-function formatTooltipDate(value: number | string): string {
-  return toLocalDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 export default function Overview() {
@@ -441,30 +429,11 @@ export default function Overview() {
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
             Token Usage Over Time{modelFilterLabel ? ' · all models' : ''}
           </h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={dailyTokens}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              {/* #58: time-scaled axis so idle days are spaced by real elapsed
-                  time instead of collapsing; minTickGap thins crowded labels. */}
-              <XAxis
-                dataKey="ts"
-                type="number"
-                scale="time"
-                domain={['dataMin', 'dataMax']}
-                tick={{ fontSize: 10, fill: '#9CA3AF' }}
-                tickFormatter={formatAxisDate}
-                minTickGap={40}
-              />
-              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={formatTokens} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
-                labelFormatter={formatTooltipDate}
-                formatter={(value: number) => [value.toLocaleString(), undefined]}
-              />
-              <Area type="monotone" dataKey="input" stackId="1" stroke="#818CF8" fill="#818CF8" fillOpacity={0.4} name="Input" isAnimationActive={false} />
-              <Area type="monotone" dataKey="output" stackId="1" stroke="#34D399" fill="#34D399" fillOpacity={0.4} name="Output" isAnimationActive={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+          {/* Fixed-height placeholder matches the chart area (height={280}) so
+              the recharts chunk streaming in causes no layout shift. */}
+          <Suspense fallback={<div className="h-[280px] rounded bg-gray-200/40 dark:bg-gray-800/40 animate-pulse" />}>
+            <OverviewTokenChart data={dailyTokens} />
+          </Suspense>
         </div>
       )}
 
@@ -474,29 +443,11 @@ export default function Overview() {
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
             Daily Cost{modelFilterLabel ? ` · ${modelFilterLabel}` : ''}
           </h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={dailyCosts}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              {/* #58: bars stay on a categorical date axis (so width renders
-                  reliably), but a compact tick formatter + minTickGap +
-                  preserveStartEnd fix the overcrowded labels. */}
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 10, fill: '#9CA3AF' }}
-                tickFormatter={formatAxisDate}
-                minTickGap={40}
-                interval="preserveStartEnd"
-              />
-              {/* #58: Y axis now goes through formatCost (was a raw `${symbol}${v}`). */}
-              <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={(v: number) => formatCost(v, currency)} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
-                labelFormatter={formatTooltipDate}
-                formatter={(v: number) => [formatCost(v, currency), 'Cost']}
-              />
-              <Bar dataKey="cost" fill="#818CF8" radius={[2, 2, 0, 0]} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
+          {/* Fixed-height placeholder matches the chart area (height={200}) so
+              the recharts chunk streaming in causes no layout shift. */}
+          <Suspense fallback={<div className="h-[200px] rounded bg-gray-200/40 dark:bg-gray-800/40 animate-pulse" />}>
+            <OverviewCostChart data={dailyCosts} currency={currency} />
+          </Suspense>
         </div>
       )}
 
