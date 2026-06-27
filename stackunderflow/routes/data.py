@@ -424,6 +424,13 @@ _PROJECT_MART_ADDITIVE: tuple[str, ...] = (
     "total_cache_read",
     "total_cache_create",
     "total_cost_usd",
+    # Message-type + command dims (v022) — per-message counts, disjoint
+    # across a slug's providers, so they sum like the token totals.
+    "total_user_messages",
+    "total_assistant_messages",
+    "total_tool_use_messages",
+    "total_tool_result_messages",
+    "total_commands",
 )
 
 
@@ -566,7 +573,17 @@ def _stats_from_marts(
         "hourly_pattern": {"messages": {}, "tokens": {}},
         "errors": {"total": 0},
         "models": models,
-        "user_interactions": {},
+        # ``user_commands_analyzed`` is materialised on ``project_mart`` (v022)
+        # — the Overview Commands KPI now reads a real value off the mart.
+        # The interaction-grain fields it doesn't carry (avg_tools_per_command,
+        # avg_steps_per_command, interruption_rate, tool_count_distribution)
+        # stay absent; the UI reads them with ``?? 0`` and the per-project
+        # detail view runs the full aggregator on demand.
+        "user_interactions": {
+            "user_commands_analyzed": int(merged_proj.get("total_commands", 0) or 0)
+            if merged_proj
+            else 0,
+        },
         "cache": _cache_block_from_mart(merged_proj),
     }
 

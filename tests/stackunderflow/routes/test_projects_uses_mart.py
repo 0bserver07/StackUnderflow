@@ -31,8 +31,10 @@ def _insert_project_mart(conn, *, project_id, provider, slug, **kw):
         "INSERT INTO project_mart "
         "(project_id, provider, slug, display_name, first_ts, last_ts, "
         " total_messages, total_sessions, total_input_tokens, total_output_tokens, "
-        " total_cache_read, total_cache_create, total_cost_usd) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " total_cache_read, total_cache_create, total_cost_usd, "
+        " total_user_messages, total_assistant_messages, total_tool_use_messages, "
+        " total_tool_result_messages, total_commands) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             project_id,
             provider,
@@ -47,6 +49,11 @@ def _insert_project_mart(conn, *, project_id, provider, slug, **kw):
             kw.get("total_cache_read", 0),
             kw.get("total_cache_create", 0),
             kw.get("total_cost_usd", 0.0),
+            kw.get("total_user_messages", 0),
+            kw.get("total_assistant_messages", 0),
+            kw.get("total_tool_use_messages", 0),
+            kw.get("total_tool_result_messages", 0),
+            kw.get("total_commands", 0),
         ),
     )
 
@@ -155,14 +162,15 @@ async def test_set_project_by_dir_bypasses_fs_if_in_db(tmp_path, monkeypatch):
     assert "test-antigravity-proj" in deps.current_log_path
 
 
-# ── RANK 26: mart path can't derive a user-command count ──────────────────
+# ── RANK 26 (resolved by v022): mart now materialises the command count ───────
 
 
 @pytest.mark.asyncio
-async def test_mart_backed_project_reports_commands_as_unknown(tmp_path, monkeypatch):
-    """A "command" is a user turn, which never becomes a billable event, so no
-    mart carries the count — the mart path reports ``None`` (UI renders ``-``),
-    not a misleading ``0``."""
+async def test_mart_backed_project_reports_materialized_commands(tmp_path, monkeypatch):
+    """v022 materialises per-project command + message-type counts onto
+    ``project_mart`` (computed at mart-build via the same classifier
+    ``get_project_stats`` uses), so the mart fast-path now surfaces the real
+    command count instead of the old ``None`` ('-') placeholder."""
     store_db = tmp_path / "store.db"
     conn = _connect(store_db)
     pid = _insert_project(conn, provider="claude", slug="alpha")
@@ -173,6 +181,7 @@ async def test_mart_backed_project_reports_commands_as_unknown(tmp_path, monkeyp
         slug="alpha",
         total_input_tokens=1000,
         total_cost_usd=1.0,
+        total_commands=42,
     )
     conn.commit()
     conn.close()
@@ -180,7 +189,7 @@ async def test_mart_backed_project_reports_commands_as_unknown(tmp_path, monkeyp
     response = await get_projects(include_stats=True)
     body = json.loads(response.body.decode("utf-8"))
     stats = body["projects"][0]["stats"]
-    assert stats["total_commands"] is None
+    assert stats["total_commands"] == 42
     # The mart numbers it *can* derive are still present.
     assert stats["total_input_tokens"] == 1000
 

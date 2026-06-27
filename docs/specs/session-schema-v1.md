@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 21`).
+**Status:** v1 (pinned to `schema_version = 22`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 21`. The current migration set is:
+Pin to `schema_version = 22`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|

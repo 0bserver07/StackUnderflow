@@ -435,17 +435,13 @@ def _stats_for_ids(
 def _mart_row_to_stats(row: dict) -> dict:
     """Project ``project_mart`` row → ProjectStats UI shape.
 
-    ``total_commands`` is ``None`` (not ``0``): a "command" is a user turn,
-    but user turns never become ``usage_events`` (the normalizers only emit
-    billable assistant rows), so no mart — ``project_mart``,
-    ``session_mart.user_message_count``, etc. — carries the count. The only
-    source is a full ``role='user'`` scan of the partitioned ``messages``
-    view (~750ms on the user's store, no role index), which would reintroduce
-    exactly the cost the mart fast-path exists to avoid. Emitting ``None``
-    makes the UI render ``-`` ("not computed here", same as
-    ``avg_steps_per_command`` already does) rather than a misleading ``0``;
-    the real per-command analytics live in the per-project detail view,
-    which runs the full aggregator on demand.
+    ``total_commands`` is the materialised ``user_commands_analyzed`` count
+    (v022): ``ProjectMartBuilder`` derives it at build time from the
+    project's ``messages`` using the same classifier logic the full
+    aggregator runs, so the list view now surfaces a real Commands count
+    without the ~750ms ``role='user'`` scan the mart fast-path exists to
+    avoid. (Pre-v022 stores whose mart hasn't been rebuilt carry ``0`` via
+    the column DEFAULT until the next refresh.)
 
     Other aggregator-only fields (avg_tokens_per_command, etc.) default to
     zero — same as ``bulk_project_lite_stats``.
@@ -455,7 +451,7 @@ def _mart_row_to_stats(row: dict) -> dict:
         "total_output_tokens": int(row.get("total_output_tokens", 0) or 0),
         "total_cache_read": int(row.get("total_cache_read", 0) or 0),
         "total_cache_write": int(row.get("total_cache_create", 0) or 0),
-        "total_commands": None,
+        "total_commands": int(row.get("total_commands", 0) or 0),
         "avg_tokens_per_command": 0,
         "avg_steps_per_command": 0,
         "compact_summary_count": 0,

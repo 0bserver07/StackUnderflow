@@ -73,7 +73,10 @@ def list_project_mart(
         "SELECT project_id, provider, slug, display_name, first_ts, last_ts, "
         "       total_messages, total_sessions, total_input_tokens, "
         "       total_output_tokens, total_cache_read, total_cache_create, "
-        "       total_cost_usd FROM project_mart"
+        "       total_cost_usd, "
+        "       total_user_messages, total_assistant_messages, "
+        "       total_tool_use_messages, total_tool_result_messages, "
+        "       total_commands FROM project_mart"
     )
     params: list[Any] = []
     if provider_filter:
@@ -94,7 +97,10 @@ def get_project_mart_row(
         "SELECT project_id, provider, slug, display_name, first_ts, last_ts, "
         "       total_messages, total_sessions, total_input_tokens, "
         "       total_output_tokens, total_cache_read, total_cache_create, "
-        "       total_cost_usd "
+        "       total_cost_usd, "
+        "       total_user_messages, total_assistant_messages, "
+        "       total_tool_use_messages, total_tool_result_messages, "
+        "       total_commands "
         "FROM project_mart WHERE project_id = ?",
         (project_id,),
     ).fetchone()
@@ -243,7 +249,13 @@ def daily_mart_to_overview(
 
     When ``project_mart_row`` is provided we trust its lifetime totals
     over the daily aggregate (faster + tolerant of partial day coverage
-    when filters narrow the daily window).
+    when filters narrow the daily window). The project-mart row also
+    carries the materialised message-type counts (v022), so we surface
+    ``message_types`` here — the same dict ``aggregator.summarise`` writes
+    into ``overview`` (``user`` / ``assistant`` match its kind counts;
+    ``tool_use`` / ``tool_result`` are the derived per-message-flag counts
+    the Overview cards read). The daily-only fallback can't carry them, so
+    it emits an empty dict (the UI reads each key with ``?? 0``).
     """
     if project_mart_row is not None:
         return {
@@ -260,6 +272,18 @@ def daily_mart_to_overview(
             },
             "total_messages": int(project_mart_row.get("total_messages", 0) or 0),
             "total_sessions": int(project_mart_row.get("total_sessions", 0) or 0),
+            "message_types": {
+                "user": int(project_mart_row.get("total_user_messages", 0) or 0),
+                "assistant": int(
+                    project_mart_row.get("total_assistant_messages", 0) or 0
+                ),
+                "tool_use": int(
+                    project_mart_row.get("total_tool_use_messages", 0) or 0
+                ),
+                "tool_result": int(
+                    project_mart_row.get("total_tool_result_messages", 0) or 0
+                ),
+            },
         }
 
     inp = sum(int(r.get("input_tokens", 0) or 0) for r in rows)
@@ -283,6 +307,10 @@ def daily_mart_to_overview(
         },
         "total_messages": msgs,
         "total_sessions": 0,
+        # Message-type counts only live on ``project_mart`` (v022); the
+        # daily-only path can't recover them, so emit an empty dict (UI
+        # reads each key with ``?? 0``).
+        "message_types": {},
     }
 
 
