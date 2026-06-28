@@ -199,7 +199,12 @@ async def _stream_loop(
 
         last_event_id = seed_event_id
         last_tool_id = seed_tool_id
-        last_burn_at = 0.0  # forces an immediate burn_tick on cycle 0
+        # ``None`` forces an immediate burn_tick on cycle 0. (A literal 0.0
+        # only worked when ``loop.time()`` — the monotonic clock, ~seconds
+        # since boot — happened to exceed ``burn_interval``; on a freshly
+        # booted host, e.g. a CI runner, ``loop.time() < burn_interval`` so the
+        # first tick was silently skipped. The sentinel is clock-independent.)
+        last_burn_at: float | None = None
         loop = asyncio.get_event_loop()
         iterations = 0
 
@@ -219,7 +224,7 @@ async def _stream_loop(
             try:
                 new_events = live_svc.recent_events(conn, since_id=last_event_id, limit=MAX_PER_CYCLE)
                 new_tools = live_svc.recent_tool_calls(conn, since_id=last_tool_id, limit=MAX_PER_CYCLE)
-                do_burn = (loop.time() - last_burn_at) >= burn_interval
+                do_burn = last_burn_at is None or (loop.time() - last_burn_at) >= burn_interval
                 burn = (
                     live_svc.rolling_burn(
                         conn,
