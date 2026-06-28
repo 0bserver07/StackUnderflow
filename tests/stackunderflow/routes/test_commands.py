@@ -374,11 +374,15 @@ async def test_tool_distribution_400_without_project(monkeypatch):
 
 def test_commands_route_registered_on_app():
     from stackunderflow.server import app
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/api/commands" in paths
+
+    from tests.conftest import app_route_paths
+
+    assert "/api/commands" in app_route_paths(app)
 
 
 def test_tool_distribution_route_registered_on_app():
     from stackunderflow.server import app
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/api/tool-distribution" in paths
+
+    from tests.conftest import app_route_paths
+
+    assert "/api/tool-distribution" in app_route_paths(app)

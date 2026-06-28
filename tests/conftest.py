@@ -10,7 +10,6 @@ on both runners.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -59,14 +58,22 @@ def set_home_env(monkeypatch, home: Path | str) -> None:
     """
     home_str = str(home)
     monkeypatch.setenv("HOME", home_str)
-    if sys.platform == "win32":
-        monkeypatch.setenv("USERPROFILE", home_str)
-        # HOMEDRIVE + HOMEPATH composed by some path helpers; keep them
-        # consistent so nothing in the suite reaches around USERPROFILE.
-        drive, tail = os.path.splitdrive(home_str)
-        if drive:
-            monkeypatch.setenv("HOMEDRIVE", drive)
-            monkeypatch.setenv("HOMEPATH", tail or "\\")
+    # Set the Windows vars UNCONDITIONALLY — not gated on ``sys.platform``.
+    # Callers commonly monkeypatch ``sys.platform`` to ``"linux"``/``"darwin"``
+    # *before* calling this (to exercise an adapter's non-Windows branch); on a
+    # real Windows runner that means ``sys.platform`` is no longer ``"win32"``
+    # here, so a gated set would skip ``USERPROFILE`` and ``Path.home()`` would
+    # resolve to the real host home instead of ``home``. The vars are inert on
+    # POSIX (``Path.home()`` reads ``HOME`` there), so always setting them is safe.
+    monkeypatch.setenv("USERPROFILE", home_str)
+    # HOMEDRIVE + HOMEPATH composed by some path helpers; keep them
+    # consistent so nothing in the suite reaches around USERPROFILE.
+    # ``splitdrive`` returns an empty drive on POSIX, so the guard below
+    # naturally no-ops there.
+    drive, tail = os.path.splitdrive(home_str)
+    if drive:
+        monkeypatch.setenv("HOMEDRIVE", drive)
+        monkeypatch.setenv("HOMEPATH", tail or "\\")
 
 
 def _norm_path(p: Path | str) -> str:
@@ -89,3 +96,23 @@ def assert_same_path(actual: Path | str, expected: Path | str) -> None:
     ``test.yml`` to the Windows matrix.
     """
     assert _norm_path(actual) == _norm_path(expected), f"{actual!r} != {expected!r}"
+
+
+def app_route_paths(app) -> set[str]:
+    """Every path a FastAPI app serves — robust across FastAPI/Starlette versions.
+
+    FastAPI >=0.138 (Starlette 1.x) stopped flattening ``include_router`` routes
+    into ``app.routes``; they now sit behind a lazy ``_IncludedRouter`` proxy, so
+    a plain ``{r.path for r in app.routes}`` scan still finds the directly
+    ``@app.get``-decorated routes but misses every ``/api/*`` route (requests
+    still resolve — only introspection is affected). Union the flat ``app.routes``
+    paths (which carry the ``{param:path}`` converter form) with the OpenAPI
+    ``paths`` (which expands the lazy routers) so route-registration assertions
+    hold on both the old and new FastAPI.
+    """
+    paths = {p for r in app.routes if isinstance(p := getattr(r, "path", None), str)}
+    try:
+        paths |= set(app.openapi().get("paths", {}))
+    except Exception:  # pragma: no cover - openapi build is best-effort here
+        pass
+    return paths

@@ -303,6 +303,9 @@ async def test_dashboard_data_no_longer_carries_cost_keys(tmp_path, monkeypatch)
 
 def test_new_routes_registered_on_app():
     from stackunderflow.server import app
-    paths = {getattr(r, "path", "") for r in app.routes}
+
+    from tests.conftest import app_route_paths
+
+    paths = app_route_paths(app)
     assert "/api/cost-data" in paths
     assert "/api/interaction/{interaction_id}" in paths

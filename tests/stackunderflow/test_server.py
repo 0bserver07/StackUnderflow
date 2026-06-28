@@ -32,11 +32,11 @@ class TestServerEndpointStructure:
         """Test that server has all required endpoints defined."""
         from stackunderflow.server import app
 
-        # Get all routes
-        routes = []
-        for route in app.routes:
-            if hasattr(route, 'path'):
-                routes.append(route.path)
+        from tests.conftest import app_route_paths
+
+        # Get all routes (version-robust: FastAPI >=0.138 no longer flattens
+        # ``include_router`` routes into ``app.routes`` — see ``app_route_paths``).
+        routes = app_route_paths(app)
 
         # Check critical endpoints exist
         assert "/" in routes

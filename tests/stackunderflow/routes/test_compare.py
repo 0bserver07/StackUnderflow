@@ -167,5 +167,7 @@ async def test_invalid_period_400(tmp_path, monkeypatch):
 
 def test_compare_route_registered_on_app():
     from stackunderflow.server import app
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/api/compare" in paths
+
+    from tests.conftest import app_route_paths
+
+    assert "/api/compare" in app_route_paths(app)
