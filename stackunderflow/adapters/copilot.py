@@ -463,6 +463,14 @@ def _input_tokens_for(event: dict, *, last_user_text: str) -> tuple[int, bool]:
 def _coerce_int(v: object) -> int:
     if v is None:
         return 0
+    if not isinstance(v, int):
+        # ``int`` (and its ``bool`` subclass) pass through silently. A float
+        # or str here means upstream sent a non-integer token count — log it
+        # so bad data is visible instead of being silently coerced.
+        _log.debug(
+            "_coerce_int: non-int token value %r (%s); coercing",
+            v, type(v).__name__,
+        )
     try:
         return max(int(v), 0)
     except (TypeError, ValueError):

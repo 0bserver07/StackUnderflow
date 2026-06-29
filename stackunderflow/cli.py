@@ -6,6 +6,7 @@ status output during startup.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -33,6 +34,8 @@ from stackunderflow.reports.scope import parse_period
 
 from . import __version__
 from .settings import Settings
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIR = Path.home() / ".stackunderflow"
 
@@ -830,10 +833,15 @@ def backup_create(label: str | None, keep: int):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
-            click.echo(f"  rsync error: {result.stderr.strip()}")
+            err = result.stderr.strip()
+            click.echo(f"  rsync error: {err}")
+            _log.error(
+                "backup create failed: rsync exited %s: %s",
+                result.returncode, err,
+            )
             import shutil as _shutil
             _shutil.rmtree(dest, ignore_errors=True)
-            return
+            sys.exit(1)
 
         # Summarize
         total_files = sum(1 for _ in dest.rglob("*") if _.is_file())
@@ -850,11 +858,67 @@ def backup_create(label: str | None, keep: int):
         click.echo(f"  Done: {total_files} files")
     except subprocess.TimeoutExpired:
         click.echo("  Backup timed out (>10 min).")
+        _log.error("backup create failed: rsync timed out after 600s")
         import shutil as _shutil
         _shutil.rmtree(dest, ignore_errors=True)
-        return
+        sys.exit(1)
 
     _prune_backups(keep)
+
+
+# The artifacts that together make a backup restorable. store.db alone is NOT
+# the full source of truth — search, Q&A, and tags each persist in their own
+# sidecar file (services/{search,qa,tag}_service). A backup missing any of
+# these restores to an empty search index / no Q&A / no tags.
+_CRITICAL_ARTIFACTS = ("store.db", "search_index.db", "qa_pairs.db", "tags.json")
+
+
+@backup_group.command("verify")
+@click.option("--name", default=None, help="Backup to verify (default: latest)")
+def backup_verify(name: str | None):
+    """Verify a backup contains all critical artifacts.
+
+    Checks that the backup holds every file needed for a full restore —
+    store.db plus the search / Q&A / tags sidecars. The SQLite store alone is
+    not the complete source of truth, so a store-only backup silently loses
+    search, Q&A, and tags. Exits non-zero if the backup is missing or
+    incomplete, so wrapper scripts can detect it.
+    """
+    if name:
+        target = (_BACKUP_DIR / name).resolve()
+        if not str(target).startswith(str(_BACKUP_DIR.resolve()) + os.sep):
+            click.echo("  Invalid backup name.")
+            sys.exit(1)
+        if not target.is_dir():
+            click.echo(f"  Backup '{name}' not found. Run: stackunderflow backup list")
+            sys.exit(1)
+    else:
+        target = _latest_backup()
+        if target is None:
+            click.echo("  No backups to verify. Run: stackunderflow backup create")
+            sys.exit(1)
+
+    click.echo(f"  Verifying {target.name}")
+    missing: list[str] = []
+    for artifact in _CRITICAL_ARTIFACTS:
+        # rglob so the check holds whether the artifact sits at the backup
+        # root or under a nested directory.
+        present = any(p.is_file() for p in target.rglob(artifact))
+        click.echo(f"    {artifact:<16} {'ok' if present else 'MISSING'}")
+        if not present:
+            missing.append(artifact)
+
+    if missing:
+        click.echo(
+            f"  Incomplete: missing {len(missing)} of "
+            f"{len(_CRITICAL_ARTIFACTS)} artifact(s): {', '.join(missing)}"
+        )
+        _log.error(
+            "backup verify: %s missing %s", target.name, ", ".join(missing)
+        )
+        sys.exit(1)
+
+    click.echo(f"  OK: all {len(_CRITICAL_ARTIFACTS)} critical artifacts present.")
 
 
 @backup_group.command("list")

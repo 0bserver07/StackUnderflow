@@ -8,13 +8,14 @@ empty-state and malformed-input behaviour for both.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 
 import pytest
 
-from stackunderflow.adapters.copilot import CopilotAdapter
+from stackunderflow.adapters.copilot import CopilotAdapter, _coerce_int
 
 
 _IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -211,3 +212,24 @@ def test_permission_denied_events_jsonl_does_not_raise(tmp_path: Path) -> None:
             assert list(adapter.read(ref)) == []
     finally:
         fp.chmod(0o644)
+
+
+# ── _coerce_int: surfaces non-int upstream token data ─────────────────
+
+
+def test_coerce_int_passes_ints_silently(caplog) -> None:
+    with caplog.at_level(logging.DEBUG, logger="stackunderflow.adapters.copilot"):
+        assert _coerce_int(42) == 42
+        assert _coerce_int(True) == 1  # bool is an int subclass
+        assert _coerce_int(None) == 0
+    assert caplog.records == []
+
+
+def test_coerce_int_logs_on_float_and_str(caplog) -> None:
+    with caplog.at_level(logging.DEBUG, logger="stackunderflow.adapters.copilot"):
+        assert _coerce_int(12.0) == 12
+        assert _coerce_int("7") == 7
+        assert _coerce_int("garbage") == 0  # uncoercible → 0, but still logged
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 3
+    assert all("non-int token value" in m for m in messages)

@@ -227,6 +227,13 @@ family = "HAIKU_3"
 provider = "anthropic"
 match = ["haiku", "3"]
 display_name = "Claude Haiku 3"
+  # Intentional convention exception. Claude 3 Haiku's published prompt-caching
+  # rates are rounded and predate the standardized 1.25x-write / 0.10x-read
+  # multipliers used everywhere else in this manifest: write is $0.30 (the
+  # formula would give 1.25 x 0.25 = 0.3125) and read is $0.03 (formula:
+  # 0.10 x 0.25 = 0.025). These are Anthropic's as-published Claude 3 Haiku
+  # rates, so they are correct for cost attribution — do NOT "fix" them to the
+  # formula.
   [[model.price]]
   input = 0.25
   output = 1.25
