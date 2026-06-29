@@ -5,13 +5,15 @@
 //   2. Burn ticker (rolling $5/min, $1/hr, $TODAY, projected month-end)
 //   3. P95 tool latency by tool (sparkline + number)
 //
-// Watcher-not-running banner: when the snapshot reports
-// `watcher.running === false`, the tab renders a yellow banner above
-// the panes explaining that the live stream depends on the filesystem
-// watcher and pointing at `stackunderflow start` (without `--no-watcher`)
-// as the fix. The SSE stream still opens — the stats route surfaces
-// historical burn / latency from the existing store, so the panes
-// remain useful even on a static dashboard.
+// Watcher-not-running banner: unless the watcher is *confirmed* running
+// (`watcher.running === true`), the tab renders a yellow banner above the
+// panes — this covers both an explicit `false` and the `"unknown"` state
+// (e.g. `--no-watcher`, or the lifespan never ran the watcher handle). It
+// explains that the live stream depends on the filesystem watcher and
+// points at `stackunderflow start` (without `--no-watcher`) as the fix.
+// The SSE stream still opens — the stats route surfaces historical burn /
+// latency from the existing store, so the panes remain useful even on a
+// static dashboard.
 
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -64,7 +66,11 @@ export default function Live() {
   // ready event takes over once stream.connected flips to true.
   const watcherRunning =
     stream.watcher?.running ?? snapshot?.watcher.running ?? 'unknown'
-  const watcherDown = watcherRunning === false
+  // Show the banner unless the watcher is *confirmed* running. `!== true`
+  // (rather than `=== false`) also covers the `"unknown"` state — i.e.
+  // `--no-watcher`, or a lifespan that never started the watcher handle —
+  // so the live stream's dependency is surfaced instead of silently absent.
+  const watcherDown = watcherRunning !== true
 
   // Combined event/tool_call stream: interleave by ts so the user sees
   // chronological order, not two parallel walls. Capped at 100.
@@ -124,11 +130,11 @@ export default function Live() {
         </div>
       </div>
 
-      {/* Watcher-not-running banner. Only renders when we know the
-          watcher is *down* (running === false). For "unknown" — i.e.
-          the lifespan never ran the watcher handle — we stay silent
-          since the user might be running --no-watcher intentionally
-          or just opened the page from the CLI. */}
+      {/* Watcher-not-running banner. Renders whenever the watcher isn't
+          *confirmed* running (running !== true) — so it also covers the
+          "unknown" / --no-watcher state, not just an explicit `false`.
+          The panes below stay useful regardless: burn + latency come from
+          the store, which the stats route serves without the watcher. */}
       {watcherDown && (
         <div
           role="alert"

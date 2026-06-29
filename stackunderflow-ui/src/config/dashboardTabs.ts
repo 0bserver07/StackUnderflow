@@ -36,11 +36,14 @@ export type Tab = {
 export const TABS: readonly Tab[] = [
   { id: 'overview', label: 'Overview', icon: IconLayoutDashboard },
   { id: 'sessions', label: 'Sessions', icon: IconFolders },
-  { id: 'agents', label: 'Agents', icon: IconHierarchy3 },
+  // Agents + Playback are heuristic, still-maturing views — flagged beta so
+  // the "Show beta features" toggle (Settings) actually gates them. Without
+  // `isBeta` the toggle was a no-op for these two tabs.
+  { id: 'agents', label: 'Agents', icon: IconHierarchy3, isBeta: true },
   // Playback slots between Sessions and Cost (same band as Agents). Both
   // tabs handle the empty-data case via their own EmptyState components —
   // see PlaybackTab.tsx and AgentsTab.tsx.
-  { id: 'playback', label: 'Playback', icon: IconHistory },
+  { id: 'playback', label: 'Playback', icon: IconHistory, isBeta: true },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
   // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
   // and Commands. Both call dedicated /api/compare and /api/yield routes.

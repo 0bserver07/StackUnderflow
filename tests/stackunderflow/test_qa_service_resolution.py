@@ -1,10 +1,11 @@
 """Unit tests for Q&A resolution classification.
 
 Each Q&A pair carries:
-  - resolution_status: 'resolved' | 'looped' | 'open'
+  - resolution_status: 'resolved' | 'looped' | 'abandoned' | 'open'
   - loop_count: number of follow-up pushbacks seen while extracting
 
-These tests cover schema migration, classification logic, persistence, and
+These tests cover schema migration, classification logic (including the
+'abandoned' branch, which depends on a session-end signal), persistence, and
 the list_qa filter.
 """
 
@@ -124,8 +125,33 @@ class TestClassifyResolution(unittest.TestCase):
         self.assertEqual(_classify_resolution(followup_count=1, has_code=True), ("resolved", 1))
 
     def test_no_code_and_few_followups_is_open(self):
+        # Default ended_session=False: a non-code answer with no session-end
+        # signal stays 'open' (the user may have kept working in-session).
         self.assertEqual(_classify_resolution(followup_count=0, has_code=False), ("open", 0))
         self.assertEqual(_classify_resolution(followup_count=1, has_code=False), ("open", 1))
+
+    def test_no_code_no_followup_at_session_end_is_abandoned(self):
+        self.assertEqual(
+            _classify_resolution(followup_count=0, has_code=False, ended_session=True),
+            ("abandoned", 0),
+        )
+
+    def test_session_end_does_not_override_stronger_signals(self):
+        # A concrete (code) answer is 'resolved' even if the session ended.
+        self.assertEqual(
+            _classify_resolution(followup_count=0, has_code=True, ended_session=True),
+            ("resolved", 0),
+        )
+        # One follow-up means it wasn't left untouched -> not 'abandoned'.
+        self.assertEqual(
+            _classify_resolution(followup_count=1, has_code=False, ended_session=True),
+            ("open", 1),
+        )
+        # Repeated pushback is 'looped' regardless of session end.
+        self.assertEqual(
+            _classify_resolution(followup_count=2, has_code=False, ended_session=True),
+            ("looped", 2),
+        )
 
 
 class TestExtractionAttachesResolution(_TempDBTestCase):
@@ -153,14 +179,46 @@ class TestExtractionAttachesResolution(_TempDBTestCase):
         self.assertEqual(pairs[0]["resolution_status"], "looped")
         self.assertGreaterEqual(pairs[0]["loop_count"], 2)
 
-    def test_non_code_no_followup_is_open(self):
+    def test_non_code_no_followup_session_end_is_abandoned(self):
+        # A non-code answer the user never returns to, with the session ending
+        # right there -> 'abandoned' (asked, got prose, walked away).
         pairs = self.svc.extract_qa_pairs("p1", [
             _msg("user", "What is Python?"),
             _msg("assistant", "Python is a programming language."),
         ])
         self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0]["resolution_status"], "open")
+        self.assertEqual(pairs[0]["resolution_status"], "abandoned")
         self.assertEqual(pairs[0]["loop_count"], 0)
+
+    def test_non_code_with_followup_is_open(self):
+        # A non-code answer with a single ambiguous follow-up: not enough
+        # pushback to be 'looped', no code to be 'resolved', and a follow-up
+        # exists so it isn't 'abandoned' -> 'open'.
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "What is Python?"),
+            _msg("assistant", "Python is a programming language."),
+            _msg("user", "Actually, can you say more about its typing?"),
+            _msg("assistant", "It is dynamically typed."),
+        ])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["resolution_status"], "open")
+        self.assertEqual(pairs[0]["loop_count"], 1)
+
+    def test_non_code_no_followup_mid_session_is_open(self):
+        # Same non-code/no-pushback shape, but the user asks another question
+        # later in the *same* session — so the first exchange wasn't abandoned.
+        pairs = self.svc.extract_qa_pairs("p1", [
+            _msg("user", "What is Python?", timestamp="2026-04-16T10:00:00"),
+            _msg("assistant", "Python is a programming language.", timestamp="2026-04-16T10:00:01"),
+            _msg("user", "What is Rust?", timestamp="2026-04-16T10:05:00"),
+            _msg("assistant", "Rust is a systems language.", timestamp="2026-04-16T10:05:01"),
+        ])
+        self.assertEqual(len(pairs), 2)
+        by_q = {p["question_text"]: p["resolution_status"] for p in pairs}
+        # First Q: session continues afterwards -> 'open', not 'abandoned'.
+        self.assertEqual(by_q["What is Python?"], "open")
+        # Last Q: nothing follows in-session -> 'abandoned'.
+        self.assertEqual(by_q["What is Rust?"], "abandoned")
 
 
 class TestIndexPersistsResolution(_TempDBTestCase):
@@ -250,10 +308,17 @@ class TestListQAResolutionFilter(_TempDBTestCase):
             _msg("user", "still not working", session_id="s2", timestamp="2026-04-02T10:00:04"),
             _msg("assistant", code_answer, session_id="s2", timestamp="2026-04-02T10:00:05"),
         ])
-        # open — no code, no follow-ups
+        # abandoned — non-code answer, no follow-up, session ends right after
         self.svc.index_project("p3", [
             _msg("user", "What is Q3?", session_id="s3", timestamp="2026-04-03T10:00:00"),
             _msg("assistant", "A3 is a thing.", session_id="s3", timestamp="2026-04-03T10:00:01"),
+        ])
+        # open — non-code answer with a single ambiguous follow-up
+        self.svc.index_project("p4", [
+            _msg("user", "What is Q4?", session_id="s4", timestamp="2026-04-04T10:00:00"),
+            _msg("assistant", "A4 is a thing.", session_id="s4", timestamp="2026-04-04T10:00:01"),
+            _msg("user", "Actually, what about Q4 edge cases?", session_id="s4", timestamp="2026-04-04T10:00:02"),
+            _msg("assistant", "Edge cases are handled.", session_id="s4", timestamp="2026-04-04T10:00:03"),
         ])
 
     def test_filter_resolved(self):
@@ -268,11 +333,17 @@ class TestListQAResolutionFilter(_TempDBTestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["results"][0]["project"], "p2")
 
+    def test_filter_abandoned(self):
+        self._seed_mixed()
+        result = self.svc.list_qa(resolution_status="abandoned")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["project"], "p3")
+
     def test_filter_open(self):
         self._seed_mixed()
         result = self.svc.list_qa(resolution_status="open")
         self.assertEqual(result["total"], 1)
-        self.assertEqual(result["results"][0]["project"], "p3")
+        self.assertEqual(result["results"][0]["project"], "p4")
 
     def test_unknown_status_returns_no_results(self):
         self._seed_mixed()
@@ -282,7 +353,7 @@ class TestListQAResolutionFilter(_TempDBTestCase):
     def test_no_filter_returns_all(self):
         self._seed_mixed()
         result = self.svc.list_qa()
-        self.assertEqual(result["total"], 3)
+        self.assertEqual(result["total"], 4)
 
 
 class TestRouteFilter(unittest.TestCase):

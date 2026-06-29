@@ -141,13 +141,23 @@ def _generate_qa_id(session_id: str, timestamp: str, content_preview: str) -> st
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _classify_resolution(followup_count: int, has_code: bool) -> tuple[str, int]:
+def _classify_resolution(
+    followup_count: int, has_code: bool, ended_session: bool = False
+) -> tuple[str, int]:
     """Classify how the Q&A was resolved based on observed signals.
 
-    Rules:
+    Rules (checked in order):
       - followup_count >= 2  -> 'looped'  (user pushed back repeatedly)
       - has_code and followup_count <= 1  -> 'resolved'  (concrete answer, no repeated pushback)
-      - otherwise  -> 'open'  (no strong signal either way)
+      - ended_session and followup_count == 0 and not has_code  -> 'abandoned'
+            (a non-code answer that the user never followed up on, and the
+            session ended right there — they asked, got prose, and walked away)
+      - otherwise  -> 'open'  (some interaction but no strong signal either way)
+
+    ``ended_session`` defaults to False so a caller that only has the
+    (followup_count, has_code) signals keeps the prior behaviour — the
+    'abandoned' bucket is only reachable when the extractor confirms the
+    Q&A was the session's final exchange.
 
     Returns:
         (resolution_status, loop_count) — loop_count equals followup_count verbatim.
@@ -156,6 +166,8 @@ def _classify_resolution(followup_count: int, has_code: bool) -> tuple[str, int]
         return "looped", followup_count
     if has_code and followup_count <= 1:
         return "resolved", followup_count
+    if ended_session and followup_count == 0 and not has_code:
+        return "abandoned", followup_count
     return "open", followup_count
 
 
@@ -285,6 +297,21 @@ class QAService:
             and m.get("content", "").strip()
         ]
 
+        # Highest index of a *real* user turn (a question/follow-up — not a
+        # tool result) per session. A Q&A whose question sits at that index is
+        # the session's final user exchange, which is what distinguishes an
+        # 'abandoned' thread from a merely 'open' one. Precomputed once (O(n))
+        # so the per-question lookup below stays O(1). `messages` can span
+        # multiple sessions (reindex_all merges them), hence the session key.
+        last_user_idx_by_session: dict[str, int] = {}
+        for idx, m in enumerate(relevant_msgs):
+            if m.get("type") != "user":
+                continue
+            c = m.get("content", "").strip()
+            if c.startswith("[Tool Result:") or c.startswith("[Tool Error:"):
+                continue
+            last_user_idx_by_session[m.get("session_id", "")] = idx
+
         qa_pairs = []
         i = 0
 
@@ -380,9 +407,15 @@ class QAService:
 
                 qa_id = _generate_qa_id(session_id, timestamp, question_text)
 
+                # The question at index `i` is this session's last real user
+                # turn iff no later (non-tool) user message shares its session
+                # — i.e. the user never came back after this exchange.
+                ended_session = last_user_idx_by_session.get(session_id, i) <= i
+
                 resolution_status, loop_count = _classify_resolution(
                     followup_count=followup_count,
                     has_code=bool(code_snippets),
+                    ended_session=ended_session,
                 )
 
                 qa_pairs.append({
