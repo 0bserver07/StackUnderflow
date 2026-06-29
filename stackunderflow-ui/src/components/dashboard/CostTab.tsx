@@ -29,6 +29,7 @@ import CommandCostList from '../cost/CommandCostList'
 import ToolCostBarChart from '../cost/ToolCostBarChart'
 import TokenCompositionDonut from '../cost/TokenCompositionDonut'
 import TokenCompositionStack from '../cost/TokenCompositionStack'
+import ByModelCostChart, { type ByModelPeriod } from '../cost/ByModelCostChart'
 import OutlierCommandsTable from '../cost/OutlierCommandsTable'
 import RetryAlertsPanel from '../cost/RetryAlertsPanel'
 
@@ -479,6 +480,11 @@ export default function CostTab({ stats }: CostTabProps) {
   const errorCost = (data.error_cost ?? undefined) as ErrorCost | undefined
   const outliers = (data.outliers ?? undefined) as Outliers | undefined
 
+  // Map the tab's range filter onto the by-model endpoint's period grain
+  // (same mapping CostByProviderCard uses for its initial period).
+  const byModelPeriod: ByModelPeriod =
+    filter.range === '7d' ? 'week' : filter.range === '30d' ? 'month' : 'all'
+
   return (
     <div className="space-y-6">
       <FilterBar
@@ -554,6 +560,12 @@ export default function CostTab({ stats }: CostTabProps) {
 
       {/* 6. Token composition stack full-width */}
       <TokenCompositionStack daily={tokenComp?.daily ?? {}} />
+
+      {/* 6b. Daily cost split by model (audit #6) — the spend sibling of the
+          token-type stack above. Consumes /api/cost-data/by-model and also
+          surfaces an unpriced-models banner. Scoped to the tab range via the
+          by-model endpoint's period grain. */}
+      <ByModelCostChart period={byModelPeriod} />
 
       {/* 7. Outlier commands table — onOpen deep-links to interaction */}
       <OutlierCommandsTable outliers={outliers} onOpen={handleOpenInteraction} />
