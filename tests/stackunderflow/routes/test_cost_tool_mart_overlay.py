@@ -165,3 +165,31 @@ async def test_cost_data_keeps_aggregator_tool_costs_when_mart_empty(
     payload = await get_cost_data()
     # Aggregator output preserved verbatim — same shape, same numbers.
     assert payload["tool_costs"] == aggregator_tool_costs
+
+
+def test_tool_mart_shape_surfaces_v023_cache_tokens():
+    """ui-perf #20: ``_tool_mart_to_aggregator_shape`` must pass the v023
+    tool_mart cache tokens through (under the aggregator's
+    ``cache_read_tokens`` / ``cache_creation_tokens`` field names) instead of
+    the old hard-coded 0, so the ToolCost card shows a real per-tool cache
+    cost — while a pre-v023 row that lacks the keys still falls back to 0."""
+    from stackunderflow.routes.cost import _tool_mart_to_aggregator_shape
+
+    shaped = _tool_mart_to_aggregator_shape(
+        {
+            "Read": {
+                "calls": 3, "calls_total": 5, "cost": 0.12,
+                "tokens_in": 100, "tokens_out": 40,
+                "cache_read_tokens": 900, "cache_creation_tokens": 120,
+            }
+        }
+    )
+    assert shaped["Read"]["cache_read_tokens"] == 900
+    assert shaped["Read"]["cache_creation_tokens"] == 120
+
+    # Pre-v023 tool_mart row (no cache keys) → safe 0 fallback, no KeyError.
+    legacy = _tool_mart_to_aggregator_shape(
+        {"Edit": {"calls": 1, "cost": 0.0, "tokens_in": 0, "tokens_out": 0}}
+    )
+    assert legacy["Edit"]["cache_read_tokens"] == 0
+    assert legacy["Edit"]["cache_creation_tokens"] == 0

@@ -12,7 +12,9 @@ Cost attribution mirrors the legacy
 name in the message gets ``1 / N`` of the message's cost where ``N`` is
 the count of distinct tool names. Token columns follow the same 1/N
 attribution so SUM(tokens_in) across the mart converges on the source
-event's input_tokens (within float rounding).
+event's input_tokens (within float rounding). v023 adds ``cache_read`` /
+``cache_create`` under the identical 1/N split so the ToolCost block can
+attribute per-tool prompt-cache tokens instead of reading 0 (ui-perf #20).
 
 Pattern selection
 =================
@@ -80,12 +82,14 @@ class ToolMartBuilder(MartBuilder):
 
         # Bucket by (day, project_id, provider, tool_name) and accumulate
         # the additive measures (event_count, calls_total, cost_usd,
-        # tokens_in/out). ``event_count`` counts distinct (message, tool)
-        # pairs (1/N attribution contract); ``calls_total`` counts every
-        # tool occurrence — a turn that called Read 3× adds 1 to
-        # event_count and 3 to calls_total. Cost / tokens follow the
-        # event_count (distinct) split so a repeated call never doubles
-        # cost.
+        # tokens_in/out, cache_read/cache_create). ``event_count`` counts
+        # distinct (message, tool) pairs (1/N attribution contract);
+        # ``calls_total`` counts every tool occurrence — a turn that called
+        # Read 3× adds 1 to event_count and 3 to calls_total. Cost / tokens
+        # (input, output, AND cache read/create — #20) follow the
+        # event_count (distinct) 1/N split so a repeated call never doubles
+        # cost; the cache columns mirror tokens_in/out so per-tool cache
+        # cost stops reading 0 in the ToolCost block.
         buckets: dict[tuple[str, int, str, str], dict[str, float]] = {}
         for r in rows:
             tool_counts = _parse_tool_names(r["tools_json"])
@@ -95,6 +99,8 @@ class ToolMartBuilder(MartBuilder):
             cost_share = float(r["cost_usd"] or 0.0) / n
             in_share = int(r["input_tokens"] or 0) / n
             out_share = int(r["output_tokens"] or 0) / n
+            cache_read_share = int(r["cache_read_tokens"] or 0) / n
+            cache_create_share = int(r["cache_create_tokens"] or 0) / n
             for tool_name, occurrences in tool_counts.items():
                 key = (
                     r["day"], int(r["project_id"]),
@@ -103,13 +109,16 @@ class ToolMartBuilder(MartBuilder):
                 bucket = buckets.setdefault(
                     key,
                     {"event_count": 0, "calls_total": 0, "cost_usd": 0.0,
-                     "tokens_in": 0.0, "tokens_out": 0.0},
+                     "tokens_in": 0.0, "tokens_out": 0.0,
+                     "cache_read": 0.0, "cache_create": 0.0},
                 )
                 bucket["event_count"] += 1
                 bucket["calls_total"] += occurrences
                 bucket["cost_usd"] += cost_share
                 bucket["tokens_in"] += in_share
                 bucket["tokens_out"] += out_share
+                bucket["cache_read"] += cache_read_share
+                bucket["cache_create"] += cache_create_share
 
         if buckets:
             conn.executemany(
@@ -117,20 +126,24 @@ class ToolMartBuilder(MartBuilder):
                 INSERT INTO tool_mart (
                     day, project_id, provider, tool_name,
                     event_count, calls_total, cost_usd, tokens_in, tokens_out,
+                    cache_read, cache_create,
                     session_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT (day, project_id, provider, tool_name) DO UPDATE SET
-                    event_count = event_count + excluded.event_count,
-                    calls_total = calls_total + excluded.calls_total,
-                    cost_usd    = cost_usd    + excluded.cost_usd,
-                    tokens_in   = tokens_in   + excluded.tokens_in,
-                    tokens_out  = tokens_out  + excluded.tokens_out
+                    event_count  = event_count  + excluded.event_count,
+                    calls_total  = calls_total  + excluded.calls_total,
+                    cost_usd     = cost_usd     + excluded.cost_usd,
+                    tokens_in    = tokens_in    + excluded.tokens_in,
+                    tokens_out   = tokens_out   + excluded.tokens_out,
+                    cache_read   = cache_read   + excluded.cache_read,
+                    cache_create = cache_create + excluded.cache_create
                 """,
                 [
                     (
                         k[0], k[1], k[2], k[3],
                         v["event_count"], v["calls_total"], v["cost_usd"],
                         int(v["tokens_in"]), int(v["tokens_out"]),
+                        int(v["cache_read"]), int(v["cache_create"]),
                     )
                     for k, v in buckets.items()
                 ],
@@ -175,15 +188,17 @@ def _fetch_window(
     arbitrary stores so we tolerate it).
     """
     sql = """
-        SELECT e.id            AS event_id,
-               e.day           AS day,
-               e.project_id    AS project_id,
-               e.provider      AS provider,
-               e.session_id    AS session_id,
-               e.cost_usd      AS cost_usd,
-               e.input_tokens  AS input_tokens,
-               e.output_tokens AS output_tokens,
-               m.tools_json    AS tools_json
+        SELECT e.id                  AS event_id,
+               e.day                 AS day,
+               e.project_id          AS project_id,
+               e.provider            AS provider,
+               e.session_id          AS session_id,
+               e.cost_usd            AS cost_usd,
+               e.input_tokens        AS input_tokens,
+               e.output_tokens       AS output_tokens,
+               e.cache_read_tokens   AS cache_read_tokens,
+               e.cache_create_tokens AS cache_create_tokens,
+               m.tools_json          AS tools_json
           FROM usage_events e
           LEFT JOIN messages m ON m.id = e.source_message_fk
          WHERE e.id > ? AND e.id <= ?

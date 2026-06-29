@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 22
+CURRENT_VERSION = 23
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -95,6 +95,7 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     12: ("tool_mart", "calls_total"),
     13: ("sessions", "team_id"),
     22: ("project_mart", "total_user_messages"),
+    23: ("project_mart", "total_records"),
 }
 
 

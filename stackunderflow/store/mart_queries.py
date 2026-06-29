@@ -76,7 +76,11 @@ def list_project_mart(
         "       total_cost_usd, "
         "       total_user_messages, total_assistant_messages, "
         "       total_tool_use_messages, total_tool_result_messages, "
-        "       total_commands FROM project_mart"
+        "       total_commands, "
+        "       total_records, total_errors, errors_by_category, "
+        "       total_cache_read_messages, total_commands_followed_by_interruption, "
+        "       total_command_tools, total_command_steps "
+        "FROM project_mart"
     )
     params: list[Any] = []
     if provider_filter:
@@ -100,7 +104,10 @@ def get_project_mart_row(
         "       total_cost_usd, "
         "       total_user_messages, total_assistant_messages, "
         "       total_tool_use_messages, total_tool_result_messages, "
-        "       total_commands "
+        "       total_commands, "
+        "       total_records, total_errors, errors_by_category, "
+        "       total_cache_read_messages, total_commands_followed_by_interruption, "
+        "       total_command_tools, total_command_steps "
         "FROM project_mart WHERE project_id = ?",
         (project_id,),
     ).fetchone()
@@ -820,7 +827,10 @@ def tool_mart_for_project(
     day_from: str | None = None,
     day_to: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return ``{tool_name: {calls, calls_total, cost, tokens_in, tokens_out, sessions}}``.
+    """Per-project per-tool rollup keyed by ``tool_name``.
+
+    Each value is ``{calls, calls_total, cost, tokens_in, tokens_out,
+    cache_read_tokens, cache_creation_tokens, sessions}``.
 
     Powers the ``/api/cost-data`` ``tool_costs`` block when the mart is
     populated. Aggregates across all (day, provider) combos within the
@@ -835,6 +845,13 @@ def tool_mart_for_project(
     mirrors ``calls`` as a floor in that transient state would be nicer
     but isn't worth a CASE; consumers that care should treat ``0`` as
     "not yet rebuilt".
+
+    ``cache_read_tokens`` / ``cache_creation_tokens`` (``SUM`` of the v023
+    ``cache_read`` / ``cache_create`` columns) carry the 1/N-attributed
+    prompt-cache tokens — they're keyed with the aggregator's
+    ``_ToolCostCollector`` field names so the ToolCost block can surface a
+    non-zero per-tool cache cost (ui-perf #20). Pre-v023 ``tool_mart`` rows
+    read 0 here until a ``--force`` rebuild re-derives them.
     """
     if not _table_exists(conn, "tool_mart"):
         return {}
@@ -845,6 +862,8 @@ def tool_mart_for_project(
         "       SUM(cost_usd) AS cost, "
         "       SUM(tokens_in) AS tokens_in, "
         "       SUM(tokens_out) AS tokens_out, "
+        "       SUM(cache_read) AS cache_read_tokens, "
+        "       SUM(cache_create) AS cache_creation_tokens, "
         "       MAX(session_count) AS sessions "
         "FROM tool_mart WHERE project_id = ?"
     )
@@ -867,6 +886,8 @@ def tool_mart_for_project(
             "cost": float(row["cost"] or 0.0),
             "tokens_in": int(row["tokens_in"] or 0),
             "tokens_out": int(row["tokens_out"] or 0),
+            "cache_read_tokens": int(row["cache_read_tokens"] or 0),
+            "cache_creation_tokens": int(row["cache_creation_tokens"] or 0),
             "sessions": int(row["sessions"] or 0),
         }
     return out

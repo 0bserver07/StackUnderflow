@@ -229,7 +229,9 @@ async def test_dashboard_data_overview_from_project_mart(tmp_path, monkeypatch):
     assert stats["overview"]["total_tokens"]["input"] == 1000
     assert stats["overview"]["total_cost"] == pytest.approx(1.25)
     assert stats["tools"] == {"usage_counts": {}, "error_counts": {}, "error_rates": {}}
-    assert stats["errors"] == {"total": 0}
+    # v023: errors block carries total + rate + by_category (all zero/empty on
+    # an un-materialised project_mart row via the column DEFAULTs).
+    assert stats["errors"] == {"total": 0, "rate": 0.0, "by_category": {}}
 
 
 @pytest.mark.asyncio

@@ -24,17 +24,33 @@ project); the dashboard read path stays a single indexed ``project_mart``
 lookup, well inside the <100ms budget.
 
 The ``INSERT OR REPLACE`` above lists only the original 13 columns, so it
-resets the five dim columns to their ``DEFAULT 0`` on every refresh; the
+resets the dim columns to their ``DEFAULT`` on every refresh; the
 ``_refresh_message_dims`` second pass then UPDATEs the true counts for the
 same affected projects (mirrors ``command_mart``'s session_count recompute).
+
+Overview rate dims (v023)
+=========================
+The same second pass also materialises the numerators behind the Overview's
+cache / interruption / errors blocks (the rates the mart fast-path otherwise
+showed as 0): ``total_cache_read_messages`` (cache.hit_rate),
+``total_commands_followed_by_interruption`` (interruption_rate),
+``total_command_tools`` / ``total_command_steps`` (avg tools/steps per
+command), and ``total_records`` / ``total_errors`` / ``errors_by_category``
+(errors total / rate / by_category). These come from the SAME enricher +
+``aggregator._command_analysis`` / ``_CacheCollector`` / ``_ErrorsCollector``
+logic the full pipeline runs, so they're identical to ``get_project_stats``
+(proven by the equivalence tests). Rates are derived at read time from these
+counts so a slug's per-provider rows stay additive.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
 
-from stackunderflow.stats import classifier
+from stackunderflow.stats import aggregator, classifier, enricher
+from stackunderflow.stats.classifier import RawEntry
 from stackunderflow.stats.enricher import (
     _has_result_block,
     _text_from,
@@ -126,32 +142,50 @@ def _max_event_id(conn: sqlite3.Connection) -> int:
 def _refresh_message_dims(
     conn: sqlite3.Connection, project_ids: list[int]
 ) -> None:
-    """Recompute the message-type + command dims for *project_ids*.
+    """Recompute the message-type + command + rate dims for *project_ids*.
 
-    Scans every ``messages`` row of each project (joined via ``sessions``)
+    Scans every ``messages`` row of each project (joined via ``sessions``,
+    ordered by timestamp so the interaction grouping matches the pipeline)
     and classifies it with the same functions ``get_project_stats`` runs,
     then UPDATEs the materialised counts onto the project's mart row. A
     project with no mart row (no billable events) is silently skipped — the
     UPDATE matches nothing.
+
+    Two derivations share the single ``messages`` fetch:
+
+    * ``_count_message_dims`` — the v022 per-message-type + command counts.
+    * ``_count_interaction_dims`` — the v023 Overview rate numerators
+      (cache-read messages, interruption / tools / steps per command,
+      errors total + by_category), which need the full enricher +
+      ``aggregator._command_analysis`` pass to match the pipeline exactly.
     """
     for pid in project_ids:
         rows = conn.execute(
-            "SELECT m.raw_json AS raw_json "
+            "SELECT m.raw_json AS raw_json, s.session_id AS session_id, "
+            "       m.timestamp AS timestamp, p.provider AS provider "
             "FROM messages m "
             "JOIN sessions s ON s.id = m.session_fk "
-            "WHERE s.project_id = ?",
+            "JOIN projects p ON p.id = s.project_id "
+            "WHERE s.project_id = ? "
+            "ORDER BY m.timestamp",
             (pid,),
         ).fetchall()
-        dims = _count_message_dims(
-            (r["raw_json"] if hasattr(r, "keys") else r[0]) for r in rows
-        )
+        dims = _count_message_dims(r["raw_json"] for r in rows)
+        rate = _count_interaction_dims(rows)
         conn.execute(
             "UPDATE project_mart SET "
             "total_user_messages = ?, "
             "total_assistant_messages = ?, "
             "total_tool_use_messages = ?, "
             "total_tool_result_messages = ?, "
-            "total_commands = ? "
+            "total_commands = ?, "
+            "total_records = ?, "
+            "total_errors = ?, "
+            "errors_by_category = ?, "
+            "total_cache_read_messages = ?, "
+            "total_commands_followed_by_interruption = ?, "
+            "total_command_tools = ?, "
+            "total_command_steps = ? "
             "WHERE project_id = ?",
             (
                 dims["user"],
@@ -159,6 +193,13 @@ def _refresh_message_dims(
                 dims["tool_use"],
                 dims["tool_result"],
                 dims["commands"],
+                rate["records"],
+                rate["errors_total"],
+                rate["errors_by_category_json"],
+                rate["cache_read_messages"],
+                rate["commands_followed_by_interruption"],
+                rate["command_tools"],
+                rate["command_steps"],
                 pid,
             ),
         )
@@ -212,4 +253,84 @@ def _count_message_dims(raw_jsons) -> dict[str, int]:
         "tool_use": tool_use,
         "tool_result": tool_result,
         "commands": commands,
+    }
+
+
+def _count_interaction_dims(rows) -> dict[str, object]:
+    """Materialise the v023 Overview rate numerators for one project.
+
+    Rebuilds the project's ``EnrichedDataset`` the SAME way
+    ``queries.build_enriched_dataset`` does — ``classifier.tag`` over
+    ``RawEntry`` rows (clean column timestamp wins over any raw payload ts),
+    then ``enricher.build`` — and reads the numerators straight off the
+    records / interactions and ``aggregator._command_analysis``. Reusing the
+    real pipeline functions keeps these counts byte-for-byte identical to
+    ``get_project_stats`` (the equivalence tests pin it):
+
+    * ``cache_read_messages`` == ``_CacheCollector.w_read`` — assistant
+      records carrying cache-read tokens; ``cache.hit_rate`` numerator.
+    * ``errors_total`` / ``errors_by_category_json`` == ``_ErrorsCollector``
+      ``_total`` / ``by_category`` — falsy ``error_category`` buckets to
+      ``"Other"`` exactly as the collector does.
+    * ``commands_followed_by_interruption`` / ``command_tools`` /
+      ``command_steps`` == ``_command_analysis``'s
+      ``commands_followed_by_interruption`` / ``total_tools_used`` /
+      ``total_assistant_steps`` — the interruption_rate and avg
+      tools/steps-per-command numerators.
+    * ``records`` == ``len(EnrichedDataset.records)`` — the all-kinds record
+      count the aggregator's ``errors.rate`` divides by (distinct from
+      ``project_mart.total_messages``, which is the billable-event count).
+
+    Defensive against unparseable rows (parity with ``_count_message_dims``):
+    a ``raw_json`` that won't decode to a dict is skipped rather than
+    breaking the mart refresh.
+    """
+    raw_entries: list[RawEntry] = []
+    for r in rows:
+        rj = r["raw_json"]
+        try:
+            payload = json.loads(rj) if rj else {}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if r["timestamp"]:
+            payload["timestamp"] = r["timestamp"]
+        raw_entries.append(
+            RawEntry(
+                payload=payload,
+                session_id=r["session_id"] or "",
+                origin=r["session_id"] or "",
+                provider=r["provider"] or "anthropic",
+            )
+        )
+
+    dataset = enricher.build(classifier.tag(raw_entries), "")
+    records = dataset.records
+
+    cache_read_messages = sum(
+        1
+        for rec in records
+        if rec.kind == "assistant" and rec.tokens.get("cache_read", 0)
+    )
+
+    errors_total = 0
+    by_category: Counter[str] = Counter()
+    for rec in records:
+        if rec.is_error:
+            errors_total += 1
+            by_category[rec.error_category or "Other"] += 1
+
+    ca = aggregator._command_analysis(records, dataset.interactions)
+
+    return {
+        "records": len(records),
+        "cache_read_messages": cache_read_messages,
+        "errors_total": errors_total,
+        "errors_by_category_json": json.dumps(dict(by_category)),
+        "commands_followed_by_interruption": int(
+            ca.get("commands_followed_by_interruption", 0) or 0
+        ),
+        "command_tools": int(ca.get("total_tools_used", 0) or 0),
+        "command_steps": int(ca.get("total_assistant_steps", 0) or 0),
     }

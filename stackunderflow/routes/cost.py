@@ -363,10 +363,12 @@ def _tool_mart_to_aggregator_shape(
     ``calls_total = 0`` until a ``--force`` rebuild — consumers should
     treat that as "not yet rebuilt", not "zero calls".
 
-    Cache token columns are not materialised in ``tool_mart`` (the v1
-    mart shape per the spec only carries tokens_in/tokens_out) — we
-    surface zeroes for them. The downstream chart only consumes
-    ``calls`` + ``cost``, so the shim stays additive.
+    Cache token columns are materialised on ``tool_mart`` as of v023
+    (``cache_read``/``cache_create``, 1/N-attributed per the same contract);
+    ``tool_mart_for_project`` already surfaces them under the aggregator's
+    ``cache_read_tokens`` / ``cache_creation_tokens`` field names, so the
+    ToolCost card shows a real per-tool cache cost (ui-perf #20). Pre-v023
+    ``tool_mart`` rows read 0 here until a ``--force`` rebuild re-derives them.
     """
     return {
         name: {
@@ -374,8 +376,8 @@ def _tool_mart_to_aggregator_shape(
             "calls_total": v.get("calls_total", 0),
             "input_tokens": v["tokens_in"],
             "output_tokens": v["tokens_out"],
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
+            "cache_read_tokens": v.get("cache_read_tokens", 0),
+            "cache_creation_tokens": v.get("cache_creation_tokens", 0),
             "cost": v["cost"],
         }
         for name, v in tool_rows.items()

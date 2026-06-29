@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -432,6 +433,16 @@ _PROJECT_MART_ADDITIVE: tuple[str, ...] = (
     "total_tool_use_messages",
     "total_tool_result_messages",
     "total_commands",
+    # Overview rate numerators (v023) — also per-message / per-command counts,
+    # so summing the per-provider rows gives the right rate denominators.
+    # ``errors_by_category`` is NOT here: it's a JSON map, merged separately
+    # from the unmerged per-provider rows (see ``_errors_block_from_marts``).
+    "total_records",
+    "total_errors",
+    "total_cache_read_messages",
+    "total_commands_followed_by_interruption",
+    "total_command_tools",
+    "total_command_steps",
 )
 
 
@@ -480,21 +491,27 @@ def _cache_block_from_mart(merged_row: dict | None, cost_saved_units: float = 0.
     ``compute_cost`` basis the aggregator's ``_CacheCollector`` now uses, so
     the dollar figure tracks ``tokens_saved`` instead of disagreeing in sign.
 
-    ``hit_rate`` is left ``0.0``: it's ``messages_with_cache_read /
-    assistant_messages``, a per-message-flag ratio no mart materialises —
-    sourcing it faithfully would need the full enrich pass we're avoiding.
+    ``hit_rate`` (v023) is ``total_cache_read_messages /
+    total_assistant_messages * 100`` — the same ratio (and 1-decimal
+    rounding) ``_CacheCollector.result`` emits, now that both numerator
+    (assistant rows carrying cache-read tokens) and denominator (assistant
+    rows) are materialised on ``project_mart``. Both columns are additive, so
+    the merged multi-provider row gives the combined-pipeline hit rate.
     """
     if not merged_row:
         return {"hit_rate": 0.0}
     created = int(merged_row.get("total_cache_create", 0) or 0)
     read = int(merged_row.get("total_cache_read", 0) or 0)
+    asst = int(merged_row.get("total_assistant_messages", 0) or 0)
+    w_read = int(merged_row.get("total_cache_read_messages", 0) or 0)
+    hit_rate = round(w_read / asst * 100, 1) if asst else 0.0
     return {
         "total_created": created,
         "total_read": read,
         "tokens_saved": read - created,
         "cost_saved_base_units": round(cost_saved_units, 2),
         "break_even_achieved": read > created,
-        "hit_rate": 0.0,  # per-message cache-read flag count not materialised
+        "hit_rate": hit_rate,
     }
 
 
@@ -540,6 +557,80 @@ def _tools_usage_from_marts(conn, project_ids: list[int]) -> dict[str, int]:
     return usage
 
 
+def _parse_category_map(val) -> dict[str, int]:
+    """Normalise a ``project_mart.errors_by_category`` value to a count map.
+
+    The column is a JSON object string; a single-provider merged row hands it
+    back verbatim while a future merge may have already parsed it. Tolerates
+    ``None`` / malformed / non-dict so a poison row never breaks the payload.
+    """
+    if isinstance(val, dict):
+        return {str(k): int(v or 0) for k, v in val.items()}
+    if isinstance(val, str) and val:
+        try:
+            parsed = json.loads(val)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {}
+        if isinstance(parsed, dict):
+            return {str(k): int(v or 0) for k, v in parsed.items()}
+    return {}
+
+
+def _errors_block_from_marts(proj_rows: list[dict | None]) -> dict:
+    """Build the ``errors`` block from the per-provider ``project_mart`` rows.
+
+    Mirrors ``_ErrorsCollector.result`` on the dims v023 materialises:
+    ``total`` (summed ``total_errors``), ``rate`` (``total_errors`` over
+    ``total_records`` — the all-kinds record count the aggregator divides by,
+    NOT the billable ``total_messages``), and ``by_category`` (the summed
+    per-provider JSON maps). Reads the unmerged rows so the non-additive
+    category map can be merged key-wise without a special case in
+    ``_merge_project_mart_rows``.
+    """
+    total_errors = 0
+    total_records = 0
+    by_category: dict[str, int] = {}
+    for r in proj_rows:
+        if not r:
+            continue
+        total_errors += int(r.get("total_errors", 0) or 0)
+        total_records += int(r.get("total_records", 0) or 0)
+        for cat, n in _parse_category_map(r.get("errors_by_category")).items():
+            by_category[cat] = by_category.get(cat, 0) + n
+    return {
+        "total": total_errors,
+        "rate": (total_errors / total_records) if total_records else 0.0,
+        "by_category": by_category,
+    }
+
+
+def _user_interactions_from_mart(merged_row: dict | None) -> dict:
+    """Build the ``user_interactions`` block from ``project_mart`` count dims.
+
+    ``user_commands_analyzed`` (v022) plus the v023 rate numerators
+    materialise the Overview's Commands / Steps-per-Cmd / Tools-per-Cmd /
+    interruption-rate KPIs. The rates use the same denominator
+    (``total_commands``) and rounding as ``_command_analysis`` so a
+    mart-backed Overview matches the full pipeline; the raw counts are
+    surfaced alongside under the aggregator's own key names.
+    """
+    if not merged_row:
+        return {"user_commands_analyzed": 0}
+    commands = int(merged_row.get("total_commands", 0) or 0)
+    int_followed = int(merged_row.get("total_commands_followed_by_interruption", 0) or 0)
+    cmd_tools = int(merged_row.get("total_command_tools", 0) or 0)
+    cmd_steps = int(merged_row.get("total_command_steps", 0) or 0)
+    return {
+        "user_commands_analyzed": commands,
+        "commands_followed_by_interruption": int_followed,
+        "total_tools_used": cmd_tools,
+        "total_assistant_steps": cmd_steps,
+        "interruption_rate": round(int_followed / commands * 100, 1) if commands else 0.0,
+        "avg_tools_per_command": round(cmd_tools / commands, 2) if commands else 0.0,
+        "avg_steps_per_command": round(cmd_steps / commands, 2) if commands else 0.0,
+    }
+
+
 def _stats_from_marts(
     conn,
     *,
@@ -554,19 +645,21 @@ def _stats_from_marts(
     without falling through to the ~3.1s aggregator pipeline:
 
     * ``project_mart`` (summed) → ``overview`` lifetime totals + ``cache``
+      (incl. ``hit_rate``, v023), ``user_interactions`` (commands +
+      interruption rate + tools/steps-per-command, v022/v023), and ``errors``
+      (total + rate + ``by_category``, v023)
     * ``daily_mart``   (concatenated) → ``daily_stats`` + ``models`` map
     * ``tool_mart``    (summed)  → ``tools.usage_counts``
 
-    Keys that depend on raw-message / interaction columns no mart carries —
-    ``errors.by_category``, hour-of-day ``hourly_pattern``, interaction-grain
-    ``user_interactions`` (command counts, tools-per-command, interruption
-    rate), and ``cache.hit_rate`` — are returned with shape-stable values so
-    the JSON contract holds. ``hourly_pattern`` is the ``{messages, tokens}``
-    dict the HourlyPatternChart expects (NOT a bare ``[]``, which is truthy
-    and would dodge the frontend's ``?? {messages, tokens}`` fallback,
-    rendering a blank chart). The heavy detail blocks live behind dedicated
-    lazy endpoints (``/api/cost-data``, ``/api/commands``,
-    ``/api/tool-distribution``).
+    The remaining keys that depend on columns no mart carries — hour-of-day
+    ``hourly_pattern`` and the per-tool error flags
+    (``tools.error_counts`` / ``error_rates``) — are returned with
+    shape-stable values so the JSON contract holds. ``hourly_pattern`` is the
+    ``{messages, tokens}`` dict the HourlyPatternChart expects (NOT a bare
+    ``[]``, which is truthy and would dodge the frontend's
+    ``?? {messages, tokens}`` fallback, rendering a blank chart). The heavy
+    detail blocks live behind dedicated lazy endpoints (``/api/cost-data``,
+    ``/api/commands``, ``/api/tool-distribution``).
     """
     proj_rows = [mart_queries.get_project_mart_row(conn, project_id=pid) for pid in project_ids]
     merged_proj = _merge_project_mart_rows(proj_rows)
@@ -601,19 +694,17 @@ def _stats_from_marts(
         },
         "daily_stats": daily_stats,
         "hourly_pattern": {"messages": {}, "tokens": {}},
-        "errors": {"total": 0},
+        # total / rate / by_category materialised on ``project_mart`` (v023);
+        # ``tool_count_distribution`` and the per-tool error flags stay behind
+        # the lazy detail endpoints.
+        "errors": _errors_block_from_marts(proj_rows),
         "models": models,
-        # ``user_commands_analyzed`` is materialised on ``project_mart`` (v022)
-        # — the Overview Commands KPI now reads a real value off the mart.
-        # The interaction-grain fields it doesn't carry (avg_tools_per_command,
-        # avg_steps_per_command, interruption_rate, tool_count_distribution)
+        # Commands KPI (v022) + interruption rate / avg tools-&-steps-per-command
+        # (v023) now read real materialised values off the mart. The remaining
+        # interaction-grain fields (tool_count_distribution, command_details)
         # stay absent; the UI reads them with ``?? 0`` and the per-project
         # detail view runs the full aggregator on demand.
-        "user_interactions": {
-            "user_commands_analyzed": int(merged_proj.get("total_commands", 0) or 0)
-            if merged_proj
-            else 0,
-        },
+        "user_interactions": _user_interactions_from_mart(merged_proj),
         "cache": _cache_block_from_mart(
             merged_proj, _cache_cost_saved_units_from_marts(conn, project_ids)
         ),

@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 22`).
+**Status:** v1 (pinned to `schema_version = 23`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 22`. The current migration set is:
+Pin to `schema_version = 23`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -44,6 +44,8 @@ Pin to `schema_version = 22`. The current migration set is:
 | 19 | `v019_commit_session_link.sql` | `commit_session_link` (Spec 22 — link commits to sessions) |
 | 20 | `v020_session_quality_metrics.sql` | `session_quality_metrics` (Spec 23 — session quality metrics) |
 | 21 | `v021_grade_no_fabricated_fallback.sql` | purges fabricated 5.0 fallback grades left in `session_quality_metrics` |
+| 22 | `v022_project_mart_message_dims.sql` | adds 5 `project_mart` columns: per-project message-type + command counts |
+| 23 | `v023_mart_overview_rate_dims.sql` | adds 7 `project_mart` columns (Overview cache/interruption/errors rate numerators) + 2 `tool_mart` columns (`cache_read`, `cache_create` — ui-perf #20) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -199,9 +201,9 @@ Per-day rollup keyed by `(day, project_id, provider, model, speed)`. Carries `in
 
 One row per `session_id`. Carries first/last timestamp, message counts (total / user / assistant), token totals, `cost_usd`, `is_one_shot` flag, and `cwd`.
 
-### `project_mart` (v006)
+### `project_mart` (v006 + v022 + v023)
 
-One row per `project_id`. Carries lifetime totals: messages, sessions, tokens, cost.
+One row per `project_id`. Carries lifetime totals: messages, sessions, tokens, cost. v022 added per-project message-type + command counts (`total_user_messages`, `total_assistant_messages`, `total_tool_use_messages`, `total_tool_result_messages`, `total_commands`). v023 added the Overview rate numerators — `total_records` (all-kinds record count; the `errors.rate` denominator), `total_errors`, `errors_by_category` (JSON map), `total_cache_read_messages` (`cache.hit_rate`), `total_commands_followed_by_interruption` (`interruption_rate`), `total_command_tools` / `total_command_steps` (avg tools/steps per command) — all derived at mart-build time from the same classifier → enricher → aggregator pass the full pipeline runs, so a mart-backed Overview matches `get_project_stats`.
 
 ### `provider_day_mart` (v006)
 
@@ -211,9 +213,9 @@ Keyed by `(day, provider)`. Carries `cost_usd`, `message_count`, `session_count`
 
 Keyed by `(day, model, speed)`. Carries cost + token + count breakdown per model. Powers the cross-agent compare view.
 
-### `tool_mart` (v007 + v012)
+### `tool_mart` (v007 + v012 + v023)
 
-Keyed by `(day, project_id, provider, tool_name)`. Carries `event_count` (distinct `(message, tool)` pairs), `calls_total` (total occurrences — added in v012; consumers pick the semantic they need), `cost_usd` (1/N attribution per distinct tool), `tokens_in`, `tokens_out`, `session_count`.
+Keyed by `(day, project_id, provider, tool_name)`. Carries `event_count` (distinct `(message, tool)` pairs), `calls_total` (total occurrences — added in v012; consumers pick the semantic they need), `cost_usd` (1/N attribution per distinct tool), `tokens_in`, `tokens_out`, `session_count`. v023 added `cache_read` / `cache_create` under the same 1/N attribution so the ToolCost block can surface per-tool prompt-cache tokens (ui-perf #20).
 
 ### `command_mart` (v007)
 
