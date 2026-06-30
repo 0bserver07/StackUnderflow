@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from stackunderflow.infra.costs import compute_cost
 from stackunderflow.reports.scope import Scope
 from stackunderflow.services.context_budget import (
     ContextBudget,
@@ -58,13 +59,56 @@ UNUSED_TOOL_LOOKBACK_DAYS = 30
 # on every turn. ~$6/mo just for the preamble at $3/M × 100 sessions/mo.
 CONTEXT_BUDGET_BLOAT_THRESHOLD = 20_000
 
+# Representative model used to dollar-denominate token-based waste. The
+# detectors estimate *tokens* wasted but don't carry the model that produced
+# them (a junk re-read could be any model's context); we price the estimate at
+# a single mid-tier rate so the dollar figure is a stable, comparable
+# lower-bound rather than a per-model exact. Sonnet is the workhorse default
+# and matches the test fixtures' model. ``compute_cost`` is called as a black
+# box — this module never reaches into pricing internals.
+WASTE_PRICING_MODEL = "claude-sonnet-4-6"
+
+
+def _tokens_to_usd(tokens: int | None, *, kind: str = "input") -> float | None:
+    """Dollar value of *tokens* priced at :data:`WASTE_PRICING_MODEL`.
+
+    ``kind`` selects which slot of the cost breakdown the tokens map onto:
+
+    * ``"input"`` — context/read tokens (the common case: CLAUDE.md bloat,
+      junk re-reads, exploration reads, oversized bash output all inflate the
+      *input* side of a request).
+    * ``"cache_creation"`` — cache-write tokens (the cache-overhead detector
+      wastes specifically the cache-create budget, which prices higher).
+
+    Returns ``None`` when there's nothing to price (mirrors
+    ``estimated_waste_tokens is None``) and ``0.0`` on any pricing error so a
+    detector never raises just because a rate failed to resolve.
+    """
+    if not tokens or tokens <= 0:
+        return None
+    token_arg = {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
+    token_arg[kind] = int(tokens)
+    try:
+        breakdown = compute_cost(token_arg, WASTE_PRICING_MODEL)
+    except Exception:  # noqa: BLE001 — pricing must never break optimize
+        return 0.0
+    return round(float(breakdown.get("total_cost", 0.0) or 0.0), 4)
+
 
 # ── Finding dataclass ───────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class Finding:
-    """A single waste-pattern hit."""
+    """A single waste-pattern hit.
+
+    ``estimated_waste_usd`` is the dollar value of ``estimated_waste_tokens``
+    priced through :func:`stackunderflow.infra.costs.compute_cost` (a black
+    box — this module never touches pricing internals). It is ``None`` when a
+    detector has no token estimate to price (e.g. ``unused_mcp_servers``,
+    ``ghost_agents``, whose cost is a per-request context tax we don't
+    quantify in dollars).
+    """
 
     pattern_id: str
     severity: str
@@ -73,6 +117,7 @@ class Finding:
     affected_count: int
     suggested_fix: str
     estimated_waste_tokens: int | None = None
+    estimated_waste_usd: float | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -224,6 +269,7 @@ def _detect_bloated_claude_md(
             ),
             affected_count=len(bloated),
             estimated_waste_tokens=waste,
+            estimated_waste_usd=_tokens_to_usd(waste),
             suggested_fix=(
                 "Trim CLAUDE.md to the bare essentials — move long-form notes "
                 "to project-local docs and reference them on demand."
@@ -678,6 +724,7 @@ def _low_read_edit_finding(bad_sessions: list[dict]) -> list[Finding]:
             ),
             affected_count=len(bad_sessions),
             estimated_waste_tokens=est_waste,
+            estimated_waste_usd=_tokens_to_usd(est_waste),
             suggested_fix=(
                 "Use targeted search (Grep / Glob) before bulk Read; "
                 "or commit a partial edit so the exploration produces output."
@@ -817,6 +864,7 @@ def _junk_reads_finding(hits: list[dict]) -> list[Finding]:
             ),
             affected_count=affected_files,
             estimated_waste_tokens=est_waste,
+            estimated_waste_usd=_tokens_to_usd(est_waste),
             suggested_fix=(
                 "Cache file contents in working memory or use Grep to "
                 "search within an already-loaded file."
@@ -960,6 +1008,7 @@ def _cache_overhead_finding(bad: list[dict]) -> list[Finding]:
             ),
             affected_count=len(bad),
             estimated_waste_tokens=est_waste,
+            estimated_waste_usd=_tokens_to_usd(est_waste, kind="cache_creation"),
             suggested_fix=(
                 "Bundle related questions into one session so cache writes "
                 "amortise; avoid spawning fresh sessions for one-shot tasks."
@@ -1112,6 +1161,7 @@ def _bash_output_finding(big: list[dict]) -> list[Finding]:
             ),
             affected_count=len(big),
             estimated_waste_tokens=est_waste,
+            estimated_waste_usd=_tokens_to_usd(est_waste),
             suggested_fix=(
                 "Pipe bash output through head/tail/grep/awk; cap with "
                 "--limit/--max flags or write to a file and read selectively."

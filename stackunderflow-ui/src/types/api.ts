@@ -701,13 +701,45 @@ export interface Finding {
   affected_count: number
   suggested_fix: string
   estimated_waste_tokens: number | null
+  /** Dollar value of `estimated_waste_tokens`, priced via `compute_cost`.
+   *  Null when the detector has no token estimate to price. */
+  estimated_waste_usd: number | null
   details: Record<string, unknown>
+}
+
+/**
+ * One flagged cost outlier from `GET /api/optimize` (`anomalies.anomalies[]`).
+ * Mirrors `reports/anomaly.py::CostAnomaly`.
+ */
+export interface CostAnomaly {
+  kind: 'day' | 'session'
+  key: string
+  cost_usd: number
+  baseline_usd: number
+  deviation_usd: number
+  ratio: number | null
+  score: number
+  method: 'mad' | 'stddev'
+  reason: string
+  details: Record<string, unknown>
+}
+
+/** The `anomalies` block of `OptimizeResponse`. */
+export interface CostAnomalyResult {
+  method: 'mad' | 'stddev' | 'none'
+  k: number
+  anomalies: CostAnomaly[]
+  day_count: number
+  session_count: number
 }
 
 export interface OptimizeResponse {
   scope: string
   waste: unknown[]
   patterns: Finding[]
+  /** Σ of every pattern's `estimated_waste_usd` (priced waste headline). */
+  total_waste_usd?: number
+  anomalies?: CostAnomalyResult
 }
 
 /**

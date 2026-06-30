@@ -28,6 +28,7 @@ import CacheRoiCard from '../cost/CacheRoiCard'
 import TokenCompositionDonut from '../cost/TokenCompositionDonut'
 import PlanBudgetCard from './PlanBudgetCard'
 import OptimizeFindingsPanel from './OptimizeFindingsPanel'
+import CostAnomaliesPanel from './CostAnomaliesPanel'
 import { setTab } from '../../services/navigation'
 
 interface OverviewTabProps {
@@ -207,6 +208,10 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
       {/* Optimize findings — v0.6.0. Self-hides when /api/optimize returns
           zero patterns so we don't surface noise on a healthy install. */}
       <OptimizeFindingsPanel />
+
+      {/* Cost anomalies — audit #7. Statistical outlier days/sessions from the
+          same /api/optimize payload. Self-hides when there are no outliers. */}
+      <CostAnomaliesPanel />
 
       {/* Cache ROI + Token composition share a row on wide screens so the
           donut doesn't stretch to a full-width band on its own. */}

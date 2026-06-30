@@ -7,10 +7,12 @@ reads, cache thrash, oversized bash output, exploration-only sessions).
 GET ``/api/optimize?period=30days`` returns:
     {
         "scope": "last 30 days",
-        "waste": [...],          # legacy find_waste()
-        "patterns": [Finding,...],
-        "warnings": [...],       # mart-backfill hints, optional
-        "cache": "hit|miss"      # diagnostic
+        "waste": [...],            # legacy find_waste()
+        "patterns": [Finding,...], # each carries estimated_waste_usd
+        "total_waste_usd": 12.34,  # Σ priced waste across patterns
+        "anomalies": {...},        # cost outlier days/sessions (anomaly.py)
+        "warnings": [...],         # mart-backfill hints, optional
+        "cache": "hit|miss"        # diagnostic
     }
 """
 
@@ -23,6 +25,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 import stackunderflow.deps as deps
+from stackunderflow.reports.anomaly import find_cost_anomalies
 from stackunderflow.reports.optimize import find_patterns, find_waste
 from stackunderflow.reports.scope import parse_period
 from stackunderflow.store import db, mart_queries, schema
@@ -145,13 +148,23 @@ async def get_optimize_report(
             scope=scope,
             project_filter=project,
         )
+        anomalies = find_cost_anomalies(conn, scope=scope)
     finally:
         conn.close()
+
+    pattern_dicts = [p.to_dict() for p in patterns]
+    # Aggregate priced waste across detectors that carry a dollar figure —
+    # the UI shows this as the headline "$X identified as waste" number.
+    total_waste_usd = round(
+        sum(p.get("estimated_waste_usd") or 0.0 for p in pattern_dicts), 4
+    )
 
     payload: dict = {
         "scope": scope.label,
         "waste": waste,
-        "patterns": [p.to_dict() for p in patterns],
+        "patterns": pattern_dicts,
+        "total_waste_usd": total_waste_usd,
+        "anomalies": anomalies,
         "warnings": warnings,
         "cache": "miss",
     }

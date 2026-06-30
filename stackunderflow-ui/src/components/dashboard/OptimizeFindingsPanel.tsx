@@ -10,7 +10,7 @@ import { getOptimize } from '../../services/api'
 import { useFilters } from '../../services/filters'
 import type { Finding, FindingSeverity } from '../../types/api'
 import Badge from '../common/Badge'
-import { formatNumber } from '../../services/format'
+import { formatCost, formatNumber } from '../../services/format'
 
 // ---------------------------------------------------------------------------
 // OptimizeFindingsPanel — v0.6.0 follow-up.
@@ -50,9 +50,14 @@ function FindingRow({ finding }: FindingRowProps) {
           <span className="text-[11px] text-gray-500 tabular-nums">
             {finding.affected_count} affected
           </span>
+          {finding.estimated_waste_usd !== null && finding.estimated_waste_usd > 0 && (
+            <span className="text-[11px] font-medium text-rose-600 dark:text-rose-400 tabular-nums">
+              · ~{formatCost(finding.estimated_waste_usd)} wasted
+            </span>
+          )}
           {finding.estimated_waste_tokens !== null && finding.estimated_waste_tokens > 0 && (
             <span className="text-[11px] text-gray-500 tabular-nums">
-              · ~{formatNumber(finding.estimated_waste_tokens)} wasted tokens
+              · ~{formatNumber(finding.estimated_waste_tokens)} tokens
             </span>
           )}
         </div>
@@ -88,6 +93,7 @@ export default function OptimizeFindingsPanel() {
   const total = all.length
   const visible = expanded ? all : all.slice(0, TOP_N)
   const hidden = Math.max(0, total - TOP_N)
+  const totalWasteUsd = data.total_waste_usd ?? 0
 
   // Suppress when there's nothing to show — the panel is opt-in noise
   // otherwise, and the stats cards already explain "things look fine".
@@ -115,6 +121,11 @@ export default function OptimizeFindingsPanel() {
             {total} pattern{total === 1 ? '' : 's'} detected · {data.scope}
           </span>
         </div>
+        {totalWasteUsd > 0 && (
+          <span className="text-xs font-semibold text-rose-600 dark:text-rose-400 tabular-nums">
+            ~{formatCost(totalWasteUsd)} identified
+          </span>
+        )}
       </button>
 
       {/* Always render at least the top N so the panel isn't a one-line tease;
