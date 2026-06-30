@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconRefresh, IconArrowUp, IconArrowDown, IconSearch } from '@tabler/icons-react'
-import { getProjects, refreshData, getGlobalStats } from '../services/api'
+import { getProjects, refreshData, getGlobalStats, getCommandsDaily } from '../services/api'
 import { formatProjectName, getNameMode, setNameMode as persistNameMode } from '../services/nameMode'
 import type { NameMode } from '../services/nameMode'
 import type { Project } from '../types/api'
@@ -161,6 +161,15 @@ export default function Overview() {
     queryFn: getGlobalStats,
   })
 
+  // #25: per-day user-command counts so the Commands KPI windows to the
+  // selected date range like Tokens/Cost (which sum their own per-day arrays).
+  // Cross-project (no log_path) — this is the global Overview. A failed/empty
+  // fetch falls back to the lifetime sum below, so the card never blanks.
+  const { data: commandDaily } = useQuery({
+    queryKey: ['commandsDaily', 'global'],
+    queryFn: () => getCommandsDaily(),
+  })
+
   const isLoading = projectsLoading || statsLoading
   const isError = projectsError || statsError
 
@@ -256,11 +265,24 @@ export default function Overview() {
     const inputTok = dailyTokens.reduce((s, d) => s + d.input, 0)
     const outputTok = dailyTokens.reduce((s, d) => s + d.output, 0)
     const cost = dailyCosts.reduce((s, d) => s + (d.cost ?? 0), 0)
-    // #25: per-day command counts aren't in /api/global-stats, so this is a
-    // LIFETIME sum of total_commands over the in-range projects (it ties out
-    // with the table's Commands column). Labelled "lifetime" on the card.
-    // Backend follow-up: a per-day commands field would let this window.
-    const cmds = dateFilteredProjects.reduce((s, p) => s + (p.stats?.total_commands ?? 0), 0)
+    // #25: window the Commands count to the selected date range by summing the
+    // per-day command series (/api/commands/daily, command_day_mart) over the
+    // same cutoff the tokens/cost headline use — so it tracks the window like
+    // them. When the per-day series is unavailable (mart not yet backfilled, or
+    // a failed fetch) we fall back to the LIFETIME sum of total_commands over
+    // the in-range projects so the card never blanks.
+    const daily = commandDaily?.daily ?? []
+    let cmds: number
+    let cmdsWindowed: boolean
+    if (daily.length > 0) {
+      cmds = daily
+        .filter(d => !cutoff || new Date(`${d.date}T00:00:00`) >= cutoff)
+        .reduce((s, d) => s + (d.commands ?? 0), 0)
+      cmdsWindowed = true
+    } else {
+      cmds = dateFilteredProjects.reduce((s, p) => s + (p.stats?.total_commands ?? 0), 0)
+      cmdsWindowed = false
+    }
     // #39: cache tokens are only available as an all-time total (no per-day
     // breakdown), so they NEVER enter the windowed headline. Surfaced as a
     // lifetime note, and only on the "all" preset where window == lifetime.
@@ -272,9 +294,10 @@ export default function Overview() {
       cacheTokens,
       totalCost: cost,
       totalCommands: cmds,
+      commandsWindowed: cmdsWindowed,
       projectCount: dateFilteredProjects.length,
     }
-  }, [dailyTokens, dailyCosts, dateFilteredProjects, dateRange, totalCacheRead, totalCacheWrite])
+  }, [dailyTokens, dailyCosts, dateFilteredProjects, dateRange, totalCacheRead, totalCacheWrite, commandDaily, cutoff])
 
   // Search & sort on date-filtered projects (#12: memoized so the full
   // client-side filter+sort only re-runs when its inputs change, not on every
@@ -435,9 +458,11 @@ export default function Overview() {
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Commands</div>
           <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{filteredStats.totalCommands.toLocaleString()}</div>
-          {/* #25: lifetime (no per-day data); #57: no per-model data. */}
+          {/* #25: windowed when the per-day series is available (command_day_mart),
+              else lifetime fallback. #57: no per-model command data — flag "all
+              models" when a model filter is active. */}
           <div className="text-[9px] text-gray-400 dark:text-gray-600 mt-0.5">
-            lifetime{modelFilterLabel ? ' · all models' : ''}
+            {filteredStats.commandsWindowed ? rangeLabel(dateRange, firstUseDate) : 'lifetime'}{modelFilterLabel ? ' · all models' : ''}
           </div>
         </div>
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">

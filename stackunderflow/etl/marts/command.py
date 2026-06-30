@@ -39,9 +39,13 @@ Caveats
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from typing import Any
+
+from stackunderflow.stats import classifier
+from stackunderflow.stats.enricher import _has_result_block, _text_from
 
 from .base import MartBuilder
 
@@ -58,6 +62,12 @@ FREEFORM = "freeform"
 # in the same session (data integrity escape hatch).
 _NO_PROMPT = "__no_prompt__"
 
+# Interruption markers excluded from the user-command tally — the SAME prefixes
+# ``project.py``'s ``_count_message_dims`` / ``aggregator._is_interrupt_text``
+# test, so ``command_day_mart.command_count`` summed over a project equals
+# ``project_mart.total_commands``. ``str.startswith`` accepts a tuple.
+_INTERRUPT_MARKERS = (classifier.INTERRUPT_PREFIX, classifier.INTERRUPT_API)
+
 
 class CommandMartBuilder(MartBuilder):
     """Per-(day, project_id, command_name) cost + token rollup."""
@@ -70,6 +80,12 @@ class CommandMartBuilder(MartBuilder):
             return since_event_id
 
         rows = _fetch_window(conn, since_event_id=since_event_id, max_id=max_id)
+
+        # Projects touched by this window — used for the per-day user-command
+        # recompute below. Derived before the per-event loop mutates state.
+        affected_projects = sorted(
+            {int(r["project_id"]) for r in rows if r["project_id"] is not None}
+        )
 
         # Cache: (session_fk, event_seq) → command_name. Many events share
         # the same parent user message — caching the seq lookup avoids a
@@ -133,10 +149,28 @@ class CommandMartBuilder(MartBuilder):
             # ── recompute session_count for affected keys ──────────
             _recompute_session_counts(conn, list(buckets.keys()))
 
+        # ── per-day user-command counts (command_day_mart, v025) ──────────
+        # Recompute every affected project's per-(day) command count from the
+        # raw ``messages`` — NOT from the event buckets above. The KPI's
+        # "command" is a real user turn (the same tally ``project_mart``
+        # materialises), which is a different grain from the event-attributed
+        # ``command_mart`` rows: a command can predate this window's events,
+        # produce many events, or produce none. Recomputing from messages (like
+        # ``project.py``'s message-dim pass) keeps the per-day count exact and
+        # idempotent across refresh windows. Skipped silently if the table is
+        # absent (a store mid-migration before v025).
+        if affected_projects and _command_day_table_exists(conn):
+            _refresh_command_day_mart(conn, affected_projects)
+
         return max_id
 
     def rebuild_from_scratch(self, conn: sqlite3.Connection) -> None:
+        # The single "command" mart owns both tables — clear both, then a full
+        # refresh re-materialises them from event id 0 (so an operator's
+        # ``etl backfill --force`` rebuilds the per-day command counts too).
         conn.execute("DELETE FROM command_mart")
+        if _command_day_table_exists(conn):
+            conn.execute("DELETE FROM command_day_mart")
         self.refresh(conn, since_event_id=0)
 
 
@@ -281,3 +315,89 @@ def _recompute_session_counts(
                 """,
                 (len(session_ids), day, project_id, cmd),
             )
+
+
+# ── command_day_mart (per-(day, project) user-command count, v025) ──────────
+
+
+def _command_day_table_exists(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``command_day_mart`` (v025) exists.
+
+    Guards the per-day pass so a store mid-migration (events present, v025 not
+    yet applied) refreshes ``command_mart`` without erroring on the missing
+    table. The migration is additive, so this only returns False transiently.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='command_day_mart'"
+    ).fetchone()
+    return row is not None
+
+
+def _refresh_command_day_mart(
+    conn: sqlite3.Connection, project_ids: list[int]
+) -> None:
+    """Recompute per-(day, project_id) user-command counts for *project_ids*.
+
+    Replace-from-scratch for each affected project: delete its rows, then
+    re-derive the per-day count from every ``messages`` row of the project
+    (joined via ``sessions``). A "command" is the SAME real user turn
+    ``project_mart.total_commands`` counts — kind ``user``, not a tool_result,
+    not an interruption — bucketed by the message's UTC day (the leading 10
+    chars of the timestamp, matching the ``day`` grain every other mart uses).
+
+    Replace (not additive upsert) because the count is over user turns the
+    event watermark never sees directly: a command can predate this window's
+    billable events. Recomputing the whole project keeps the count exact and
+    idempotent regardless of how the refresh windows slice the event stream —
+    bounded by the affected project's message count, the same scan
+    ``project.py``'s ``_refresh_message_dims`` already runs in this cycle.
+    """
+    for pid in project_ids:
+        rows = conn.execute(
+            "SELECT m.raw_json AS raw_json, "
+            "       substr(m.timestamp, 1, 10) AS day "
+            "FROM messages m "
+            "JOIN sessions s ON s.id = m.session_fk "
+            "WHERE s.project_id = ?",
+            (pid,),
+        ).fetchall()
+
+        per_day: dict[str, int] = {}
+        for r in rows:
+            day = r["day"]
+            if not day:
+                continue
+            if _is_user_command(r["raw_json"]):
+                per_day[day] = per_day.get(day, 0) + 1
+
+        conn.execute("DELETE FROM command_day_mart WHERE project_id = ?", (pid,))
+        if per_day:
+            conn.executemany(
+                "INSERT INTO command_day_mart (day, project_id, command_count) "
+                "VALUES (?, ?, ?)",
+                [(day, pid, n) for day, n in per_day.items()],
+            )
+
+
+def _is_user_command(raw_json: str | None) -> bool:
+    """True iff a ``messages.raw_json`` row is a real user command turn.
+
+    Mirrors ``project.py``'s ``_count_message_dims`` command rule exactly:
+    kind ``user``, NOT carrying a tool_result block, and whose text does not
+    start with an interruption marker. Defensive against unparseable rows (a
+    poison row must never break the mart refresh) — an undecodable payload is
+    treated as "not a command".
+    """
+    try:
+        payload = json.loads(raw_json) if raw_json else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if classifier._determine_kind(payload) != "user":
+        return False
+    raw_msg = payload.get("message")
+    msg = raw_msg if isinstance(raw_msg, dict) else {}
+    if _has_result_block(msg):
+        return False
+    return not _text_from(payload).startswith(_INTERRUPT_MARKERS)

@@ -147,3 +147,64 @@ async def test_projects_list_surfaces_total_commands(tmp_path, monkeypatch):
     body = json.loads(response.body.decode("utf-8"))
     stats = body["projects"][0]["stats"]
     assert stats["total_commands"] == 13
+
+
+# ── #25: _stats_from_marts windows user_commands_analyzed ─────────────────────
+
+
+def _seed_command_day(conn, *, pid: int, rows: list[tuple[str, int]]) -> None:
+    conn.executemany(
+        "INSERT INTO command_day_mart (day, project_id, command_count) VALUES (?, ?, ?)",
+        [(day, pid, n) for day, n in rows],
+    )
+
+
+def test_stats_from_marts_windows_commands_with_day_bounds(tmp_path):
+    """A day window sums command_day_mart for user_commands_analyzed (#25)."""
+    store_db = tmp_path / "store.db"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", "-win-cmd")
+    # Lifetime total_commands = 30; the per-day rows sum to 30 across all days.
+    _insert_project_mart_with_dims(
+        conn, pid=pid, provider="claude", slug="-win-cmd", total_commands=30,
+    )
+    _seed_command_day(
+        conn, pid=pid,
+        rows=[("2026-04-01", 10), ("2026-04-10", 12), ("2026-04-20", 8)],
+    )
+    conn.commit()
+
+    # No window → lifetime total_commands.
+    lifetime = data_route._stats_from_marts(conn, project_ids=[pid])
+    assert lifetime["user_interactions"]["user_commands_analyzed"] == 30
+
+    # Window 04-05..04-15 includes only the 04-10 bucket → 12.
+    windowed = data_route._stats_from_marts(
+        conn, project_ids=[pid], day_from="2026-04-05", day_to="2026-04-15"
+    )
+    assert windowed["user_interactions"]["user_commands_analyzed"] == 12
+
+    # Window covering everything → sums to the lifetime total.
+    full = data_route._stats_from_marts(
+        conn, project_ids=[pid], day_from="2026-04-01", day_to="2026-04-30"
+    )
+    assert full["user_interactions"]["user_commands_analyzed"] == 30
+    conn.close()
+
+
+def test_stats_from_marts_window_falls_back_when_command_day_empty(tmp_path):
+    """No command_day_mart rows (pre-v025 backfill) → keep lifetime, don't zero."""
+    store_db = tmp_path / "store.db"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", "-win-fallback")
+    _insert_project_mart_with_dims(
+        conn, pid=pid, provider="claude", slug="-win-fallback", total_commands=7,
+    )
+    conn.commit()
+
+    windowed = data_route._stats_from_marts(
+        conn, project_ids=[pid], day_from="2026-04-05", day_to="2026-04-15"
+    )
+    # command_day_mart empty → windowed_commands stays None → lifetime total.
+    assert windowed["user_interactions"]["user_commands_analyzed"] == 7
+    conn.close()

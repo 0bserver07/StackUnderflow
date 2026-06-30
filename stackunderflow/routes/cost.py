@@ -219,15 +219,35 @@ def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset:
 
 
 @router.get("/api/cost-data")
-async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
+async def get_cost_data(
+    log_path: str | None = None,
+    timezone_offset: int = 0,
+    model: Annotated[list[str] | None, Query()] = None,
+):
     """Return only the 9 cost/analytics sections split off from dashboard-data.
 
     Shape: ``{key: stats[key]}`` for every key in ``COST_KEYS``. Missing keys
     default to empty containers (``[]``, ``{}``) so the frontend can render
     without guarding for undefined sections.
+
+    #57: ``model`` is a repeated query param (``?model=opus-4-8&model=…``) that
+    broadens the dashboard's model filter beyond cost. When set, the
+    ``token_composition.daily``/``totals`` blocks are sourced from
+    ``daily_mart`` narrowed to the selected model(s) — so the Token Composition
+    donut/stack on the Cost tab reflect the filter, not just the by-model cost
+    chart. Empty/absent == all models (the existing contract). ``token_composition``
+    is the block the daily mart can narrow by model; ``tool_mart`` has no model
+    dimension, so ``tool_costs`` stays all-model and the frontend badges it.
     """
     path = _resolve_log_path(log_path)
     slug = Path(path).name
+
+    model_filter: set[str] | None = None
+    if model:
+        normed = {m.strip().lower() for m in model if m and m.strip()}
+        if normed:
+            model_filter = normed
+
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path)
@@ -244,7 +264,9 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
         # the period split (current vs prior) needs interaction-level
         # correlations the daily mart can\'t see by itself.
         if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
-            stats = _overlay_mart_rollups(conn, project_id=project_ids[0], stats=stats)
+            stats = _overlay_mart_rollups(
+                conn, project_id=project_ids[0], stats=stats, model_filter=model_filter
+            )
     finally:
         conn.close()
 
@@ -265,16 +287,24 @@ async def get_cost_data(log_path: str | None = None, timezone_offset: int = 0):
     return payload
 
 
-def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
+def _overlay_mart_rollups(
+    conn, *, project_id: int, stats: dict, model_filter: set[str] | None = None
+) -> dict:
     """Replace the rollup blocks of ``stats`` with mart-derived values.
 
     Touches keys the day/tool/command marts can reconstruct:
 
     * ``token_composition.daily`` / ``token_composition.totals`` — from
-      ``daily_mart`` (Wave 3A).
+      ``daily_mart`` (Wave 3A). ``model_filter`` (#57) narrows the daily rows to
+      the selected model(s) so the Token Composition charts honour the
+      dashboard's model filter; ``None`` == all models.
     * ``tool_costs`` — from ``tool_mart`` (Wave 5). The mart's
       pre-attributed 1/N cost/token shares mirror the aggregator's
       ``_ToolCostCollector`` contract so the JSON shape is identical.
+      ``tool_mart`` is keyed (day, project, provider, tool_name) with NO model
+      dimension, so it can't be model-filtered — when a model filter is active
+      we therefore SKIP the tool_costs overlay and leave the aggregator's
+      all-model figures (the frontend badges them as all-model).
 
     ``command_costs`` and ``session_costs`` stay aggregator-driven.
     Their existing shapes are per-Interaction / per-session lists keyed
@@ -300,8 +330,20 @@ def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
     ``store/mart_queries.command_mart_for_project``. It just isn't a
     drop-in source for THIS route's response shape.
     """
-    daily_rows = mart_queries.daily_for_project(conn, project_id=project_id)
+    daily_rows = mart_queries.daily_for_project(
+        conn, project_id=project_id, model_filter=model_filter
+    )
     if not daily_rows:
+        # A model filter that excludes every row of this project leaves the
+        # token_composition blocks empty (shape-stable) so the donut/stack
+        # render their zero state instead of all-model totals.
+        if model_filter is not None:
+            tc = stats.get("token_composition")
+            if not isinstance(tc, dict):
+                tc = {"daily": {}, "totals": {}, "per_session": {}}
+                stats["token_composition"] = tc
+            tc["daily"] = {}
+            tc["totals"] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
         return stats
 
     daily: dict[str, dict[str, int]] = {}
@@ -332,7 +374,11 @@ def _overlay_mart_rollups(conn, *, project_id: int, stats: dict) -> dict:
 
     # Wave 5: overlay tool_costs from tool_mart when populated. Empty
     # mart → keep whatever the aggregator emitted (default fallback).
-    if mart_queries.mart_has_tool_rows(conn):
+    # #57: skip when a model filter is active — ``tool_mart`` has no model
+    # dimension, so the mart rollup can't be narrowed to the selected model;
+    # leaving the aggregator's all-model tool_costs (badged in the UI) beats
+    # silently showing all-model numbers that look model-scoped.
+    if model_filter is None and mart_queries.mart_has_tool_rows(conn):
         tool_rows = mart_queries.tool_mart_for_project(
             conn,
             project_id=project_id,

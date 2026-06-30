@@ -604,7 +604,9 @@ def _errors_block_from_marts(proj_rows: list[dict | None]) -> dict:
     }
 
 
-def _user_interactions_from_mart(merged_row: dict | None) -> dict:
+def _user_interactions_from_mart(
+    merged_row: dict | None, *, windowed_commands: int | None = None
+) -> dict:
     """Build the ``user_interactions`` block from ``project_mart`` count dims.
 
     ``user_commands_analyzed`` (v022) plus the v023 rate numerators
@@ -613,15 +615,24 @@ def _user_interactions_from_mart(merged_row: dict | None) -> dict:
     (``total_commands``) and rounding as ``_command_analysis`` so a
     mart-backed Overview matches the full pipeline; the raw counts are
     surfaced alongside under the aggregator's own key names.
+
+    #25: when a date window is active, ``windowed_commands`` (summed from
+    ``command_day_mart`` for the window) overrides the lifetime
+    ``user_commands_analyzed`` so the Commands KPI respects the window like the
+    other Overview headline figures. The rate/avg denominators stay on the
+    lifetime ``total_commands`` because their numerators (interruption / tools /
+    steps) are only materialised lifetime (v023) — windowing only the numerator
+    would skew the ratio, so they're left as lifetime values. ``None`` (no
+    window) preserves the lifetime command count unchanged.
     """
     if not merged_row:
-        return {"user_commands_analyzed": 0}
+        return {"user_commands_analyzed": 0 if windowed_commands is None else windowed_commands}
     commands = int(merged_row.get("total_commands", 0) or 0)
     int_followed = int(merged_row.get("total_commands_followed_by_interruption", 0) or 0)
     cmd_tools = int(merged_row.get("total_command_tools", 0) or 0)
     cmd_steps = int(merged_row.get("total_command_steps", 0) or 0)
     return {
-        "user_commands_analyzed": commands,
+        "user_commands_analyzed": commands if windowed_commands is None else windowed_commands,
         "commands_followed_by_interruption": int_followed,
         "total_tools_used": cmd_tools,
         "total_assistant_steps": cmd_steps,
@@ -637,6 +648,8 @@ def _stats_from_marts(
     project_ids: list[int],
     provider_filter: set[str] | None = None,
     model_filter: set[str] | None = None,
+    day_from: str | None = None,
+    day_to: str | None = None,
 ) -> dict:
     """Build the dashboard ``statistics`` block from mart reads only.
 
@@ -682,6 +695,18 @@ def _stats_from_marts(
     models = mart_queries.daily_mart_by_model(daily_rows)
     tools_usage = _tools_usage_from_marts(conn, project_ids)
 
+    # #25: when a date window is active, the Commands KPI sums the per-day
+    # user-command counts (``command_day_mart``, v025) inside the window so it
+    # tracks the window like the tokens/cost headline. No window → leave the
+    # lifetime ``total_commands`` (``windowed_commands=None``). The mart-empty
+    # case (pre-v025 backfill) also returns ``None`` so the KPI keeps the
+    # lifetime value rather than dropping to 0.
+    windowed_commands: int | None = None
+    if (day_from or day_to) and mart_queries.mart_has_command_day_rows(conn):
+        windowed_commands = mart_queries.command_count_in_window(
+            conn, project_ids=project_ids, day_from=day_from, day_to=day_to
+        )
+
     return {
         "overview": overview,
         "tools": {
@@ -704,7 +729,9 @@ def _stats_from_marts(
         # interaction-grain fields (tool_count_distribution, command_details)
         # stay absent; the UI reads them with ``?? 0`` and the per-project
         # detail view runs the full aggregator on demand.
-        "user_interactions": _user_interactions_from_mart(merged_proj),
+        "user_interactions": _user_interactions_from_mart(
+            merged_proj, windowed_commands=windowed_commands
+        ),
         "cache": _cache_block_from_mart(
             merged_proj, _cache_cost_saved_units_from_marts(conn, project_ids)
         ),

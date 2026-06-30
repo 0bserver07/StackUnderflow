@@ -34,7 +34,7 @@ from stackunderflow.infra.costs import compute_cost
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.routes.cost import _project_stats_cached
 from stackunderflow.stats.enricher import Interaction
-from stackunderflow.store import db, queries
+from stackunderflow.store import db, mart_queries, queries
 
 router = APIRouter()
 
@@ -198,6 +198,48 @@ async def get_commands(
         "limit": limit,
         "currency": currency,
     }
+
+
+@router.get("/api/commands/daily")
+async def get_commands_daily(log_path: str | None = None):
+    """Per-day user-command counts for the windowed "Commands" KPI (#25).
+
+    The Overview headline figures (tokens, cost) window to the dashboard's
+    selected date range because the frontend sums per-day arrays
+    (``daily_token_usage`` / ``daily_costs``). The "Commands" KPI had no per-day
+    source, so it summed the lifetime ``total_commands`` and ignored the
+    window. This endpoint serves the missing series straight from
+    ``command_day_mart`` (v025) so the KPI can window the same way — the
+    frontend sums ``commands`` over the days inside its range.
+
+    Scope:
+      * No ``log_path`` and no active project → cross-project (the global
+        Projects Overview). Counts are summed across every project per day.
+      * ``log_path`` (or an active project) → scoped to that slug's ids.
+
+    Response:
+      ``{daily: [{date, commands}], total, scope}`` where ``daily`` is
+      oldest-day-first, ``total`` is the lifetime sum across the returned rows,
+      and ``scope`` is ``"project"`` or ``"global"``. Empty ``daily`` (mart not
+      yet built, or no commands) lets the caller fall back to its lifetime
+      total — the KPI never blanks.
+    """
+    path = log_path or deps.current_log_path
+
+    conn = db.connect(deps.store_path)
+    try:
+        if path:
+            project_ids = _project_ids_for(conn, path)
+            daily = mart_queries.command_day_series(conn, project_ids=project_ids)
+            scope = "project"
+        else:
+            daily = mart_queries.command_day_series(conn)
+            scope = "global"
+    finally:
+        conn.close()
+
+    total = sum(int(d["commands"]) for d in daily)
+    return {"daily": daily, "total": total, "scope": scope}
 
 
 @router.get("/api/tool-distribution")

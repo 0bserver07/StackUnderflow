@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 24`).
+**Status:** v1 (pinned to `schema_version = 25`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -13,14 +13,14 @@ The schema described here is **additive-only**. Any future column requires a new
 1. **Local-first.** The store is a single SQLite file on the user's machine. There is no network sync, no daemon, no shared queue. A second process can open the file read-only at any time.
 2. **Raw + normalised separation.** The `messages` view (or table, pre-v008) carries one row per source-message exactly as the adapter parsed it from disk. The `usage_events` table carries one row per *billable* event in the canonical 4-token shape. The two are never merged; downstream consumers pick the layer they need.
 3. **Cost computed once.** `usage_events.cost_usd` is stamped at normalisation time and never recomputed by readers. The accompanying `cost_source` enum tells the reader whether they're looking at a billed amount, a rate-card lookup, an estimate, or a guess.
-4. **Marts are derivative.** The 8 mart tables are watermarked rebuilds of `usage_events`. Drop them and they rebuild from scratch; never write to a mart from outside the store.
+4. **Marts are derivative.** The 9 mart tables are watermarked rebuilds of `usage_events` (a few also read `messages` for dims `usage_events` can't see — e.g. user-command counts). Drop them and they rebuild from scratch; never write to a mart from outside the store.
 5. **Migrations are additive.** No column has been dropped, renamed, or had its type changed; new columns ship with a `DEFAULT` so existing rows stay valid. Most migrations add a table or a column. A few only rewrite data — v004 nulls out synthetic model ids, v005 redistributes legacy cursor sessions — and v008 restructured `messages` into a view over `messages_YYYYMM` partitions without changing its column shape.
 
 ---
 
 ## Schema version
 
-Pin to `schema_version = 24`. The current migration set is:
+Pin to `schema_version = 25`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -47,6 +47,7 @@ Pin to `schema_version = 24`. The current migration set is:
 | 22 | `v022_project_mart_message_dims.sql` | adds 5 `project_mart` columns: per-project message-type + command counts |
 | 23 | `v023_mart_overview_rate_dims.sql` | adds 7 `project_mart` columns (Overview cache/interruption/errors rate numerators) + 2 `tool_mart` columns (`cache_read`, `cache_create` — ui-perf #20) |
 | 24 | `v024_price_book.sql` | `price_book` (effective-dated unified rate table; manifest + rate card backfill, LiteLLM `live` snapshots — audit #2) |
+| 25 | `v025_command_day_mart.sql` | `command_day_mart` (per-`(day, project_id)` user-command count; windows the Overview "Commands" KPI — ui-perf #25) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -220,7 +221,11 @@ Keyed by `(day, project_id, provider, tool_name)`. Carries `event_count` (distin
 
 ### `command_mart` (v007)
 
-Keyed by `(day, project_id, command_name)`. `command_name` is the leading slash-command of the user prompt that triggered the assistant turn (e.g. `/init`, `/review`), or `'freeform'` for non-slash prompts.
+Keyed by `(day, project_id, command_name)`. `command_name` is the leading slash-command of the user prompt that triggered the assistant turn (e.g. `/init`, `/review`), or `'freeform'` for non-slash prompts. Note: `event_count` counts billable assistant turns attributed to a command (event grain), **not** user prompts — it can't reconstruct the user-command tally (`command_day_mart` does that).
+
+### `command_day_mart` (v025)
+
+Keyed by `(day, project_id)`. Carries `command_count` — the count of real user command turns (kind `user`, not a tool_result, not an interruption) on that UTC day. The per-day analogue of `project_mart.total_commands`: summed over a day window it gives the windowed Commands KPI; summed over all days it equals the lifetime total. Unlike the other lower-grain marts it's derived from `messages.raw_json` (user turns aren't in `usage_events`) by the `command` mart builder's second pass, using the same classifier rule `project_mart` uses.
 
 ### `message_tool_mart` (v011)
 

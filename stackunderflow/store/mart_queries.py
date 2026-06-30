@@ -1002,6 +1002,107 @@ def command_mart_for_project(
     ]
 
 
+# ── command_day_mart reads (per-(day, project) user-command count, v025) ─────
+#
+# ``command_day_mart`` materialises the windowed Commands KPI (#25): one row per
+# (day, project_id) carrying the count of real user command turns — the SAME
+# tally ``project_mart.total_commands`` reports lifetime, just bucketed by day.
+# Summing ``command_count`` across a project's ids in a day window gives the
+# windowed ``user_commands_analyzed``; summing every row gives the lifetime
+# total. ``day_from`` / ``day_to`` are inclusive ISO ``YYYY-MM-DD`` strings
+# (caller slices any timezone offset before passing — marts store UTC days).
+
+
+def mart_has_command_day_rows(conn: sqlite3.Connection) -> bool:
+    """Return True iff ``command_day_mart`` exists and has ≥1 row.
+
+    The gate the read path uses to decide whether the windowed Commands KPI can
+    be sourced from the mart. False (table absent or empty — a store that
+    hasn't run the v025 backfill yet) means the caller keeps the lifetime
+    ``project_mart.total_commands`` fallback so the KPI never blanks.
+    """
+    if not _table_exists(conn, "command_day_mart"):
+        return False
+    return conn.execute("SELECT 1 FROM command_day_mart LIMIT 1").fetchone() is not None
+
+
+def command_count_in_window(
+    conn: sqlite3.Connection,
+    *,
+    project_ids: Sequence[int],
+    day_from: str | None = None,
+    day_to: str | None = None,
+) -> int:
+    """SUM ``command_day_mart.command_count`` for *project_ids* in a day window.
+
+    The windowed analogue of ``project_mart.total_commands`` — one indexed
+    aggregate over the tiny per-(day, project) table. Empty ``project_ids`` or
+    a missing table returns 0. With no day bounds it equals the lifetime
+    command total for those projects (used by the dashboard fast-path).
+    """
+    pids = [int(p) for p in project_ids]
+    if not pids or not _table_exists(conn, "command_day_mart"):
+        return 0
+    placeholders = ",".join("?" * len(pids))
+    sql = (
+        f"SELECT COALESCE(SUM(command_count), 0) AS c "  # noqa: S608 — placeholders are bound
+        f"FROM command_day_mart WHERE project_id IN ({placeholders})"
+    )
+    params: list[Any] = list(pids)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    row = conn.execute(sql, params).fetchone()
+    if row is None:
+        return 0
+    val = row["c"] if hasattr(row, "keys") else row[0]
+    return int(val or 0)
+
+
+def command_day_series(
+    conn: sqlite3.Connection,
+    *,
+    project_ids: Sequence[int] | None = None,
+    day_from: str | None = None,
+    day_to: str | None = None,
+) -> list[dict[str, Any]]:
+    """Per-day command counts as ``[{date, commands}]``, oldest day first.
+
+    Powers the Overview "Commands" KPI's window-aware sum (#25): the frontend
+    sums ``commands`` over the days inside its selected date range, exactly as
+    it already sums ``daily_token_usage`` / ``daily_costs``. ``project_ids`` is
+    ``None`` for the cross-project (global Overview) view or a list to scope to
+    one project's ids; counts are summed across projects per day. Empty mart →
+    ``[]`` (the caller falls back to the lifetime total).
+    """
+    if not _table_exists(conn, "command_day_mart"):
+        return []
+    sql = "SELECT day, SUM(command_count) AS commands FROM command_day_mart WHERE 1=1"
+    params: list[Any] = []
+    if project_ids is not None:
+        pids = [int(p) for p in project_ids]
+        if not pids:
+            return []
+        placeholders = ",".join("?" * len(pids))
+        sql += f" AND project_id IN ({placeholders})"  # noqa: S608 — placeholders are bound
+        params.extend(pids)
+    if day_from:
+        sql += " AND day >= ?"
+        params.append(day_from)
+    if day_to:
+        sql += " AND day <= ?"
+        params.append(day_to)
+    sql += " GROUP BY day ORDER BY day"
+    return [
+        {"date": r["day"], "commands": int(r["commands"] or 0)}
+        for r in conn.execute(sql, params).fetchall()
+        if r["day"]
+    ]
+
+
 # ── message_tool_mart reads (per-message-grain mart, v011) ──────────────────
 #
 # These power the ``reports/optimize.py`` detectors that used to re-parse

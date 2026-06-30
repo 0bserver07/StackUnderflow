@@ -120,6 +120,80 @@ async def test_cost_data_no_overlay_when_mart_empty(tmp_path, monkeypatch):
     assert payload["token_composition"] == expected_tc
 
 
+# ── #57: model filter broadens to token_composition ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cost_data_model_filter_narrows_token_composition(tmp_path, monkeypatch):
+    """?model= narrows token_composition to the selected model (#57)."""
+    store_db = tmp_path / "store.db"
+    slug = "-cost-modelfilter"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", slug)
+    _insert_project_mart(conn, project_id=pid, provider="claude", slug=slug)
+    # Two models on the same day; the filter should keep only opus.
+    _insert_daily_mart(conn, project_id=pid, day="2026-04-01", model="claude-opus-4-8",
+        input_tokens=10, output_tokens=5, cache_read=2, cache_create=1, cost_usd=0.05)
+    _insert_daily_mart(conn, project_id=pid, day="2026-04-01", model="claude-sonnet-4-5",
+        input_tokens=100, output_tokens=50, cache_read=20, cache_create=10, cost_usd=0.5)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    stub_stats = {
+        "session_costs": [], "command_costs": [],
+        "tool_costs": {"Read": {"calls": 2, "cost": 0.0}},
+        "token_composition": {"daily": {}, "totals": {}, "per_session": {}},
+        "outliers": {}, "retry_signals": [], "session_efficiency": [],
+        "error_cost": {}, "trends": {},
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], stub_stats))
+
+    # All models → both rows sum into the totals.
+    all_payload = await get_cost_data()
+    assert all_payload["token_composition"]["totals"]["input"] == 110
+
+    # Only opus → just the opus row's tokens.
+    opus_payload = await get_cost_data(model=["claude-opus-4-8"])
+    tc = opus_payload["token_composition"]
+    assert tc["daily"] == {
+        "2026-04-01": {"input": 10, "output": 5, "cache_read": 2, "cache_creation": 1},
+    }
+    assert tc["totals"] == {"input": 10, "output": 5, "cache_read": 2, "cache_creation": 1}
+    # tool_costs has no model dim → overlay skipped, aggregator value preserved.
+    assert opus_payload["tool_costs"] == {"Read": {"calls": 2, "cost": 0.0}}
+
+
+@pytest.mark.asyncio
+async def test_cost_data_model_filter_excludes_all_yields_empty_token_comp(tmp_path, monkeypatch):
+    """A model filter matching no daily rows → empty token_composition (not all-model)."""
+    store_db = tmp_path / "store.db"
+    slug = "-cost-modelfilter-none"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", slug)
+    _insert_project_mart(conn, project_id=pid, provider="claude", slug=slug)
+    _insert_daily_mart(conn, project_id=pid, day="2026-04-01", model="claude-sonnet-4-5",
+        input_tokens=100, output_tokens=50, cost_usd=0.5)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], {
+            "session_costs": [], "command_costs": [], "tool_costs": {},
+            "token_composition": {"daily": {"BOGUS": {"input": 999}}, "totals": {"input": 999}, "per_session": {}},
+            "outliers": {}, "retry_signals": [], "session_efficiency": [],
+            "error_cost": {}, "trends": {},
+        }))
+    payload = await get_cost_data(model=["claude-opus-4-8"])  # no opus rows
+    tc = payload["token_composition"]
+    assert tc["daily"] == {}
+    assert tc["totals"] == {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+
+
 @pytest.mark.asyncio
 async def test_cost_by_provider_uses_provider_day_mart(tmp_path, monkeypatch):
     store_db = tmp_path / "store.db"

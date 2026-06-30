@@ -269,6 +269,24 @@ export async function getGlobalStats(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/global-stats`)
 }
 
+// Per-day user-command counts — windows the Overview "Commands" KPI (#25).
+// `daily` is oldest-day-first `{date: "YYYY-MM-DD", commands: N}`; the caller
+// sums `commands` over the days inside its selected date range the same way it
+// sums daily_token_usage / daily_costs. Cross-project when no `logPath` is
+// passed (the global Overview), project-scoped otherwise.
+export interface CommandDailyResponse {
+  daily: Array<{ date: string; commands: number }>
+  total: number
+  scope: 'global' | 'project'
+}
+
+export async function getCommandsDaily(logPath?: string): Promise<CommandDailyResponse> {
+  const params = new URLSearchParams()
+  if (logPath) params.set('log_path', logPath)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/commands/daily${qs ? `?${qs}` : ''}`)
+}
+
 // Reindex (manual cache rebuilds)
 export async function reindexSearch(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/search/reindex`, { method: 'POST' })

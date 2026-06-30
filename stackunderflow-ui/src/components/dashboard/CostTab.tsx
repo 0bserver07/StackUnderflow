@@ -20,6 +20,8 @@ import type {
   Trends,
 } from '../../types/api'
 import { getParam, openInteraction, openSession } from '../../services/navigation'
+import { useFilters } from '../../services/filters'
+import { formatModelName } from '../../services/format'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
 import CacheRoiCard from '../cost/CacheRoiCard'
 import CostByProviderCard from '../cost/CostByProviderCard'
@@ -90,11 +92,21 @@ interface CostData {
  * #10: the heavy `/api/cost-data` payload is now fetched through React Query
  * (see the `useQuery` call below) so re-visiting the Cost tab within the
  * 30s staleTime serves the cached payload instead of re-downloading it.
- * The server resolves `log_path` from `deps.current_log_path`, so no params
- * are needed here — the project identity is folded into the query key.
+ * The server resolves `log_path` from `deps.current_log_path`, so the project
+ * identity is folded into the query key.
+ *
+ * #57: the active model filter is forwarded as repeated `?model=` params so the
+ * server narrows the `token_composition` blocks (donut/stack) to the selected
+ * model(s) — broadening the filter past the by-model cost chart. `models` is
+ * empty for "all models" (the existing behaviour).
  */
-async function fetchCostData(): Promise<CostData> {
-  const res = await fetch('/api/cost-data')
+async function fetchCostData(models: string[]): Promise<CostData> {
+  const params = new URLSearchParams()
+  for (const m of models) {
+    if (m && m.trim()) params.append('model', m.toLowerCase().trim())
+  }
+  const qs = params.toString()
+  const res = await fetch(`/api/cost-data${qs ? `?${qs}` : ''}`)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
@@ -279,14 +291,20 @@ export default function CostTab({ stats }: CostTabProps) {
   // serve the previous project's cost data from cache. staleTime mirrors the
   // app-wide default (main.tsx) — re-visiting within 30s is a cache hit.
   const { name } = useParams<{ name: string }>()
+  // #57: the dashboard-wide model filter must scope this tab's
+  // token_composition (not just the by-model cost chart). Thread the active
+  // model set into the fetch + query key so a chip toggle refetches the
+  // model-narrowed payload.
+  const { filters } = useFilters()
+  const modelFilter = filters.models
   const {
     data,
     isLoading: loading,
     error: queryError,
     refetch,
   } = useQuery({
-    queryKey: ['costData', name ?? null],
-    queryFn: fetchCostData,
+    queryKey: ['costData', name ?? null, modelFilter],
+    queryFn: () => fetchCostData(modelFilter),
     staleTime: 30_000,
   })
   const error = queryError instanceof Error ? queryError.message : queryError ? String(queryError) : null
@@ -540,22 +558,38 @@ export default function CostTab({ stats }: CostTabProps) {
           timestamps, so the date-range filter can't be applied client-side.
           Surface an "all time" badge when a range is active rather than
           silently mislabelling all-time totals as "Last 7/30 days".
-          FLAG (backend): give `tool_mart_for_project` (routes/cost.py)
-          start/end params so /api/cost-data can return windowed tool costs. */}
+          #57: tool_mart has no model dimension either, so the model filter
+          can't narrow tool costs — badge it all-models when a model filter is
+          active so the bars don't read as model-scoped. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          {filter.range !== 'all' && (
+          {(filter.range !== 'all' || modelFilter.length > 0) && (
             <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-400">
               <IconAlertTriangle size={11} />
               <span>
-                Tool costs are <span className="font-semibold">all-time</span> — the date-range
-                filter isn’t applied here yet.
+                Tool costs are{' '}
+                <span className="font-semibold">
+                  {[filter.range !== 'all' ? 'all-time' : null, modelFilter.length > 0 ? 'all-models' : null]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>{' '}
+                — the {filter.range !== 'all' && modelFilter.length > 0 ? 'date-range and model filters aren’t' : filter.range !== 'all' ? 'date-range filter isn’t' : 'model filter isn’t'} applied here yet.
               </span>
             </div>
           )}
           <ToolCostBarChart data={f.tools} />
         </div>
-        <TokenCompositionDonut totals={tokenTotals} />
+        <div>
+          {modelFilter.length > 0 && (
+            <div className="mb-1.5 text-[10px] text-gray-500">
+              Token composition scoped to{' '}
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                {modelFilter.map(formatModelName).join(', ')}
+              </span>
+            </div>
+          )}
+          <TokenCompositionDonut totals={tokenTotals} />
+        </div>
       </div>
 
       {/* 6. Token composition stack full-width */}

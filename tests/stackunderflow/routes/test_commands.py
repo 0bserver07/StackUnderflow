@@ -14,7 +14,11 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from stackunderflow.routes.commands import get_commands, get_tool_distribution
+from stackunderflow.routes.commands import (
+    get_commands,
+    get_commands_daily,
+    get_tool_distribution,
+)
 from stackunderflow.routes.data import get_dashboard_data
 from stackunderflow.stats.enricher import EnrichedDataset, Interaction, Record
 from stackunderflow.store import db, schema
@@ -386,3 +390,111 @@ def test_tool_distribution_route_registered_on_app():
     from tests.conftest import app_route_paths
 
     assert "/api/tool-distribution" in app_route_paths(app)
+
+
+# ── /api/commands/daily (#25 — windowed Commands KPI source) ─────────────────
+
+
+def _seed_command_day_rows(store_db, *, pid: int, rows: list[tuple[str, int]]) -> None:
+    """Insert ``command_day_mart`` rows ``[(day, command_count), ...]`` directly.
+
+    Read-path isolation: the builder's own materialisation is covered by
+    ``etl/marts/test_command_day_mart.py``, so the route tests exercise the
+    reader/endpoint against pre-seeded mart rows.
+    """
+    conn = db.connect(store_db)
+    schema.apply(conn)
+    conn.executemany(
+        "INSERT INTO command_day_mart (day, project_id, command_count) VALUES (?, ?, ?)",
+        [(day, pid, n) for day, n in rows],
+    )
+    conn.commit()
+    conn.close()
+
+
+def _project_id_for_slug(store_db, slug: str) -> int:
+    conn = db.connect(store_db)
+    try:
+        row = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
+        return int(row[0])
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_commands_daily_project_scoped(tmp_path, monkeypatch):
+    """With a project active, the series is scoped to that slug's ids."""
+    store_db = tmp_path / "store.db"
+    slug = "-cmd-daily"
+    _seed_project(store_db, slug)
+    pid = _project_id_for_slug(store_db, slug)
+    _seed_command_day_rows(
+        store_db, pid=pid,
+        rows=[("2026-04-01", 3), ("2026-04-02", 5), ("2026-04-03", 2)],
+    )
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    payload = await get_commands_daily()
+    assert payload["scope"] == "project"
+    assert payload["total"] == 10
+    assert payload["daily"] == [
+        {"date": "2026-04-01", "commands": 3},
+        {"date": "2026-04-02", "commands": 5},
+        {"date": "2026-04-03", "commands": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_commands_daily_global_sums_across_projects(tmp_path, monkeypatch):
+    """No project active → cross-project; per-day counts sum across projects."""
+    store_db = tmp_path / "store.db"
+    conn = db.connect(store_db)
+    schema.apply(conn)
+    conn.execute(
+        "INSERT INTO projects (id, provider, slug, display_name, first_seen, last_modified) "
+        "VALUES (1, 'claude', 'a', 'a', 0, 0)"
+    )
+    conn.execute(
+        "INSERT INTO projects (id, provider, slug, display_name, first_seen, last_modified) "
+        "VALUES (2, 'codex', 'b', 'b', 0, 0)"
+    )
+    conn.executemany(
+        "INSERT INTO command_day_mart (day, project_id, command_count) VALUES (?, ?, ?)",
+        [("2026-04-01", 1, 3), ("2026-04-01", 2, 4), ("2026-04-02", 1, 5)],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    payload = await get_commands_daily()
+    assert payload["scope"] == "global"
+    # 2026-04-01 sums project 1 (3) + project 2 (4) = 7; 2026-04-02 = 5.
+    assert payload["daily"] == [
+        {"date": "2026-04-01", "commands": 7},
+        {"date": "2026-04-02", "commands": 5},
+    ]
+    assert payload["total"] == 12
+
+
+@pytest.mark.asyncio
+async def test_commands_daily_empty_when_mart_unbuilt(tmp_path, monkeypatch):
+    """Mart not yet backfilled → empty series (caller falls back to lifetime)."""
+    store_db = tmp_path / "store.db"
+    conn = db.connect(store_db)
+    schema.apply(conn)
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    payload = await get_commands_daily()
+    assert payload == {"daily": [], "total": 0, "scope": "global"}
+
+
+def test_commands_daily_route_registered_on_app():
+    from stackunderflow.server import app
+
+    from tests.conftest import app_route_paths
+
+    assert "/api/commands/daily" in app_route_paths(app)
