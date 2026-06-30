@@ -292,13 +292,17 @@ def append_live_snapshot(conn: sqlite3.Connection, rows: list[dict]) -> int:
     return _upsert_price_rows(conn, stamped)
 
 
-def _row_effective_at(rows: list[sqlite3.Row], at_ts: str | None) -> sqlite3.Row | None:
+def _row_effective_at(rows, at_ts: str | None):
     """Pick the ``price_book`` row effective at ``at_ts`` (date-prefix compared).
 
     Mirrors ``_select_price``: with no ``at_ts`` prefer the open-ended
     (``effective_until == ''``) row, else the last; with an ``at_ts`` pick the
     window that contains it. ``at_ts`` may be a full ISO timestamp — only its
     ``YYYY-MM-DD`` prefix is compared against the date-only bounds.
+
+    ``rows`` is any sequence of mapping-style rows (``sqlite3.Row`` from the
+    connection path, or the lightweight dicts the in-memory cache stores) — both
+    support ``r["effective_from"]`` / ``r["effective_until"]`` subscripting.
     """
     if not rows:
         return None
@@ -362,17 +366,33 @@ def price_book_lookup(
     return None
 
 
-# ── opt-in store wiring for the connection-free ``compute_cost`` path ─────────
+# ── store wiring + in-memory cache for the connection-free ``compute_cost`` ───
 #
 # ``compute_cost`` is a pure module-level function with no DB handle; the lookup
-# must therefore reach a connection through a configured seam. When no store is
-# wired (the default — every existing call site, every unit test), the lookup is
-# skipped entirely and ``compute_cost`` prices from the in-code manifest exactly
-# as before. Wiring a store in (``use_price_book_store``) makes the book the
-# source while keeping the in-code manifest as the miss fallback.
+# must therefore reach the book through a configured seam. When wired, the book
+# is loaded ONCE into a module-level structure (``_book_cache``) and every lookup
+# hits memory — there is NO per-call DB query. A clean miss returns ``None`` so
+# ``compute_cost`` falls back to the in-code manifest, which keeps a fresh /
+# empty store (and any CLI/ETL run before a backfill) pricing exactly as today.
+#
+# The default at import is DISABLED, so every unit test and any bare ``import
+# stackunderflow`` prices from the in-code manifest, deterministically. The
+# server turns the book on at startup (``prime_price_book_cache`` after a
+# backfill from the SAME in-code manifest — see ``server._lifespan``), where the
+# rows are gate-proven equal to in-code. The cache is also re-primed by
+# ``refresh_price_book_cache`` after the PricingService appends a live snapshot.
+# Changing the wired path (or disabling the seam) invalidates the cache so the
+# next lookup re-primes from the new source.
 
 _store_path_override: Path | None = None
 _use_store: bool = False
+
+# In-memory book: (provider, model, source) -> rows sorted by effective_from.
+# Each row is a lightweight dict mirroring the columns the SQL lookup reads.
+# ``None`` means "not primed yet"; an empty dict means "primed, book empty".
+# Invalidation keys off ``_store_path_override`` (see ``use_price_book_store``),
+# so no separate "primed from" path needs tracking.
+_book_cache: dict[tuple[str, str, str], list[dict]] | None = None
 
 
 def use_price_book_store(path: str | Path | None = None, *, enabled: bool = True) -> None:
@@ -380,39 +400,163 @@ def use_price_book_store(path: str | Path | None = None, *, enabled: bool = True
 
     ``path`` overrides the default ``~/.stackunderflow/store.db``. With
     ``enabled=False`` the book is ignored and pricing reverts to the in-code
-    manifest (the default state). Idempotent and cheap — opening the connection
-    happens per-lookup and is guarded.
+    manifest (the default state). Changing the path or the enabled flag
+    invalidates the in-memory cache so the next lookup re-primes from the new
+    source — there is no per-call DB I/O.
     """
     global _store_path_override, _use_store
+    new_path = Path(path) if path is not None else None
+    # Any change to the wired source must drop the cached rows so the next
+    # lookup re-primes; otherwise a toggle would serve a stale book.
+    if not enabled or new_path != _store_path_override:
+        _invalidate_book_cache()
     _use_store = bool(enabled)
-    _store_path_override = Path(path) if path is not None else None
+    _store_path_override = new_path
 
 
 def _store_path() -> Path:
     return _store_path_override if _store_path_override is not None else _STORE_PATH
 
 
-def store_price_book_lookup(
-    model: str, provider: str = "anthropic", at_ts: str | None = None
-) -> tuple[float, float, float, float] | None:
-    """Book lookup for the connection-free path, behind the ``use_store`` seam.
+def _invalidate_book_cache() -> None:
+    """Drop the in-memory book so the next lookup re-primes."""
+    global _book_cache
+    _book_cache = None
 
-    Returns ``None`` (→ in-code fallback) when the store isn't wired, the file
-    is missing, the table doesn't exist yet, or any read error — pricing must
-    never raise just because the book is unavailable.
+
+def _build_book_cache(conn: sqlite3.Connection) -> dict[tuple[str, str, str], list[dict]]:
+    """Read the entire ``price_book`` into memory, grouped + effective-sorted.
+
+    One pass over the table; every lookup thereafter is a dict access. Rows are
+    sorted by ``effective_from`` to match the ``ORDER BY`` the connection path
+    uses, so ``_row_effective_at`` selects the identical row from memory.
+    """
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    rows = conn.execute(
+        "SELECT provider, model, source, effective_from, effective_until, "
+        "input, output, cache_write, cache_read FROM price_book "
+        "ORDER BY effective_from"
+    ).fetchall()
+    for r in rows:
+        key = (r["provider"], r["model"], r["source"])
+        grouped.setdefault(key, []).append(
+            {
+                "effective_from": r["effective_from"],
+                "effective_until": r["effective_until"],
+                "input": float(r["input"]),
+                "output": float(r["output"]),
+                "cache_write": float(r["cache_write"]),
+                "cache_read": float(r["cache_read"]),
+            }
+        )
+    return grouped
+
+
+def prime_price_book_cache(conn: sqlite3.Connection | None = None) -> bool:
+    """Load the whole ``price_book`` into the module-level cache.
+
+    Pass a live ``conn`` (server startup, right after a backfill) to prime from
+    it directly; with no ``conn`` the wired store path is opened once. Returns
+    ``True`` when the cache was populated (table present), ``False`` otherwise
+    (missing file / table / read error) — never raises, so a fresh store leaves
+    the cache empty and lookups fall through to the in-code manifest.
+    """
+    global _book_cache
+    if conn is not None:
+        prev_factory = conn.row_factory
+        try:
+            conn.row_factory = sqlite3.Row
+            _book_cache = _build_book_cache(conn)
+        except sqlite3.Error:
+            _book_cache = {}
+            return False
+        finally:
+            conn.row_factory = prev_factory
+        return True
+
+    path = _store_path()
+    if not path.exists():
+        _book_cache = {}
+        return False
+    own: sqlite3.Connection | None = None
+    try:
+        own = sqlite3.connect(path)
+        own.row_factory = sqlite3.Row
+        _book_cache = _build_book_cache(own)
+        return True
+    except sqlite3.Error:
+        _book_cache = {}
+        return False
+    finally:
+        if own is not None:
+            own.close()
+
+
+def refresh_price_book_cache() -> None:
+    """Re-prime the in-memory book from the wired store.
+
+    Called by ``PricingService`` after it appends a ``source='live'`` snapshot
+    so the new rates are visible to ``compute_cost`` without a process restart
+    and without a per-call DB read. No-op-safe when the seam is disabled.
+    """
+    if not _use_store:
+        _invalidate_book_cache()
+        return
+    prime_price_book_cache()
+
+
+def _ensure_book_cache() -> dict[tuple[str, str, str], list[dict]] | None:
+    """Return the primed cache, lazily priming from the wired path on first use.
+
+    Returns ``None`` when the seam is disabled (→ in-code path). A primed-but-
+    empty cache (fresh store) returns an empty dict, whose misses also fall
+    through to in-code.
     """
     if not _use_store:
         return None
-    path = _store_path()
-    if not path.exists():
+    if _book_cache is None:
+        prime_price_book_cache()
+    return _book_cache
+
+
+def _cached_rows(provider: str, model: str, source: str) -> list[dict]:
+    cache = _book_cache or {}
+    return cache.get((provider, model, source), [])
+
+
+def _cached_lookup_by_model_source(
+    provider: str, model: str, source: str, at_ts: str | None
+) -> tuple[float, float, float, float] | None:
+    row = _row_effective_at(_cached_rows(provider, model, source), at_ts)
+    if row is None:
         return None
-    conn: sqlite3.Connection | None = None
-    try:
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return price_book_lookup(conn, model, provider, at_ts)
-    except sqlite3.Error:
+    return (
+        float(row["input"]), float(row["output"]),
+        float(row["cache_write"]), float(row["cache_read"]),
+    )
+
+
+def store_price_book_lookup(
+    model: str, provider: str = "anthropic", at_ts: str | None = None
+) -> tuple[float, float, float, float] | None:
+    """Book lookup for the connection-free path, served from the in-memory cache.
+
+    Mirrors ``price_book_lookup``'s precedence (live > rate_card > manifest) but
+    reads the module-level ``_book_cache`` — NO per-call DB query. Returns
+    ``None`` (→ in-code fallback) when the seam is disabled, the store is
+    missing/empty, or the model is absent. Never raises: pricing must not break
+    just because the book is unavailable.
+    """
+    if not model:
         return None
-    finally:
-        if conn is not None:
-            conn.close()
+    cache = _ensure_book_cache()
+    if cache is None:  # seam disabled
+        return None
+    for source in (_SOURCE_LIVE, _SOURCE_RATE_CARD):
+        hit = _cached_lookup_by_model_source(provider, model, source, at_ts)
+        if hit is not None:
+            return hit
+    family = canonicalize(model, provider)
+    if family:
+        return _cached_lookup_by_model_source(provider, family, _SOURCE_MANIFEST, at_ts)
+    return None

@@ -232,6 +232,7 @@ class PricingService:
         if not rows:
             return
         conn: sqlite3.Connection | None = None
+        appended = False
         try:
             from ..infra.model_manifest import append_live_snapshot
 
@@ -243,11 +244,24 @@ class PricingService:
             if has_table:
                 append_live_snapshot(conn, rows)
                 conn.commit()
+                appended = True
         except (sqlite3.Error, ImportError) as e:
             logger.info("price_book live append skipped: %s", e)
         finally:
             if conn is not None:
                 conn.close()
+
+        # Re-prime the in-memory book so the freshly appended ``live`` rows are
+        # visible to ``compute_cost`` without a restart (no-op when the seam is
+        # disabled — e.g. CLI/unit-test paths). Isolated from the write above so
+        # a refresh hiccup can't undo a successful append.
+        if appended:
+            try:
+                from ..infra.model_manifest import refresh_price_book_cache
+
+                refresh_price_book_cache()
+            except Exception as e:  # noqa: BLE001 — refresh must never break a pricing save
+                logger.info("price_book cache refresh skipped: %s", e)
 
     def _is_cache_valid(self, timestamp_str: str | None) -> bool:
         """Check if cache timestamp is within valid duration."""

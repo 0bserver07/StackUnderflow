@@ -17,6 +17,13 @@ wrong dollars.
 Plus: lookup precedence (live > rate_card > manifest), effective-dating by
 ``at_ts``, the live-overlay append, backfill idempotency, and the safe-by-
 default fallback (no store wired ⇒ in-code path, byte-for-byte unchanged).
+
+ACTIVATION (the live default): the server primes the whole book into a
+module-level in-memory cache (``prime_price_book_cache``) after a backfill, and
+``compute_cost`` serves rates from memory. ``TestCachePrimedBookEqualsInCode``
+re-proves the equality gate through that priming path, ``TestNoPerCallDbIO``
+locks the no-per-call-DB-I/O contract, and ``TestLiveSnapshotRefreshesCache``
+checks the post-append refresh hook.
 """
 
 from __future__ import annotations
@@ -122,6 +129,147 @@ class TestPriceBookEqualsInCode:
         son_fast = compute_cost(_TOKENS, son, provider="anthropic", speed="fast")["total_cost"]
         assert opus_fast > opus_std  # premium applied
         assert son_fast == pytest.approx(son_std)  # no premium for sonnet
+
+
+# ── ACTIVE default: in-memory cache primed from a backfilled store ─────────────
+#
+# The activation path the server takes: backfill the book, then prime the
+# module-level in-memory cache from that store via ``prime_price_book_cache``.
+# ``compute_cost`` then serves rates from memory. These tests assert the SAME
+# number-preservation contract as the gate above, but through the priming +
+# cached-lookup machinery (not the lazy per-path prime the gate exercises), AND
+# that no DB connection is opened per ``compute_cost`` call.
+
+
+class TestCachePrimedBookEqualsInCode:
+    def _prime_from(self, store_path):
+        """Wire + prime the in-memory cache from ``store_path`` (server path)."""
+        conn = sqlite3.connect(store_path)
+        try:
+            mm.use_price_book_store(store_path, enabled=True)
+            primed = mm.prime_price_book_cache(conn)
+        finally:
+            conn.close()
+        assert primed is True  # a backfilled store always has rows
+
+    def test_full_breakdown_identical_with_primed_cache(self, backfilled_store):
+        """Every cost component matches in-code for the full spread, priced from
+        the primed in-memory cache (the active server default)."""
+        keys = ("input_cost", "output_cost", "cache_creation_cost", "cache_read_cost", "total_cost")
+        # In-code baseline (seam off).
+        mm.use_price_book_store(enabled=False)
+        incode = {
+            (m, s): compute_cost(_TOKENS, m, provider=p, speed=s)
+            for m, p, s in _CASES
+        }
+        # Active book via primed cache.
+        self._prime_from(backfilled_store)
+        for m, p, s in _CASES:
+            got = compute_cost(_TOKENS, m, provider=p, speed=s)
+            for k in keys:
+                assert got[k] == pytest.approx(incode[(m, s)][k], abs=1e-12), (
+                    f"{m}/{s} {k} differs between primed-cache book and in-code"
+                )
+
+    def test_at_ts_effective_dating_matches_incode_on_primed_cache(self, backfilled_store):
+        """A historical ``at_ts`` prices identically on the primed-cache book and
+        in-code — the manifest's dated rows survive into the cache."""
+        at = "2025-06-01T00:00:00Z"
+        mm.use_price_book_store(enabled=False)
+        incode = compute_cost(_TOKENS, "claude-opus-4-20250514", provider="anthropic", at_ts=at)
+        self._prime_from(backfilled_store)
+        book = compute_cost(_TOKENS, "claude-opus-4-20250514", provider="anthropic", at_ts=at)
+        assert book["total_cost"] == pytest.approx(incode["total_cost"], abs=1e-12)
+
+
+class TestNoPerCallDbIO:
+    """The hard performance contract: a primed book serves lookups from memory,
+    so ``compute_cost`` opens ZERO sqlite connections per call."""
+
+    def test_compute_cost_opens_no_connection_when_cache_primed(
+        self, backfilled_store, monkeypatch
+    ):
+        # Prime from the store, then forbid any further connection.
+        conn = sqlite3.connect(backfilled_store)
+        try:
+            mm.use_price_book_store(backfilled_store, enabled=True)
+            mm.prime_price_book_cache(conn)
+        finally:
+            conn.close()
+
+        # Warm the (network/JSON-backed, NOT sqlite) overlay cache BEFORE we
+        # start counting, so the assertion isolates the book lookup's I/O.
+        compute_cost(_TOKENS, "claude-opus-4-8", provider="anthropic")
+
+        calls = {"n": 0}
+        real_connect = sqlite3.connect
+
+        def _counting_connect(*a, **k):
+            calls["n"] += 1
+            return real_connect(*a, **k)
+
+        monkeypatch.setattr(sqlite3, "connect", _counting_connect)
+        # A spread of priced calls — every one must hit the in-memory cache.
+        for m, p, s in _CASES:
+            compute_cost(_TOKENS, m, provider=p, speed=s)
+        assert calls["n"] == 0, f"compute_cost opened {calls['n']} DB connection(s) per-call"
+
+    def test_lookups_still_correct_when_connect_is_poisoned(
+        self, backfilled_store, monkeypatch
+    ):
+        """Belt-and-braces: with the cache primed, a ``sqlite3.connect`` that
+        raises must not affect pricing — proving lookups never touch the DB."""
+        conn = sqlite3.connect(backfilled_store)
+        try:
+            mm.use_price_book_store(backfilled_store, enabled=True)
+            mm.prime_price_book_cache(conn)
+        finally:
+            conn.close()
+
+        # Warm the overlay cache before poisoning ``connect`` (the overlay path
+        # is JSON/network, not sqlite, but warming keeps the test honest).
+        compute_cost(_TOKENS, "claude-opus-4-8", provider="anthropic")
+
+        def _boom(*a, **k):
+            raise AssertionError("compute_cost must not open a DB connection")
+
+        monkeypatch.setattr(sqlite3, "connect", _boom)
+        got = compute_cost(_TOKENS, "claude-opus-4-8", provider="anthropic")["total_cost"]
+        assert got > 0.0
+
+
+# ── live refresh: cache reflects an appended snapshot without a restart ────────
+
+
+class TestLiveSnapshotRefreshesCache:
+    def test_refresh_after_live_append_changes_priced_rate(self, tmp_path):
+        """Appending a ``live`` snapshot + ``refresh_price_book_cache`` makes the
+        new rate visible to ``compute_cost`` — no process restart, no per-call
+        DB read. Uses an unrecognised id so no JSON overlay shadows the book."""
+        store_path = tmp_path / "store.db"
+        conn = db.connect(store_path)
+        schema.apply(conn)
+        conn.close()
+
+        mm.use_price_book_store(store_path, enabled=True)
+        mm.prime_price_book_cache()  # empty book → in-code fallback for the id
+        model = "claude-not-a-real-id-zzz"
+        before = compute_cost(_TOKENS, model, provider="anthropic")["total_cost"]
+
+        # Append a distinguishable live rate for the concrete id and refresh.
+        conn = sqlite3.connect(store_path)
+        conn.row_factory = sqlite3.Row
+        mm.append_live_snapshot(
+            conn,
+            [{"provider": "anthropic", "model": model,
+              "input": 999.0, "output": 999.0, "cache_write": 999.0, "cache_read": 999.0}],
+        )
+        conn.commit()
+        conn.close()
+        mm.refresh_price_book_cache()
+
+        after = compute_cost(_TOKENS, model, provider="anthropic")["total_cost"]
+        assert after > before  # the live row now prices the id
 
 
 # ── safe-by-default: no store wired ⇒ untouched in-code path ───────────────────
