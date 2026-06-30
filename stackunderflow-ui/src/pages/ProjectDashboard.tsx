@@ -33,6 +33,7 @@ const SessionsTab = lazy(() => import('../components/dashboard/SessionsTab'))
 const AgentsTab = lazy(() => import('../components/dashboard/AgentsTab'))
 const PlaybackTab = lazy(() => import('../components/dashboard/PlaybackTab'))
 const CostTab = lazy(() => import('../components/dashboard/CostTab'))
+const BudgetsTab = lazy(() => import('../components/dashboard/BudgetsTab'))
 const CompareTab = lazy(() => import('../components/dashboard/CompareTab'))
 const YieldTab = lazy(() => import('../components/dashboard/YieldTab'))
 import {
@@ -381,6 +382,7 @@ export default function ProjectDashboard() {
           <Suspense fallback={<LoadingSpinner size="md" message="Loading..." />}>
             {activeTab === 'overview' && <OverviewTab stats={stats} />}
             {activeTab === 'cost' && <CostTab stats={stats} />}
+            {activeTab === 'budgets' && <BudgetsTab />}
             {activeTab === 'compare' && <CompareTab />}
             {activeTab === 'yield' && <YieldTab />}
             {activeTab === 'commands' && <CommandsTab data={dashboardData} />}

@@ -24,6 +24,7 @@ import {
   IconGitBranch,
   IconHierarchy3,
   IconHistory,
+  IconWallet,
 } from '@tabler/icons-react'
 
 export type Tab = {
@@ -45,6 +46,11 @@ export const TABS: readonly Tab[] = [
   // see PlaybackTab.tsx and AgentsTab.tsx.
   { id: 'playback', label: 'Playback', icon: IconHistory, isBeta: true },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
+  // Cost-intelligence tab (audit #7p2) — spend budgets + cross-provider
+  // what-if repricing. Slots right after Cost since it consumes the same
+  // /api/budgets + /api/whatif cost surfaces. Beta while the candidate set
+  // and projection heuristics settle.
+  { id: 'budgets', label: 'Budgets', icon: IconWallet, isBeta: true },
   // v0.6.0 follow-up tabs — per spec brief, Compare/Yield slot between Cost
   // and Commands. Both call dedicated /api/compare and /api/yield routes.
   { id: 'compare', label: 'Compare', icon: IconScale },

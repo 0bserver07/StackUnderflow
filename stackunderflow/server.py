@@ -20,6 +20,7 @@ import stackunderflow.deps as deps
 from stackunderflow.routes import (
     agent_teams,
     bookmarks,
+    budgets,
     cfg,
     commands,
     compare,
@@ -41,6 +42,7 @@ from stackunderflow.routes import (
     sessions,
     tags,
     webhooks,
+    whatif,
     yield_route,
 )
 from stackunderflow.routes import (
@@ -258,6 +260,8 @@ app.include_router(webhooks.router)
 app.include_router(static_analysis_routes.router)
 app.include_router(quality.router)
 app.include_router(pricing.router)
+app.include_router(budgets.router)
+app.include_router(whatif.router)
 
 
 

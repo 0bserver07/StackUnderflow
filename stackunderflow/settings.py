@@ -133,6 +133,15 @@ class Settings:
     plan_name                    = _Opt(None,  None)
     plan_monthly_usd             = _Opt(None,  None)
     plan_reset_day               = _Opt(1,     None)
+    # Spend budgets (cost-intelligence audit #7 part 2) — user-set monthly
+    # and/or daily USD ceilings, distinct from ``plan_*`` above (which models
+    # a *known* subscription like Claude Max). Either may stay ``None``
+    # (unset). Both are file-only — a bare number is awkward to express as an
+    # env var, and these are managed through the Budgets UI / the
+    # ``GET,PUT,DELETE /api/budgets`` route rather than the shell. Read
+    # together by ``stackunderflow.services.budgets.get_budget``.
+    budget_monthly_usd           = _Opt(None,  None)
+    budget_daily_usd             = _Opt(None,  None)
     # Burn-projector v2 alert thresholds — list of integer percentages
     # of the plan budget at which the CLI / route / UI surface a banner
     # ("Crossed 50% of plan budget"). Defaults to 50 / 75 / 90; manage via

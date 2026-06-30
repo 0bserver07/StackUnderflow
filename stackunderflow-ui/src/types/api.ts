@@ -686,6 +686,91 @@ export interface PlanResponse {
   projection?: PlanProjection | null
 }
 
+// ---------------------------------------------------------------------------
+// Spend budgets (`GET/PUT/DELETE /api/budgets`) — cost-intelligence audit #7p2.
+// A user-set monthly and/or daily spend ceiling, distinct from the
+// subscription-modelling `Plan` above. Either leg may be null (unset).
+// Dollar fields inside `status` are pre-converted to the active currency.
+// ---------------------------------------------------------------------------
+
+/** One band of the budget traffic-light: below 80%, ≥80%, or over 100%. */
+export type BudgetBand = 'under' | 'approaching' | 'over'
+
+/** One budget leg's current status (monthly or daily). All dollars in display currency. */
+export interface BudgetLegStatus {
+  budget: number
+  used: number
+  remaining: number
+  /** Dimensionless % of the ceiling used (computed pre-conversion). */
+  pct: number
+  status: BudgetBand
+}
+
+export interface BudgetStatus {
+  monthly: BudgetLegStatus | null
+  daily: BudgetLegStatus | null
+  /** Linear month-end projection (display currency); null when no monthly budget. */
+  projected_month_end: number | null
+  /** True when the projection exceeds the monthly ceiling; null when unset. */
+  projection_overruns: boolean | null
+  /** Models that drove the in-window spend (for captioning). */
+  models: string[]
+}
+
+export interface BudgetConfig {
+  monthly_usd: number | null
+  daily_usd: number | null
+}
+
+export interface BudgetResponse {
+  budget: BudgetConfig
+  /** Null when no budget is set — render an "add a budget" CTA. */
+  status: BudgetStatus | null
+  currency: CurrencyInfo
+}
+
+/** Request body for `PUT /api/budgets`. Omit a field to leave it; null to clear it. */
+export interface BudgetUpdate {
+  monthly_usd?: number | null
+  daily_usd?: number | null
+}
+
+// ---------------------------------------------------------------------------
+// Cross-provider what-if (`GET /api/whatif`) — reprice the project's actual
+// token workload against a curated candidate set. Dollar fields are
+// pre-converted to the active currency; `delta_pct` is dimensionless.
+// ---------------------------------------------------------------------------
+
+export interface WhatIfTokens {
+  input: number
+  output: number
+  cache_read: number
+  cache_create: number
+  total: number
+}
+
+export interface WhatIfCandidate {
+  provider: string
+  model: string
+  label: string
+  cost_usd: number
+  /** cost_usd − actual (negative = cheaper than what was spent). */
+  delta_usd: number
+  /** delta vs actual as a %, or null when there is no actual spend. */
+  delta_pct: number | null
+}
+
+export interface WhatIfResponse {
+  scope: 'project' | 'all'
+  project_slug: string | null
+  tokens: WhatIfTokens
+  actual: { cost_usd: number; models: string[] }
+  /** Sorted cheapest-first. */
+  candidates: WhatIfCandidate[]
+  cheapest: WhatIfCandidate | null
+  currency: CurrencyInfo
+}
+
 /**
  * One structural finding from `GET /api/optimize`. Mirrors
  * `reports/optimize.py::Finding`. The route also returns a legacy `waste`

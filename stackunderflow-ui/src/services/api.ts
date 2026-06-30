@@ -17,6 +17,9 @@ import type {
   CostByProviderResponse,
   YieldResponse,
   PlanResponse,
+  BudgetResponse,
+  BudgetUpdate,
+  WhatIfResponse,
   OptimizeResponse,
   ContextBudget,
   EtlStatusResponse,
@@ -400,6 +403,46 @@ export async function getYield(
 
 export async function getPlan(): Promise<PlanResponse> {
   return fetchJson(`${BASE}/plan`)
+}
+
+// ---------------------------------------------------------------------------
+// Spend budgets (audit #7p2). The status query takes the browser's UTC offset
+// so month/today spend buckets on the user's local day, matching Cost/Live.
+// `tzOffsetMinutes` is "minutes east of UTC" — note Date.getTimezoneOffset()
+// returns the *opposite* sign, so we negate it (same convention the other
+// tz-aware routes use).
+// ---------------------------------------------------------------------------
+
+function localTzOffset(): number {
+  return -new Date().getTimezoneOffset()
+}
+
+export async function getBudgets(): Promise<BudgetResponse> {
+  const params = new URLSearchParams({ timezone_offset: String(localTzOffset()) })
+  return fetchJson(`${BASE}/budgets?${params}`)
+}
+
+export async function setBudgets(update: BudgetUpdate): Promise<BudgetResponse> {
+  const params = new URLSearchParams({ timezone_offset: String(localTzOffset()) })
+  return fetchJson(`${BASE}/budgets?${params}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+}
+
+export async function clearBudgets(): Promise<BudgetResponse> {
+  const params = new URLSearchParams({ timezone_offset: String(localTzOffset()) })
+  return fetchJson(`${BASE}/budgets?${params}`, { method: 'DELETE' })
+}
+
+/**
+ * Cross-provider what-if repricing. With a project active the route scopes to
+ * it via `deps.current_log_path`, so no param is needed for the per-project
+ * Budgets tab view.
+ */
+export async function getWhatIf(): Promise<WhatIfResponse> {
+  return fetchJson(`${BASE}/whatif`)
 }
 
 export async function getOptimize(
