@@ -3407,6 +3407,156 @@ def _render_etl_status_text(payload: dict) -> None:
         click.echo(f"  Lag (events behind marts): {lag:,}")
 
 
+# ── pricing health (read-only doctor) ────────────────────────────────────────
+#
+# ``stackunderflow pricing doctor`` reports pricing health from the store:
+# models with no resolvable rate card, a stale rate overlay, and rows stamped
+# ``cost_source='unknown'`` — plus, for each, the dollar delta a resolvable
+# rate would add. Read-only: the assembler issues only SELECTs and reads the
+# overlay cache without a network fetch. Both this command and
+# ``GET /api/pricing/doctor`` call the same assembler so they never disagree.
+
+@cli.group("pricing")
+def pricing_group():
+    """Inspect model pricing health (read-only)."""
+
+
+@pricing_group.command("doctor")
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(_VALID_FORMATS),
+    default="text",
+    help="Output format (text or json).",
+)
+@click.option(
+    "--stale-days",
+    type=int,
+    default=7,  # mirrors routes.pricing.DEFAULT_STALE_DAYS / PricingService.STALE_THRESHOLD
+    help="Flag the rate overlay stale when older than this many days.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=50,  # mirrors routes.pricing.DEFAULT_LIMIT
+    help="Max model entries listed per section (full counts stay in the summary).",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    help="Exit non-zero when a hard defect is found (billable unpriced model or "
+         "unknown row with nonzero cost) — for CI gating.",
+)
+def pricing_doctor_cmd(fmt: str, stale_days: int, limit: int, strict: bool):
+    """Report pricing health: unpriced models, stale rates, unknown cost rows.
+
+    Reads the live store (``~/.stackunderflow/store.db``) and renders the
+    same payload ``GET /api/pricing/doctor`` returns. Works without a
+    running server. Strictly read-only — no DB writes, no network.
+    """
+    from stackunderflow.routes.pricing import assemble_pricing_health
+
+    conn = _open_store()
+    try:
+        payload = assemble_pricing_health(conn, stale_days=stale_days, limit=limit)
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _render_pricing_doctor_text(payload)
+
+    if strict and not payload.get("ok", True):
+        raise SystemExit(1)
+
+
+def _render_pricing_doctor_text(payload: dict) -> None:
+    """Render the pricing-health payload as a one-screen text block.
+
+    Numbers come straight from the payload — the renderer adds no
+    computed figures of its own beyond formatting.
+    """
+    from stackunderflow.infra.costs import format_dollars
+
+    ok = payload.get("ok", True)
+    summary = payload.get("summary", {})
+
+    header = "Pricing health — OK" if ok else "Pricing health — ISSUES FOUND"
+    click.secho(header, fg="green" if ok else "red", bold=True)
+    click.echo("")
+
+    total_events = summary.get("total_events", 0)
+    total_cost = summary.get("total_cost_usd", 0.0)
+    click.echo(
+        f"  Events:        {total_events:,} "
+        f"({format_dollars(total_cost)} total cost)"
+    )
+
+    # Rate overlay freshness.
+    freshness = payload.get("rate_freshness") or {}
+    age = freshness.get("age_days")
+    src = freshness.get("source", "none")
+    threshold = freshness.get("stale_days_threshold", payload.get("stale_days"))
+    if age is not None:
+        age_phrase = f"{age:.1f}d old"
+    else:
+        age_phrase = "no cached overlay" if src == "none" else "age unknown"
+    stale_tag = "STALE" if freshness.get("stale") else "fresh"
+    fg = "yellow" if freshness.get("stale") else "green"
+    click.secho(
+        f"  Rate overlay:  {src} — {age_phrase} "
+        f"(threshold {threshold}d) [{stale_tag}]",
+        fg=fg,
+    )
+    click.echo("")
+
+    # Unpriced models (no resolvable rate card).
+    unpriced = payload.get("unpriced_models") or []
+    n_unpriced = summary.get("unpriced_model_count", len(unpriced))
+    n_billable = summary.get("billable_unpriced_model_count", 0)
+    exposure = summary.get("estimated_unpriced_exposure_usd", 0.0)
+    click.echo(
+        f"  Unpriced models (no rate card): {n_unpriced} "
+        f"(est. exposure {format_dollars(exposure)})"
+    )
+    if n_billable:
+        click.secho(
+            f"    ! {n_billable} are BILLABLE (priced rows against an "
+            f"unresolvable model — a defect)",
+            fg="red",
+        )
+    for m in unpriced:
+        delta = m.get("estimated_delta_usd")
+        delta_phrase = f"+{format_dollars(delta)} if priced" if delta else "no estimate"
+        flag = " [billable]" if m.get("billable") else ""
+        click.echo(
+            f"      {m.get('provider','')}/{m.get('model','')}: "
+            f"{m.get('events',0):,} events, {delta_phrase}{flag}"
+        )
+    click.echo("")
+
+    # Unknown cost_source rows.
+    unknown = payload.get("unknown_cost_source") or []
+    n_unknown = summary.get("unknown_cost_source_model_count", len(unknown))
+    violations = summary.get("unknown_nonzero_cost_rows", 0)
+    click.echo(f"  Unknown cost_source models: {n_unknown}")
+    for m in unknown:
+        delta = m.get("estimated_delta_usd")
+        delta_phrase = (
+            f"{format_dollars(delta)} recoverable" if delta else "no estimate"
+        )
+        click.echo(
+            f"      {m.get('provider','')}/{m.get('model','')}: "
+            f"{m.get('events',0):,} events, {delta_phrase}"
+        )
+    if violations:
+        click.secho(
+            f"    ! {violations:,} unknown rows carry a NONZERO cost "
+            f"(contract: unknown ⇒ $0.0)",
+            fg="red",
+        )
+
+
 # ── hybrid-capture hooks ─────────────────────────────────────────────────────
 #
 # Opt-in Claude Code lifecycle hooks (see ``.notes/specs/05-hybrid-capture-hooks.md``

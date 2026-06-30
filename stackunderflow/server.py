@@ -33,6 +33,7 @@ from stackunderflow.routes import (
     optimize,
     plan,
     playback,
+    pricing,
     projects,
     qa,
     quality,
@@ -256,6 +257,7 @@ app.include_router(live.router)
 app.include_router(webhooks.router)
 app.include_router(static_analysis_routes.router)
 app.include_router(quality.router)
+app.include_router(pricing.router)
 
 
 

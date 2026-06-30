@@ -102,6 +102,59 @@ class PricingService:
                     "is_stale": True,
                 }
 
+    @classmethod
+    def read_cache_status(cls) -> dict[str, Any]:
+        """Read-only freshness probe of the on-disk pricing overlay.
+
+        Reports how old the cached LiteLLM overlay is WITHOUT triggering a
+        network fetch or creating any directory — unlike :meth:`get_pricing`
+        (which refreshes on a stale cache) and ``__init__`` (which mkdirs the
+        cache dir). Safe to call from the read-only ``pricing doctor`` surface.
+
+        Returns ``{source, timestamp, age_days, is_stale, model_count}``:
+
+        * ``source``      — ``"cache"`` when a cache file is present, else
+          ``"none"`` (no overlay on disk; callers price from the rate card).
+        * ``timestamp``   — ISO string the cache was written, or ``None``.
+        * ``age_days``    — float age of the cache, or ``None`` if unparseable.
+        * ``is_stale``    — True when older than :data:`STALE_THRESHOLD` (or
+          when there is no cache / no parseable timestamp).
+        * ``model_count`` — number of overlay model entries (0 when absent).
+        """
+        cache_file = Path.home() / ".stackunderflow" / "cache" / "pricing.json"
+        empty = {
+            "source": "none",
+            "timestamp": None,
+            "age_days": None,
+            "is_stale": True,
+            "model_count": 0,
+        }
+        if not cache_file.exists():
+            return empty
+        try:
+            with open(cache_file) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return empty
+
+        ts = data.get("timestamp")
+        age_days: float | None = None
+        if ts:
+            try:
+                cache_time = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                age_days = (datetime.now(UTC) - cache_time).total_seconds() / 86400.0
+            except (ValueError, AttributeError):
+                age_days = None
+        is_stale = age_days is None or age_days >= cls.STALE_THRESHOLD.days
+        pricing = data.get("pricing")
+        return {
+            "source": str(data.get("source") or "cache"),
+            "timestamp": ts,
+            "age_days": age_days,
+            "is_stale": bool(is_stale),
+            "model_count": len(pricing) if isinstance(pricing, dict) else 0,
+        }
+
     def force_refresh(self) -> bool:
         """Force refresh pricing from LiteLLM."""
         fresh_data = self._fetch_from_litellm()

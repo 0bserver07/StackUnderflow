@@ -268,14 +268,51 @@ def get_dynamic_pricing() -> dict[str, Any]:
 RATE_CARD = {mid: get_model_pricing(mid) for mid in _CANONICAL_IDS}
 
 
+# ── read-only introspection (pricing doctor) ─────────────────────────────────
+
+def is_rate_card_model(model: str) -> bool:
+    """True when *model* has an exact entry in :data:`RATE_CARD`.
+
+    This is the same membership test every normalizer uses to decide
+    ``cost_source`` (``rate_card`` when the id is present, ``unknown``
+    otherwise — see ``etl/normalize/*``): the provider pricers fall back
+    to a default family for unrecognised ids, so ``get_model_pricing``
+    would never return ``None``, and exact ``RATE_CARD`` membership is the
+    only honest "we actually know this model" signal. Read-only — used by
+    ``pricing doctor`` to flag models with no resolvable rate card.
+    """
+    return bool(model) and model in RATE_CARD
+
+
+def estimate_cost(tokens: dict[str, int], model: str) -> float:
+    """Best-effort would-be cost (USD) for *tokens* priced at *model*'s rate.
+
+    Routes through :func:`compute_cost` with the model-name provider
+    heuristic so an unpriced row's dollar exposure can be quantified —
+    ``pricing doctor`` reports this as the delta a resolvable rate would
+    add (an ``unknown`` row stores ``cost_usd`` 0.0, so the delta is the
+    full conservative fallback-priced figure). Read-only and never raises:
+    returns ``0.0`` when no rate resolves or pricing errors. ``tokens``
+    uses the canonical 4-key shape (``input`` / ``output`` /
+    ``cache_creation`` / ``cache_read``).
+    """
+    try:
+        breakdown = compute_cost(tokens, model, provider=_provider_for_model(model))
+    except Exception:  # noqa: BLE001 — introspection must never raise
+        return 0.0
+    return float(breakdown.get("total_cost", 0.0) or 0.0)
+
+
 # Re-export the pricer classes for tests / advanced callers.
 __all__ = [
     "AnthropicPricer",
     "OpenAIPricer",
     "RATE_CARD",
     "compute_cost",
+    "estimate_cost",
     "format_dollars",
     "get_dynamic_pricing",
     "get_model_pricing",
+    "is_rate_card_model",
     "resolve_model_alias",
 ]
