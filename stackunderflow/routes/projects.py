@@ -17,6 +17,20 @@ from stackunderflow.store import db, mart_queries, queries
 router = APIRouter()
 
 
+# Pagination bounds for ``GET /api/projects``.
+#
+# ``limit`` omitted → ``PROJECTS_DEFAULT_LIMIT`` — a *large* default cap (not a
+# tiny page) so existing callers that fetch "all projects" keep working for
+# every realistic store (real installs top out in the low hundreds of slugs).
+# The cap only bites a pathological store with more slugs than the default,
+# which the paginating frontend walks page-by-page anyway.
+#
+# ``PROJECTS_MAX_LIMIT`` is the hard ceiling any single request can ask for, so
+# a crafted ``?limit=999999`` can't force an oversized slice/serialisation.
+PROJECTS_DEFAULT_LIMIT = 500
+PROJECTS_MAX_LIMIT = 1000
+
+
 # Set project endpoint
 @router.post("/api/project")
 async def set_project(data: dict[str, str]):
@@ -186,8 +200,11 @@ async def get_projects(
     Args:
         include_stats: Include statistics for each project (may be slower)
         sort_by: Sort field (last_modified, first_seen, size, name)
-        limit: Maximum number of projects to return
-        offset: Offset for pagination
+        limit: Page size. Omitted → ``PROJECTS_DEFAULT_LIMIT`` (a large cap that
+            preserves the historical "all projects" response for realistic
+            stores); clamped to ``[1, PROJECTS_MAX_LIMIT]`` when provided.
+        offset: Page offset (floored at 0). With ``total_count`` + ``has_more``
+            in the response this is enough for the frontend to page.
         provider: Optional repeated query param (``?provider=cursor&provider=cline``)
             scoping the project list to those providers. Empty = "all".
             Case-insensitive on read, lowercased before comparison.
@@ -230,6 +247,22 @@ def _normalise_provider_filter(provider: list[str] | None) -> set[str] | None:
     return normed or None
 
 
+def _clamp_pagination(limit: int | None, offset: int) -> tuple[int, int]:
+    """Resolve ``(limit, offset)`` to bounded, non-negative integers.
+
+    ``limit is None`` → :data:`PROJECTS_DEFAULT_LIMIT` (preserve the historical
+    "return everything" behaviour for realistic stores). An explicit ``limit``
+    is clamped to ``[1, PROJECTS_MAX_LIMIT]``; ``offset`` floors at ``0``. The
+    returned ``limit`` is always a positive int, so the caller can slice
+    unconditionally.
+    """
+    if limit is None:
+        resolved_limit = PROJECTS_DEFAULT_LIMIT
+    else:
+        resolved_limit = max(1, min(int(limit), PROJECTS_MAX_LIMIT))
+    return resolved_limit, max(0, int(offset))
+
+
 def _compute_projects_payload(
     *,
     include_stats: bool,
@@ -246,6 +279,7 @@ def _compute_projects_payload(
     sorts / paginates and applies the active-currency conversion. Returns
     the JSON payload dict the route ships verbatim.
     """
+    limit, offset = _clamp_pagination(limit, offset)
     conn = db.connect(deps.store_path)
     try:
         project_rows = queries.list_projects(conn)
@@ -314,9 +348,12 @@ def _compute_projects_payload(
         elif sort_by == "name":
             projects.sort(key=lambda x: x["display_name"])
 
+        # ``total_count`` is the full slug count *before* the page slice so the
+        # frontend can size its pager. The per-project ``_stats_for_ids`` pass
+        # below runs only over the page slice — that's what keeps the mart
+        # fast-path bounded (we never resolve stats for projects off-page).
         total_count = len(projects)
-        if limit:
-            projects = projects[offset : offset + limit]
+        projects = projects[offset : offset + limit]
 
         if include_stats:
             for proj in projects:
@@ -343,7 +380,11 @@ def _compute_projects_payload(
     return {
         "projects": projects,
         "total_count": total_count,
-        "has_more": offset + limit < total_count if limit else False,
+        # Echo the resolved (clamped) page bounds so the frontend can compute
+        # the next offset without re-deriving the clamp rules client-side.
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total_count,
         "cache_status": {
             "cached_count": 0,
             "total_projects": total_count,

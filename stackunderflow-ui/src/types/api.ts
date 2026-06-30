@@ -64,6 +64,10 @@ export interface ProjectStats {
 export interface ProjectsResponse {
   projects: Project[]
   total_count: number
+  // Resolved (clamped) page bounds echoed by the server so a paging client can
+  // compute the next offset. Optional: older server builds may omit them.
+  limit?: number
+  offset?: number
   has_more: boolean
   cache_status: {
     cached_count: number

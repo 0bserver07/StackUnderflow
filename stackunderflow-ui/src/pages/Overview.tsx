@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconRefresh, IconArrowUp, IconArrowDown, IconSearch } from '@tabler/icons-react'
 import { getProjects, refreshData, getGlobalStats } from '../services/api'
 import { formatProjectName, getNameMode, setNameMode as persistNameMode } from '../services/nameMode'
@@ -31,6 +31,13 @@ const DATE_PRESETS: { key: DateRange; label: string }[] = [
   { key: '90d', label: '90 days' },
   { key: 'all', label: 'All time' },
 ]
+
+// Audit #12: walk `/api/projects?include_stats=true` in bounded pages instead
+// of pulling the entire (hundreds-of-projects) payload in one request. Stores
+// with <= one page load everything on first fetch — identical UX; larger
+// stores get a "Load more" affordance below the table that appends the next
+// page. Kept under the backend's hard max so a page request is never clamped.
+const PROJECTS_PAGE_SIZE = 100
 
 function daysAgo(n: number): Date {
   const d = new Date()
@@ -122,13 +129,23 @@ export default function Overview() {
   const debouncedSearch = useDebounce(search, 200)
 
   const {
-    data: projectsData,
+    data: projectsPages,
     isLoading: projectsLoading,
     isError: projectsError,
     refetch: refetchProjects,
-  } = useQuery({
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['projects', true],
-    queryFn: () => getProjects(true),
+    queryFn: ({ pageParam }) =>
+      getProjects(true, undefined, { limit: PROJECTS_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => {
+      if (!lastPage.has_more) return undefined
+      const next = (lastPage.offset ?? 0) + (lastPage.limit ?? PROJECTS_PAGE_SIZE)
+      return next < lastPage.total_count ? next : undefined
+    },
   })
 
   // #50: globalStats now tracks its own loading/error. Previously its state was
@@ -155,7 +172,15 @@ export default function Overview() {
     },
   })
 
-  const projects = projectsData?.projects ?? []
+  // Flatten the loaded pages into one list — `useMemo` keeps the reference
+  // stable across unrelated re-renders so the downstream filter/sort memos
+  // actually cache. `totalCount` is the server's true slug count (from the
+  // first page), independent of how many pages are currently loaded.
+  const projects = useMemo(
+    () => projectsPages?.pages.flatMap(p => p.projects) ?? [],
+    [projectsPages],
+  )
+  const totalCount = projectsPages?.pages[0]?.total_count ?? projects.length
 
   // Global stats
   const gStats = globalStats as Record<string, unknown> | undefined
@@ -418,7 +443,7 @@ export default function Overview() {
         <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
           <div className="text-xs text-gray-500 uppercase tracking-wider">Cached</div>
           <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
-            {projectsData?.cache_status?.cached_count ?? 0}/{projects.length}
+            {projectsPages?.pages[0]?.cache_status?.cached_count ?? 0}/{totalCount}
           </div>
         </div>
       </div>
@@ -577,6 +602,23 @@ export default function Overview() {
           </table>
         </div>
       </div>
+
+      {/* Audit #12: server-side "Load more" — appends the next page of projects
+          to the loaded set. Absent once everything is loaded, so stores with
+          <= one page never see it (UX identical). The client-side Prev/Next
+          below pages through whatever is currently loaded. */}
+      {hasNextPage && (
+        <div className="flex items-center justify-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+          <span>{projects.length} of {totalCount} projects loaded</span>
+          <button
+            onClick={() => fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className="px-3 py-1 bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 disabled:opacity-50"
+          >
+            {isFetchingNextPage ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
 
       {/* Pagination */}
       {totalPages > 1 && (

@@ -68,11 +68,26 @@ function buildFilterParams(params: URLSearchParams, filters?: FilterParams): URL
 }
 
 // Projects
+//
+// `/api/projects` is server-paginated (audit #12): omitting `limit` returns a
+// large default cap, but heavy `include_stats=true` callers should walk pages
+// via `limit`/`offset` so the hundreds-of-projects payload isn't pulled at
+// once. The response echoes the resolved `limit`/`offset` plus `total_count` /
+// `has_more` so callers (see Overview's `useInfiniteQuery`) can derive the next
+// page without re-deriving the clamp rules.
+export interface ProjectsPageQuery {
+  limit?: number
+  offset?: number
+}
+
 export async function getProjects(
   includeStats = false,
   filters?: FilterParams,
+  page?: ProjectsPageQuery,
 ): Promise<ProjectsResponse> {
   const params = new URLSearchParams({ include_stats: String(includeStats) })
+  if (typeof page?.limit === 'number') params.set('limit', String(page.limit))
+  if (typeof page?.offset === 'number') params.set('offset', String(page.offset))
   buildFilterParams(params, filters)
   return fetchJson(`${BASE}/projects?${params}`)
 }
