@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 23
+CURRENT_VERSION = 24
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -96,6 +96,12 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     13: ("sessions", "team_id"),
     22: ("project_mart", "total_user_messages"),
     23: ("project_mart", "total_records"),
+    # v024 creates the ``price_book`` table (CREATE TABLE IF NOT EXISTS, so
+    # re-running is already safe); the guard makes the partial-application
+    # path — table present, ``user_version`` behind — bump the version
+    # without re-executing the body. ``_column_exists`` doubles as a
+    # "does this table exist with this column?" probe.
+    24: ("price_book", "model"),
 }
 
 

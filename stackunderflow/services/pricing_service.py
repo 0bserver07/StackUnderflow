@@ -193,6 +193,62 @@ class PricingService:
         except OSError as e:
             logger.info(f"Error saving pricing cache: {e}")
 
+        # Unification (audit #2): besides the single-snapshot JSON cache that
+        # ``costs._load_overlay`` reads, APPEND each refresh as an effective-
+        # dated ``source='live'`` row in the store's ``price_book`` so the live
+        # feed accrues history there too. Best-effort and isolated from the JSON
+        # write — a missing/locked store must never break a pricing refresh.
+        self._append_live_to_price_book(pricing_data)
+
+    def _append_live_to_price_book(self, pricing_data: dict) -> None:
+        """Append the LiteLLM overlay as dated ``source='live'`` price-book rows.
+
+        The overlay JSON is per-token; the book stores $/M, so each rate is
+        scaled by 1e6. Stamped "as of today" (the overlay carries no history).
+        Anthropic-shape provider for every entry — the overlay only transforms
+        Anthropic models (see :meth:`_transform_litellm_to_claude`). No-op when
+        the store file or the ``price_book`` table is absent.
+        """
+        import sqlite3
+
+        store_path = Path.home() / ".stackunderflow" / "store.db"
+        if not store_path.exists() or not isinstance(pricing_data, dict):
+            return
+        million = 1_000_000.0
+        rows: list[dict] = []
+        for mid, entry in pricing_data.items():
+            if not isinstance(entry, dict):
+                continue
+            rows.append(
+                {
+                    "provider": "anthropic",
+                    "model": mid,
+                    "input": float(entry.get("input_cost_per_token", 0) or 0) * million,
+                    "output": float(entry.get("output_cost_per_token", 0) or 0) * million,
+                    "cache_write": float(entry.get("cache_creation_cost_per_token", 0) or 0) * million,
+                    "cache_read": float(entry.get("cache_read_cost_per_token", 0) or 0) * million,
+                }
+            )
+        if not rows:
+            return
+        conn: sqlite3.Connection | None = None
+        try:
+            from ..infra.model_manifest import append_live_snapshot
+
+            conn = sqlite3.connect(store_path)
+            # Table may not exist on a store that predates v024; bail quietly.
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='price_book'"
+            ).fetchone()
+            if has_table:
+                append_live_snapshot(conn, rows)
+                conn.commit()
+        except (sqlite3.Error, ImportError) as e:
+            logger.info("price_book live append skipped: %s", e)
+        finally:
+            if conn is not None:
+                conn.close()
+
     def _is_cache_valid(self, timestamp_str: str | None) -> bool:
         """Check if cache timestamp is within valid duration."""
         if not timestamp_str:

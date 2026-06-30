@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 23`).
+**Status:** v1 (pinned to `schema_version = 24`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 23`. The current migration set is:
+Pin to `schema_version = 24`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -46,6 +46,7 @@ Pin to `schema_version = 23`. The current migration set is:
 | 21 | `v021_grade_no_fabricated_fallback.sql` | purges fabricated 5.0 fallback grades left in `session_quality_metrics` |
 | 22 | `v022_project_mart_message_dims.sql` | adds 5 `project_mart` columns: per-project message-type + command counts |
 | 23 | `v023_mart_overview_rate_dims.sql` | adds 7 `project_mart` columns (Overview cache/interruption/errors rate numerators) + 2 `tool_mart` columns (`cache_read`, `cache_create` — ui-perf #20) |
+| 24 | `v024_price_book.sql` | `price_book` (effective-dated unified rate table; manifest + rate card backfill, LiteLLM `live` snapshots — audit #2) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 

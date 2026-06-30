@@ -109,6 +109,17 @@ def compute_cost(
         # Overlay (LiteLLM feed) is a single current snapshot with no
         # effective-dated history, so ``at_ts`` does not apply here.
         return ProviderPricer._apply_overlay_rates(normalized, overlay)
+
+    # Unified price book (store-backed, opt-in). When a store is wired
+    # (``model_manifest.use_price_book_store``) and carries a matching row,
+    # it is the source — at the SAME precedence the manifest path has here
+    # (after the overlay). A miss returns None and falls through to the
+    # in-code pricer below, so a fresh store prices identically to today.
+    book = _price_book_rates(model, provider, at_ts)
+    if book is not None:
+        if speed == "fast":
+            book = _apply_fast_multiplier(book, model, provider)
+        return ProviderPricer._apply_overlay_rates(normalized, book)
     return pricer.compute(normalized, model, speed=speed, at_ts=at_ts)
 
 
@@ -242,6 +253,80 @@ def _overlay_rates(model: str) -> tuple[float, float, float, float] | None:
     return _load_overlay().get(model)
 
 
+# ── unified price book seam ──────────────────────────────────────────────────
+
+def _price_book_rates(
+    model: str, provider: str, at_ts: str | None
+) -> tuple[float, float, float, float] | None:
+    """Resolve $/M rates from the store-backed price book, or ``None``.
+
+    Routes the *pricer-side* provider key (Anthropic for claude/GLM/cursor,
+    etc.) — the same key ``model_manifest`` keyed the rows under during
+    backfill — so a manifest-family lookup resolves. Returns ``None`` when the
+    store isn't wired or the model is absent so ``compute_cost`` falls through
+    to the in-code manifest. Never raises.
+    """
+    try:
+        from .model_manifest import store_price_book_lookup
+        return store_price_book_lookup(model, _provider_for_model(model), at_ts)
+    except Exception:  # noqa: BLE001 — book lookup must never break pricing
+        return None
+
+
+def _apply_fast_multiplier(
+    rates: tuple[float, float, float, float], model: str, provider: str
+) -> tuple[float, float, float, float]:
+    """Fold Anthropic's priority/fast input+output multiplier into book rates.
+
+    The book stores standard rates; the fast premium is a manifest concept the
+    in-code Anthropic pricer applies after rate lookup. Mirror that here so a
+    book hit for a ``speed='fast'`` Opus record bills identically to the
+    in-code path. No-op when the family has no ``fast_multiplier``.
+    """
+    try:
+        from .model_manifest import canonicalize, fast_multiplier
+        pkey = _provider_for_model(model)
+        mult = fast_multiplier(canonicalize(model, pkey), pkey)
+    except Exception:  # noqa: BLE001
+        mult = None
+    if not mult:
+        return rates
+    inp_r, out_r, cw_r, cr_r = rates
+    return (inp_r * mult, out_r * mult, cw_r, cr_r)
+
+
+def backfill_price_book(conn) -> int:
+    """Populate the ``price_book`` table from the manifest + RATE_CARD.
+
+    The manifest's effective-dated family rows map directly
+    (``model_manifest.backfill_price_book``); on top of them this stamps every
+    concrete ``_CANONICAL_IDS`` id at its current resolved rate
+    (``source='rate_card'``) so the per-id lookup tier covers non-manifest
+    providers (openai/qwen/gemini/…). Idempotent (UPSERT); returns rows written.
+    """
+    from .model_manifest import backfill_price_book as _manifest_backfill
+
+    rate_card_rows: list[dict] = []
+    for mid in _CANONICAL_IDS:
+        pricing = get_model_pricing(mid)
+        if not pricing:
+            continue
+        rate_card_rows.append(
+            {
+                "provider": _provider_for_model(mid),
+                "model": mid,
+                "effective_from": "",
+                "effective_until": "",
+                "input": pricing["input_cost_per_token"] * _MILLION,
+                "output": pricing["output_cost_per_token"] * _MILLION,
+                "cache_write": pricing["cache_creation_cost_per_token"] * _MILLION,
+                "cache_read": pricing["cache_read_cost_per_token"] * _MILLION,
+                "source": "rate_card",
+            }
+        )
+    return _manifest_backfill(conn, rate_card_rows)
+
+
 def get_model_pricing(model: str) -> dict[str, float] | None:
     model = resolve_model_alias(model, _user_aliases())
     overlay = _overlay_rates(model)
@@ -308,6 +393,7 @@ __all__ = [
     "AnthropicPricer",
     "OpenAIPricer",
     "RATE_CARD",
+    "backfill_price_book",
     "compute_cost",
     "estimate_cost",
     "format_dollars",

@@ -18,6 +18,8 @@ logic and delegate identity + rates here.
 from __future__ import annotations
 
 import logging
+import sqlite3
+import time
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -165,3 +167,252 @@ def fast_multiplier(canonical: str | None, provider: str = "anthropic") -> float
         return None
     mult = entry.get("fast_multiplier")
     return float(mult) if mult else None
+
+
+# ── unified price book (store-backed) ────────────────────────────────────────
+#
+# The ``price_book`` table (migration v024) is the single effective-dated home
+# the manifest + RATE_CARD back-fill into and the LiteLLM overlay appends "live"
+# snapshots into. ``compute_cost`` reads it through ``price_book_lookup`` with
+# the same precedence as before (live > rate_card/manifest) and falls back to
+# the in-code manifest when the book is empty (fresh store), so cost numbers are
+# unchanged. Rates are stored in the manifest's $/M unit so a book hit is
+# byte-for-byte the in-code value.
+
+_SOURCE_MANIFEST = "manifest"
+_SOURCE_RATE_CARD = "rate_card"
+_SOURCE_LIVE = "live"
+
+# Read precedence when several sources carry a row for the same model — the
+# live overlay wins, mirroring ``costs.compute_cost``'s overlay-first behaviour.
+_SOURCE_PRECEDENCE = {_SOURCE_LIVE: 0, _SOURCE_RATE_CARD: 1, _SOURCE_MANIFEST: 2}
+
+# Default store location — same convention as ``services/pricing_service`` and
+# ``deps.store_path``. Kept here (not imported from ``deps``) to avoid an
+# infra→app import cycle.
+_STORE_PATH = Path.home() / ".stackunderflow" / "store.db"
+
+
+def manifest_price_book_rows() -> list[dict]:
+    """Flatten the in-code manifest into ``price_book``-shaped rows.
+
+    One row per (family, price-row): the manifest family is the ``model`` key
+    and each effective-dated price row maps directly. Empty
+    ``effective_from`` / ``effective_until`` sentinels stand in for the
+    manifest's ``None`` (always-current) so they survive the table's NOT NULL
+    UNIQUE key.
+    """
+    rows: list[dict] = []
+    for m in _models():
+        provider = m.get("provider")
+        family = m.get("family")
+        if not provider or not family:
+            continue
+        for price in m.get("price") or []:
+            rows.append(
+                {
+                    "provider": provider,
+                    "model": family,
+                    "effective_from": price.get("effective_from") or "",
+                    "effective_until": price.get("effective_until") or "",
+                    "input": float(price["input"]),
+                    "output": float(price["output"]),
+                    "cache_write": float(price["cache_write"]),
+                    "cache_read": float(price["cache_read"]),
+                    "source": _SOURCE_MANIFEST,
+                }
+            )
+    return rows
+
+
+def _upsert_price_rows(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    """Idempotently write ``price_book`` rows (UPSERT on the unique key).
+
+    A re-run overwrites the same (provider, model, effective_from, source) row
+    in place, so backfilling twice — or refreshing a live snapshot — is a no-op
+    on identity and a value-refresh otherwise. Returns the number of rows
+    written.
+    """
+    now = time.time()
+    written = 0
+    for r in rows:
+        conn.execute(
+            "INSERT INTO price_book "
+            "(provider, model, effective_from, effective_until, "
+            " input, output, cache_write, cache_read, source, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, model, effective_from, source) DO UPDATE SET "
+            "  effective_until = excluded.effective_until, "
+            "  input = excluded.input, output = excluded.output, "
+            "  cache_write = excluded.cache_write, cache_read = excluded.cache_read, "
+            "  updated_at = excluded.updated_at",
+            (
+                r["provider"], r["model"], r.get("effective_from", ""),
+                r.get("effective_until", ""), r["input"], r["output"],
+                r["cache_write"], r["cache_read"], r.get("source", _SOURCE_MANIFEST),
+                now,
+            ),
+        )
+        written += 1
+    return written
+
+
+def backfill_price_book(
+    conn: sqlite3.Connection, rate_card_rows: list[dict] | None = None
+) -> int:
+    """Populate ``price_book`` from the manifest (+ optional RATE_CARD rows).
+
+    The manifest's dated rows map directly (``source='manifest'``, keyed by
+    family). ``rate_card_rows`` — passed by ``costs.backfill_price_book`` so
+    this module needn't import ``costs`` (cycle) — carries the concrete
+    ``_CANONICAL_IDS`` priced at their current rate (``source='rate_card'``),
+    which is what the per-id lookup tier hits for non-manifest providers
+    (openai/qwen/…). Idempotent; returns the row count written.
+    """
+    written = _upsert_price_rows(conn, manifest_price_book_rows())
+    if rate_card_rows:
+        written += _upsert_price_rows(conn, rate_card_rows)
+    return written
+
+
+def append_live_snapshot(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    """Append LiteLLM-overlay rows as dated ``source='live'`` snapshots.
+
+    Each row needs ``provider`` / ``model`` / the four $/M rates; an absent
+    ``effective_from`` is stamped with today's date so the snapshot is
+    effective-dated (the overlay JSON cache carries no history, so each
+    refresh records "as of today"). The same-day snapshot for a model
+    overwrites in place via the unique key.
+    """
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    stamped = [
+        {**r, "effective_from": r.get("effective_from") or today, "source": _SOURCE_LIVE}
+        for r in rows
+    ]
+    return _upsert_price_rows(conn, stamped)
+
+
+def _row_effective_at(rows: list[sqlite3.Row], at_ts: str | None) -> sqlite3.Row | None:
+    """Pick the ``price_book`` row effective at ``at_ts`` (date-prefix compared).
+
+    Mirrors ``_select_price``: with no ``at_ts`` prefer the open-ended
+    (``effective_until == ''``) row, else the last; with an ``at_ts`` pick the
+    window that contains it. ``at_ts`` may be a full ISO timestamp — only its
+    ``YYYY-MM-DD`` prefix is compared against the date-only bounds.
+    """
+    if not rows:
+        return None
+    if at_ts is None:
+        current = [r for r in rows if not r["effective_until"]]
+        return (current or rows)[-1]
+    day = at_ts[:10]
+    for r in rows:
+        ef = r["effective_from"]
+        eu = r["effective_until"]
+        if (not ef or day >= ef) and (not eu or day < eu):
+            return r
+    return rows[-1]
+
+
+def _lookup_by_model_source(
+    conn: sqlite3.Connection, provider: str, model: str, source: str, at_ts: str | None
+) -> tuple[float, float, float, float] | None:
+    rows = conn.execute(
+        "SELECT effective_from, effective_until, input, output, cache_write, cache_read "
+        "FROM price_book WHERE provider = ? AND model = ? AND source = ? "
+        "ORDER BY effective_from",
+        (provider, model, source),
+    ).fetchall()
+    row = _row_effective_at(rows, at_ts)
+    if row is None:
+        return None
+    return (
+        float(row["input"]), float(row["output"]),
+        float(row["cache_write"]), float(row["cache_read"]),
+    )
+
+
+def price_book_lookup(
+    conn: sqlite3.Connection,
+    model: str,
+    provider: str = "anthropic",
+    at_ts: str | None = None,
+) -> tuple[float, float, float, float] | None:
+    """Resolve ``(input, output, cache_write, cache_read)`` $/M from the book.
+
+    Precedence — same as ``costs.compute_cost`` (live > rate_card > manifest):
+
+      1. ``source='live'`` keyed by the concrete model id (LiteLLM overlay).
+      2. ``source='rate_card'`` keyed by the concrete model id.
+      3. ``source='manifest'`` keyed by the canonical family (``canonicalize``).
+
+    Returns ``None`` on a clean miss (book empty / model absent) so the caller
+    falls back to the in-code manifest — guaranteeing a fresh store prices
+    identically to today.
+    """
+    if not model:
+        return None
+    for source in (_SOURCE_LIVE, _SOURCE_RATE_CARD):
+        hit = _lookup_by_model_source(conn, provider, model, source, at_ts)
+        if hit is not None:
+            return hit
+    family = canonicalize(model, provider)
+    if family:
+        return _lookup_by_model_source(conn, provider, family, _SOURCE_MANIFEST, at_ts)
+    return None
+
+
+# ── opt-in store wiring for the connection-free ``compute_cost`` path ─────────
+#
+# ``compute_cost`` is a pure module-level function with no DB handle; the lookup
+# must therefore reach a connection through a configured seam. When no store is
+# wired (the default — every existing call site, every unit test), the lookup is
+# skipped entirely and ``compute_cost`` prices from the in-code manifest exactly
+# as before. Wiring a store in (``use_price_book_store``) makes the book the
+# source while keeping the in-code manifest as the miss fallback.
+
+_store_path_override: Path | None = None
+_use_store: bool = False
+
+
+def use_price_book_store(path: str | Path | None = None, *, enabled: bool = True) -> None:
+    """Enable (or disable) reading rates from the on-disk ``price_book``.
+
+    ``path`` overrides the default ``~/.stackunderflow/store.db``. With
+    ``enabled=False`` the book is ignored and pricing reverts to the in-code
+    manifest (the default state). Idempotent and cheap — opening the connection
+    happens per-lookup and is guarded.
+    """
+    global _store_path_override, _use_store
+    _use_store = bool(enabled)
+    _store_path_override = Path(path) if path is not None else None
+
+
+def _store_path() -> Path:
+    return _store_path_override if _store_path_override is not None else _STORE_PATH
+
+
+def store_price_book_lookup(
+    model: str, provider: str = "anthropic", at_ts: str | None = None
+) -> tuple[float, float, float, float] | None:
+    """Book lookup for the connection-free path, behind the ``use_store`` seam.
+
+    Returns ``None`` (→ in-code fallback) when the store isn't wired, the file
+    is missing, the table doesn't exist yet, or any read error — pricing must
+    never raise just because the book is unavailable.
+    """
+    if not _use_store:
+        return None
+    path = _store_path()
+    if not path.exists():
+        return None
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        return price_book_lookup(conn, model, provider, at_ts)
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
