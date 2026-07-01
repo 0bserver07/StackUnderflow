@@ -51,13 +51,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import stackunderflow.deps as deps
-from stackunderflow.services import meta_agent
+from stackunderflow.services import embeddings, meta_agent
 from stackunderflow.store import db, schema
 
 router = APIRouter()
-
-_OLLAMA_BASE = "http://localhost:11434"
-_OLLAMA_CHAT = f"{_OLLAMA_BASE}/api/chat"
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -201,8 +198,15 @@ async def _run_chat_stream(  # noqa: C901, PLR0912 — single complex orchestrat
                 # "fake streaming" the audit flagged). Tokens are forwarded as
                 # they arrive; ``tool_calls`` are harvested off the ``done`` row.
                 try:
+                    # Cloud-first, local-fallback: use the configured cloud
+                    # endpoint (STACKUNDERFLOW_OLLAMA_URL / OLLAMA_URL, with a
+                    # bearer key) when set, else local Ollama — no blocking
+                    # probe on this async path; a dead endpoint surfaces via the
+                    # existing RequestError handling below.
+                    _base, _key = embeddings._resolve_endpoints()[0]
                     async with client.stream(
-                        "POST", _OLLAMA_CHAT, json=req
+                        "POST", f"{_base}/api/chat", json=req,
+                        headers=embeddings._headers(_key),
                     ) as response:
                         if response.status_code >= 400:
                             await response.aread()

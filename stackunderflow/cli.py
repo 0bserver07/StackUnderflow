@@ -1843,6 +1843,63 @@ def memory_ask(
         )
 
 
+@memory_group.command("embed")
+@click.option("--batch", type=int, default=512, show_default=True, help="Messages embedded per batch.")
+def memory_embed(batch):
+    """Backfill vector embeddings for your existing indexed messages.
+
+    ``memory ask`` embeds NEW messages as they're ingested; this one-time
+    backfill embeds everything already in the search index so semantic recall
+    works over your whole history. Needs a reachable Ollama — cloud
+    (``STACKUNDERFLOW_OLLAMA_URL`` + ``STACKUNDERFLOW_OLLAMA_API_KEY``) or
+    local; with neither it explains how to enable one and exits.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    import stackunderflow.deps as deps
+    from stackunderflow.services import embeddings
+    from stackunderflow.services.search_service import SEARCH_DB_PATH
+
+    ep = embeddings.active_endpoint()
+    if ep is None:
+        click.echo(
+            "No Ollama reachable. Point it at your cloud with "
+            "STACKUNDERFLOW_OLLAMA_URL (+ STACKUNDERFLOW_OLLAMA_API_KEY), or start "
+            "a local Ollama, then re-run `stackunderflow memory embed`.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    store_path = getattr(deps, "store_path", None)
+    index_path = Path(store_path).parent / "search_index.db" if store_path else SEARCH_DB_PATH
+    if not Path(index_path).exists():
+        click.echo(f"No search index at {index_path}. Run `stackunderflow start` to index first.", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Embedding via {ep[0]} …")
+    conn = sqlite3.connect(str(index_path))
+    conn.row_factory = sqlite3.Row
+    total = 0
+    try:
+        while True:
+            n = embeddings.embed_new_messages(conn, batch_limit=batch)
+            if n <= 0:
+                break
+            total += n
+            click.echo(f"  … {total} embedded")
+    finally:
+        conn.close()
+    if total:
+        click.echo(f"Done — {total} message(s) embedded. `memory ask` now uses them.")
+    else:
+        click.echo(
+            "0 embedded — everything is already vectorised, or the embed model "
+            f"isn't available. Pull it with `ollama pull {embeddings.DEFAULT_EMBED_MODEL}` "
+            "(or set STACKUNDERFLOW_EMBED_MODEL) and re-run."
+        )
+
+
 # ── ingest-on-read helpers ───────────────────────────────────────────────────
 #
 # Read-only data commands (``status``, ``today``, ``month``, ``report``,

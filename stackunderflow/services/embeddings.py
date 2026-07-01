@@ -538,9 +538,17 @@ def embed_new_messages(
     context anyway, and the tail rarely changes the vector's neighbourhood).
     """
     try:
-        base = _resolve_url(url)
-        if not ollama_reachable(base):
-            return 0
+        # cloud-first, local-fallback (same as embed_texts): an explicit url is
+        # probed directly; otherwise active_endpoint() tries cloud then local.
+        if url is not None:
+            base = url
+            if not ollama_reachable(base):
+                return 0
+        else:
+            ep = active_endpoint()
+            if ep is None:
+                return 0
+            base = ep[0]
 
         mdl = _resolve_model(model)
         vstore = store or EmbeddingStore()
