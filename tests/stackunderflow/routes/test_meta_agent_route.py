@@ -441,13 +441,10 @@ def test_route_chat_when_ollama_down_yields_error_event(app_client, monkeypatch)
     """
     client, _ = app_client
 
-    # We can't reliably guarantee no Ollama is running on this dev box,
-    # so monkeypatch the chat URL to an unrouteable port. Reusing
-    # ``_OLLAMA_CHAT`` would also work but the constant is private —
-    # patch the module's attribute directly.
-    import stackunderflow.routes.meta_agent as ma_route
-
-    monkeypatch.setattr(ma_route, "_OLLAMA_CHAT", "http://localhost:1/api/chat")
+    # We can't reliably guarantee no Ollama is running on this dev box, so
+    # point the endpoint at an unrouteable port via the cloud-first config —
+    # the route resolves STACKUNDERFLOW_OLLAMA_URL per request.
+    monkeypatch.setenv("STACKUNDERFLOW_OLLAMA_URL", "http://localhost:1")
 
     resp = client.post(
         "/api/meta-agent/chat",
@@ -528,7 +525,7 @@ class _FakeOllamaClient:
     async def post(self, url: str, json: dict | None = None) -> _FakeOllamaResponse:  # noqa: A002
         return self._next()
 
-    def stream(self, method: str, url: str, json: dict | None = None):  # noqa: A002
+    def stream(self, method: str, url: str, json: dict | None = None, headers: dict | None = None):  # noqa: A002
         # httpx.AsyncClient.stream is sync and returns an async context
         # manager; our fake response IS one (__aenter__/__aexit__ below).
         return self._next()
