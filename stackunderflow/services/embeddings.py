@@ -100,10 +100,54 @@ def _resolve_url(url: str | None) -> str:
     return os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
 
 
+# ── cloud-first, local-fallback endpoints ────────────────────────────────────
+# "Use cloud for Ollama, but check local." We resolve an ORDERED list of
+# endpoints — a configured cloud endpoint first (STACKUNDERFLOW_OLLAMA_URL /
+# OLLAMA_URL, with STACKUNDERFLOW_OLLAMA_API_KEY / OLLAMA_API_KEY as a bearer
+# token for hosted Ollama), then local Ollama as a fallback — and use the first
+# that answers. So a cloud outage silently degrades to a local daemon, a box
+# with only local still works, and CI (neither) stays FTS-only. An explicit
+# ``url=`` overrides the list (tests + specific callers), preserving behaviour.
+LOCAL_OLLAMA_URL = "http://localhost:11434"
+
+
+def _resolve_api_key() -> str | None:
+    import os
+
+    return os.environ.get("STACKUNDERFLOW_OLLAMA_API_KEY") or os.environ.get("OLLAMA_API_KEY") or None
+
+
+def _resolve_endpoints(url: str | None = None) -> list[tuple[str, str | None]]:
+    """Ordered ``(base_url, api_key)`` to try — cloud first, then local."""
+    if url:
+        return [(url.rstrip("/"), _resolve_api_key())]
+    import os
+
+    out: list[tuple[str, str | None]] = []
+    cloud = os.environ.get("STACKUNDERFLOW_OLLAMA_URL") or os.environ.get("OLLAMA_URL")
+    if cloud:
+        out.append((cloud.rstrip("/"), _resolve_api_key()))
+    if all(base != LOCAL_OLLAMA_URL for base, _ in out):
+        out.append((LOCAL_OLLAMA_URL, None))
+    return out
+
+
+def _headers(api_key: str | None) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+def active_endpoint(*, use_cache: bool = True) -> tuple[str, str | None] | None:
+    """First reachable ``(base_url, api_key)`` from the cloud-first list, else None."""
+    for base, key in _resolve_endpoints():
+        if ollama_reachable(base, use_cache=use_cache, api_key=key):
+            return (base, key)
+    return None
+
+
 # ── Ollama reachability + embedding ──────────────────────────────────────────
 
 
-def ollama_reachable(url: str | None = None, *, use_cache: bool = True) -> bool:
+def ollama_reachable(url: str | None = None, *, use_cache: bool = True, api_key: str | None = None) -> bool:
     """Return ``True`` iff a local Ollama answers ``GET /api/tags`` quickly.
 
     This is the single gate the whole feature hangs on. Every network
@@ -122,7 +166,11 @@ def ollama_reachable(url: str | None = None, *, use_cache: bool = True) -> bool:
 
     ok = False
     try:
-        resp = httpx.get(f"{base}/api/tags", timeout=_REACHABLE_TIMEOUT_S)
+        resp = httpx.get(
+            f"{base}/api/tags",
+            headers=_headers(api_key or _resolve_api_key()),
+            timeout=_REACHABLE_TIMEOUT_S,
+        )
         ok = resp.status_code == 200
     except Exception as exc:  # noqa: BLE001 — absence is the expected case
         logger.debug("embeddings: Ollama not reachable at %s: %s", base, exc)
@@ -158,16 +206,30 @@ def embed_texts(
     """
     if not texts:
         return []
-    base = _resolve_url(url)
     mdl = _resolve_model(model)
 
-    if check_reachable and not ollama_reachable(base):
-        return None
+    # Pick the endpoint: an explicit url overrides; otherwise cloud-first,
+    # then local. active_endpoint() probes in order and returns the first up.
+    if url is not None:
+        base: str | None = url.rstrip("/")
+        key = _resolve_api_key()
+        if check_reachable and not ollama_reachable(base, api_key=key):
+            return None
+    elif check_reachable:
+        ep = active_endpoint()
+        if ep is None:
+            return None
+        base, key = ep
+    else:
+        eps = _resolve_endpoints()
+        if not eps:
+            return None
+        base, key = eps[0]
 
     out: list[list[float]] = []
     any_ok = False
     for text in texts:
-        vec = _embed_one(text, model=mdl, base=base)
+        vec = _embed_one(text, model=mdl, base=base, api_key=key)
         if vec is None:
             continue
         out.append(vec)
@@ -178,7 +240,7 @@ def embed_texts(
     return out
 
 
-def _embed_one(text: str, *, model: str, base: str) -> list[float] | None:
+def _embed_one(text: str, *, model: str, base: str, api_key: str | None = None) -> list[float] | None:
     """POST a single string to ``/api/embeddings``; ``None`` on any failure.
 
     Ollama's embeddings endpoint takes ``{"model", "prompt"}`` and
@@ -191,6 +253,7 @@ def _embed_one(text: str, *, model: str, base: str) -> list[float] | None:
         resp = httpx.post(
             f"{base}/api/embeddings",
             json={"model": model, "prompt": text},
+            headers=_headers(api_key),
             timeout=_EMBED_TIMEOUT_S,
         )
         if resp.status_code != 200:

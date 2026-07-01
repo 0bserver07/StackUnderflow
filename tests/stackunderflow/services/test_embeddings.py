@@ -348,3 +348,48 @@ class TestHybridSearchWithInjectedVectors:
             res = svc.hybrid_search("authentication test")
         assert res["vector_used"] is False
         assert res["results"][0]["session_id"] == "sess-auth"
+
+
+# ── cloud-first, local-fallback endpoints ("use cloud for Ollama, check local")
+
+
+class TestCloudFirstEndpoints:
+    """Cloud endpoint is tried first, local is always the fallback, bearer auth
+    when a key is set. All offline — no network, no real Ollama."""
+
+    def _clear(self, monkeypatch):
+        for v in ("STACKUNDERFLOW_OLLAMA_URL", "OLLAMA_URL",
+                  "STACKUNDERFLOW_OLLAMA_API_KEY", "OLLAMA_API_KEY"):
+            monkeypatch.delenv(v, raising=False)
+
+    def test_no_cloud_configured_is_local_only(self, monkeypatch):
+        self._clear(monkeypatch)
+        assert emb._resolve_endpoints() == [(emb.LOCAL_OLLAMA_URL, None)]
+
+    def test_cloud_first_then_local_with_auth(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("STACKUNDERFLOW_OLLAMA_URL", "https://ollama.mycloud.com/")
+        monkeypatch.setenv("STACKUNDERFLOW_OLLAMA_API_KEY", "sk-abc")
+        eps = emb._resolve_endpoints()
+        assert eps[0] == ("https://ollama.mycloud.com", "sk-abc")  # cloud first, / stripped
+        assert eps[-1] == (emb.LOCAL_OLLAMA_URL, None)             # local fallback, no key
+
+    def test_bearer_header_only_when_key(self):
+        assert emb._headers("sk-abc") == {"Authorization": "Bearer sk-abc"}
+        assert emb._headers(None) == {}
+
+    def test_explicit_url_overrides_list(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("OLLAMA_URL", "https://cloud")
+        assert emb._resolve_endpoints("http://127.0.0.1:9999") == [("http://127.0.0.1:9999", None)]
+
+    def test_active_endpoint_falls_back_to_local_when_cloud_down(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("STACKUNDERFLOW_OLLAMA_URL", "http://cloud-down:1")
+        emb._reset_reachable_cache()
+
+        def fake_reachable(url=None, *, use_cache=True, api_key=None):
+            return url == emb.LOCAL_OLLAMA_URL  # cloud down, local up
+
+        monkeypatch.setattr(emb, "ollama_reachable", fake_reachable)
+        assert emb.active_endpoint() == (emb.LOCAL_OLLAMA_URL, None)
