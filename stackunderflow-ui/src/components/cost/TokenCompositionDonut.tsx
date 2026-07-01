@@ -109,6 +109,15 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
 
   const grandTotal = SERIES.reduce((sum, s) => sum + (totals?.[s.key] ?? 0), 0)
 
+  // Reasoning ("thinking") tokens are an attribution-only SUBSET of Output —
+  // the provider bills them as output, so they are ALREADY inside the Output
+  // slice and must NOT become a competing 5th slice (that would double-count
+  // and inflate the ring total). Surface them as a caption instead: the share
+  // of Output that was reasoning.
+  const reasoningTokens = totals?.reasoning ?? 0
+  const outputTokens = totals?.output ?? 0
+  const reasoningPctOfOutput = outputTokens > 0 ? (reasoningTokens / outputTokens) * 100 : 0
+
   if (!totals || grandTotal === 0) {
     return (
       <div
@@ -263,6 +272,23 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
           />
         </PieChart>
       </ResponsiveContainer>
+      {reasoningTokens > 0 && (
+        <div
+          className="mt-1 flex items-center justify-center gap-1.5 text-xs text-gray-500 dark:text-gray-400"
+          data-testid="token-composition-reasoning"
+        >
+          <span
+            aria-hidden="true"
+            className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0 border border-dashed"
+            style={{ borderColor: '#34D399' }}
+          />
+          <span>of which reasoning</span>
+          <span className="text-gray-700 dark:text-gray-300 font-medium tabular-nums">
+            {formatTokens(reasoningTokens)}
+          </span>
+          <span className="tabular-nums">({reasoningPctOfOutput.toFixed(1)}% of output)</span>
+        </div>
+      )}
     </div>
   )
 }

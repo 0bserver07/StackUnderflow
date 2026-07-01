@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 25
+CURRENT_VERSION = 26
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -107,6 +107,11 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     # — table present, ``user_version`` behind — bump the version without
     # re-executing the body.
     25: ("command_day_mart", "command_count"),
+    # v026 ADDs ``usage_events.reasoning_tokens`` (reasoning-attribution
+    # subset of output; never summed into cost). Standard ADD COLUMN guard so a
+    # partial prior run (column added, ``user_version`` behind) bumps the
+    # version instead of erroring on "duplicate column".
+    26: ("usage_events", "reasoning_tokens"),
 }
 
 

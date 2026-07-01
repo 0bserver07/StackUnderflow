@@ -120,6 +120,81 @@ async def test_cost_data_no_overlay_when_mart_empty(tmp_path, monkeypatch):
     assert payload["token_composition"] == expected_tc
 
 
+# ── v026: reasoning attribution threads through token_composition ────────────
+
+@pytest.mark.asyncio
+async def test_cost_data_overlay_carries_aggregator_reasoning(tmp_path, monkeypatch):
+    """The daily mart has no reasoning column, but the aggregator computed an
+    authoritative all-model reasoning total. With NO model filter, the overlay
+    carries that total (and derived share) onto the mart totals."""
+    store_db = tmp_path / "store.db"
+    slug = "-cost-reasoning"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", slug)
+    _insert_project_mart(conn, project_id=pid, provider="claude", slug=slug)
+    _insert_daily_mart(conn, project_id=pid, day="2026-04-01",
+        input_tokens=100, output_tokens=500, cache_read=0, cache_create=0, cost_usd=0.5)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    stub_stats = {
+        "session_costs": [], "command_costs": [], "tool_costs": {},
+        "token_composition": {
+            "daily": {}, "per_session": {},
+            "totals": {"input": 100, "output": 500, "cache_read": 0,
+                       "cache_creation": 0, "reasoning": 200},
+            "reasoning_share": 0.4,
+        },
+        "outliers": {}, "retry_signals": [], "session_efficiency": [],
+        "error_cost": {}, "trends": {},
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], stub_stats))
+    payload = await get_cost_data()
+    tc = payload["token_composition"]
+    # Mart-derived billing totals, PLUS the carried-over reasoning attribution.
+    assert tc["totals"]["output"] == 500
+    assert tc["totals"]["reasoning"] == 200
+    assert tc["reasoning_share"] == pytest.approx(0.4)  # 200 / 500
+
+
+@pytest.mark.asyncio
+async def test_cost_data_overlay_drops_reasoning_under_model_filter(tmp_path, monkeypatch):
+    """``daily_mart`` can't attribute reasoning to specific model(s), so a model
+    filter drops the reasoning overlay rather than misattribute an all-model
+    figure to model-scoped output."""
+    store_db = tmp_path / "store.db"
+    slug = "-cost-reasoning-filtered"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, "claude", slug)
+    _insert_project_mart(conn, project_id=pid, provider="claude", slug=slug)
+    _insert_daily_mart(conn, project_id=pid, day="2026-04-01", model="claude-opus-4-8",
+        input_tokens=100, output_tokens=500, cache_read=0, cache_create=0, cost_usd=0.5)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    stub_stats = {
+        "session_costs": [], "command_costs": [], "tool_costs": {},
+        "token_composition": {
+            "daily": {}, "per_session": {},
+            "totals": {"input": 100, "output": 500, "reasoning": 200},
+            "reasoning_share": 0.4,
+        },
+        "outliers": {}, "retry_signals": [], "session_efficiency": [],
+        "error_cost": {}, "trends": {},
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], stub_stats))
+    payload = await get_cost_data(model=["claude-opus-4-8"])
+    tc = payload["token_composition"]
+    assert "reasoning" not in tc["totals"]
+    assert "reasoning_share" not in tc
+
+
 # ── #57: model filter broadens to token_composition ─────────────────────────
 
 

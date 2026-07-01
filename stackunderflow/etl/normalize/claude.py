@@ -78,6 +78,13 @@ class ClaudeNormalizer(Normalizer):
             else COST_SOURCE_UNKNOWN
         )
 
+        # reasoning_tokens stays 0 (the default). Anthropic thinking blocks ARE
+        # billed as output and are already inside ``output_tokens``, but the
+        # ``message.usage`` payload carries no separate reasoning/thinking token
+        # count — only the (often redacted) thinking text. Estimating a count
+        # from that text would be a fabricated number, so we attribute none
+        # rather than guess. (If Anthropic later surfaces a usage-level count,
+        # capture it here the way codex/droid do.)
         yield self._build_event(
             msg_row,
             input_tokens=input_tokens,

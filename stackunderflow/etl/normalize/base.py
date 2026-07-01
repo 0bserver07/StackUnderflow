@@ -88,6 +88,7 @@ class Normalizer(ABC):
         cache_read_tokens: int,
         cache_create_tokens: int,
         cost_source: str,
+        reasoning_tokens: int = 0,
         model: str | None = None,
         role: str | None = None,
         speed: str | None = None,
@@ -100,6 +101,13 @@ class Normalizer(ABC):
         provided ``cost_source``. Auto-derives ``day`` from ``ts``.
         Returns a plain dict — caller (backfill / incremental ingest)
         is responsible for the actual ``INSERT``.
+
+        ``reasoning_tokens`` is an ATTRIBUTION-ONLY subset of
+        ``output_tokens`` — the count of "thinking"/reasoning tokens that
+        the provider already folded into billable output. It is NEVER
+        passed to the pricer (``_compute_cost_usd`` takes only the
+        canonical four token columns), so surfacing it can never change
+        ``cost_usd``. Providers with no measurable reasoning leave it 0.
         """
         if cost_source not in _VALID_COST_SOURCES:
             raise ValueError(f"cost_source must be one of {_VALID_COST_SOURCES!r}; got {cost_source!r}")
@@ -133,6 +141,9 @@ class Normalizer(ABC):
             "output_tokens": int(output_tokens),
             "cache_read_tokens": int(cache_read_tokens),
             "cache_create_tokens": int(cache_create_tokens),
+            # Attribution-only subset of output_tokens; never priced. Clamped
+            # >= 0 so a malformed negative wire value can't corrupt the column.
+            "reasoning_tokens": max(int(reasoning_tokens), 0),
             "cost_usd": float(cost_usd),
             "cost_source": cost_source,
             "role": role_value,

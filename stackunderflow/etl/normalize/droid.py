@@ -70,7 +70,12 @@ class DroidNormalizer(Normalizer):
         cache_create = int(msg_row.get("cache_create_tokens") or 0)
 
         # Fold thinking tokens (Droid's reasoning slot) into output if a
-        # per-row column is set.
+        # per-row column is set — Droid bills thinking as output, so keeping it
+        # inside ``output_tokens`` is what makes ``cost_usd`` correct. We ALSO
+        # carry the same count as ``reasoning_tokens`` (an additive-metadata
+        # subset of output, never priced) so the composition views can report
+        # what share of output was reasoning. ``output_tokens`` is unchanged by
+        # that second use.
         thinking = int(msg_row.get("thinking_tokens") or 0)
         if thinking == 0:
             payload = _safe_load_raw(msg_row.get("raw_json"))
@@ -114,6 +119,7 @@ class DroidNormalizer(Normalizer):
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
             cache_create_tokens=cache_create,
+            reasoning_tokens=thinking,
             cost_source=cost_source,
             model=model,
             raw_extras=raw_extras,

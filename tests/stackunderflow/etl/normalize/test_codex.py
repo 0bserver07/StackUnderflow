@@ -187,3 +187,70 @@ def test_cost_computed_once_and_stored() -> None:
         provider="openai",
     )
     assert ev["cost_usd"] == expected["total_cost"]
+
+
+# ── v026 reasoning attribution (subset of output, never priced) ──────────────
+
+def test_reasoning_tokens_captured_separately_from_row() -> None:
+    """reasoning_output_tokens surfaces as reasoning_tokens AND stays folded
+    into output (so cost is unchanged)."""
+    row = _msg_row(
+        input_tokens=100,
+        cached_input_tokens=0,
+        output_tokens=500,
+        reasoning_output_tokens=200,
+    )
+    ev = list(CodexNormalizer().normalize(row))[0]
+    assert ev["output_tokens"] == 700      # reasoning still folded in (billing)
+    assert ev["reasoning_tokens"] == 200   # AND attributed separately
+
+
+def test_reasoning_tokens_captured_from_raw_json() -> None:
+    raw = {
+        "payload": {
+            "info": {
+                "last_token_usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 300,
+                    "output_tokens": 500,
+                    "reasoning_output_tokens": 200,
+                }
+            }
+        }
+    }
+    row = _msg_row(raw_json=json.dumps(raw))
+    ev = list(CodexNormalizer().normalize(row))[0]
+    assert ev["reasoning_tokens"] == 200
+    assert ev["output_tokens"] == 700
+    # subset invariant
+    assert ev["reasoning_tokens"] <= ev["output_tokens"]
+
+
+def test_reasoning_tokens_zero_when_absent() -> None:
+    row = _msg_row(input_tokens=100, output_tokens=100)
+    ev = list(CodexNormalizer().normalize(row))[0]
+    assert ev["reasoning_tokens"] == 0
+
+
+def test_reasoning_does_not_change_cost() -> None:
+    """Same BILLABLE output with vs without a reasoning count → identical cost.
+
+    Reasoning is folded into output for billing, so to compare like-for-like we
+    hold the *billable* output constant at 700: with-reasoning carries raw
+    output 500 + reasoning 200 (folds to 700), without carries raw output 700
+    and no reasoning. Same priced tokens ⇒ same cost; only the attribution
+    differs.
+    """
+    with_reasoning = _msg_row(
+        input_tokens=100, cached_input_tokens=0,
+        output_tokens=500, reasoning_output_tokens=200,   # folds to 700
+    )
+    without = _msg_row(
+        input_tokens=100, cached_input_tokens=0,
+        output_tokens=700, reasoning_output_tokens=0,
+    )
+    a = list(CodexNormalizer().normalize(with_reasoning))[0]
+    b = list(CodexNormalizer().normalize(without))[0]
+    assert a["output_tokens"] == b["output_tokens"] == 700  # same billable output
+    assert a["reasoning_tokens"] == 200 and b["reasoning_tokens"] == 0
+    assert a["cost_usd"] == b["cost_usd"]

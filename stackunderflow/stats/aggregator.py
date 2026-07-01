@@ -427,7 +427,17 @@ class _ToolCostCollector:
 
 
 class _TokenCompositionCollector:
-    """§1.4 — token totals per day, globally, and per session."""
+    """§1.4 — token totals per day, globally, and per session.
+
+    ``Record.tokens`` carries a ``reasoning`` key (an attribution-only SUBSET
+    of ``output``, never priced) whenever the enricher recovered a separable
+    reasoning-token count. It flows through the same per-key summation as the
+    billing tokens, so ``totals``/``daily``/``per_session`` gain a
+    ``reasoning`` entry for projects that have it. ``reasoning_share`` — the
+    reasoning fraction of output — is derived from the totals and attached only
+    when reasoning is present, so a project with no reasoning keeps the exact
+    prior payload shape.
+    """
 
     def __init__(self, tz_offset: int = 0) -> None:
         self._tz = tz_offset
@@ -450,11 +460,19 @@ class _TokenCompositionCollector:
                 d[k] += v
 
     def result(self) -> dict:
-        return {
+        out: dict = {
             "daily":       {k: dict(v) for k, v in self._daily.items()},
             "totals":      dict(self._totals),
             "per_session": {k: dict(v) for k, v in self._per_session.items()},
         }
+        reasoning = int(self._totals.get("reasoning", 0))
+        if reasoning > 0:
+            # Share of billable OUTPUT that was reasoning. Reasoning is folded
+            # into output upstream, so ``output`` is the correct denominator
+            # (reasoning ⊆ output). Guard against a degenerate output==0.
+            output = int(self._totals.get("output", 0))
+            out["reasoning_share"] = (reasoning / output) if output > 0 else 0.0
+        return out
 
 
 class _OutlierCollector:

@@ -95,12 +95,33 @@ class CodexNormalizer(Normalizer):
             output_tokens=canonical["output"],
             cache_read_tokens=canonical["cache_read"],
             cache_create_tokens=canonical["cache_creation"],
+            # OpenAI bills reasoning as output, so ``canonical["output"]``
+            # already includes it (via ``OpenAIPricer.normalize_tokens``) and
+            # ``cost_usd`` is correct. Carry the same count separately as an
+            # attribution-only subset of output — never priced.
+            reasoning_tokens=self._reasoning_tokens(msg_row),
             cost_source=cost_source,
             model=model,
             raw_extras=raw_extras,
         )
 
     # ── internals ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _reasoning_tokens(msg_row: dict) -> int:
+        """Reasoning-output token count for this turn, or 0.
+
+        Sourced from OpenAI's ``reasoning_output_tokens`` in whichever raw
+        shape ``_raw_openai_shape`` surfaces (the row directly or
+        ``raw_json.payload.info.last_token_usage``). Returns 0 when the raw
+        shape isn't present — the adapter has already folded reasoning into
+        the ``output_tokens`` column so there is no separable count to recover
+        from the canonical columns alone. Attribution-only; never priced.
+        """
+        raw_shape = _raw_openai_shape(msg_row)
+        if raw_shape is None:
+            return 0
+        return max(int(raw_shape.get("reasoning_output_tokens") or 0), 0)
 
     @staticmethod
     def _canonical_tokens(msg_row: dict) -> dict[str, int] | None:

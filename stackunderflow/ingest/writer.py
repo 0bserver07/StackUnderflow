@@ -404,9 +404,9 @@ def normalize_and_insert_event(
             source_message_fk, provider, account, project_id,
             session_id, ts, day, model, speed,
             input_tokens, output_tokens,
-            cache_read_tokens, cache_create_tokens,
+            cache_read_tokens, cache_create_tokens, reasoning_tokens,
             cost_usd, cost_source, role, raw_extras
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             msg_row["id"],
@@ -422,6 +422,11 @@ def normalize_and_insert_event(
             int(event.get("output_tokens") or 0),
             int(event.get("cache_read_tokens") or 0),
             int(event.get("cache_create_tokens") or 0),
+            # Attribution-only subset of output_tokens (0 unless a normalizer
+            # surfaced a real reasoning count); never enters cost. Defaults 0 so
+            # events yielded before v026 / by providers with no reasoning are
+            # unaffected.
+            int(event.get("reasoning_tokens") or 0),
             float(event.get("cost_usd") or 0.0),
             event.get("cost_source") or "rate_card",
             event.get("role") or msg_row.get("role") or "",

@@ -84,6 +84,10 @@ class GrokNormalizer(Normalizer):
             output_tokens=output_tokens,
             cache_read_tokens=0,
             cache_create_tokens=0,
+            # reasoning_tokens stays 0 (the default): Grok's chain-of-thought is
+            # stored ``encrypted_content`` and never decrypted, so its length —
+            # and therefore its token count — is unmeasurable. There is nothing
+            # to attribute even though the model plainly reasons.
             cost_source=COST_SOURCE_ESTIMATED,
             model=model,
             raw_extras=raw_extras,

@@ -86,3 +86,40 @@ def test_unknown_model_stamps_unknown() -> None:
     row = _msg_row(input_tokens=100, output_tokens=100, model="droid-mystery-2030")
     events = list(DroidNormalizer().normalize(row))
     assert events[0]["cost_source"] == COST_SOURCE_UNKNOWN
+
+
+# ── v026 reasoning attribution (subset of output, never priced) ──────────────
+
+def test_thinking_captured_as_reasoning_tokens_from_column() -> None:
+    """thinkingTokens fold into output (billing) AND surface as reasoning."""
+    row = _msg_row(input_tokens=200, output_tokens=300, thinking_tokens=100)
+    ev = list(DroidNormalizer().normalize(row))[0]
+    assert ev["output_tokens"] == 400      # folded in (existing contract)
+    assert ev["reasoning_tokens"] == 100   # AND attributed separately
+    assert ev["reasoning_tokens"] <= ev["output_tokens"]
+
+
+def test_thinking_captured_as_reasoning_tokens_from_raw_json() -> None:
+    raw = {"tokenUsage": {"thinkingTokens": 75}}
+    row = _msg_row(input_tokens=100, output_tokens=200, raw_json=json.dumps(raw))
+    ev = list(DroidNormalizer().normalize(row))[0]
+    assert ev["output_tokens"] == 275
+    assert ev["reasoning_tokens"] == 75
+
+
+def test_reasoning_tokens_zero_without_thinking() -> None:
+    row = _msg_row(input_tokens=500, output_tokens=300)
+    ev = list(DroidNormalizer().normalize(row))[0]
+    assert ev["reasoning_tokens"] == 0
+
+
+def test_reasoning_does_not_change_cost() -> None:
+    """With vs without thinking (output held constant) → identical cost."""
+    with_think = _msg_row(input_tokens=200, output_tokens=300, thinking_tokens=100)
+    # Same billable output (400), no separate thinking count.
+    without = _msg_row(input_tokens=200, output_tokens=400)
+    a = list(DroidNormalizer().normalize(with_think))[0]
+    b = list(DroidNormalizer().normalize(without))[0]
+    assert a["output_tokens"] == b["output_tokens"] == 400
+    assert a["reasoning_tokens"] == 100 and b["reasoning_tokens"] == 0
+    assert a["cost_usd"] == b["cost_usd"]

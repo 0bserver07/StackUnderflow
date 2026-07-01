@@ -344,6 +344,8 @@ def _overlay_mart_rollups(
                 stats["token_composition"] = tc
             tc["daily"] = {}
             tc["totals"] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+            # No rows survive the filter → no reasoning to attribute either.
+            tc.pop("reasoning_share", None)
         return stats
 
     daily: dict[str, dict[str, int]] = {}
@@ -369,6 +371,26 @@ def _overlay_mart_rollups(
     if not isinstance(tc, dict):
         tc = {"daily": {}, "totals": {}, "per_session": {}}
         stats["token_composition"] = tc
+
+    # Reasoning is an attribution-only subset of output that the marts do NOT
+    # carry (materialising it on ``daily_mart`` is a deferred follow-up). The
+    # aggregator DID compute an authoritative all-model reasoning total from the
+    # full pipeline, so when NO model filter is active we carry that total (and
+    # its derived share) onto the mart-derived ``totals`` — the reasoning count
+    # is model-independent here, so pairing it with the mart output total is
+    # exact. Under a model filter we drop it: ``daily_mart`` can't attribute
+    # reasoning to the selected model(s), and showing an all-model reasoning
+    # figure against model-scoped output would misattribute (same reason
+    # ``tool_costs`` is skipped when filtered).
+    prior_totals = tc.get("totals") if isinstance(tc.get("totals"), dict) else {}
+    reasoning_total = int(prior_totals.get("reasoning", 0) or 0)
+    if model_filter is None and reasoning_total > 0:
+        totals["reasoning"] = reasoning_total
+        out_tok = int(totals.get("output", 0) or 0)
+        tc["reasoning_share"] = (reasoning_total / out_tok) if out_tok > 0 else 0.0
+    else:
+        tc.pop("reasoning_share", None)
+
     tc["daily"] = daily
     tc["totals"] = totals
 

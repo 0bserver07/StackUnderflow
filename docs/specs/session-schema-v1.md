@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 25`).
+**Status:** v1 (pinned to `schema_version = 26`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 25`. The current migration set is:
+Pin to `schema_version = 26`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -48,6 +48,7 @@ Pin to `schema_version = 25`. The current migration set is:
 | 23 | `v023_mart_overview_rate_dims.sql` | adds 7 `project_mart` columns (Overview cache/interruption/errors rate numerators) + 2 `tool_mart` columns (`cache_read`, `cache_create` — ui-perf #20) |
 | 24 | `v024_price_book.sql` | `price_book` (effective-dated unified rate table; manifest + rate card backfill, LiteLLM `live` snapshots — audit #2) |
 | 25 | `v025_command_day_mart.sql` | `command_day_mart` (per-`(day, project_id)` user-command count; windows the Overview "Commands" KPI — ui-perf #25) |
+| 26 | `v026_reasoning_tokens.sql` | adds `usage_events.reasoning_tokens` (reasoning/"thinking" attribution — an additive-metadata SUBSET of `output_tokens`, never priced; `DEFAULT 0`) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -155,6 +156,7 @@ CREATE TABLE usage_events (
   output_tokens       INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
   cache_create_tokens INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens    INTEGER NOT NULL DEFAULT 0,   -- v026: attribution-only SUBSET of output_tokens; NEVER priced
   -- cost
   cost_usd            REAL    NOT NULL DEFAULT 0.0,
   cost_source         TEXT    NOT NULL DEFAULT 'rate_card',   -- enum below
@@ -166,11 +168,12 @@ CREATE TABLE usage_events (
 CREATE UNIQUE INDEX uniq_events_msg ON usage_events(source_message_fk);
 ```
 
-Three invariants the writer must hold:
+Four invariants the writer must hold:
 
 1. **Token shape is canonical.** `input_tokens` is fresh input only (cached reads stripped); `output_tokens` is fully-billable assistant output (reasoning folded in for OpenAI-shape providers); `cache_read_tokens` and `cache_create_tokens` carry prompt-cache reads and writes. Providers that don't bill prompt-cache writes (OpenAI / Codex) leave `cache_create_tokens` at 0.
 2. **Cost is computed once.** `cost_usd` is the dollar amount at write time; `cost_source` records *how* it was derived (see enum below). Readers never recompute.
 3. **Dedup by source_message_fk.** Re-running normalisation for an already-converted `messages` row is a no-op via `INSERT OR IGNORE` against `uniq_events_msg`. This is the only safe way to rebuild — never `DELETE FROM usage_events`.
+4. **`reasoning_tokens` is attribution-only, never cost.** It records the reasoning/"thinking" tokens that the provider already folded into `output_tokens` (Anthropic thinking blocks, OpenAI `reasoning_output_tokens`, Droid `thinkingTokens` — all billed as output), so it is a SUBSET of `output_tokens`, not additive to it: `0 <= reasoning_tokens <= output_tokens`. The pricer reads only the canonical four token columns, so populating (or not) `reasoning_tokens` can never change `cost_usd`. Providers with no measurable reasoning (Grok's encrypted chain-of-thought; Anthropic, which exposes no separate usage-level count) leave it 0 rather than estimate. It answers "what share of output spend was reasoning?" without ever double-counting into cost. Materialising it onto the marts is a deferred follow-up — the aggregator/full-pipeline path surfaces it under `token_composition` today.
 
 ### `cost_source` enum
 

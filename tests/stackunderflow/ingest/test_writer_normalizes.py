@@ -257,3 +257,45 @@ def test_writer_normalize_failure_does_not_fail_ingest(
     # so messages persist but no events were generated.
     assert messages == 3
     assert events == 0
+
+
+def test_normalize_and_insert_event_persists_reasoning_tokens(conn) -> None:
+    """The writer's INSERT carries the normalizer's ``reasoning_tokens`` through
+    to the ``usage_events`` row (v026). Missing key defaults to 0."""
+    from stackunderflow.ingest.writer import normalize_and_insert_event
+
+    conn.execute(
+        "INSERT INTO projects (provider, slug, path, display_name, first_seen, last_modified) "
+        "VALUES ('droid', 'p', '/p', 'P', 0, 0)"
+    )
+    pid = conn.execute("SELECT id FROM projects").fetchone()[0]
+
+    msg_row = {"id": 4242, "provider": "droid", "project_id": pid, "session_id": "s"}
+    event = {
+        "ts": "2026-04-25T00:00:00+00:00",
+        "day": "2026-04-25",
+        "model": "claude-sonnet-4-5-20250929",
+        "input_tokens": 200,
+        "output_tokens": 400,   # already includes the 100 reasoning tokens
+        "reasoning_tokens": 100,
+        "cost_source": "rate_card",
+        "role": "assistant",
+    }
+    inserted, skipped = normalize_and_insert_event(conn, msg_row, event)
+    assert (inserted, skipped) == (1, 0)
+
+    row = conn.execute(
+        "SELECT output_tokens, reasoning_tokens FROM usage_events WHERE source_message_fk = 4242"
+    ).fetchone()
+    assert row["output_tokens"] == 400
+    assert row["reasoning_tokens"] == 100
+
+    # An event with no reasoning_tokens key lands the DEFAULT 0.
+    msg_row2 = {"id": 4343, "provider": "droid", "project_id": pid, "session_id": "s"}
+    event2 = dict(event)
+    del event2["reasoning_tokens"]
+    normalize_and_insert_event(conn, msg_row2, event2)
+    row2 = conn.execute(
+        "SELECT reasoning_tokens FROM usage_events WHERE source_message_fk = 4343"
+    ).fetchone()
+    assert row2["reasoning_tokens"] == 0

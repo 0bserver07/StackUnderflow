@@ -8,6 +8,7 @@ from stackunderflow.stats.enricher import (
     _flatten_content_blocks,
     _has_result_block,
     _parse_entry,
+    _reasoning_from,
     _text_from,
     _tools_from,
     _usage_from,
@@ -151,6 +152,51 @@ def test_usage_from_no_usage_key():
 
 def test_usage_from_not_dict():
     assert _usage_from("not a dict") == _EMPTY_TOKENS  # type: ignore[arg-type]
+
+
+# ── _reasoning_from (v026 attribution overlay) ───────────────────────────────
+
+def test_reasoning_from_openai_usage_key():
+    assert _reasoning_from({}, {"usage": {"reasoning_output_tokens": 120}}) == 120
+    assert _reasoning_from({}, {"usage": {"reasoning_tokens": 90}}) == 90
+
+
+def test_reasoning_from_codex_raw_shape():
+    raw = {"info": {"last_token_usage": {"reasoning_output_tokens": 200}}}
+    assert _reasoning_from(raw, {}) == 200
+
+
+def test_reasoning_from_droid_thinking():
+    assert _reasoning_from({"tokenUsage": {"thinkingTokens": 75}}, {}) == 75
+
+
+def test_reasoning_from_absent_is_zero():
+    # Plain Claude-shape usage with no reasoning field → 0 (no fabrication).
+    assert _reasoning_from({}, {"usage": {"input_tokens": 5, "output_tokens": 3}}) == 0
+    assert _reasoning_from({}, {}) == 0
+
+
+def test_parse_entry_adds_reasoning_key_only_when_present():
+    """The reasoning key is added to Record.tokens only when > 0; a plain
+    record keeps the exact 4-key shape (so cost and legacy readers are
+    unchanged)."""
+    plain = _asst_te("hi")
+    rec_plain = _parse_entry(plain)
+    assert "reasoning" not in rec_plain.tokens
+
+    te = _tagged(
+        {
+            "timestamp": "2026-01-01T10:00:00Z",
+            "message": {
+                "model": "gpt-5-codex",
+                "usage": {"output_tokens": 500, "reasoning_output_tokens": 200},
+            },
+        },
+        kind="assistant",
+    )
+    rec = _parse_entry(te)
+    assert rec.tokens["reasoning"] == 200
+    assert rec.tokens["output"] == 500  # output untouched (reasoning is a subset)
 
 
 # ── _tools_from ───────────────────────────────────────────────────────────────

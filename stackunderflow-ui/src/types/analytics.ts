@@ -63,6 +63,12 @@ export interface TokenComposition {
   daily: Record<string, Record<string, number>>
   totals: Record<string, number>
   per_session: Record<string, Record<string, number>>
+  // Reasoning ("thinking") tokens are an attribution-only SUBSET of `output`
+  // (they are billed as output, so cost is unaffected). When any record
+  // carried a separable reasoning count, `totals`/`daily`/`per_session` include
+  // a `reasoning` key and this holds reasoning ÷ output. Absent when there is
+  // no measurable reasoning (Anthropic thinking / encrypted Grok reasoning).
+  reasoning_share?: number
 }
 
 export interface OutlierCommand {

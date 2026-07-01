@@ -219,13 +219,26 @@ def _parse_entry(te: TaggedEntry) -> Record:
     raw = te.payload
     msg = raw.get("message") if isinstance(raw.get("message"), dict) else {}
 
+    tokens = _usage_from(msg)
+    # Reasoning/"thinking" tokens are already folded into ``output`` for
+    # billing (every provider bills them as output), so ``tokens`` and every
+    # cost figure derived from it are unchanged. When the wire carries a
+    # SEPARATE reasoning count we ALSO expose it under a ``reasoning`` key so
+    # the token-composition views can report the reasoning share of output.
+    # The key is added ONLY when > 0 — a zero-reasoning record keeps the exact
+    # 4-key shape older readers and tests assert on, and the pricer never reads
+    # the key regardless, so this can never move a dollar figure.
+    reasoning = _reasoning_from(raw, msg)
+    if reasoning > 0:
+        tokens["reasoning"] = reasoning
+
     return Record(
         session_id=te.session_id,
         kind=te.kind,
         timestamp=raw.get("timestamp", ""),
         model=msg.get("model", "N/A") if msg else "N/A",
         content=_text_from(raw),
-        tokens=_usage_from(msg),
+        tokens=tokens,
         tools=_tools_from(msg),
         is_error=te.is_error,
         error_category=te.error_category,
@@ -305,6 +318,51 @@ def _usage_from(msg: dict) -> dict[str, int]:
     if not isinstance(usage, dict):
         return dict(_EMPTY_USAGE)
     return {our_key: usage.get(api_key, 0) or 0 for api_key, our_key in _TOKEN_FIELDS.items()}
+
+
+def _reasoning_from(raw: dict, msg: dict) -> int:
+    """Best-effort separable reasoning-token count for this record, or 0.
+
+    Reasoning is billed as output and folded into ``output`` upstream, so this
+    is a pure attribution overlay — a SUBSET of output, never priced. We look
+    only at wire fields that carry a real measured count and take the first hit
+    (they are mutually exclusive per provider):
+
+    * OpenAI-shape ``usage.reasoning_output_tokens`` / ``usage.reasoning_tokens``
+      — Codex/OpenAI reasoning-token slot when the adapter kept it on the usage
+      block.
+    * ``raw.info.last_token_usage.reasoning_output_tokens`` — the OpenAI rollout
+      shape the Codex adapter preserves verbatim in ``raw_json``.
+    * ``raw.tokenUsage.thinkingTokens`` — Droid's (Factory) session/per-message
+      thinking slot.
+
+    Anthropic thinking blocks and Grok's encrypted reasoning have NO separable
+    wire count, so they fall through to 0 — we attribute nothing rather than
+    fabricate a text-length estimate.
+    """
+    if isinstance(msg, dict):
+        usage = msg.get("usage")
+        if isinstance(usage, dict):
+            for key in ("reasoning_output_tokens", "reasoning_tokens"):
+                v = usage.get(key)
+                if v:
+                    return max(int(v), 0)
+
+    if isinstance(raw, dict):
+        info = raw.get("info")
+        if isinstance(info, dict):
+            last = info.get("last_token_usage")
+            if isinstance(last, dict):
+                v = last.get("reasoning_output_tokens")
+                if v:
+                    return max(int(v), 0)
+        tu = raw.get("tokenUsage")
+        if isinstance(tu, dict):
+            v = tu.get("thinkingTokens")
+            if v:
+                return max(int(v), 0)
+
+    return 0
 
 
 def _tools_from(msg: dict) -> list[dict[str, Any]]:

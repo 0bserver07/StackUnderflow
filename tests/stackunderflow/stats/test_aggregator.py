@@ -741,6 +741,61 @@ def test_token_composition_empty():
     assert r == {"daily": {}, "totals": {}, "per_session": {}}
 
 
+def test_token_composition_surfaces_reasoning_and_share():
+    """A ``reasoning`` key on Record.tokens flows into totals/daily/per_session
+    and a reasoning_share (reasoning ÷ output) is derived."""
+    c = _TokenCompositionCollector(tz_offset=0)
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-23T10:00:00Z",
+                  tokens={"input": 100, "output": 400, "cache_creation": 0,
+                          "cache_read": 0, "reasoning": 100}))
+    out = c.result()
+    assert out["totals"]["reasoning"] == 100
+    assert out["totals"]["output"] == 400
+    assert out["daily"]["2026-02-23"]["reasoning"] == 100
+    assert out["per_session"]["s1"]["reasoning"] == 100
+    # reasoning ÷ output == 100/400
+    assert out["reasoning_share"] == pytest.approx(0.25)
+
+
+def test_token_composition_no_reasoning_omits_share_and_key():
+    """No reasoning on any record → payload shape is byte-identical to before
+    (no reasoning key, no reasoning_share)."""
+    c = _TokenCompositionCollector(tz_offset=0)
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-23T10:00:00Z",
+                  tokens={"input": 100, "output": 50, "cache_creation": 0, "cache_read": 0}))
+    out = c.result()
+    assert "reasoning" not in out["totals"]
+    assert "reasoning_share" not in out
+
+
+def test_token_composition_reasoning_share_guards_zero_output():
+    c = _TokenCompositionCollector(tz_offset=0)
+    # Degenerate: reasoning present but output 0 → share 0.0, no divide error.
+    c.ingest(_rec(session_id="s1", timestamp="2026-02-23T10:00:00Z",
+                  tokens={"input": 10, "output": 0, "cache_creation": 0,
+                          "cache_read": 0, "reasoning": 5}))
+    out = c.result()
+    assert out["reasoning_share"] == 0.0
+
+
+def test_reasoning_key_does_not_change_overview_cost():
+    """summarise(): adding a reasoning key to records leaves total_cost and the
+    billing token totals identical (reasoning is a subset of output, never
+    priced)."""
+    toks_with = {"input": 1000, "output": 500, "cache_creation": 0,
+                 "cache_read": 0, "reasoning": 200}
+    toks_without = {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0}
+    r_with = summarise(_ds([_rec(tokens=toks_with)]), log_dir="/tmp")
+    r_without = summarise(_ds([_rec(tokens=toks_without)]), log_dir="/tmp")
+    assert r_with["overview"]["total_cost"] == r_without["overview"]["total_cost"]
+    for k in ("input", "output", "cache_read", "cache_creation"):
+        assert (r_with["overview"]["total_tokens"].get(k, 0)
+                == r_without["overview"]["total_tokens"].get(k, 0))
+    # And the reasoning attribution IS present on the with-reasoning run.
+    assert r_with["token_composition"]["totals"]["reasoning"] == 200
+    assert r_with["token_composition"]["reasoning_share"] == pytest.approx(0.4)
+
+
 # ── _OutlierCollector (§1.5) ─────────────────────────────────────────────────
 
 def test_outlier_collector_flags_high_tool_and_step():
