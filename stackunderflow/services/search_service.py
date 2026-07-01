@@ -397,6 +397,282 @@ class SearchService:
         finally:
             conn.close()
 
+    def _fts_ranked_ids(
+        self,
+        conn: sqlite3.Connection,
+        safe_query: str,
+        where_sql: str,
+        params: list,
+        limit: int,
+    ) -> list[int]:
+        """Return message ids for ``safe_query``, best-relevance first.
+
+        The lexical half of the hybrid retriever. Shares the exact FTS5
+        ``MATCH`` + filter path :meth:`search` uses, but projects only the
+        row id (RRF fuses on ids, then :meth:`_rows_for_ids` rehydrates).
+        An FTS5 syntax error yields ``[]`` — same swallow as ``search``.
+        """
+        sql = f"""
+            SELECT m.id AS id
+            FROM messages_fts
+            JOIN messages m ON messages_fts.rowid = m.id
+            WHERE messages_fts MATCH ?
+            {where_sql}
+            ORDER BY rank
+            LIMIT ?
+        """
+        try:
+            rows = conn.execute(sql, [safe_query, *params, limit]).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [int(r["id"]) for r in rows]
+
+    def _rows_for_ids(
+        self, conn: sqlite3.Connection, ids: list[int]
+    ) -> dict[int, dict]:
+        """Fetch full message rows for ``ids`` → ``{id: result_dict}``.
+
+        One query, ``IN (...)`` over the (small) fused candidate set. The
+        dict shape mirrors :meth:`search`'s ``results`` rows minus the
+        FTS-only ``snippet``/``relevance`` (the hybrid caller attaches its
+        own ``relevance`` = fused score).
+        """
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        sql = f"""
+            SELECT id, session_id, project, role, content, timestamp,
+                   model, tokens_input, tokens_output
+            FROM messages
+            WHERE id IN ({placeholders})
+        """
+        out: dict[int, dict] = {}
+        for row in conn.execute(sql, ids).fetchall():
+            out[int(row["id"])] = {
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "project": row["project"],
+                "role": row["role"],
+                "content": row["content"][:500],
+                "timestamp": row["timestamp"],
+                "model": row["model"],
+                "tokens_input": row["tokens_input"],
+                "tokens_output": row["tokens_output"],
+            }
+        return out
+
+    def hybrid_search(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        limit: int = 20,
+        candidate_k: int = 50,
+        embed_model: str | None = None,
+        ollama_url: str | None = None,
+    ) -> dict:
+        """Hybrid FTS + vector retrieval, merged by reciprocal-rank fusion.
+
+        Runs the lexical FTS5 ``MATCH`` **and** a brute-force cosine scan
+        over ``embeddings.db``, then fuses the two rankings with RRF
+        (:func:`services.embeddings.rrf_merge`). Filters (project / date /
+        model / role) are applied to the FTS half in SQL and to the vector
+        half by post-filtering the fused rows against the same predicates.
+
+        Graceful degradation is the whole point:
+
+        * Ollama unreachable, or ``embeddings.db`` empty, or the query
+          fails to embed → the vector ranking is empty and the fused
+          result is **exactly** the FTS ranking. Zero regression: the same
+          rows in the same order today's ``search`` would return.
+        * FTS finds nothing but the vector half does → semantic-only hits
+          still surface (the win: "how did I fix the flaky auth test"
+          matching without the keyword).
+
+        Returns the same envelope shape as :meth:`search` (``results`` /
+        ``total`` / ``query`` / ``limit``), plus ``vector_used`` so a
+        caller can tell whether the semantic half actually contributed.
+        Each result's ``relevance`` is the fused RRF score (higher is
+        better — note this is the opposite sign convention to ``search``'s
+        raw FTS ``rank``, where lower is better).
+        """
+        empty = {
+            "results": [],
+            "total": 0,
+            "query": query,
+            "limit": limit,
+            "vector_used": False,
+        }
+        if not query or not query.strip():
+            return empty
+
+        # Import here so callers that never hit the hybrid path don't pay
+        # the (tiny, but principled) import, and so a partially-installed
+        # env degrades to FTS via the except below.
+        try:
+            from stackunderflow.services import embeddings as _emb
+        except Exception:  # noqa: BLE001
+            _emb = None  # type: ignore[assignment]
+
+        conn = self._get_conn()
+        try:
+            safe_query = self._sanitize_fts_query(query)
+            where_clauses, params = self._build_filter_clauses(
+                project=project, date_from=date_from, date_to=date_to,
+                model=model, role=role,
+            )
+            where_sql = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
+
+            # -- lexical half -------------------------------------------------
+            fts_ids = self._fts_ranked_ids(
+                conn, safe_query, where_sql, params, candidate_k
+            )
+
+            # -- vector half (best-effort, gated) -----------------------------
+            vector_ids: list[int] = []
+            if _emb is not None:
+                vector_ids = self._vector_ranked_ids(
+                    query, emb=_emb, candidate_k=candidate_k,
+                    embed_model=embed_model, ollama_url=ollama_url,
+                )
+
+            vector_used = bool(vector_ids)
+
+            # -- fuse ---------------------------------------------------------
+            rankings = [r for r in (fts_ids, vector_ids) if r]
+            if not rankings:
+                return empty
+            if _emb is not None:
+                fused = _emb.rrf_merge(rankings, limit=None)
+            else:
+                # No embeddings module at all → FTS ids re-scored in order.
+                fused = [(mid, 1.0 / (60 + i)) for i, mid in enumerate(fts_ids)]
+
+            fused_ids = [mid for mid, _ in fused]
+            rows_by_id = self._rows_for_ids(conn, fused_ids)
+
+            # The vector half is not filtered in SQL, so post-filter every
+            # fused row against the same predicates before returning. FTS
+            # rows already satisfy them; vector-only rows may not.
+            results: list[dict] = []
+            for mid, score in fused:
+                row = rows_by_id.get(mid)
+                if row is None:
+                    continue
+                if not self._row_matches_filters(
+                    row, project=project, date_from=date_from,
+                    date_to=date_to, model=model, role=role,
+                ):
+                    continue
+                row = dict(row)
+                row["relevance"] = score
+                results.append(row)
+                if len(results) >= limit:
+                    break
+
+            return {
+                "results": results,
+                "total": len(results),
+                "query": query,
+                "limit": limit,
+                "vector_used": vector_used,
+            }
+        finally:
+            conn.close()
+
+    def _vector_ranked_ids(
+        self,
+        query: str,
+        *,
+        emb,
+        candidate_k: int,
+        embed_model: str | None,
+        ollama_url: str | None,
+    ) -> list[int]:
+        """Embed ``query`` and cosine-scan ``embeddings.db`` → id list.
+
+        Returns ``[]`` on any miss (Ollama down, empty store, embed
+        failure) so the caller falls back to FTS-only. Never raises.
+        """
+        try:
+            model_name = emb._resolve_model(embed_model)
+            store = emb.EmbeddingStore()
+            if store.count(model_name) == 0:
+                return []
+            if not emb.ollama_reachable(ollama_url):
+                return []
+            qvecs = emb.embed_texts(
+                [query], model=model_name, url=ollama_url, check_reachable=False,
+            )
+            if not qvecs:
+                return []
+            hits = store.search(qvecs[0], model=model_name, top_k=candidate_k)
+            return [mid for mid, _ in hits]
+        except Exception as exc:  # noqa: BLE001 — never break the query path
+            logger.debug("hybrid_search: vector half failed: %s", exc)
+            return []
+
+    def _build_filter_clauses(
+        self,
+        *,
+        project: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        model: str | None,
+        role: str | None,
+    ) -> tuple[list[str], list]:
+        """Build the shared ``WHERE`` fragments + params (FTS SQL half)."""
+        where_clauses: list[str] = []
+        params: list = []
+        if project:
+            where_clauses.append("m.project = ?")
+            params.append(project)
+        if date_from:
+            where_clauses.append("m.timestamp >= ?")
+            params.append(date_from)
+        if date_to:
+            if len(date_to) == 10:
+                date_to = date_to + "T23:59:59"
+            where_clauses.append("m.timestamp <= ?")
+            params.append(date_to)
+        if model:
+            where_clauses.append("m.model = ?")
+            params.append(model)
+        if role:
+            where_clauses.append("m.role = ?")
+            params.append(role)
+        return where_clauses, params
+
+    @staticmethod
+    def _row_matches_filters(
+        row: dict,
+        *,
+        project: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        model: str | None,
+        role: str | None,
+    ) -> bool:
+        """Python mirror of :meth:`_build_filter_clauses` for vector rows."""
+        if project and row.get("project") != project:
+            return False
+        if model and row.get("model") != model:
+            return False
+        if role and row.get("role") != role:
+            return False
+        ts = row.get("timestamp") or ""
+        if date_from and ts < date_from:
+            return False
+        if date_to:
+            hi = date_to + "T23:59:59" if len(date_to) == 10 else date_to
+            if ts > hi:
+                return False
+        return True
+
     def get_indexed_projects(self) -> list[dict]:
         """Get list of projects that have been indexed with their metadata."""
         conn = self._get_conn()

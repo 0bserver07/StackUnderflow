@@ -1192,6 +1192,180 @@ def _run_decisions_query(
         conn.close()
 
 
+def _run_ask_query(question, *, project, since, limit, budget, scope_to_cwd=True):
+    """Hybrid retrieval behind ``memory ask``: FTS + vector, RRF-fused.
+
+    Returns ``(BudgetedResult, resolved_slug, vector_used)``.
+
+    The base signal is ``discovery.search_past_decisions`` over the store
+    (substring match), which is the authority for **provenance** — every
+    returned row carries ``session_id`` (session), ``last_ts`` (date) and
+    ``cost_usd`` (cost). On top of that we consult the hybrid
+    ``SearchService.hybrid_search`` (lexical FTS + local-vector cosine,
+    fused by reciprocal-rank fusion) to obtain a *semantic* ordering of
+    ``session_id`` s, and re-fuse the two session orderings with RRF.
+
+    Degrades to exactly today's behaviour: when ``search_index.db`` is
+    empty or Ollama is down the hybrid half returns nothing, the fused
+    order collapses to the base order, and the packed ``BudgetedResult``
+    is byte-identical to what ``memory decisions`` would have produced.
+    ``vector_used`` reports whether the semantic half actually contributed.
+    """
+    from stackunderflow.services.discovery import (
+        pack_within_budget,
+        search_past_decisions,
+    )
+
+    conn = _open_store()
+    try:
+        slug = project
+        if slug is None and scope_to_cwd:
+            slug = _detect_cwd_project_slug(conn)
+
+        # Base (provenance authority) — no budget yet; we pack after fusion.
+        base = search_past_decisions(
+            conn, question, project=slug, since=since, limit=limit,
+            context_budget=None,
+        )
+        by_sid = {m.session_id: m for m in base}
+        base_order = [m.session_id for m in base]
+
+        # Hybrid semantic ordering of session ids (best-effort; [] on any miss).
+        hybrid_sids, vector_used = _hybrid_session_order(
+            question, project_slug=slug, limit=limit,
+        )
+        # Pull in semantic-only sessions the substring base missed, looking
+        # up provenance from the store. Best-effort: a session we can't
+        # hydrate is simply skipped (it stays out of the fused surface).
+        extra_sids = [s for s in hybrid_sids if s not in by_sid]
+        if extra_sids:
+            for m in _hydrate_sessions(conn, extra_sids, slug):
+                by_sid.setdefault(m.session_id, m)
+
+        # Fuse the two session orderings with RRF. When ``hybrid_sids`` is
+        # empty the fused order equals ``base_order``, so the no-Ollama /
+        # empty-index path is a no-op re-rank (zero regression vs today).
+        ordered_sids = _fuse_session_ids(base_order, hybrid_sids)
+
+        ordered = [by_sid[s] for s in ordered_sids if s in by_sid]
+        if limit and limit > 0:
+            ordered = ordered[:limit]
+
+        kept, dropped, used = pack_within_budget(
+            ordered, budget_tokens=budget, rank_fn=None,
+        )
+        from stackunderflow.services.discovery import BudgetedResult
+
+        result = BudgetedResult(
+            sessions=kept,
+            truncated=dropped > 0,
+            more_available=dropped,
+            budget_used_tokens=used,
+            budget_max_tokens=budget,
+        )
+        return result, slug, vector_used
+    finally:
+        conn.close()
+
+
+def _fuse_session_ids(
+    base_order: list[str], hybrid_order: list[str], *, k: int = 60,
+) -> list[str]:
+    """RRF over two session-id orderings → one fused order (best-first).
+
+    A thin string-keyed twin of ``embeddings.rrf_merge`` (which keys on
+    ints). Score = ``Σ 1/(k + rank)`` across the lists an id appears in;
+    ties break by first-seen order so the result is deterministic. When
+    ``hybrid_order`` is empty this returns ``base_order`` unchanged.
+    """
+    scores: dict[str, float] = {}
+    first_seen: dict[str, int] = {}
+    seq = 0
+    for order in (base_order, hybrid_order):
+        for rank, sid in enumerate(order):
+            scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
+            if sid not in first_seen:
+                first_seen[sid] = seq
+                seq += 1
+    return sorted(scores, key=lambda s: (-scores[s], first_seen[s]))
+
+
+def _hybrid_session_order(question, *, project_slug, limit):
+    """Run ``SearchService.hybrid_search`` → ``(session_ids, vector_used)``.
+
+    Returns session ids best-first (deduped, order-preserving) plus a flag
+    for whether the vector half contributed. Wrapped in a broad ``except``
+    so a missing/locked ``search_index.db`` or any hybrid failure degrades
+    to ``([], False)`` — the caller then runs pure substring retrieval.
+    """
+    try:
+        import stackunderflow.deps as deps
+        from stackunderflow.services.search_service import SearchService
+
+        # The search index lives beside the store it mirrors. Deriving the
+        # path from ``deps.store_path`` (rather than the module default)
+        # keeps ``memory ask`` consistent with whatever store it is
+        # actually querying — production reads ``~/.stackunderflow/
+        # search_index.db`` as before, and a test that redirects the store
+        # to a tmp dir gets an (empty) tmp index, so the hybrid half is a
+        # clean no-op there rather than leaking the developer's real index.
+        store_path = getattr(deps, "store_path", None)
+        index_path = (
+            Path(store_path).parent / "search_index.db" if store_path else None
+        )
+        svc = SearchService(db_path=index_path)
+        res = svc.hybrid_search(
+            question, project=project_slug,
+            limit=max(int(limit) * 3, 30) if limit and limit > 0 else 60,
+        )
+    except Exception:  # noqa: BLE001 — hybrid is strictly additive
+        return [], False
+
+    seen: set[str] = set()
+    sids: list[str] = []
+    for row in res.get("results", []):
+        sid = row.get("session_id")
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        sids.append(sid)
+    return sids, bool(res.get("vector_used"))
+
+
+def _hydrate_sessions(conn, session_ids, project_slug):
+    """Best-effort ``SessionMatch`` provenance for bare ``session_ids``.
+
+    Looks each id up in the store (session ⨯ project ⨯ session_mart) so a
+    semantic-only hit still carries session / date / cost. Unknown ids are
+    skipped. Reuses the discovery row→match mapper so the dict shape stays
+    identical to the substring path.
+    """
+    if not session_ids:
+        return []
+    from stackunderflow.services import discovery as _disc
+
+    _disc._ensure_row_factory(conn)
+    placeholders = ",".join("?" for _ in session_ids)
+    params: list = list(session_ids)
+    where_extra = ""
+    if project_slug:
+        where_extra = " AND p.slug = ?"
+        params.append(project_slug)
+    sql = (
+        "SELECT "
+        + _disc._SESSION_SELECT
+        + " "
+        + _disc._SESSION_FROM
+        + f" WHERE s.session_id IN ({placeholders})"
+        + where_extra
+    )
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except Exception:  # noqa: BLE001 — store shape drift must not break ask
+        return []
+    return [_disc._row_to_match(r) for r in rows]
+
+
 def _run_action_worked_query(
     action, *, project, file_path, since, limit, min_confidence,
     scope_to_cwd=False,
@@ -1622,22 +1796,20 @@ def memory_ask(
 ):
     """Ask a natural-language question of the local store.
 
-    v1 of ``ask`` is a keyword search over past decisions — it runs the
-    same query as ``memory decisions`` on QUESTION and labels the result
-    ``ask``. The local-LLM meta-agent (which needs a running Ollama, so an
-    agent caller cannot rely on it) is intentionally deferred; until it is
-    wired in, prefer ``memory decisions`` with specific terms for a
-    precise lookup.
+    ``ask`` runs a **hybrid** retrieval: a keyword search over past
+    decisions fused (reciprocal-rank fusion) with a local semantic vector
+    search. The vector half uses a small local embedding model served by
+    Ollama; when Ollama is not running it is silently skipped and ``ask``
+    degrades to the keyword search alone — so the command always works,
+    and gets sharper (finds sessions you didn't have the exact words for)
+    when a local Ollama is available. Every result carries its provenance:
+    session id, date (``last_ts``) and cost (``cost_usd``).
     """
     json_mode = _memory_format(fmt, as_json) == "json"
     budget = _resolve_context_budget(context_budget)
-    note = (
-        "memory ask v1 runs a keyword search over past decisions; for a "
-        "precise lookup use `memory decisions` with specific terms."
-    )
     q = {"question": question, "project": project, "since": since, "limit": limit}
     try:
-        result, slug = _run_decisions_query(
+        result, slug, vector_used = _run_ask_query(
             question, project=project, since=since, limit=limit, budget=budget,
             scope_to_cwd=True,
         )
@@ -1645,13 +1817,21 @@ def memory_ask(
         _memory_fail(ctx, command="ask", query=q, exc=exc, json_mode=json_mode)
         return
     q["project"] = slug
+    note = (
+        "hybrid retrieval: keyword search fused with local semantic vector "
+        "search (Ollama)."
+        if vector_used
+        else "keyword search over past decisions (local semantic vector "
+        "search unavailable — start Ollama to enable it)."
+    )
     if json_mode:
         from stackunderflow.cli_helpers import agent_output
 
         envelope = agent_output.build_envelope(
             command="ask", query=q,
             results=[m.to_dict() for m in result.sessions],
-            budget=budget, truncated=result.truncated, extra={"note": note},
+            budget=budget, truncated=result.truncated,
+            extra={"note": note, "vector_used": vector_used},
         )
         click.echo(agent_output.render(envelope))
     else:
@@ -1659,7 +1839,7 @@ def memory_ask(
         click.echo("")
         _emit_sessions(
             result, fmt="text",
-            title=f"Past decisions matching {question!r}", show_snippet=True,
+            title=f"Sessions matching {question!r}", show_snippet=True,
         )
 
 

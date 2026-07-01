@@ -449,12 +449,17 @@ class TestMemoryAsk:
         assert r.exit_code == 0, r.output
         body = json.loads(r.output)
         _assert_envelope(body, command="ask")
-        # `ask` is a documented v1 stub — the envelope says so.
+        # `ask` is hybrid retrieval; with no Ollama the envelope says the
+        # semantic half was unavailable and it fell back to keyword search.
         assert "note" in body
         assert "keyword search" in body["note"]
+        assert body["vector_used"] is False
         assert body["query"]["question"] == "sqlite"
 
-    def test_ask_runs_a_keyword_search(self, tmp_path, monkeypatch):
+    def test_ask_falls_back_to_keyword_without_ollama(self, tmp_path, monkeypatch):
+        # No search index + no Ollama → the hybrid path degrades exactly to
+        # the substring search over the store (zero regression). Same row
+        # ``memory decisions`` would surface, with full provenance.
         store_db = tmp_path / "store.db"
         _seed_basic(store_db)
         r = _invoke(CliRunner(),
@@ -463,6 +468,20 @@ class TestMemoryAsk:
         body = json.loads(r.output)
         assert body["result_count"] == 1
         assert body["results"][0]["session_id"] == "s-decide"
+
+    def test_ask_results_carry_provenance(self, tmp_path, monkeypatch):
+        # Every returned chunk must carry session / date / cost provenance.
+        store_db = tmp_path / "store.db"
+        _seed_basic(store_db)
+        r = _invoke(CliRunner(),
+                    ["memory", "ask", "sqlite", "--json"],
+                    store_db, monkeypatch)
+        body = json.loads(r.output)
+        row = body["results"][0]
+        assert row["session_id"] == "s-decide"      # session
+        assert row["last_ts"].startswith("2026-05-01")  # date
+        assert "cost_usd" in row                     # cost
+        assert isinstance(row["cost_usd"], (int, float))
 
     def test_text_format(self, tmp_path, monkeypatch):
         store_db = tmp_path / "store.db"

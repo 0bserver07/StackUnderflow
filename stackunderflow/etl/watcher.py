@@ -228,17 +228,56 @@ def _run_cycle(
         except Exception as exc:  # noqa: BLE001 — swallow on shutdown
             _log.debug("etl.watcher: conn.close() raised: %s", exc)
 
+    # Step 6: embed newly-indexed messages for hybrid (FTS + vector)
+    # retrieval. Best-effort and fully decoupled — mirrors how the FTS
+    # triggers keep the search index current. Gated on a local Ollama;
+    # a single cheap reachability probe short-circuits when it is absent
+    # (CI, most machines), so this step never blocks the cycle or raises.
+    embedded = _embed_new_messages_best_effort()
+
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     mart_summary = " ".join(
         f"{name}={n}" for name, n in sorted(mart_counts.items())
     )
     _log.info(
-        "etl.watcher: refreshed marts in %dms — %d events%s%s",
+        "etl.watcher: refreshed marts in %dms — %d events%s%s%s",
         round(elapsed_ms),
         events,
         f", normalized={events_normalised}" if events_normalised else "",
         f" {mart_summary}" if mart_summary else "",
+        f" embedded={embedded}" if embedded else "",
     )
+
+
+def _embed_new_messages_best_effort() -> int:
+    """Embed newly-indexed ``search_index.db`` messages; never raise.
+
+    Opens its own ``SearchService`` connection (the vector store keys on
+    the *search index's* message ids, not the store's) and hands it to
+    :func:`stackunderflow.services.embeddings.embed_new_messages`, which
+    is itself gated on Ollama reachability and swallows every error.
+
+    Returns the number of vectors written (``0`` when Ollama is absent,
+    the search index is empty, or anything at all goes wrong). Wrapped in
+    a broad ``except`` so the watcher's critical path is untouched by a
+    missing module, a locked db, or a slow Ollama.
+    """
+    try:
+        from stackunderflow.services import embeddings as _emb
+        from stackunderflow.services.search_service import SearchService
+
+        # Cheap pre-check: no local Ollama → don't even open the index.
+        if not _emb.ollama_reachable():
+            return 0
+        svc = SearchService()
+        conn = svc._get_conn()
+        try:
+            return _emb.embed_new_messages(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — never let embedding stall the loop
+        _log.debug("etl.watcher: embed_new_messages step failed: %s", exc)
+        return 0
 
 
 def _ingest_changed_paths(
