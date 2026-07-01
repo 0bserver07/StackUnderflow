@@ -633,6 +633,51 @@ export interface YieldResponse {
 }
 
 /**
+ * One abandoned fork branch — `reports/forks.py::AbandonedBranch`, with
+ * `cost_usd` already converted to the active currency by the route.
+ */
+export interface AbandonedBranch {
+  session_id: string
+  fork_uuid: string
+  branch_head_uuid: string
+  message_count: number
+  cost_usd: number
+  token_total: number
+  sidechain: boolean
+  last_ts: string | null
+  session_last_ts: string | null
+  gap_seconds: number | null
+  reason: string
+}
+
+/**
+ * Fork / sidechain economics — `reports/forks.py::ForkReport`. Dollar figures
+ * are pre-converted to the active currency by `GET /api/forks`.
+ */
+export interface ForkReportData {
+  sidechain_message_count: number
+  sidechain_cost_usd: number
+  sidechain_token_total: number
+  total_cost_usd: number
+  total_token_total: number
+  total_message_count: number
+  sidechain_cost_share: number
+  sidechain_token_share: number
+  fork_point_count: number
+  abandoned_branch_count: number
+  abandoned_cost_usd: number
+  abandoned_branches: AbandonedBranch[]
+}
+
+export interface ForksResponse {
+  period: string
+  scope: string
+  report: ForkReportData
+  currency: CurrencyInfo
+  warning: string
+}
+
+/**
  * Plan + usage payload from `GET /api/plan`. Both fields are nullable —
  * when no plan is configured, the route returns `{plan: null, usage: null}`
  * and the UI should hide the widget rather than render an empty card.

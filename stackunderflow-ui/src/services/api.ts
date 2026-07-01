@@ -16,6 +16,7 @@ import type {
   CompareResponse,
   CostByProviderResponse,
   YieldResponse,
+  ForksResponse,
   PlanResponse,
   BudgetResponse,
   BudgetUpdate,
@@ -417,6 +418,19 @@ export async function getYield(
   // narrow.
   buildFilterParams(params, filters)
   return fetchJson(`${BASE}/yield?${params}`)
+}
+
+/** Period selector accepted by `/api/forks`. */
+export type ForksPeriod = 'today' | 'week' | 'month' | 'all'
+
+/**
+ * Fetch fork / sidechain economics for the active project. The server scopes
+ * to the active project via `deps.current_log_path`, so the project identity is
+ * folded into the caller's query key rather than passed here.
+ */
+export async function getForks(period: ForksPeriod = 'all'): Promise<ForksResponse> {
+  const params = new URLSearchParams({ period })
+  return fetchJson(`${BASE}/forks?${params}`)
 }
 
 export async function getPlan(): Promise<PlanResponse> {

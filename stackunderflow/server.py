@@ -28,6 +28,7 @@ from stackunderflow.routes import (
     cost,
     data,
     etl,
+    forks,
     live,
     meta_agent,
     misc,
@@ -281,6 +282,7 @@ app.include_router(quality.router)
 app.include_router(pricing.router)
 app.include_router(budgets.router)
 app.include_router(whatif.router)
+app.include_router(forks.router)
 
 
 

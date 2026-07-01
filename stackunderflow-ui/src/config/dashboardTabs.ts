@@ -22,6 +22,7 @@ import {
   IconTag,
   IconScale,
   IconGitBranch,
+  IconGitFork,
   IconHierarchy3,
   IconHistory,
   IconWallet,
@@ -55,6 +56,11 @@ export const TABS: readonly Tab[] = [
   // and Commands. Both call dedicated /api/compare and /api/yield routes.
   { id: 'compare', label: 'Compare', icon: IconScale },
   { id: 'yield', label: 'Yield', icon: IconGitBranch, isBeta: true },
+  // Fork / sidechain economics — prices the conversation DAG that
+  // `is_sidechain` + `parent_uuid` already capture (subagent spend + branches
+  // started then dropped). Calls the dedicated /api/forks route. Beta while the
+  // abandonment heuristic settles.
+  { id: 'forks', label: 'Forks', icon: IconGitFork, isBeta: true },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
