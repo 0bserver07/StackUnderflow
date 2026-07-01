@@ -784,48 +784,43 @@ class TestFindFailureModesForFile:
 # ── search-past-decisions --use-embeddings ──────────────────────────────────
 
 
-# Skip the entire embedding-CLI class when numpy isn't installed (i.e. the
-# optional ``[embeddings]`` extra isn't on the test environment). The stub
-# inside ``_stub_embeddings`` imports numpy at fixture time, which means a
-# bare-install CI errors at collection without this guard.
-pytest.importorskip("numpy")
-
-
 class TestSearchPastDecisionsEmbeddingsCLI:
-    """CLI surface for the opt-in semantic-search mode.
+    """CLI surface for the opt-in semantic-search mode (Ollama backend).
 
     The full re-rank semantics are covered by the unit tests under
     ``services/test_search_past_decisions_embeddings.py``; these tests
     pin the *CLI* contract — the flag exists, JSON output carries
-    ``embedding_score``, text output appends ``cos=…``, and a missing
-    optional dep exits cleanly with the install hint.
+    ``embedding_score``, text output appends ``cos=…``, and (crucially)
+    an unreachable Ollama degrades cleanly to substring ranking with a
+    zero exit code, no error.
+
+    The Ollama path is stubbed by monkey-patching
+    ``embeddings.embed_texts`` — no network, no Ollama, no numpy.
     """
 
-    def _stub_embeddings(self, monkeypatch):
-        """Install a tiny deterministic stub for ``load_model``."""
-        import numpy as np
+    def _stub_embed_texts(self, monkeypatch):
+        """Deterministic stand-in for the Ollama embed call.
 
-        from stackunderflow.services import discovery_embeddings
+        query/sqlite/watcher text → axis-0 vector; everything else → axis-1.
+        Aligned 1:1 with the input (query first). Records nothing — tests
+        assert on output, not call shape.
+        """
+        from stackunderflow.services import embeddings
 
-        class _Stub:
-            DIM = 4
+        def _fake(texts, *, model=None, **_kw):  # noqa: ARG001 — API compat
+            out = []
+            for t in texts:
+                low = t.lower()
+                if "watcher" in low or "sqlite" in low:
+                    out.append([1.0, 0.0, 0.0, 0.0])
+                else:
+                    out.append([0.0, 1.0, 0.0, 0.0])
+            return out
 
-            def encode(self, texts, **_kw):
-                out = np.zeros((len(texts), self.DIM), dtype=np.float32)
-                for i, t in enumerate(texts):
-                    if "watcher" in t.lower() or "sqlite" in t.lower():
-                        out[i] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-                    else:
-                        out[i] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-                return out
-
-        discovery_embeddings._MODEL_CACHE.clear()
-        monkeypatch.setattr(
-            discovery_embeddings, "load_model", lambda _name: _Stub(),
-        )
+        monkeypatch.setattr(embeddings, "embed_texts", _fake)
 
     def test_json_output_carries_embedding_score(self, tmp_path, monkeypatch):
-        self._stub_embeddings(monkeypatch)
+        self._stub_embed_texts(monkeypatch)
         store_db = tmp_path / "store.db"
         _seed_with_data(store_db)
         runner = CliRunner()
@@ -844,7 +839,7 @@ class TestSearchPastDecisionsEmbeddingsCLI:
         assert 0.0 <= s["embedding_score"] <= 1.0
 
     def test_text_output_appends_cos(self, tmp_path, monkeypatch):
-        self._stub_embeddings(monkeypatch)
+        self._stub_embed_texts(monkeypatch)
         store_db = tmp_path / "store.db"
         _seed_with_data(store_db)
         runner = CliRunner()
@@ -858,13 +853,17 @@ class TestSearchPastDecisionsEmbeddingsCLI:
         # The text renderer appends "cos=X.XX" to the headline.
         assert "cos=" in r.output
 
-    def test_missing_optional_dep_exits_with_hint(self, tmp_path, monkeypatch):
-        from stackunderflow.services import discovery_embeddings
+    def test_ollama_unreachable_degrades_cleanly(self, tmp_path, monkeypatch):
+        """``--use-embeddings`` with Ollama down must exit 0 and fall back
+        to substring ranking — the error path (missing extra) is gone.
+        """
+        from stackunderflow.services import embeddings
 
-        def _no_st():
-            raise discovery_embeddings.MissingEmbeddingsDependencyError()
+        # Ollama unreachable → embed_texts returns None (its documented
+        # "embedding unavailable" signal).
         monkeypatch.setattr(
-            discovery_embeddings, "_require_sentence_transformers", _no_st,
+            embeddings, "embed_texts",
+            lambda texts, *, model=None, **_kw: None,  # noqa: ARG005
         )
 
         store_db = tmp_path / "store.db"
@@ -872,24 +871,27 @@ class TestSearchPastDecisionsEmbeddingsCLI:
         runner = CliRunner()
         r = _invoke(
             runner,
-            ["search-past-decisions", "sqlite", "--use-embeddings"],
+            ["search-past-decisions", "sqlite", "--use-embeddings",
+             "--format", "json"],
             store_db, monkeypatch,
         )
-        # Non-zero exit code with the install hint in the output (stderr
-        # collapses into Click's combined output).
-        assert r.exit_code != 0
-        assert "pip install stackunderflow[embeddings]" in r.output
+        # Clean exit, results present, no crash, no install hint.
+        assert r.exit_code == 0, r.output
+        body = json.loads(r.output)
+        assert body["sessions"]
+        # Fell back to substring ranking: no embedding_score attached.
+        for s in body["sessions"]:
+            assert "embedding_score" not in s
 
-    def test_default_off_does_not_load_model(self, tmp_path, monkeypatch):
-        """Sanity check: without the flag, no model load is attempted."""
-        from stackunderflow.services import discovery_embeddings
+    def test_default_off_does_not_embed(self, tmp_path, monkeypatch):
+        """Sanity check: without the flag, the Ollama backend is never hit."""
+        from stackunderflow.services import embeddings
 
-        def _explode(_name):
+        def _explode(texts, *, model=None, **_kw):  # noqa: ARG001
             raise AssertionError(
-                "load_model should never be called without --use-embeddings"
+                "embed_texts should never be called without --use-embeddings"
             )
-        discovery_embeddings._MODEL_CACHE.clear()
-        monkeypatch.setattr(discovery_embeddings, "load_model", _explode)
+        monkeypatch.setattr(embeddings, "embed_texts", _explode)
 
         store_db = tmp_path / "store.db"
         _seed_with_data(store_db)

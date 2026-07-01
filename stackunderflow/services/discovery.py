@@ -954,6 +954,37 @@ def _relevance_embeddings(m: SessionMatch) -> float:
     return max(0.0, min(1.0, float(score)))
 
 
+def _load_message_texts(
+    conn: sqlite3.Connection, message_ids: list[int],
+) -> dict[int, str]:
+    """Fetch ``messages.content_text`` for ``message_ids``.
+
+    Returns ``{message_id: content_text}``; ids with no row are absent.
+    Reads the same column the substring filter matched on (and the same
+    source the retired sentence-transformers backend used), so the
+    re-rank scores the text the user actually searched. The IN clause is
+    chunked to stay under SQLite's default 999-parameter limit even though
+    the candidate set is normally a few dozen ids.
+    """
+    if not message_ids:
+        return {}
+    out: dict[int, str] = {}
+    chunk_size = 500
+    for start in range(0, len(message_ids), chunk_size):
+        chunk = message_ids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            "SELECT id, content_text FROM messages "  # noqa: S608 — placeholders bound
+            f"WHERE id IN ({placeholders})",
+            chunk,
+        ).fetchall()
+        for r in rows:
+            mid = int(r["id"] if hasattr(r, "keys") else r[0])
+            content = r["content_text"] if hasattr(r, "keys") else r[1]
+            out[mid] = content or ""
+    return out
+
+
 def _compute_embedding_scores(
     conn: sqlite3.Connection,
     *,
@@ -961,31 +992,69 @@ def _compute_embedding_scores(
     mid_by_sfk: dict[int, int],
     model_name: str | None = None,
 ) -> dict[int, float]:
-    """Embed query + first-hit messages, return ``{session_fk: cosine}``.
+    """Embed query + first-hit messages via Ollama, return ``{session_fk: cosine}``.
 
-    Lazy-imports :mod:`stackunderflow.services.discovery_embeddings` so
-    a discovery call with ``use_embeddings=False`` never pays the
-    sentence-transformers / torch import cost. Any failure inside the
-    embedding pipeline propagates out — the caller (CLI / MCP) is
-    responsible for catching
-    :class:`discovery_embeddings.MissingEmbeddingsDependencyError` and
-    converting it into a clean error surface.
+    Uses :mod:`stackunderflow.services.embeddings` — the same cloud-first,
+    local-fallback Ollama path that powers ``memory ask`` /
+    ``hybrid_search``. The candidate set is small (bounded by the
+    substring pre-filter), so the messages are embedded on the fly with no
+    cache table: we load each candidate's ``content_text``, embed them plus
+    the query in one Ollama batch, and score with
+    :func:`embeddings.cosine` mapped to ``[0, 1]``.
 
-    Returns an empty dict when ``mid_by_sfk`` is empty (nothing to
-    score) — short-circuits before the model load.
+    Graceful degradation is the whole point. When Ollama is unreachable
+    ``embeddings.embed_texts`` returns ``None``; we return an **empty
+    dict** so every row's ``embedding_score`` stays ``None``,
+    :func:`_relevance_embeddings` yields ``0.0`` for all of them, and
+    ``search_past_decisions`` degrades to substring ordering — exactly how
+    ``hybrid_search`` falls back to FTS-only. No exception is raised.
+
+    ``model_name`` is an Ollama embed model name; ``None`` →
+    ``embeddings.DEFAULT_EMBED_MODEL`` (via the env-var-aware resolver
+    inside ``embed_texts``).
+
+    Returns an empty dict when ``mid_by_sfk`` is empty (nothing to score).
     """
     if not mid_by_sfk:
         return {}
-    from stackunderflow.services import discovery_embeddings as _emb
+    from stackunderflow.services import embeddings as _emb
 
-    resolved_model = _emb.resolve_model_name(model_name)
     message_ids = list(mid_by_sfk.values())
+    texts_by_mid = _load_message_texts(conn, message_ids)
 
-    candidate_vectors = _emb.compute_or_load(
-        conn, message_ids=message_ids, model_name=resolved_model,
-    )
-    query_vector = _emb.embed_query(query, resolved_model)
-    score_by_mid = _emb.score_against_query(query_vector, candidate_vectors)
+    # Build the aligned embed batch: query first, then one entry per
+    # candidate that has non-empty text. ``embed_texts`` skips rows whose
+    # text is empty/whitespace, so feeding only non-empty texts keeps the
+    # returned vectors aligned 1:1 with ``embed_ids`` (a candidate with no
+    # embeddable text simply never gets a score → 0.0 at rank time).
+    embed_ids: list[int] = []
+    batch: list[str] = [query]
+    for mid in message_ids:
+        text = texts_by_mid.get(mid, "")
+        if text and text.strip():
+            embed_ids.append(mid)
+            batch.append(text)
+
+    # Nothing embeddable (all candidate texts empty) — no cosine to
+    # compute, fall through to substring ranking.
+    if not embed_ids:
+        return {}
+
+    vectors = _emb.embed_texts(batch, model=model_name)
+    # Ollama unreachable / whole batch failed → None (or a short result if
+    # some rows silently dropped). Degrade to substring ranking: empty
+    # dict, no score attached to any row.
+    if not vectors or len(vectors) != len(batch):
+        return {}
+
+    query_vec = vectors[0]
+    score_by_mid: dict[int, float] = {}
+    for i, mid in enumerate(embed_ids):
+        cand_vec = vectors[i + 1]
+        # cosine ∈ [-1, 1]; map to [0, 1] so the score composes with the
+        # existing pack_within_budget rank fn (each component in [0, 1]).
+        cos = _emb.cosine(query_vec, cand_vec)
+        score_by_mid[mid] = (cos + 1.0) / 2.0
 
     return {
         sfk: score_by_mid.get(mid, 0.0)
@@ -1045,20 +1114,21 @@ def search_past_decisions(
         :class:`BudgetedResult`.
     use_embeddings:
         When ``True``, the LIKE-density relevance term in the rank
-        function is **replaced** by a sentence-transformers cosine
-        similarity score between the query and the first matching
-        message per session (mapped to ``[0, 1]``). Each returned
-        ``SessionMatch`` carries the score on its ``embedding_score``
-        field. The substring filter still runs first — embeddings only
-        re-rank the candidate set; they never widen it. Requires the
-        ``stackunderflow[embeddings]`` extra; raises
-        :class:`stackunderflow.services.discovery_embeddings.MissingEmbeddingsDependencyError`
-        otherwise.
+        function is **replaced** by an Ollama cosine similarity score
+        between the query and the first matching message per session
+        (mapped to ``[0, 1]``). Each returned ``SessionMatch`` carries the
+        score on its ``embedding_score`` field. The substring filter still
+        runs first — embeddings only re-rank the candidate set; they never
+        widen it. Uses the same cloud-first, local-fallback Ollama backend
+        as ``memory ask`` (:mod:`stackunderflow.services.embeddings`). When
+        Ollama is unreachable this **degrades silently** to substring
+        ranking (no score attached, no error raised) — exactly how
+        ``hybrid_search`` falls back to FTS-only.
     model_name:
-        Override the embedding model. ``None`` (default) →
+        Override the Ollama embed model. ``None`` (default) →
         ``STACKUNDERFLOW_EMBED_MODEL`` env var, or
-        ``sentence-transformers/all-MiniLM-L6-v2``. Ignored when
-        ``use_embeddings`` is ``False``.
+        ``embeddings.DEFAULT_EMBED_MODEL`` (``nomic-embed-text``). Ignored
+        when ``use_embeddings`` is ``False``.
     """
     _ensure_row_factory(conn)
     if not query or not query.strip():

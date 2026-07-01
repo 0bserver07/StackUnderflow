@@ -48,13 +48,6 @@ dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
 ]
-# Opt-in semantic search for ``search-past-decisions --use-embeddings``
-# (HANDOFF #10). Pulls in sentence-transformers + its torch / numpy
-# transitives. Heavy install — left out of the base deps so users who
-# never flag ``--use-embeddings`` don't pay the ~500 MB cost.
-embeddings = [
-    "sentence-transformers>=2.7,<3",
-]
 analysis = [
     "radon>=2.6.0",
     "mypy>=1.5.0",

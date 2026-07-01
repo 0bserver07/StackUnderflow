@@ -2731,16 +2731,16 @@ def find_sessions_touching_file_cmd(
                    "Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. "
                    "Pass 0 to disable.")
 @click.option("--use-embeddings", "use_embeddings", is_flag=True, default=False,
-              help="Re-rank substring matches by local sentence-transformers "
-                   "embeddings (cosine similarity). Requires the optional "
-                   "`stackunderflow[embeddings]` extra. The substring filter "
-                   "still runs first; embeddings only re-rank the candidate "
-                   "set. Each JSON row gains an `embedding_score` in [0, 1].")
+              help="Re-rank substring matches by Ollama embeddings (cosine "
+                   "similarity), the same backend as `memory ask`. The "
+                   "substring filter still runs first; embeddings only re-rank "
+                   "the candidate set. Each JSON row gains an `embedding_score` "
+                   "in [0, 1]. Degrades silently to substring ranking when "
+                   "Ollama is unreachable.")
 @click.option("--embed-model", "embed_model", default=None,
-              help="Override the embedding model (sentence-transformers id). "
-                   "Default: STACKUNDERFLOW_EMBED_MODEL or "
-                   "sentence-transformers/all-MiniLM-L6-v2. Ignored without "
-                   "--use-embeddings.")
+              help="Override the Ollama embed model. Default: "
+                   "STACKUNDERFLOW_EMBED_MODEL or nomic-embed-text. Ignored "
+                   "without --use-embeddings.")
 @click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
               show_default=True, help="Output format.")
 def search_past_decisions_cmd(
@@ -2758,12 +2758,10 @@ def search_past_decisions_cmd(
     # subcommand uses (scope_to_cwd left off, so --project defaults to all
     # projects — the original behaviour). Keeps the {"sessions": [...]} output.
     #
-    # Lazy import — only to catch the missing-extra error here at the
-    # surface so the user sees a clean exit instead of a bare traceback.
-    from stackunderflow.services.discovery_embeddings import (
-        MissingEmbeddingsDependencyError,
-    )
-
+    # ``--use-embeddings`` re-ranks via the Ollama backend (embeddings.py).
+    # When Ollama is unreachable the re-rank degrades silently to substring
+    # ranking inside ``_compute_embedding_scores`` — no missing-dep error to
+    # catch here anymore.
     budget = _resolve_context_budget(context_budget)
     try:
         result, _slug = _run_decisions_query(
@@ -2772,12 +2770,6 @@ def search_past_decisions_cmd(
         )
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--since") from exc
-    except MissingEmbeddingsDependencyError as exc:
-        # ``raise SystemExit`` here (not click.UsageError) so the exit
-        # message matches the install hint verbatim — Click's error
-        # formatter prepends "Usage: ..." which would bury the actionable
-        # line under boilerplate.
-        raise SystemExit(str(exc)) from exc
 
     _emit_sessions(
         result,

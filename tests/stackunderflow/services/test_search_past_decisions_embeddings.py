@@ -5,11 +5,14 @@ These tests verify that the embedding re-rank path:
 1. Returns the same rows as the substring filter (it never widens the set);
 2. Reorders them according to cosine similarity;
 3. Surfaces ``embedding_score`` on each returned ``SessionMatch``;
-4. Co-exists cleanly with ``context_budget`` (rank fn uses cosine).
+4. Co-exists cleanly with ``context_budget`` (rank fn uses cosine);
+5. Degrades *silently* to substring ranking when Ollama is unreachable.
 
-The sentence-transformers model is stubbed via monkey-patching
-``stackunderflow.services.discovery_embeddings.load_model`` — the real
-90 MB MiniLM model is never loaded.
+The Ollama backend (``services/embeddings.py``) is stubbed by
+monkey-patching ``embeddings.embed_texts`` with a deterministic
+text→vector table — no network, no Ollama, no numpy. This mirrors how
+``memory ask`` / ``hybrid_search`` embed via Ollama and fall back to
+lexical ranking when it is down.
 """
 
 from __future__ import annotations
@@ -18,74 +21,58 @@ import sqlite3
 
 import pytest
 
-np = pytest.importorskip("numpy")
-
-from stackunderflow.services import discovery_embeddings
+from stackunderflow.services import embeddings
 from stackunderflow.services.discovery import (
     BudgetedResult,
     search_past_decisions,
 )
 from stackunderflow.store import db, schema
 
-# ── deterministic stub model ────────────────────────────────────────────────
+# ── deterministic embed stub ─────────────────────────────────────────────────
 
 
-class _OrderedStub:
-    """Stub model whose embeddings are crafted to enforce a known ranking.
+class _EmbedStub:
+    """Deterministic stand-in for ``embeddings.embed_texts``.
 
-    The encoder maps each text to a vector via a tiny lookup table. Texts
-    not in the table get a near-orthogonal vector (low cosine to the
-    query). This lets a single test assert "session A ranks above session
-    B under embeddings" without depending on the real model's behaviour.
+    Maps each input string to a fixed vector via a substring lookup table
+    (so the test can pin "session A ranks above session B"). Anything not
+    registered gets a noise vector near-orthogonal to every registered
+    one. Records the batches it was asked to embed so a test can assert
+    that off-topic (non-substring-matching) text never reached the
+    encoder. Aligned 1:1 with the input — one vector per input string,
+    including the leading query.
     """
 
     DIM = 4
 
     def __init__(self, table: dict[str, list[float]]) -> None:
         self.table = table
-        self.encode_calls: list[list[str]] = []
+        self.calls: list[list[str]] = []
 
-    def encode(
-        self,
-        texts: list[str],
-        *,
-        normalize_embeddings: bool = False,  # noqa: ARG002
-        convert_to_numpy: bool = True,       # noqa: ARG002
-        show_progress_bar: bool = False,     # noqa: ARG002
-        **_kw,
-    ) -> np.ndarray:
-        self.encode_calls.append(list(texts))
-        out = np.zeros((len(texts), self.DIM), dtype=np.float32)
-        for i, text in enumerate(texts):
-            vec = self._lookup(text)
-            out[i] = vec
-        return out
+    def __call__(self, texts, *, model=None, **_kw):  # noqa: ARG002 — API compat
+        self.calls.append(list(texts))
+        return [self._lookup(t) for t in texts]
 
-    def _lookup(self, text: str) -> np.ndarray:
-        # Exact-match by stripping whitespace + lower — keeps the table
-        # readable in the test. Anything not registered gets a fallback
-        # vector that's near-orthogonal to every registered one.
+    def _lookup(self, text: str) -> list[float]:
         key = text.strip().lower()
-        for haystack, vec in self.table.items():
-            if haystack in key:
-                v = np.array(vec, dtype=np.float32)
-                n = float(np.linalg.norm(v))
-                return v / n if n > 0 else v
-        # Fallback: a vector pointing in a "noise" direction.
-        v = np.zeros(self.DIM, dtype=np.float32)
+        for needle, vec in self.table.items():
+            if needle in key:
+                return list(vec)
+        # Fallback: a vector on the last axis, orthogonal to axis-0 hits.
+        v = [0.0] * self.DIM
         v[-1] = 1.0
         return v
 
 
-@pytest.fixture(autouse=True)
-def _clear_model_cache() -> None:
-    discovery_embeddings._MODEL_CACHE.clear()
-    yield
-    discovery_embeddings._MODEL_CACHE.clear()
+def _install_embed_stub(
+    monkeypatch: pytest.MonkeyPatch, stub: _EmbedStub,
+) -> None:
+    """Patch the Ollama embed fn so the test never touches the network."""
+    monkeypatch.setattr(embeddings, "embed_texts", stub)
 
 
 def _make_conn(tmp_path) -> sqlite3.Connection:
-    """Open a real store at tmp_path and apply migrations (so v014 lands)."""
+    """Open a real store at tmp_path and apply migrations."""
     conn = db.connect(tmp_path / "store.db")
     schema.apply(conn)
     return conn
@@ -140,54 +127,34 @@ def _seed_message(
     ).fetchone()[0])
 
 
-def _stub_load_model(monkeypatch: pytest.MonkeyPatch, stub: _OrderedStub) -> None:
-    """Replace the lazy model loader so the test never imports torch."""
-    monkeypatch.setattr(
-        discovery_embeddings, "load_model", lambda _name: stub,
-    )
-
-
 # ── re-rank assertions ──────────────────────────────────────────────────────
 
 
 class TestEmbeddingsReRanking:
     def test_use_embeddings_reorders_by_cosine(self, tmp_path, monkeypatch):
-        """With the stub model crafted so session A's content matches the
-        query closely (cosine ≈ 1) and session B's matches loosely
-        (cosine ≈ 0.5), the budgeted re-rank must put A first.
+        """With the stub crafted so session A's content matches the query
+        closely (cosine ≈ 1) and session B's matches loosely (cosine ≈ 0),
+        the budgeted re-rank must put A first.
         """
         conn = _make_conn(tmp_path)
         pid = _seed_project(conn)
-        # Both sessions contain the substring needle but use it
-        # differently. The stub aligns "watcher exact match" to the
-        # query vector; "watcher off-topic" lands on a noise axis.
-        sfk_a = _seed_session(
-            conn, pid, "sess-A",
-            first_ts="2026-05-01T00:00:00+00:00",
-            last_ts="2026-05-02T00:00:00+00:00",
-        )
-        sfk_b = _seed_session(
-            conn, pid, "sess-B",
-            first_ts="2026-05-01T00:00:00+00:00",
-            last_ts="2026-05-02T00:00:00+00:00",
-        )
+        sfk_a = _seed_session(conn, pid, "sess-A")
+        sfk_b = _seed_session(conn, pid, "sess-B")
         _seed_message(conn, sfk_a, 0,
                       content_text="The watcher exact match decision was clear")
         _seed_message(conn, sfk_b, 0,
                       content_text="The watcher off-topic discussion went elsewhere")
         conn.commit()
 
-        # Stub: query "watcher" → vector pointing at axis 0; sess A's
-        # text also lands on axis 0; sess B's text lands on axis 3
-        # (orthogonal → low cosine).
-        stub = _OrderedStub({
+        # query "watcher" → axis 0; sess A's text also lands on axis 0;
+        # sess B's text lands on axis 3 (orthogonal → cosine 0 → 0.5).
+        stub = _EmbedStub({
             "watcher exact match": [1.0, 0.0, 0.0, 0.0],
             "watcher off-topic": [0.0, 0.0, 0.0, 1.0],
             "watcher": [1.0, 0.0, 0.0, 0.0],
         })
-        _stub_load_model(monkeypatch, stub)
+        _install_embed_stub(monkeypatch, stub)
 
-        # With context_budget — the budgeted result is rank-ordered.
         result = search_past_decisions(
             conn, "watcher",
             context_budget=2000,
@@ -195,35 +162,35 @@ class TestEmbeddingsReRanking:
             model_name="stub",
         )
         assert isinstance(result, BudgetedResult)
-        # Both sessions are kept (small enough to fit 2000-token budget).
         ids = [m.session_id for m in result.sessions]
         assert set(ids) == {"sess-A", "sess-B"}
         # A ranks above B under cosine.
         assert ids[0] == "sess-A"
-        # Each surfaced row carries the cosine score.
         for m in result.sessions:
             assert m.embedding_score is not None
             assert 0.0 <= m.embedding_score <= 1.0
-        # Session A's score is strictly higher than B's.
         score_by_id = {m.session_id: m.embedding_score for m in result.sessions}
         assert score_by_id["sess-A"] > score_by_id["sess-B"]
 
     def test_default_off_keeps_substring_ranking(self, tmp_path, monkeypatch):
-        """Without ``use_embeddings``, the LIKE-density path runs and
-        no encoder is touched."""
+        """Without ``use_embeddings``, the LIKE-density path runs and the
+        Ollama backend is never touched."""
         conn = _make_conn(tmp_path)
         pid = _seed_project(conn)
         sfk = _seed_session(conn, pid, "sess-X")
         _seed_message(conn, sfk, 0, content_text="watcher decision worth keeping")
         conn.commit()
 
-        # If we accidentally hit the embedding path the test fails on
-        # the model load (no stub installed).
+        # If we accidentally hit the embedding path this stub records it.
+        stub = _EmbedStub({})
+        _install_embed_stub(monkeypatch, stub)
+
         out = search_past_decisions(conn, "watcher")
         assert len(out) == 1
         assert out[0].session_id == "sess-X"
-        # No embedding score on substring-mode rows.
         assert out[0].embedding_score is None
+        # No embed call fired.
+        assert stub.calls == []
 
     def test_embedding_score_surfaces_in_to_dict(self, tmp_path, monkeypatch):
         conn = _make_conn(tmp_path)
@@ -232,8 +199,8 @@ class TestEmbeddingsReRanking:
         _seed_message(conn, sfk, 0, content_text="the watcher landed")
         conn.commit()
 
-        stub = _OrderedStub({"watcher": [1.0, 0.0, 0.0, 0.0]})
-        _stub_load_model(monkeypatch, stub)
+        stub = _EmbedStub({"watcher": [1.0, 0.0, 0.0, 0.0]})
+        _install_embed_stub(monkeypatch, stub)
 
         out = search_past_decisions(conn, "watcher", use_embeddings=True,
                                     model_name="stub")
@@ -256,8 +223,8 @@ class TestEmbeddingsReRanking:
         assert "embedding_score" not in d
 
     def test_does_not_widen_candidate_set(self, tmp_path, monkeypatch):
-        """An embedding-mode call must still filter on the substring;
-        rows with no substring hit never reach the encoder.
+        """An embedding-mode call must still filter on the substring; rows
+        with no substring hit never reach the encoder.
         """
         conn = _make_conn(tmp_path)
         pid = _seed_project(conn)
@@ -267,53 +234,95 @@ class TestEmbeddingsReRanking:
         _seed_message(conn, sfk_b, 0, content_text="something unrelated entirely")
         conn.commit()
 
-        stub = _OrderedStub({})
-        _stub_load_model(monkeypatch, stub)
+        stub = _EmbedStub({})
+        _install_embed_stub(monkeypatch, stub)
 
         out = search_past_decisions(conn, "watcher", use_embeddings=True,
                                     model_name="stub")
         ids = [m.session_id for m in out]
         assert ids == ["sess-match"]
         # The non-matching session's text never reached the encoder.
-        for batch in stub.encode_calls:
+        for batch in stub.calls:
             for text in batch:
                 assert "unrelated" not in text
 
     def test_empty_query_short_circuits(self, tmp_path, monkeypatch):
         conn = _make_conn(tmp_path)
-        stub = _OrderedStub({})
-        _stub_load_model(monkeypatch, stub)
+        stub = _EmbedStub({})
+        _install_embed_stub(monkeypatch, stub)
         out = search_past_decisions(conn, "", use_embeddings=True,
                                     model_name="stub")
         assert out == []
-        # And no encoder was ever invoked.
-        assert stub.encode_calls == []
+        # And no embed call was ever fired.
+        assert stub.calls == []
 
 
-# ── missing dep at the service surface ──────────────────────────────────────
+# ── graceful degradation when Ollama is unreachable ─────────────────────────
 
 
-class TestMissingDepSurface:
-    def test_missing_extra_propagates_importerror(self, tmp_path, monkeypatch):
-        """When the user has not installed the embeddings extra and
-        flags ``--use-embeddings``, the service raises
-        ``MissingEmbeddingsDependencyError`` (subclass of ``ImportError``).
+class TestOllamaUnreachableDegrades:
+    """``--use-embeddings`` with no Ollama must **not** raise — it silently
+    falls back to substring ranking, exactly like ``hybrid_search`` degrades
+    to FTS-only.
+    """
+
+    def test_embed_texts_none_degrades_to_substring(self, tmp_path, monkeypatch):
+        """``embed_texts`` returns ``None`` (Ollama down). The query must
+        still succeed, return the substring-matched rows, and carry no
+        embedding score — proving the fallback, no exception.
         """
         conn = _make_conn(tmp_path)
         pid = _seed_project(conn)
-        sfk = _seed_session(conn, pid, "s")
-        _seed_message(conn, sfk, 0, content_text="watcher here")
+        # Two sessions, different last_ts so substring ranking (recency)
+        # gives a deterministic order we can assert against.
+        sfk_recent = _seed_session(
+            conn, pid, "sess-recent", last_ts="2026-05-10T00:00:00+00:00",
+        )
+        sfk_old = _seed_session(
+            conn, pid, "sess-old", last_ts="2026-05-01T00:00:00+00:00",
+        )
+        _seed_message(conn, sfk_recent, 0, content_text="watcher fix, recent")
+        _seed_message(conn, sfk_old, 0, content_text="watcher fix, older")
         conn.commit()
 
-        # Simulate "the extra isn't installed" by making the lazy
-        # require helper raise.
-        def _no_st():
-            raise discovery_embeddings.MissingEmbeddingsDependencyError()
+        # Simulate Ollama unreachable: embed_texts returns None.
+        called = {"n": 0}
+
+        def _down(texts, *, model=None, **_kw):  # noqa: ARG001 — API compat
+            called["n"] += 1
+            return None
+
+        monkeypatch.setattr(embeddings, "embed_texts", _down)
+
+        # No exception, both rows returned.
+        out = search_past_decisions(
+            conn, "watcher", context_budget=2000, use_embeddings=True,
+        )
+        assert isinstance(out, BudgetedResult)
+        ids = [m.session_id for m in out.sessions]
+        assert set(ids) == {"sess-recent", "sess-old"}
+        # embed_texts *was* attempted (candidates had embeddable text) …
+        assert called["n"] == 1
+        # … but no score attached — the rank fell back to substring/recency.
+        for m in out.sessions:
+            assert m.embedding_score is None
+        # Substring fallback rank = recency-led → recent session first.
+        assert ids[0] == "sess-recent"
+
+    def test_plain_list_mode_degrades_without_error(self, tmp_path, monkeypatch):
+        """Same fallback in the non-budgeted (plain list) call shape."""
+        conn = _make_conn(tmp_path)
+        pid = _seed_project(conn)
+        sfk = _seed_session(conn, pid, "sess-x")
+        _seed_message(conn, sfk, 0, content_text="watcher note here")
+        conn.commit()
+
         monkeypatch.setattr(
-            discovery_embeddings, "_require_sentence_transformers", _no_st,
+            embeddings, "embed_texts",
+            lambda texts, *, model=None, **_kw: None,  # noqa: ARG005
         )
 
-        with pytest.raises(discovery_embeddings.MissingEmbeddingsDependencyError) as exc:
-            search_past_decisions(conn, "watcher", use_embeddings=True,
-                                  model_name="stub")
-        assert "pip install stackunderflow[embeddings]" in str(exc.value)
+        out = search_past_decisions(conn, "watcher", use_embeddings=True)
+        assert isinstance(out, list)
+        assert [m.session_id for m in out] == ["sess-x"]
+        assert out[0].embedding_score is None
