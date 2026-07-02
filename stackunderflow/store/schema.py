@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 26
+CURRENT_VERSION = 27
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -112,6 +112,11 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     # partial prior run (column added, ``user_version`` behind) bumps the
     # version instead of erroring on "duplicate column".
     26: ("usage_events", "reasoning_tokens"),
+    # v027 ADDs ``projects.worktree_of`` (nullable parent-project slug for
+    # worktree fragment projects; NULL = normal project). Standard ADD COLUMN
+    # guard so a partial prior run (column added, ``user_version`` behind)
+    # bumps the version instead of erroring on "duplicate column".
+    27: ("projects", "worktree_of"),
 }
 
 

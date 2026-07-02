@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 26`).
+**Status:** v1 (pinned to `schema_version = 27`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 26`. The current migration set is:
+Pin to `schema_version = 27`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -49,6 +49,7 @@ Pin to `schema_version = 26`. The current migration set is:
 | 24 | `v024_price_book.sql` | `price_book` (effective-dated unified rate table; manifest + rate card backfill, LiteLLM `live` snapshots — audit #2) |
 | 25 | `v025_command_day_mart.sql` | `command_day_mart` (per-`(day, project_id)` user-command count; windows the Overview "Commands" KPI — ui-perf #25) |
 | 26 | `v026_reasoning_tokens.sql` | adds `usage_events.reasoning_tokens` (reasoning/"thinking" attribution — an additive-metadata SUBSET of `output_tokens`, never priced; `DEFAULT 0`) |
+| 27 | `v027_worktree_of.sql` | adds `projects.worktree_of` (nullable parent-project slug for git-worktree fragment projects; NULL = normal project — campaign #8) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
@@ -60,7 +61,7 @@ A reader checks the version with `PRAGMA user_version`. A writer should refuse t
 
 ### `projects`
 
-One row per (provider, project-slug) pair. The same project surfaced by two providers gets two rows; dedup at the API layer.
+One row per (provider, project-slug) pair. The same project surfaced by two providers gets two rows; dedup at the API layer. v027 added one nullable column: `worktree_of` carries the PARENT project slug when the row is a git-worktree fragment (a session run inside `<repo>/.worktrees/<name>` or `<repo>/.claude/worktrees/<name>` lands under a slug of its own); NULL = a normal project.
 
 ```sql
 CREATE TABLE projects (
@@ -71,6 +72,8 @@ CREATE TABLE projects (
   display_name   TEXT NOT NULL,
   first_seen     REAL NOT NULL,
   last_modified  REAL NOT NULL,
+  -- v027 (nullable; parent project slug for worktree fragment projects)
+  worktree_of    TEXT,
   UNIQUE (provider, slug)
 );
 ```
