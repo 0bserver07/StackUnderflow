@@ -10,6 +10,8 @@ import {
   Legend,
 } from 'recharts'
 import type { DailyData } from '../../types/api'
+import { formatCost } from '../../services/format'
+import { useCurrency } from '../../services/currency'
 import { ChartCard, EmptyChartCard, useChartTheme, CHART_HEIGHT } from './chartTheme'
 
 interface DailyCostChartProps {
@@ -29,13 +31,24 @@ const LEGEND_LABELS: Record<string, string> = {
 }
 const FLAT_RADIUS: [number, number, number, number] = [0, 0, 0, 0]
 const TOP_RADIUS: [number, number, number, number] = [4, 4, 0, 0]
-const costTickFormatter = (v: number) => `$${v.toFixed(2)}`
-const costTooltipFormatter = (value: number, name: string) =>
-  [`$${value.toFixed(4)}`, TOOLTIP_LABELS[name] ?? name] as [string, string]
 const legendFormatter = (value: string) => LEGEND_LABELS[value] ?? value
 
 function DailyCostChart({ dailyStats }: DailyCostChartProps) {
   const palette = useChartTheme()
+  // #21: the backend pre-converts these amounts into the active currency, but
+  // the axis/tooltip used a hardcoded `$` — an EUR/GBP store rendered
+  // converted numbers behind the wrong symbol. formatCost carries the symbol.
+  const { currency } = useCurrency()
+  const costTickFormatter = useMemo(
+    () => (v: number) => formatCost(v, currency),
+    [currency],
+  )
+  const costTooltipFormatter = useMemo(
+    () =>
+      (value: number, name: string) =>
+        [formatCost(value, currency), TOOLTIP_LABELS[name] ?? name] as [string, string],
+    [currency],
+  )
 
   const data = useMemo(() => {
     if (!dailyStats) return []

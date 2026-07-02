@@ -20,6 +20,7 @@ import type {
   Trends,
 } from '../../types/api'
 import { getParam, openInteraction, openSession } from '../../services/navigation'
+import { buildCostDataQuery } from '../../services/api'
 import { useFilters } from '../../services/filters'
 import { formatModelName } from '../../services/format'
 import TrendDeltaStrip from '../cost/TrendDeltaStrip'
@@ -81,6 +82,10 @@ interface CostData {
   session_efficiency: unknown[]
   error_cost: ErrorCost | Record<string, never>
   trends: Trends | Record<string, never>
+  // #24: true when the server applied the ?range= window to tool_costs
+  // (mart fast-path). False on the aggregator fallback / under a model
+  // filter — the all-time badge stays only for those cases.
+  tool_costs_windowed?: boolean
   // Cache may not be on /api/cost-data (it lives on dashboard-data), so we
   // accept it from the optional `stats` prop as a fallback.
   cache?: unknown
@@ -99,14 +104,13 @@ interface CostData {
  * server narrows the `token_composition` blocks (donut/stack) to the selected
  * model(s) — broadening the filter past the by-model cost chart. `models` is
  * empty for "all models" (the existing behaviour).
+ *
+ * #24: the tab's date range is forwarded as `?range=` so the server windows
+ * the `tool_costs` block off `tool_mart` (which is day-keyed). The response's
+ * `tool_costs_windowed` says whether the window actually applied.
  */
-async function fetchCostData(models: string[]): Promise<CostData> {
-  const params = new URLSearchParams()
-  for (const m of models) {
-    if (m && m.trim()) params.append('model', m.toLowerCase().trim())
-  }
-  const qs = params.toString()
-  const res = await fetch(`/api/cost-data${qs ? `?${qs}` : ''}`)
+async function fetchCostData(models: string[], range: RangeKey): Promise<CostData> {
+  const res = await fetch(`/api/cost-data${buildCostDataQuery(models, range)}`)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
@@ -297,27 +301,30 @@ export default function CostTab({ stats }: CostTabProps) {
   // model-narrowed payload.
   const { filters } = useFilters()
   const modelFilter = filters.models
+  // §D4: seed from URL so a reload / shared link restores filter state.
+  // Params: ?range=7d|30d|all · ?session=<id> · ?tool=<name>
+  // (Declared before the query — #24 threads `filter.range` into the fetch.)
+  const [filter, setFilter] = useState<FilterState>(() => ({
+    range: parseRange(getParam('range')),
+    sessionFilter: getParam('session'),
+    toolFilter: getParam('tool'),
+  }))
   const {
     data,
     isLoading: loading,
     error: queryError,
     refetch,
   } = useQuery({
-    queryKey: ['costData', name ?? null, modelFilter],
-    queryFn: () => fetchCostData(modelFilter),
+    // #24: `filter.range` is part of the key so a range toggle refetches the
+    // server-windowed tool_costs block (30s staleTime keeps toggling cheap).
+    queryKey: ['costData', name ?? null, modelFilter, filter.range],
+    queryFn: () => fetchCostData(modelFilter, filter.range),
     staleTime: 30_000,
   })
   const error = queryError instanceof Error ? queryError.message : queryError ? String(queryError) : null
   const reload = useCallback(() => {
     void refetch()
   }, [refetch])
-  // §D4: seed from URL so a reload / shared link restores filter state.
-  // Params: ?range=7d|30d|all · ?session=<id> · ?tool=<name>
-  const [filter, setFilter] = useState<FilterState>(() => ({
-    range: parseRange(getParam('range')),
-    sessionFilter: getParam('session'),
-    toolFilter: getParam('tool'),
-  }))
 
   // §D4: mirror filter state into the URL via `replaceState` (never push),
   // so filter toggles don't balloon the history stack or trap back-nav.
@@ -554,29 +561,34 @@ export default function CostTab({ stats }: CostTabProps) {
       <CommandCostList data={f.commands} onOpen={handleOpenInteraction} />
 
       {/* 5. Tool cost · Token donut two-column.
-          #24: per-tool costs come from an all-time mart with no per-row
-          timestamps, so the date-range filter can't be applied client-side.
-          Surface an "all time" badge when a range is active rather than
-          silently mislabelling all-time totals as "Last 7/30 days".
-          #57: tool_mart has no model dimension either, so the model filter
-          can't narrow tool costs — badge it all-models when a model filter is
+          #24: the server windows tool_costs to the tab's date range off the
+          day-keyed tool_mart (`?range=` + `tool_costs_windowed`). The badge
+          only remains for the cases that genuinely can't window: the
+          aggregator fallback (mart not built) and the model-filtered path.
+          #57: tool_mart has no model dimension, so the model filter can't
+          narrow tool costs — badge it all-models when a model filter is
           active so the bars don't read as model-scoped. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          {(filter.range !== 'all' || modelFilter.length > 0) && (
-            <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-400">
-              <IconAlertTriangle size={11} />
-              <span>
-                Tool costs are{' '}
-                <span className="font-semibold">
-                  {[filter.range !== 'all' ? 'all-time' : null, modelFilter.length > 0 ? 'all-models' : null]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>{' '}
-                — the {filter.range !== 'all' && modelFilter.length > 0 ? 'date-range and model filters aren’t' : filter.range !== 'all' ? 'date-range filter isn’t' : 'model filter isn’t'} applied here yet.
-              </span>
-            </div>
-          )}
+          {(() => {
+            const rangeUnapplied = filter.range !== 'all' && !data.tool_costs_windowed
+            const modelUnapplied = modelFilter.length > 0
+            if (!rangeUnapplied && !modelUnapplied) return null
+            return (
+              <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-400">
+                <IconAlertTriangle size={11} />
+                <span>
+                  Tool costs are{' '}
+                  <span className="font-semibold">
+                    {[rangeUnapplied ? 'all-time' : null, modelUnapplied ? 'all-models' : null]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>{' '}
+                  — the {rangeUnapplied && modelUnapplied ? 'date-range and model filters aren’t' : rangeUnapplied ? 'date-range filter isn’t' : 'model filter isn’t'} applied here yet.
+                </span>
+              </div>
+            )
+          })()}
           <ToolCostBarChart data={f.tools} />
         </div>
         <div>
@@ -592,8 +604,10 @@ export default function CostTab({ stats }: CostTabProps) {
         </div>
       </div>
 
-      {/* 6. Token composition stack full-width */}
-      <TokenCompositionStack daily={tokenComp?.daily ?? {}} />
+      {/* 6. Token composition stack full-width. #23: the tab FilterBar drives
+          the stack's date window (hiding its duplicate in-card range buttons)
+          so the tab never shows two competing range controls. */}
+      <TokenCompositionStack daily={tokenComp?.daily ?? {}} range={filter.range} />
 
       {/* 6b. Daily cost split by model (audit #6) — the spend sibling of the
           token-type stack above. Consumes /api/cost-data/by-model and also

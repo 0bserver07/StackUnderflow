@@ -290,6 +290,23 @@ export async function getCommandsDaily(logPath?: string): Promise<CommandDailyRe
   return fetchJson(`${BASE}/commands/daily${qs ? `?${qs}` : ''}`)
 }
 
+// Query string for `/api/cost-data` (CostTab). Pure + exported so the
+// param contract is unit-testable without a fetch mock:
+//  * #57 — every non-blank model becomes a repeated `model=` param
+//    (lowercased/trimmed, matching the backend's normalisation).
+//  * #24 — a windowed range ('7d' | '30d') becomes `range=`, letting the
+//    server window the tool_costs block off tool_mart; 'all' is the default
+//    and is omitted, keeping cache keys/URLs stable for the common case.
+export function buildCostDataQuery(models: string[], range?: '7d' | '30d' | 'all'): string {
+  const params = new URLSearchParams()
+  for (const m of models) {
+    if (m && m.trim()) params.append('model', m.toLowerCase().trim())
+  }
+  if (range === '7d' || range === '30d') params.set('range', range)
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
 // Reindex (manual cache rebuilds)
 export async function reindexSearch(): Promise<Record<string, unknown>> {
   return fetchJson(`${BASE}/search/reindex`, { method: 'POST' })
