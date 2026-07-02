@@ -2,8 +2,8 @@
 
 One place defines:
 
-* the hook ids — four *capture* hooks plus three *injection* hooks — and which
-  Claude Code lifecycle event each binds to,
+* the hook ids — four *capture* hooks, three *injection* hooks, and one
+  *active-recall* hook — and which Claude Code lifecycle event each binds to,
 * the *portable* command form (``stackunderflow hooks run <id>`` — never an
   absolute path, so the entry survives a venv move; see hard constraint #6),
 * the matchers we use (``PostToolUse`` capture is scoped to ``Bash``, the tool
@@ -43,20 +43,34 @@ INJECT_EVENT_HOOK_IDS: dict[str, str] = {
     "PreToolUse": "stackunderflow-inject-pre-tool-use",
 }
 
-# hook id → Claude Code event, for every hook we own (capture + injection).
-# Keyed by hook id because that *is* unique — events are not (UserPromptSubmit
-# maps to two). ``parse_hook_command`` uses this to recognise our ids.
+# Active-recall hook (campaign #5) — installed alongside the injection hooks by
+# ``hooks install --inject``. Where ``stackunderflow-inject-pre-tool-use`` reads
+# the store in-process for the file-editing tools, this one shells the public
+# ``stackunderflow memory file <path> --json`` CLI under a hard timeout and also
+# covers ``Bash`` (extracting file-looking paths from the command). It gets its
+# own id + module (``hooks/recall.py``) because the execution model — a nested
+# subprocess with a deadline — is deliberately different from ``inject.py``.
+RECALL_EVENT_HOOK_IDS: dict[str, str] = {
+    "PreToolUse": "stackunderflow-pretool-recall",
+}
+
+# hook id → Claude Code event, for every hook we own (capture + injection +
+# recall). Keyed by hook id because that *is* unique — events are not
+# (UserPromptSubmit maps to two, PreToolUse to two). ``parse_hook_command``
+# uses this to recognise our ids.
 HOOK_ID_EVENTS: dict[str, str] = {
     **{hid: ev for ev, hid in EVENT_HOOK_IDS.items()},
     **{hid: ev for ev, hid in INJECT_EVENT_HOOK_IDS.items()},
+    **{hid: ev for ev, hid in RECALL_EVENT_HOOK_IDS.items()},
 }
 
 # Capture hook ids (the original four). Kept as ``HOOK_IDS`` for backward
 # compatibility — re-exported from ``handlers`` and used across the install path
-# and tests. The injection ids and the union get their own names.
+# and tests. The injection / recall ids and the union get their own names.
 HOOK_IDS: tuple[str, ...] = tuple(EVENT_HOOK_IDS.values())
 INJECT_HOOK_IDS: tuple[str, ...] = tuple(INJECT_EVENT_HOOK_IDS.values())
-ALL_HOOK_IDS: tuple[str, ...] = HOOK_IDS + INJECT_HOOK_IDS
+RECALL_HOOK_IDS: tuple[str, ...] = tuple(RECALL_EVENT_HOOK_IDS.values())
+ALL_HOOK_IDS: tuple[str, ...] = HOOK_IDS + INJECT_HOOK_IDS + RECALL_HOOK_IDS
 
 # Matchers scope a hook to specific tools. ``PostToolUse`` capture is scoped to
 # ``Bash`` (the clean non-zero-exit failure signal); firing on every tool would
@@ -70,6 +84,11 @@ EVENT_MATCHERS: dict[str, str] = {
 }
 INJECT_EVENT_MATCHERS: dict[str, str] = {
     "PreToolUse": "Edit|Write|MultiEdit",
+}
+# The recall hook covers Bash too — its handler pulls file-looking paths out of
+# the command (and is a silent no-op when there are none).
+RECALL_EVENT_MATCHERS: dict[str, str] = {
+    "PreToolUse": "Edit|Write|Bash",
 }
 
 # Each hook command is ``stackunderflow hooks run <id>`` optionally followed by
@@ -159,12 +178,23 @@ def inject_matcher_group(event: str) -> dict:
     return _matcher_group(INJECT_EVENT_HOOK_IDS[event], INJECT_EVENT_MATCHERS.get(event))
 
 
+def recall_matcher_group(event: str) -> dict:
+    """The matcher-group ``install --inject`` appends for the *recall* hook.
+
+    Like the injection hooks, recall never carries ``--capture-content`` —
+    it reads memory (via the ``memory`` CLI), it records nothing.
+    """
+    return _matcher_group(RECALL_EVENT_HOOK_IDS[event], RECALL_EVENT_MATCHERS.get(event))
+
+
 def canonical_hooks_block(*, capture_content: bool = False, inject: bool = False) -> dict:
     """The full ``hooks`` mapping ``install`` would write into a fresh file.
 
-    With ``inject=True`` the three injection hooks are merged in alongside the
-    capture hooks; ``UserPromptSubmit`` — which carries one of each — ends up
-    with both matcher-groups.
+    With ``inject=True`` the three injection hooks and the active-recall hook
+    are merged in alongside the capture hooks; ``UserPromptSubmit`` — which
+    carries a capture and an injection hook — ends up with both
+    matcher-groups, and ``PreToolUse`` carries the injection *and* recall
+    groups.
     """
     block: dict = {
         event: [matcher_group(event, capture_content=capture_content)]
@@ -173,4 +203,6 @@ def canonical_hooks_block(*, capture_content: bool = False, inject: bool = False
     if inject:
         for event in INJECT_EVENT_HOOK_IDS:
             block.setdefault(event, []).append(inject_matcher_group(event))
+        for event in RECALL_EVENT_HOOK_IDS:
+            block.setdefault(event, []).append(recall_matcher_group(event))
     return block

@@ -21,11 +21,14 @@ Only events worth a row produce one: a ``PostToolUse`` that *failed*, a
 boundary) and every ``PreCompact`` (compaction snapshot). A successful tool
 call or an ordinary prompt is a silent no-op.
 
-``run()`` is also the dispatch point for the *injection* hooks (Move 3). Their
-ids — ``stackunderflow-inject-*`` — route to :mod:`stackunderflow.hooks.inject`,
-which READS the store and writes a context-injection JSON envelope to stdout
-rather than recording anything. The same never-disrupt contract holds: any
-error → empty output, exit ``0``.
+``run()`` is also the dispatch point for the *injection* hooks (Move 3) and
+the *active-recall* hook (campaign #5). The ``stackunderflow-inject-*`` ids
+route to :mod:`stackunderflow.hooks.inject`, which READS the store and writes
+a context-injection JSON envelope to stdout rather than recording anything;
+``stackunderflow-pretool-recall`` routes to
+:mod:`stackunderflow.hooks.recall`, which shells the ``memory`` CLI under a
+hard deadline and writes the same envelope shape. The same never-disrupt
+contract holds for all of them: any error → empty output, exit ``0``.
 """
 
 from __future__ import annotations
@@ -91,10 +94,12 @@ def run(hook_id: str, payload: dict | None, *, capture_content: bool = False) ->
 
     Dispatches on *hook_id*. The four capture ids record a ``captured_events``
     row (or no-op). The three ``stackunderflow-inject-*`` ids route to
-    :mod:`stackunderflow.hooks.inject`, which writes a context-injection JSON
-    envelope to stdout instead. An unknown id is a no-op. Any exception
-    (malformed payload, store unavailable, …) is logged at DEBUG and swallowed —
-    neither a recorder nor an injector may make Claude Code stumble.
+    :mod:`stackunderflow.hooks.inject`, and ``stackunderflow-pretool-recall``
+    routes to :mod:`stackunderflow.hooks.recall`; both write a
+    context-injection JSON envelope to stdout instead. An unknown id is a
+    no-op. Any exception (malformed payload, store unavailable, …) is logged
+    at DEBUG and swallowed — neither a recorder nor an injector may make
+    Claude Code stumble.
     """
     try:
         payload = payload if isinstance(payload, dict) else {}
@@ -102,6 +107,13 @@ def run(hook_id: str, payload: dict | None, *, capture_content: bool = False) ->
             from stackunderflow.hooks import inject
 
             output = inject.build_injection(hook_id, payload)
+            if output:
+                sys.stdout.write(output if output.endswith("\n") else output + "\n")
+            return 0
+        if hook_id in templates.RECALL_HOOK_IDS:
+            from stackunderflow.hooks import recall
+
+            output = recall.build_recall(hook_id, payload)
             if output:
                 sys.stdout.write(output if output.endswith("\n") else output + "\n")
             return 0

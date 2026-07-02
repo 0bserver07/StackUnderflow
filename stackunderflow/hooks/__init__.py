@@ -30,9 +30,20 @@ Claude Code event                 hook id                               injects
 ``PreToolUse`` (Edit/Write/…)     ``stackunderflow-inject-pre-tool-use``   the file's failure modes
 ================================  ====================================  ===================
 
+**Active recall** (installed alongside the injection hooks by
+``install --inject``) — before an Edit/Write/Bash runs, shells the public
+``stackunderflow memory file <path> --json`` CLI under a hard deadline and
+injects a short warning when the target file has real failure history:
+
+================================  ====================================  ===================
+Claude Code event                 hook id                               injects
+================================  ====================================  ===================
+``PreToolUse`` (Edit/Write/Bash)  ``stackunderflow-pretool-recall``        the file's failure history
+================================  ====================================  ===================
+
 Capture gives outcome-aware discovery (spec 01) a deterministic failure /
-correction feed; injection closes the loop the other way. Both stay optional,
-and both are independently opt-in.
+correction feed; injection and recall close the loop the other way. All stay
+optional, and capture vs. injection+recall are independently opt-in.
 
 Public surface (also the CLI ``stackunderflow hooks {install,uninstall,status,repair,run}``):
 
@@ -43,10 +54,11 @@ Public surface (also the CLI ``stackunderflow hooks {install,uninstall,status,re
     hooks.repair(scope="project", dry_run=False)                                      -> RepairReport
     hooks.run(hook_id, payload)                                                       -> int   # called by Claude Code
     hooks.build_injection(hook_id, payload)                                           -> str   # injection envelope
+    hooks.build_recall(hook_id, payload)                                              -> str   # recall envelope
 
 Hard constraints (see the spec): opt-in only · backup before mutation ·
 ``repair`` from day one · never delete other tools' hooks · scope explicit ·
-portable commands · an injection hook never disrupts the agent.
+portable commands · an injection or recall hook never disrupts the agent.
 """
 
 from __future__ import annotations
@@ -62,6 +74,7 @@ from stackunderflow.hooks._install import (
 from stackunderflow.hooks._repair import RepairReport, repair
 from stackunderflow.hooks.handlers import HOOK_IDS, ensure_captured_events_table, run
 from stackunderflow.hooks.inject import build_injection
+from stackunderflow.hooks.recall import build_recall
 
 __all__ = [
     "HOOK_IDS",
@@ -74,6 +87,7 @@ __all__ = [
     "repair",
     "run",
     "build_injection",
+    "build_recall",
     "resolve_settings_path",
     "ensure_captured_events_table",
 ]

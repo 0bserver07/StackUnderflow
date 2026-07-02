@@ -49,7 +49,7 @@ class InstallReport:
     settings_path: str
     dry_run: bool
     capture_content: bool
-    inject: bool                                   # were the context-injection hooks installed too?
+    inject: bool                                   # were the context-injection + recall hooks installed too?
     changed: bool                                  # did the file content change (or would it, under --dry-run)?
     created_file: bool                             # was settings.json absent before?
     backup_path: str | None                        # the .bak.<ts> written (None on no-op / dry-run / fresh file)
@@ -285,9 +285,11 @@ def _add_our_hooks(settings: dict, *, capture_content: bool, inject: bool) -> di
     """Append our canonical matcher-groups to each event array (creating as needed).
 
     Always installs the four capture hooks; with ``inject`` also installs the
-    three injection hooks. ``UserPromptSubmit`` then carries two of our
-    matcher-groups (a capture hook and an injection hook) — Claude Code runs
-    every hook registered for an event, so the two coexist cleanly.
+    three injection hooks plus the active-recall hook. ``UserPromptSubmit``
+    then carries two of our matcher-groups (a capture hook and an injection
+    hook) and ``PreToolUse`` carries two (the in-process injection hook and
+    the recall hook) — Claude Code runs every hook registered for an event,
+    so they coexist cleanly.
     """
     new = json.loads(json.dumps(settings))
     hooks = new.setdefault("hooks", {})
@@ -305,6 +307,8 @@ def _add_our_hooks(settings: dict, *, capture_content: bool, inject: bool) -> di
     if inject:
         for event in templates.INJECT_EVENT_HOOK_IDS:
             _append(event, templates.inject_matcher_group(event))
+        for event in templates.RECALL_EVENT_HOOK_IDS:
+            _append(event, templates.recall_matcher_group(event))
     return new
 
 
@@ -326,12 +330,12 @@ def install(
     ``--capture-content`` so handlers store the full (unsanitised) payload
     (default: metadata + tool name + exit code only).
 
-    With ``inject=True`` the three context-injection hooks (Move 3) are
-    installed alongside the four capture hooks. Injection is opt-in *separately*
-    from capture: ``inject=False`` (default) is the unchanged capture-only
-    install. Because the installer is convergent, re-running with
-    ``inject=False`` after an ``inject=True`` install cleanly drops the
-    injection hooks again.
+    With ``inject=True`` the three context-injection hooks (Move 3) and the
+    active-recall hook (campaign #5) are installed alongside the four capture
+    hooks. Injection is opt-in *separately* from capture: ``inject=False``
+    (default) is the unchanged capture-only install. Because the installer is
+    convergent, re-running with ``inject=False`` after an ``inject=True``
+    install cleanly drops the injection + recall hooks again.
     """
     if scope not in _VALID_SCOPES:
         raise ValueError(f"scope must be one of {_VALID_SCOPES}, got {scope!r}")
