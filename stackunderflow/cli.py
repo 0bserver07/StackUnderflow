@@ -3838,6 +3838,133 @@ def _render_pricing_doctor_text(payload: dict) -> None:
         )
 
 
+# ── worktrees (read-only hygiene surface) ────────────────────────────────────
+#
+# ``stackunderflow worktrees`` surfaces every git worktree the store knows
+# about: which project owns it, what its sessions cost, and whether pruning
+# is safe. Strictly read-only against git (the service layer guarantees it) —
+# verdicts come with the exact ``git worktree remove`` / ``git branch -D``
+# commands as a PREVIEW; nothing here deletes git state. ``worktrees list
+# --format json`` and ``GET /api/worktrees`` call the same assembler
+# (``routes/worktrees.py``) so they never disagree.
+
+@cli.group("worktrees")
+def worktrees_group():
+    """Inspect git worktrees: owner project, cost, prune safety (read-only)."""
+
+
+@worktrees_group.command("list")
+@click.option(
+    "--project",
+    "project",
+    type=click.Path(),
+    default=None,
+    help="Project log path or repo root to scan; omit to scan every known root.",
+)
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(_VALID_FORMATS),
+    default="text",
+    help="Output format (text or json).",
+)
+def worktrees_list_cmd(project: str | None, fmt: str):
+    """List known worktrees with a verdict: ACTIVE, MERGED_SAFE_TO_PRUNE, or HAS_UNIQUE_WORK.
+
+    Reads the live store and renders the same payload ``GET /api/worktrees``
+    returns. Works without a running server. Read-only: git is only queried,
+    never mutated — prune commands ship in the json payload as a preview for
+    you to run yourself.
+    """
+    from stackunderflow.routes.worktrees import assemble_worktrees_payload
+
+    conn = _open_store()
+    try:
+        payload = assemble_worktrees_payload(conn, project_root=project)
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _render_worktrees_text(payload)
+
+
+@worktrees_group.command("attribute")
+def worktrees_attribute_cmd():
+    """Attribute worktree session fragments to their parent projects.
+
+    Rolls phantom sibling "projects" (worktree session logs) up into the
+    project that owns them. Writes ONLY the additive attribution column in
+    the store — never git state. Idempotent: once every fragment is linked,
+    re-running reports 0 rows updated.
+    """
+    from stackunderflow.services.worktrees import attribute_fragments
+
+    conn = _open_store()
+    try:
+        updated = attribute_fragments(conn)
+        # Store connections are autocommit; the explicit commit only matters
+        # if the service opened its own transaction. Harmless either way.
+        conn.commit()
+    finally:
+        conn.close()
+    click.echo(f"Attributed {int(updated)} worktree session fragment(s) to parent projects.")
+
+
+def _short_worktree_path(path: str, max_len: int = 44) -> str:
+    """Shorten a worktree path for the table: ``~``-abbreviate, keep the tail."""
+    home = str(Path.home())
+    if home and path.startswith(home + os.sep):
+        path = "~" + path[len(home):]
+    if len(path) > max_len:
+        path = "…" + path[-(max_len - 1):]
+    return path
+
+
+def _render_worktrees_text(payload: dict) -> None:
+    """Render the worktrees payload as a compact fixed-width table.
+
+    Numbers come straight from the payload — the renderer adds no computed
+    figures of its own beyond formatting.
+    """
+    worktrees = payload.get("worktrees") or []
+    summary = payload.get("summary") or {}
+    symbol = (payload.get("currency") or {}).get("symbol", "$")
+
+    if not worktrees:
+        click.echo(f"No worktrees found (scope: {payload.get('scope', 'store')}).")
+        return
+
+    headers = ("PATH", "BRANCH", "VERDICT", "DIRTY", "UNIQUE", "SESSIONS", "COST")
+    rows = [
+        (
+            _short_worktree_path(str(wt.get("path", ""))),
+            str(wt.get("branch", "")),
+            str(wt.get("verdict", "")),
+            str(wt.get("dirty_count", 0)),
+            str(wt.get("unique_commits", 0)),
+            str(wt.get("sessions", 0)),
+            f"{symbol}{float(wt.get('cost_usd') or 0.0):.2f}",
+        )
+        for wt in worktrees
+    ]
+
+    widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]
+    click.secho("  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)), bold=True)
+    for row in rows:
+        click.echo("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
+
+    click.echo("")
+    click.echo(
+        f"{summary.get('total', 0)} worktree(s) — "
+        f"{summary.get('active', 0)} active, "
+        f"{summary.get('safe_to_prune', 0)} safe to prune, "
+        f"{summary.get('has_unique_work', 0)} with unique work — "
+        f"attributed cost {symbol}{float(summary.get('attributed_cost_usd') or 0.0):.2f}"
+    )
+    click.echo("Prune commands are a preview (see --format json); nothing is deleted for you.")
+
+
 # ── hybrid-capture hooks ─────────────────────────────────────────────────────
 #
 # Opt-in Claude Code lifecycle hooks (see ``.notes/specs/05-hybrid-capture-hooks.md``

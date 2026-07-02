@@ -45,6 +45,7 @@ from stackunderflow.routes import (
     tags,
     webhooks,
     whatif,
+    worktrees,
     yield_route,
 )
 from stackunderflow.routes import (
@@ -289,6 +290,7 @@ app.include_router(budgets.router)
 app.include_router(whatif.router)
 app.include_router(forks.router)
 app.include_router(patterns.router)
+app.include_router(worktrees.router)
 
 
 
