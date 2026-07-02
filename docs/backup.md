@@ -22,6 +22,7 @@ re-running every coding session.
 
 ```
 stackunderflow backup create [--label TEXT] [--keep N]
+stackunderflow backup verify [--name NAME]
 stackunderflow backup list
 stackunderflow backup restore NAME [--dry-run]
 stackunderflow backup auto [--enable | --disable]
@@ -103,6 +104,16 @@ backup is a full copy, and the command prints a one-line notice.
   command exits with a message.
 - Invalid label (escapes the backup directory) → command exits
   without writing anything.
+
+### `backup verify [--name NAME]`
+
+Checks that a backup (default: the latest) contains every artifact a
+full restore needs: `store.db` plus the search / Q&A / tags sidecars
+(`search_index.db`, `qa_pairs.db`, `tags.json`). The SQLite store alone
+is not the complete source of truth, so a store-only backup silently
+loses search, Q&A, and tags. Prints one line per artifact and exits
+non-zero when the backup is missing or incomplete, so wrapper scripts
+can detect it.
 
 ### `backup list`
 

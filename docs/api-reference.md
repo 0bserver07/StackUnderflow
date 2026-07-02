@@ -78,6 +78,11 @@ FX rates are fetched from Frankfurter and cached for 24h; if a fetch fails the A
 | GET | `/api/compare` | Compare |
 | GET | `/api/yield` | Yield |
 | GET | `/api/plan` | Plan |
+| GET | `/api/forks` | Forks |
+| GET | `/api/whatif` | What-if |
+| GET | `/api/budgets` | Budgets |
+| PUT | `/api/budgets` | Budgets |
+| DELETE | `/api/budgets` | Budgets |
 | GET | `/api/optimize` | Optimize |
 | GET | `/api/context-budget` | Context Budget |
 | GET | `/api/etl/status` | ETL pipeline |
@@ -88,6 +93,9 @@ FX rates are fetched from Frankfurter and cached for 24h; if a fetch fails the A
 | GET | `/api/playback/{session_id}` | Playback |
 | GET | `/api/playback/project/{slug}` | Playback |
 | GET | `/api/playback/{session_id}/fs` | Playback |
+| GET | `/api/static-analysis/session/{session_id}` | Static analysis |
+| GET | `/api/static-analysis/session/{session_id}/quality` | Static analysis |
+| POST | `/api/static-analysis/session/{session_id}/grade` | Static analysis |
 | GET | `/api/meta-agent/tools` | Meta-agent |
 | POST | `/api/meta-agent/chat` | Meta-agent |
 | GET | `/api/live/stats` | Live |
@@ -98,6 +106,7 @@ FX rates are fetched from Frankfurter and cached for 24h; if a fetch fails the A
 | GET | `/api/health` | Misc |
 | GET | `/api/pricing` | Misc |
 | POST | `/api/pricing/refresh` | Misc |
+| GET | `/api/pricing/doctor` | Misc |
 | GET, POST, PUT, DELETE | `/ollama-api/{path}` | Misc |
 
 ---
@@ -1468,12 +1477,57 @@ Force a re-fetch of pricing data from LiteLLM, bypassing the local cache.
 
 ---
 
+### GET /api/pricing/doctor
+
+Read-only pricing-health report — the same payload `stackunderflow pricing doctor` renders, assembled by
+the shared `assemble_pricing_health` function so the CLI and HTTP surfaces never disagree. Only `SELECT`
+queries; no writes, no network.
+
+**Query parameters**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `stale_days` | int | no | Overlay-cache age (days) past which rates are reported stale. Default `7`. |
+| `limit` | int | no | Max entries per model list; full counts stay in `summary`. Default `50`. |
+
+**Response**
+
+```json
+{
+  "stale_days": 7,
+  "ok": true,
+  "summary": {
+    "total_events": 228311,
+    "total_cost_usd": 7421.03,
+    "unpriced_model_count": 2,
+    "billable_unpriced_model_count": 0,
+    "unknown_cost_source_model_count": 2,
+    "unknown_nonzero_cost_rows": 0,
+    "estimated_unpriced_exposure_usd": 12.41,
+    "rate_cache_stale": false
+  },
+  "unpriced_models": [ { "provider": "...", "model": "...", "events": 0, "billable": false, "estimated_delta_usd": 0.0 } ],
+  "unknown_cost_source": [ { "...": "per-model rollup of cost_source='unknown' rows" } ],
+  "rate_freshness": { "age_days": 2, "stale_days_threshold": 7, "stale": false }
+}
+```
+
+`ok` reflects hard defects only: a billable row referencing an unresolvable model, or an `unknown` row
+carrying a nonzero cost. Unpriced exotic models correctly stamped `unknown` (⇒ $0) and a stale overlay are
+warnings, not failures. Both model lists are sorted by estimated dollar exposure descending and truncated
+to `limit`. A fresh-install store returns an empty, `ok`-true payload.
+
+**Status codes:** `200` always (including the fresh-install case).
+
+---
+
 ### /ollama-api/{path}
 
 Pass-through proxy to a local Ollama instance at `http://localhost:11434/api/{path}`. Accepts `GET`, `POST`,
 `PUT`, and `DELETE`; the request body and most headers are forwarded verbatim, and chunked responses are
-streamed back. This is what the meta-agent sidebar and any in-app Ollama feature talk to so the browser
-never has to reach `localhost:11434` directly.
+streamed back. This is what the chat sidebar's model discovery and any in-app Ollama feature talk to so the
+browser never has to reach `localhost:11434` directly. (The meta-agent chat route calls Ollama server-side
+and separately honours `STACKUNDERFLOW_OLLAMA_URL`; this proxy is always local.)
 
 **Status codes:** mirrors whatever Ollama returns; `502` with `{"error": "Ollama not available"}` when the
 local instance is unreachable.
@@ -1778,6 +1832,118 @@ the frontend can render an "add a plan" CTA without parsing fields.
 - `currency` is always present on both branches.
 
 **Status codes:** `200` always.
+
+---
+
+## Forks
+
+### GET /api/forks
+
+Fork / sidechain economics: the cost and token share that went to subagent (sidechain) messages, plus the
+fork points where a conversation branched and one path was abandoned — priced from the message DAG that
+`is_sidechain` + `parent_uuid` capture.
+
+**Query parameters**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `period` | string | no | `today` \| `week` \| `month` \| `30days` \| `all` (default `all`; `week` = `7days`) |
+| `log_path` | string | no | Project log path; defaults to the active project, or whole-store when none is selected |
+
+**Response** — `{period, scope, report, currency, warning}`. `report` carries the fork analysis with every
+dollar figure pre-converted to the active currency (`sidechain_cost_usd`, `total_cost_usd`,
+`abandoned_cost_usd`, and per-branch `cost_usd` on `abandoned_branches`). `warning` is a fixed caveat
+string: branch abandonment is inferred from the DAG, so edits, retries, and tool re-runs can look like
+abandoned branches — treat the list as a signal to review, not a verdict.
+
+**Status codes:** `200` success; `400` invalid `period`.
+
+---
+
+## What-If Repricing
+
+### GET /api/whatif
+
+Reprice the project's (or store's) total token workload across candidate provider/model rate cards —
+"what would this workload have cost on X?".
+
+**Query parameters**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `log_path` | string | no | Project log path; defaults to the active project, or whole-store when none is selected |
+
+**Response**
+
+```json
+{
+  "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0, "total": 0},
+  "actual": {"cost_usd": 0.0, "models": ["..."]},
+  "candidates": [
+    {"provider": "...", "model": "...", "label": "...",
+     "cost_usd": 0.0, "delta_usd": 0.0, "delta_pct": 0.0}
+  ],
+  "cheapest": {"...": "the first (lowest-cost) candidate row, or null"},
+  "scope": "project",
+  "project_slug": "-Users-you-dev-app",
+  "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
+}
+```
+
+`candidates` is sorted cheapest first. `delta_usd` is `cost_usd - actual.cost_usd` (negative = the
+candidate would have been cheaper); `delta_pct` is `null` when there is no actual spend to compare
+against. `scope` is `"project"` or `"all"`; `project_slug` is `null` for whole-store. Dollar figures are
+pre-converted to the active currency. Read-only — `SELECT` queries only.
+
+**Status codes:** `200` always.
+
+---
+
+## Budgets
+
+Spend budgets (a monthly and/or daily USD ceiling) persisted in `~/.stackunderflow/config.json` — no DB
+migration. Spend is summed across the **whole store** (a budget caps everything, not one project),
+bucketed on the caller's local day via `timezone_offset` (minutes east of UTC) so the boundaries line up
+with the Cost and Live tabs. All three endpoints return the same shape.
+
+### GET /api/budgets
+
+**Query parameters:** `timezone_offset` (int, optional, default `0`).
+
+**Response**
+
+```json
+{
+  "budget": {"monthly_usd": 500.0, "daily_usd": null},
+  "status": {
+    "monthly": {"budget": 500.0, "used": 311.9, "remaining": 188.1, "pct": 62.4, "status": "under"},
+    "daily": null,
+    "projected_month_end": 540.12,
+    "projection_overruns": true,
+    "models": ["claude-opus-4-6", "..."]
+  },
+  "currency": {"code": "USD", "symbol": "$", "rate_from_usd": 1.0}
+}
+```
+
+A leg (`monthly` / `daily`) is `null` when its ceiling is unset; when **no** budget is set at all,
+`status` is `null` and both `budget` legs are `null` (the UI renders an "add a budget" CTA). The
+projection fields are `null` without a monthly ceiling. Dollar fields inside `status` are pre-converted
+to the active currency.
+
+### PUT /api/budgets
+
+**Request body** — `{"monthly_usd": 500}`, `{"daily_usd": 25}`, or both. Each leg is independent: a
+positive number sets that ceiling, an explicit `null` clears it, and an omitted field leaves it
+untouched.
+
+**Response** — the refreshed `GET` shape.
+
+**Status codes:** `200` success; `422` non-positive amount (or body validation failure).
+
+### DELETE /api/budgets
+
+Clears both ceilings. **Response** — the now-empty `GET` shape. **Status codes:** `200` always.
 
 ---
 
@@ -2214,6 +2380,69 @@ but keeps `byte_count`, the metadata, and `risk`.
 
 ---
 
+## Static Analysis & Session Quality
+
+Read-only surface over the per-session static-analysis findings (complexity / lint / type-completeness
+deltas, written by `stackunderflow analyze session` / `analyze backfill`) and the LLM-graded session
+quality metrics.
+
+### GET /api/static-analysis/session/{session_id}
+
+Persisted findings + aggregate summary for one session. Does **not** analyze on demand — analyzers fork
+shell subprocesses, so analysis is a CLI / backfill operation; a never-analyzed session returns `200` with
+empty `findings`.
+
+**Response**
+
+```json
+{
+  "session_id": "abc123…",
+  "findings": [
+    {"file_path": "src/foo.py", "language": "python", "ts": "…", "metric": "complexity",
+     "pre_value": 12.0, "post_value": 9.0, "delta": -3.0, "details_json": "…"}
+  ],
+  "summary": {
+    "files": 3,
+    "languages": ["python"],
+    "metrics": {
+      "complexity": {"files": 3, "avg_delta": -0.7, "improved": 2, "regressed": 0, "neutral": 1}
+    },
+    "headline": "Reduced complexity by 0.7 on average across 3 files."
+  }
+}
+```
+
+**Status codes:** `200` always (empty `findings` + zero-count `summary` when not analyzed).
+
+### GET /api/static-analysis/session/{session_id}/quality
+
+The session's quality grade, grading it lazily via the local Ollama model when no cached grade exists.
+
+**Response**
+
+```json
+{
+  "session_id": "abc123…",
+  "overall_score": 7.5,
+  "grades": {"goal_clarity": 8.0, "execution_efficiency": 7.0, "success": 7.5},
+  "rationale": "…",
+  "suggestions": ["…"],
+  "graded_at": "2026-06-30T12:00:00+00:00",
+  "grade_source": "llm"
+}
+```
+
+**Status codes:** `200` success; `404` unknown session id.
+
+### POST /api/static-analysis/session/{session_id}/grade
+
+Force a re-grade (ignores the cached grade) and return the fresh quality metrics — same shape as the
+`quality` GET.
+
+**Status codes:** `200` success; `404` unknown session id.
+
+---
+
 ## Agent Teams
 
 Read-only views over Claude Code parallel-agent topology — sessions that spawned sub-agents. Since store
@@ -2353,7 +2582,7 @@ The static tool catalogue the chat route hands the model on each turn.
 }
 ```
 
-`tools` is the OpenAI-style schema array (13 tools); `names` is the flat name list; `max_hops` is the
+`tools` is the OpenAI-style schema array (14 tools); `names` is the flat name list; `max_hops` is the
 tool-call loop cap.
 
 **Status codes:** `200` always.

@@ -2,7 +2,7 @@
 
 StackUnderflow ships a right-docked meta-agent sidebar that lets you talk to a local LLM about your own AI coding history — sessions, projects, costs, file touches, past decisions. The model gets a set of read-only backend tools that query the same SQLite store the dashboard reads, so its answers are grounded in your real data.
 
-> **TL;DR.** Run a tool-capable model under Ollama (e.g. `qwen2.5-coder` or `llama3.2`). Open StackUnderflow. Ask "what did I spend this month?", "have I dealt with stripe webhooks before?", "who touched `src/auth/middleware.py`?". The sidebar's LLM calls a backend tool, the route executes it against your local store, and the model answers in its own words. Nothing leaves your machine.
+> **TL;DR.** Run a tool-capable model under Ollama (e.g. `qwen2.5-coder` or `llama3.2`). Open StackUnderflow. Ask "what did I spend this month?", "have I dealt with stripe webhooks before?", "who touched `src/auth/middleware.py`?". The sidebar's LLM calls a backend tool, the route executes it against your local store, and the model answers in its own words. With a local Ollama, nothing leaves your machine.
 
 The sidebar *is* the chat sidebar — there is one chat surface, not two. For Ollama setup and how models are discovered, see [`docs/chat.md`](chat.md).
 
@@ -11,12 +11,12 @@ The sidebar *is* the chat sidebar — there is one chat surface, not two. For Ol
 The sidebar has three parts:
 
 - A persistent right-side column in the dashboard layout. On wide viewports (`>= 1280px`) it's expanded by default; on tablet widths (`>= 768px`) it collapses to a thin icon rail; below that it hides, and the header chat button summons it as an overlay. The expanded/collapsed state persists in `localStorage`.
-- A streaming chat surface that talks to `POST /api/meta-agent/chat`. That route calls your local Ollama instance at `http://localhost:11434/api/chat` — the same hop the `/ollama-api` proxy uses.
-- A backend tool catalogue: thirteen typed read-only tools wrapping discovery, playback, project-summary, cost-rollup, recommendation and PR/CI services. The route hands the catalogue to Ollama on every request; if the model emits a `tool_calls` array, the route executes each call against the local store, appends the results as `role: "tool"` messages, and loops up to a 5-hop cap.
+- A streaming chat surface that talks to `POST /api/meta-agent/chat`. That route calls Ollama's `/api/chat` — the endpoint configured via `STACKUNDERFLOW_OLLAMA_URL` / `OLLAMA_URL` (with `STACKUNDERFLOW_OLLAMA_API_KEY` / `OLLAMA_API_KEY` as a bearer token, for hosted Ollama) when set, else the local instance at `http://localhost:11434`.
+- A backend tool catalogue: fourteen typed read-only tools wrapping discovery, playback, project-summary, cost-rollup, recommendation and PR/CI services. The route hands the catalogue to Ollama on every request; if the model emits a `tool_calls` array, the route executes each call against the local store, appends the results as `role: "tool"` messages, and loops up to a 5-hop cap.
 
 ## Privacy
 
-Everything stays on your machine. The route only opens HTTP connections to `localhost:11434` (Ollama). The tool executors only read from `~/.stackunderflow/store.db`. There is no fallback to a remote LLM — if Ollama isn't running, the first NDJSON event the route emits is a `{"type": "error"}` line and the sidebar surfaces a banner. To verify, run `lsof -nP -p $(pgrep -f stackunderflow)`; the only chat-related outbound socket is the one to your local Ollama port.
+By default everything stays on your machine: the route only opens HTTP connections to `localhost:11434` (Ollama), and the tool executors only read from `~/.stackunderflow/store.db`. Setting `STACKUNDERFLOW_OLLAMA_URL` (or `OLLAMA_URL`) points the chat at that endpoint instead — the conversation, including tool results drawn from your store, then goes to the endpoint you chose. There is no other remote path — with no reachable Ollama, the first NDJSON event the route emits is a `{"type": "error"}` line and the sidebar surfaces a banner. To verify, run `lsof -nP -p $(pgrep -f stackunderflow)`; the only chat-related outbound socket is the one to your configured Ollama endpoint (local port 11434 unless you set the env var).
 
 ## Which Ollama models support tool-calling
 

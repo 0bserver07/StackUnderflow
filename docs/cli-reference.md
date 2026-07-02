@@ -34,6 +34,7 @@ stackunderflow memory file PATH        [--project SLUG] [--since X] [--limit N] 
 stackunderflow memory worked ACTION    [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
 stackunderflow memory sessions [PATH]  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
 stackunderflow memory ask QUESTION     [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stackunderflow memory embed [--batch N]   # one-time embedding backfill for semantic recall (needs Ollama)
 
 # Discovery — lower-level self-referential queries (the `memory` namespace wraps these)
 stackunderflow find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
@@ -77,14 +78,28 @@ stackunderflow etl backfill [--force]
 stackunderflow etl status [--format text|json]
 
 # Hooks (opt-in Claude Code lifecycle hooks — see docs/hooks.md)
-stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content]
+stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
 stackunderflow hooks uninstall [--scope project|user]
 stackunderflow hooks status    [--scope project|user] [--format text|json]
 stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
 stackunderflow hooks run <hook-id> [--capture-content]   # internal — invoked by Claude Code
 
+# Agent-discovery guide snippet in CLAUDE.md / AGENTS.md (see docs/hooks.md)
+stackunderflow guide install   [--scope project|user] [--dry-run]
+stackunderflow guide uninstall [--scope project|user]
+stackunderflow guide status    [--scope project|user] [--format text|json]
+
+# Pricing health (read-only)
+stackunderflow pricing doctor [--format text|json] [--stale-days N] [--limit N] [--strict]
+
+# Static analysis + session grading
+stackunderflow analyze session SESSION_ID [--language python|typescript|go] [--format text|json]
+stackunderflow analyze backfill [--since X] [-N LIMIT] [--concurrency N] [--format text|json]
+stackunderflow analyze quality [SESSION_ID] [--all] [--force] [--format text|json]
+
 # Backup
 stackunderflow backup create [--label TEXT] [--keep N]
+stackunderflow backup verify [--name NAME]
 stackunderflow backup list
 stackunderflow backup restore NAME [--dry-run]
 stackunderflow backup auto [--enable|--disable]
@@ -1323,18 +1338,48 @@ daemon thread that lives in another process.
 
 ---
 
+## Pricing Commands
+
+### `stackunderflow pricing doctor`
+
+Read-only pricing-health report: unpriced models, stale rate overlay, and
+`cost_source='unknown'` rows carrying a nonzero cost. Reads the live store
+(`~/.stackunderflow/store.db`) and renders the same payload
+`GET /api/pricing/doctor` returns, so the CLI and the HTTP surface never
+disagree. Works without a running server; no DB writes, no network.
+
+```
+Usage: stackunderflow pricing doctor [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--format` | `text\|json` | `text` | Output format |
+| `--stale-days` | INTEGER | `7` | Flag the rate overlay stale when older than this many days |
+| `--limit` | INTEGER | `50` | Max model entries listed per section (full counts stay in the summary) |
+| `--strict` | flag | false | Exit non-zero when a hard defect is found (billable unpriced model, or an `unknown` row with nonzero cost) — for CI gating |
+
+The payload's `ok` reflects hard defects only; unpriced exotic models that
+are correctly stamped `unknown` (and therefore $0) and a stale overlay are
+surfaced as warnings, not failures.
+
+---
+
 ## Memory Commands
 
 `stackunderflow memory` is the agent-facing namespace — the single set of
 commands a coding agent learns to ask the local store *"have I decided this
-before, what broke on this file, what worked last time"*. Each subcommand
-wraps an existing discovery query (see [Discovery Commands](#discovery-commands)
-below); `memory` adds a uniform option set and, with `--json`, a stable
-output envelope built for splicing into a context window.
+before, what broke on this file, what worked last time"*. Each query
+subcommand wraps an existing discovery query (see
+[Discovery Commands](#discovery-commands) below); `memory` adds a uniform
+option set and, with `--json`, a stable output envelope built for splicing
+into a context window. One subcommand is maintenance rather than query:
+`memory embed` backfills the vector index that `memory ask` searches.
 
 ### Shared options
 
-Every `memory` subcommand carries the same six options:
+Every `memory` query subcommand (`decisions`, `file`, `worked`, `sessions`,
+`ask`) carries the same six options:
 
 | Option | Default | Description |
 |---|---|---|
@@ -1382,7 +1427,8 @@ Contract guarantees: the envelope is **stable and versioned**, **deterministic**
 (same store + same query → byte-identical JSON), and **token-bounded**. In
 `--format json`, stdout is pure JSON with nothing on stderr; a non-zero exit
 means stdout is an `{"error": "..."}` envelope instead. `memory file` adds a
-`risk` block alongside the eight core fields; `memory ask` adds a `note`.
+`risk` block alongside the eight core fields; `memory ask` adds a `note` and a
+`vector_used` flag.
 
 ### `stackunderflow memory decisions`
 
@@ -1453,15 +1499,53 @@ Usage: stackunderflow memory sessions [OPTIONS] [PATH]
 
 ### `stackunderflow memory ask`
 
-A natural-language question of the local store. **v1 is a keyword search:**
-`ask` runs the same query as `memory decisions` on `QUESTION` and labels the
-result `ask`, with a `note` saying so. The local-LLM meta-agent — which needs a
-running Ollama, so an agent caller cannot rely on it — is deliberately
-deferred; until it lands, `memory decisions` with specific terms is the precise
-tool.
+A natural-language question of the local store. `ask` runs a **hybrid**
+retrieval: a keyword search over past decisions fused (reciprocal-rank fusion)
+with a semantic vector search. The vector half uses a small embedding model
+served by Ollama; when no Ollama is reachable it is silently skipped and `ask`
+degrades to the keyword search alone — the command always works, and gets
+sharper (finds sessions you didn't have the exact words for) when Ollama is
+available. Every result carries its provenance: session id, date (`last_ts`)
+and cost (`cost_usd`).
+
+The JSON envelope gains two extra fields: `note` (a one-line description of
+which retrieval ran) and `vector_used` (`true` when the vector half
+participated).
 
 ```
 Usage: stackunderflow memory ask [OPTIONS] QUESTION
+```
+
+### `stackunderflow memory embed`
+
+One-time backfill of vector embeddings for messages already in the search
+index. Ingest embeds *new* messages as they arrive; `memory embed` covers
+everything indexed before embeddings existed, so semantic recall (`memory
+ask`, `search-past-decisions --use-embeddings`) works over your whole history.
+
+```
+Usage: stackunderflow memory embed [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--batch` | INTEGER | `512` | Messages embedded per batch; the command loops until nothing is left |
+
+Needs a reachable Ollama: a configured endpoint (`STACKUNDERFLOW_OLLAMA_URL`,
+with `STACKUNDERFLOW_OLLAMA_API_KEY` as a bearer token for hosted Ollama) is
+tried first, then a local daemon at `localhost:11434`. With neither, the
+command explains how to enable one and exits `1`. It also exits `1` when no
+search index exists yet (run `stackunderflow start` once to build it). The
+embed model defaults to `nomic-embed-text` (`ollama pull nomic-embed-text`);
+override with `STACKUNDERFLOW_EMBED_MODEL`. Vectors land in
+`~/.stackunderflow/embeddings.db`, keyed by search-index message id.
+
+```
+$ stackunderflow memory embed
+Embedding via http://localhost:11434 …
+  … 512 embedded
+  … 1024 embedded
+Done — 1024 message(s) embedded. `memory ask` now uses them.
 ```
 
 ---
@@ -1567,8 +1651,8 @@ Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
 | `--since` | TEXT | (all time) | Filter to messages newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
 | `--limit` | INTEGER | `20` | Max sessions to return (hard cap) |
 | `--context-budget` | INTEGER | env or `2000` | Token budget for the output; `0` disables |
-| `--use-embeddings` | flag | false | Re-rank substring matches by local sentence-transformers cosine similarity (requires `pip install stackunderflow[embeddings]`) |
-| `--embed-model` | TEXT | env or `all-MiniLM-L6-v2` | Override the sentence-transformers model id; ignored without `--use-embeddings` |
+| `--use-embeddings` | flag | false | Re-rank substring matches by Ollama-embedding cosine similarity — the same backend as `memory ask`; degrades silently to substring ranking when Ollama is unreachable |
+| `--embed-model` | TEXT | env or `nomic-embed-text` | Override the Ollama embed model; ignored without `--use-embeddings` |
 | `--format` | `text\|json` | text | Output format |
 
 **Example:**
@@ -1585,21 +1669,22 @@ $ stackunderflow search-past-decisions "auth middleware" --project -Users-you-de
 ```
 
 **Semantic search (opt-in).** Plain substring matching misses phrases that
-were worded differently in the transcript. Install
-`pip install stackunderflow[embeddings]` (adds sentence-transformers) and
-pass `--use-embeddings` to re-rank the substring-matched candidate set
-by cosine similarity against the query. The substring filter still runs
-first — `--use-embeddings` only re-orders the set, never widens it. JSON
-output gains an `embedding_score` in `[0, 1]`; text output appends
-`cos=X.XX` to each session headline. Model defaults to
-`sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim) and is loaded
-lazily on the first call; override via the `STACKUNDERFLOW_EMBED_MODEL`
-env var or `--embed-model`. Per-message vectors are cached in
-`discovery_embeddings` (added by migration v014) so repeat queries
-against the same candidate set are a SELECT, not a recompute.
+were worded differently in the transcript. Pass `--use-embeddings` to
+re-rank the substring-matched candidate set by cosine similarity against
+the query, using embeddings served by Ollama — a configured endpoint
+(`STACKUNDERFLOW_OLLAMA_URL`, with `STACKUNDERFLOW_OLLAMA_API_KEY` as a
+bearer token) or a local daemon at `localhost:11434`, the same backend
+`memory ask` uses. The substring filter still runs first —
+`--use-embeddings` only re-orders the set, never widens it. JSON output
+gains an `embedding_score` in `[0, 1]`; text output appends `cos=X.XX` to
+each session headline. Model defaults to `nomic-embed-text`
+(`ollama pull nomic-embed-text`); override via the
+`STACKUNDERFLOW_EMBED_MODEL` env var or `--embed-model`. The candidate set
+is small (bounded by the substring pre-filter), so candidates are embedded
+on the fly per query. When no Ollama answers, the re-rank silently degrades
+to substring ordering — there is no extra dependency to install.
 
 ```
-$ pip install 'stackunderflow[embeddings]'
 $ stackunderflow search-past-decisions "watcher behind a flag" --use-embeddings
 Past decisions matching 'watcher behind a flag'  (2 session(s))
 
@@ -1949,6 +2034,67 @@ Usage: stackunderflow discovery demote-uncited [OPTIONS]
 
 ---
 
+## Analysis Commands
+
+Per-session static analysis (complexity / lint / type-completeness deltas
+over the files a session touched, reconstructed via playback) plus
+LLM-graded session quality. Optional dependencies: `pip install
+'stackunderflow[analysis]'` adds `radon` + `mypy` for Python; `tsc` /
+`eslint` / `go` / `gocyclo` must be on `PATH` for TypeScript and Go. A
+missing tool produces a warning for that language and skips cleanly.
+
+### `stackunderflow analyze session`
+
+Run the analyzers on every file `SESSION_ID` touched and persist findings to
+the `static_analysis_findings` table. Idempotent — re-running overwrites
+prior rows for the same (session, file, metric).
+
+```
+Usage: stackunderflow analyze session [OPTIONS] SESSION_ID
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--language` | `python\|typescript\|go` | (all) | Restrict to these languages (repeatable) |
+| `--format` | `text\|json` | `text` | Output format |
+
+### `stackunderflow analyze backfill`
+
+Analyze every recent session that has no `static_analysis_findings` rows
+yet. Idempotent — already-analyzed sessions are skipped.
+
+```
+Usage: stackunderflow analyze backfill [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--since` | TEXT | `30d` | Only sessions with activity newer than this (`7d`/`1w`/`1m`/`24h`/ISO) |
+| `-N, --limit` | INTEGER (>=1) | (no cap) | Cap on candidates analyzed |
+| `--concurrency` | INTEGER (1–16) | min(4, cpu_count) | Worker count |
+| `--format` | `text\|json` | `text` | Output format |
+
+### `stackunderflow analyze quality`
+
+Grade a session's quality (goal clarity, execution efficiency, success)
+with a local Ollama model; results are cached in
+`session_quality_metrics`. Give a `SESSION_ID`, or `--all` to grade every
+ungraded session.
+
+```
+Usage: stackunderflow analyze quality [OPTIONS] [SESSION_ID]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--all` | flag | false | Grade all sessions that have not been graded yet |
+| `--force` | flag | false | Re-grade even when a cached grade exists |
+| `--format` | `text\|json` | `text` | Output format |
+
+Passing neither `SESSION_ID` nor `--all` is a usage error.
+
+---
+
 ## Backup Commands
 
 Long-form discussion of the snapshot directory layout, the rsync
@@ -1987,6 +2133,37 @@ $ stackunderflow backup create --label pre-upgrade --keep 5
   Backing up ~/.claude → /Users/you/.stackunderflow/backups/20260419-143209-pre-upgrade
   (excluding: debug, plugins, cache, statsig...)
   Done: 2884 files (1102 JSONL), 3216.6 MB
+```
+
+---
+
+### `stackunderflow backup verify`
+
+Verify a backup contains every artifact needed for a full restore —
+`store.db` plus the search / Q&A / tags sidecars. The SQLite store alone is
+not the complete source of truth, so a store-only backup silently loses
+search, Q&A, and tags. Prints one line per critical artifact and exits
+non-zero when the backup is missing or incomplete, so wrapper scripts can
+detect it.
+
+```
+Usage: stackunderflow backup verify [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--name` | TEXT | (latest) | Backup directory name to verify, as shown by `backup list` |
+
+**Example:**
+
+```
+$ stackunderflow backup verify
+  Verifying 20260419-143209-pre-upgrade
+    store.db         ok
+    search_index.db  ok
+    qa_pairs.db      ok
+    tags.json        ok
+  OK: all 4 critical artifacts present.
 ```
 
 ---
@@ -2222,7 +2399,9 @@ site:
 | `STACKUNDERFLOW_DISABLE_LOCK` | unset | Truthy = skip the watcher single-instance lock at `~/.stackunderflow/server.lock` (same as `start --no-lock`) |
 | `STACKUNDERFLOW_DISCOVERY_TELEMETRY` | on | Set to `0` / `false` to disable the passive discovery citation-feedback recording |
 | `STACKUNDERFLOW_BETA_<NAME>` | unset | Truthy = enable a beta-flagged provider adapter (e.g. `STACKUNDERFLOW_BETA_GEMINI=1`) |
-| `STACKUNDERFLOW_EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | sentence-transformers model id for `search-past-decisions --use-embeddings`; the `--embed-model` flag overrides it |
+| `STACKUNDERFLOW_OLLAMA_URL` / `OLLAMA_URL` | unset | Ollama endpoint tried first for embeddings (`memory ask`, `memory embed`, `--use-embeddings`) and meta-agent chat; local `localhost:11434` is the fallback. `STACKUNDERFLOW_OLLAMA_URL` wins over `OLLAMA_URL` |
+| `STACKUNDERFLOW_OLLAMA_API_KEY` / `OLLAMA_API_KEY` | unset | Bearer token sent to the configured Ollama endpoint (hosted Ollama) |
+| `STACKUNDERFLOW_EMBED_MODEL` | `nomic-embed-text` | Ollama embed model for `memory ask` / `memory embed` / `search-past-decisions --use-embeddings`; the `--embed-model` flag overrides it |
 | `STACKUNDERFLOW_GITHUB_TOKEN` / `GITHUB_TOKEN` | unset | GitHub PAT for `ingest github`. The `--token` flag overrides; `STACKUNDERFLOW_GITHUB_TOKEN` is consulted before `GITHUB_TOKEN` |
 | `STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET` | unset | HMAC-SHA256 secret for the `/api/webhooks/github` receiver; unset → that endpoint returns 503 |
 | `STACKUNDERFLOW_GITLAB_WEBHOOK_SECRET` | unset | Token-comparison secret for `/api/webhooks/gitlab`; unset → 503 |
@@ -2287,7 +2466,7 @@ performance characteristics, the Windows status — in [`docs/hooks.md`](hooks.m
 ### `stackunderflow hooks install`
 
 ```
-stackunderflow hooks install [--scope project|user] [--dry-run] [--capture-content]
+stackunderflow hooks install [--scope project|user] [--dry-run] [--capture-content] [--inject]
 ```
 
 Merges StackUnderflow's hook entries into a `settings.json` —
@@ -2299,7 +2478,10 @@ a changed `--capture-content` choice is *replaced*, never duplicated). Writes
 `--dry-run`). **Never touches another tool's hooks.** `--dry-run` prints the
 would-be `hooks` block and writes nothing. `--capture-content` makes the
 installed hook commands store full payloads (prompt text, tool output) instead
-of the conservative sanitised-metadata default.
+of the conservative sanitised-metadata default. `--inject` additionally
+installs the context-injection hooks (`SessionStart` / `UserPromptSubmit` /
+`PreToolUse`) that feed StackUnderflow's memory back into the live agent —
+opt-in separately from capture, off by default.
 
 ### `stackunderflow hooks uninstall`
 
@@ -2339,6 +2521,45 @@ ever runs when you invoke it.
 Internal — Claude Code invokes this; reads the hook payload as JSON on stdin and
 records a `captured_events` row when warranted. Always exits `0` (it must never
 disrupt Claude Code). Not for direct use.
+
+---
+
+## Guide Commands
+
+Manage the StackUnderflow agent-discovery snippet in `CLAUDE.md` /
+`AGENTS.md` — ~15 lines naming the `memory` commands and their `--json`
+output contract, so an agent discovers the query surface without any
+protocol support. Details in [`docs/hooks.md`](hooks.md).
+
+### `stackunderflow guide install`
+
+```
+stackunderflow guide install [--scope project|user] [--dry-run]
+```
+
+Writes the snippet into the instruction file(s): `--scope project`
+(default) targets `./CLAUDE.md` *and* `./AGENTS.md` in the cwd's git root;
+`--scope user` targets `~/.claude/CLAUDE.md`. Idempotent — the snippet sits
+between marker comments and a re-run replaces the block in place; a
+timestamped backup is written before any mutation. `--dry-run` shows what
+would change and writes nothing.
+
+### `stackunderflow guide uninstall`
+
+```
+stackunderflow guide uninstall [--scope project|user]
+```
+
+Removes only the marked StackUnderflow block; never deletes the file.
+
+### `stackunderflow guide status`
+
+```
+stackunderflow guide status [--scope project|user] [--format text|json]
+```
+
+Shows, per instruction file, whether the snippet is installed, missing, or
+stale (installed but older than the shipped copy). Default: both scopes.
 
 ---
 

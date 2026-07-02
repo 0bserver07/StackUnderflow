@@ -51,11 +51,11 @@ Conversations persist in `localStorage` and survive a page reload. You can keep 
 
 ## The privacy model
 
-- **Where queries go.** The browser → the dashboard (`127.0.0.1:8081`) → the local Ollama daemon (`127.0.0.1:11434`). Nothing crosses the network.
+- **Where queries go.** The browser → the dashboard (`127.0.0.1:8081`) → the local Ollama daemon (`127.0.0.1:11434`) by default. Nothing crosses the network unless you configure a remote Ollama endpoint (below).
 - **What gets logged.** Nothing on StackUnderflow's side for the proxy — it's stateless. Ollama logs whatever Ollama logs (check its own configuration). The meta-agent route reads your local store but writes nothing back from a chat turn.
-- **The upstream is hard-coded.** Both the `/ollama-api` proxy and the meta-agent route target `http://localhost:11434`. If you point Ollama elsewhere with `OLLAMA_HOST`, StackUnderflow does not follow — it always talks to the local port.
+- **The proxy upstream is hard-coded.** The `/ollama-api` proxy targets `http://localhost:11434`; if you point Ollama elsewhere with `OLLAMA_HOST`, the proxy does not follow. The meta-agent route is the exception: it honours `STACKUNDERFLOW_OLLAMA_URL` / `OLLAMA_URL` (a configured endpoint first, local fallback) — see [`docs/meta-agent.md`](meta-agent.md).
 
-For the guarantee that the meta-agent never reaches a remote LLM, and how to verify it, see [`docs/meta-agent.md`](meta-agent.md).
+For where the meta-agent sends its requests and how to verify it, see [`docs/meta-agent.md`](meta-agent.md).
 
 ## Limits
 

@@ -2,7 +2,7 @@
 
 **Offline, local-first observability toolkit for AI coding agents.**
 
-StackUnderflow ingests and indexes session logs from 19 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
+StackUnderflow ingests and indexes session logs from 20 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
 
 <p align="center">
   <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> &nbsp;
@@ -26,7 +26,7 @@ StackUnderflow ingests and indexes session logs from 19 coding agent providers t
 *   **Local Agent Memory**: Exposes a CLI so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
 *   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
-19 providers supported (7 default-on, 12 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
+20 providers supported (7 default-on, 13 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
@@ -146,7 +146,7 @@ Past decisions matching 'cache' (14 session(s))
 ## What it does
 
 ### Multi-provider ingest
-19 coding agents have adapters in the registry. Seven ship default-on:
+20 coding agents have adapters in the registry. Seven ship default-on:
 
 | Provider | Source |
 |---|---|
@@ -158,7 +158,7 @@ Past decisions matching 'cache' (14 session(s))
 | Pi + OMP | `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/` |
 | Hermes | `~/.hermes/sessions/` |
 
-Twelve more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity) opt in via env var:
+Thirteen more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok) opt in via env var:
 
 ```bash
 STACKUNDERFLOW_BETA_GEMINI=1 STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
@@ -189,7 +189,7 @@ See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source
 - **Auto-tagging** — sessions get tagged by language, framework, topic, intent (`build`, `fix`, `explore`, `refactor`, `test`, `ops`).
 
 ### Meta agent (Ask StackUnderflow)
-A **right-docked sidebar** lets you talk to your local Ollama LLM about your own coding history. It calls a catalogue of read-only backend tools (search past decisions, find sessions touching a file, get a project's cost summary, replay a session's filesystem mutations, …) and answers in prose. Recommended models: `qwen2.5-coder`, `llama3.2`. Everything runs locally — there is **no fallback to a remote LLM**; if Ollama is down the sidebar surfaces a banner. See [docs/meta-agent.md](docs/meta-agent.md).
+A **right-docked sidebar** lets you talk to an Ollama LLM about your own coding history. It calls a catalogue of read-only backend tools (search past decisions, find sessions touching a file, get a project's cost summary, replay a session's filesystem mutations, …) and answers in prose. Recommended models: `qwen2.5-coder`, `llama3.2`. The chat talks only to Ollama — local at `localhost:11434` by default, or the endpoint you set via `STACKUNDERFLOW_OLLAMA_URL` (+ `STACKUNDERFLOW_OLLAMA_API_KEY`); with no reachable endpoint the sidebar surfaces a banner. See [docs/meta-agent.md](docs/meta-agent.md).
 
 ![Ask StackUnderflow: a local model answering from your own session history via read-only tools](assets/agent-sidebar.png)
 
@@ -200,7 +200,7 @@ A **right-docked sidebar** lets you talk to your local Ollama LLM about your own
 ![Step-by-step playback with the reconstructed file tree at each moment](assets/playback.png)
 
 ### Self-referential discovery (for coding agents)
-- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI commands that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** (`pip install stackunderflow[embeddings]`) re-ranks by cosine similarity with a local sentence-transformers model.
+- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI commands that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** re-ranks by cosine similarity using Ollama-served embeddings (default model `nomic-embed-text`), degrading to substring ranking when Ollama is absent.
 - **`find-sessions-where-action-worked` / `find-failure-modes-for-file`** — outcome-aware variants. Returns sessions whose subsequent turns confirmed (or contradicted) the action, with a confidence score so silence isn't mistaken for success.
 - **`skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files. Project-scoped by default.
 - **Bookmarks** — pin conversations you want to find later.
@@ -248,7 +248,7 @@ flowchart TD
     classDef agent fill:#805AD5,stroke:#9F7AEA,stroke-width:2px,color:#FFF;
 
     %% 1. Log Sources
-    subgraph Sources ["📁 Input Log Sources (19 Providers)"]
+    subgraph Sources ["📁 Input Log Sources (20 Providers)"]
         Logs["Local Session Logs<br/>• Claude Code JSONL<br/>• Cursor state.vscdb<br/>• Cline tasks JSON"]
     end
     class Logs source;
@@ -305,9 +305,9 @@ Most dashboard routes read from the marts when populated, falling back to a live
 
 ```
 stackunderflow/
-  adapters/         # 19 source-file parsers (7 default-on, 12 beta)
+  adapters/         # 20 source-file parsers (7 default-on, 13 beta)
   etl/              # ETL pipeline (v0.7+)
-    normalize/      #   Normalizer ABC + per-provider transforms (18 normalizers — pi and omp register separately, one more than the 17 adapters)
+    normalize/      #   Normalizer ABC + per-provider transforms (20 registered normalizers — pi and omp register separately; antigravity has none)
     marts/          #   MartBuilder ABC + 8 mart builders
     backfill.py     #   streams messages → events → marts
     watcher.py      #   watchfiles daemon, debounced 200ms
@@ -316,7 +316,7 @@ stackunderflow/
   api/              # public Python API (list_projects/process/list_sessions)
   ingest/           # writer + per-record normalize hook
   store/            # SQLite at ~/.stackunderflow/store.db
-    migrations/     #   v001 → v017 (additive; v015 intentionally skipped)
+    migrations/     #   v001 → v026 (additive; v015 intentionally skipped)
     queries.py      #   typed read helpers (raw layer)
     mart_queries.py #   typed read helpers (marts)
   infra/
@@ -325,7 +325,7 @@ stackunderflow/
     cursor_cache.py # fingerprint cache for vscdb (3-8x cold-start speedup)
     providers/      # per-provider Pricers (one file per provider)
   reports/          # CLI report renderers + 8 optimize patterns
-  routes/           # FastAPI route modules — 23, one per concern
+  routes/           # FastAPI route modules — 29, one per concern
   services/         # compare, plans, yield_tracker, search, qa, tags, ...
   cli.py            # click CLI — dashboard, ETL ops, exports, plan budgets, discovery
   server.py         # thin shell — app + lifespan + watcher + bg ingest
@@ -453,7 +453,7 @@ Everything runs locally. Nothing about your sessions, prompts, or code leaves th
 - `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`
 - `~/.hermes/sessions/`
 
-The 12 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
+The 13 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
 
 **What it writes** — `~/.stackunderflow/` only.
 - `store.db` — SQLite, WAL mode, the source of truth
@@ -463,6 +463,7 @@ The 12 beta adapters add more source roots when their env vars are set. Full pat
 **What leaves your machine** — only when explicitly enabled:
 - Pricing snapshot from `github.com/BerriAI/litellm` (no user data sent; hardcoded fallback in `infra/costs.py`)
 - FX rates from `api.frankfurter.app` when `currency != USD` (no user data sent; ECB snapshot fallback embedded in `infra/currency.py`)
+- Chat and embedding requests to the Ollama endpoint you configure with `STACKUNDERFLOW_OLLAMA_URL` (these carry message text from your store). Unset, the only Ollama endpoint tried is local `localhost:11434` — or nothing at all.
 
 No telemetry. No tracking. No crash reports. No analytics. The app is a single binary that talks to your filesystem and your browser.
 
@@ -476,7 +477,7 @@ cd StackUnderflow
 pip install -e ".[dev]"
 cd stackunderflow-ui && npm install && npm run build && cd ..
 
-# Backend tests — fast suite (pytest tests/ -q collects 2781; slow tests deselected by default)
+# Backend tests — fast suite (pytest tests/ -q runs 3307 of 3321 collected; 14 slow tests deselected by default)
 pytest tests/ -q
 
 # Slow integration + perf-regression suite (opt-in via the `slow` marker)

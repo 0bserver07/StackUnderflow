@@ -1,9 +1,9 @@
 # Adapter Contract — implementing a new `SourceAdapter`
 
-**Audience:** anyone adding an 18th coding-tool integration to StackUnderflow.
+**Audience:** anyone adding a 21st coding-tool integration to StackUnderflow.
 **Scope:** the `SourceAdapter` Protocol and the dataclasses it produces. The store-side schema your records land in is documented separately in [session-schema-v1.md](session-schema-v1.md).
 
-A source adapter is the bridge between a coding tool's native on-disk format (JSONL, vscdb, SQLite, JSON blob) and StackUnderflow's raw layer. The adapter answers two questions: *what sessions exist?* and *what records do they contain?* The ingest layer drives adapters; nothing downstream — routes, services, MCP — ever touches an adapter.
+A source adapter is the bridge between a coding tool's native on-disk format (JSONL, vscdb, SQLite, JSON blob) and StackUnderflow's raw layer. The adapter answers two questions: *what sessions exist?* and *what records do they contain?* The ingest layer drives adapters; nothing downstream — routes, services, the memory CLI — ever touches an adapter.
 
 ---
 

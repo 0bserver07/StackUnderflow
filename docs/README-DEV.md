@@ -6,7 +6,7 @@ Contributor guide: architecture, local setup, testing, and release.
 
 StackUnderflow is a single-process, local-first app:
 
-- **Python backend**: a FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer into a local SQLite store and exposes a JSON API over it. Claude Code is enabled by default; adapters for other agents ship as opt-in betas.
+- **Python backend**: a FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer into a local SQLite store and exposes a JSON API over it. Seven adapters are enabled by default (Claude Code, Codex, Cursor, Cline, OpenClaw, Pi + OMP, Hermes); the other thirteen ship as opt-in betas.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. The build output is written to `stackunderflow/static/react/` and served by the backend.
 
 Everything runs on the user's machine; data never leaves the host.
@@ -39,10 +39,13 @@ are declared in `pyproject.toml`; the `dev` extra is the dependency
 group CI installs. Editable mode means Python changes take effect
 without reinstalling.
 
-An optional `embeddings` extra (`pip install -e ".[embeddings]"`) pulls
-in `sentence-transformers` for semantic search behind
-`search-past-decisions --use-embeddings`. It is a large install and
-most contributors don't need it.
+Semantic search (`memory ask`, `search-past-decisions
+--use-embeddings`) uses vector embeddings served by Ollama — a
+configured endpoint (`STACKUNDERFLOW_OLLAMA_URL` +
+`STACKUNDERFLOW_OLLAMA_API_KEY`) or a local daemon at
+`localhost:11434`. There is no Python dependency to install; without a
+reachable Ollama the feature degrades to keyword/substring search, so
+most contributors don't need one.
 
 ## Running in development
 
@@ -91,7 +94,7 @@ StackUnderflow/
 │   ├── store/                   # SQLite store: db, schema + migrations/, queries, mart_queries, types
 │   ├── etl/                     # Filesystem watcher, normalizers, mart builders, backfill
 │   ├── reports/                 # CLI reporting (aggregate, optimize, scope, render, export)
-│   ├── routes/                  # FastAPI routers — one module per concern (23 modules)
+│   ├── routes/                  # FastAPI routers — one module per concern (29 modules)
 │   ├── services/                # Stateful services initialised at startup (search, qa, tags, …)
 │   ├── hooks/                   # Claude Code hook install / repair / handlers
 │   ├── infra/                   # Discovery, cost/pricing math, currency, caches
@@ -228,13 +231,14 @@ point.
 | `stackunderflow status` | One-line today + month cost and message counts. |
 | `stackunderflow export` | Export aggregated data as CSV or JSON. |
 | `stackunderflow optimize` | Surface sessions with repeated retry loops. |
-| `stackunderflow backup create\|list\|restore\|auto` | Snapshot and restore `~/.claude/` — see [backup.md](backup.md). |
+| `stackunderflow backup create\|verify\|list\|restore\|auto` | Snapshot and restore `~/.claude/` — see [backup.md](backup.md). |
 | `stackunderflow clear-cache` | Clear the Cursor parse cache; the in-memory cache clears on restart. |
 
-The CLI has more command groups — `etl`, `hooks`, `skills`,
-`discovery`, `recommend`, `risk`, `ingest`, plus `context-budget`,
-`compare`, and `yield`. Run `stackunderflow --help` or see
-[cli-reference.md](cli-reference.md) for the full surface.
+The CLI has more command groups — `memory` (the agent-facing query
+namespace), `etl`, `hooks`, `guide`, `skills`, `discovery`,
+`recommend`, `risk`, `ingest`, `pricing`, `analyze`, plus
+`context-budget`, `compare`, and `yield`. Run `stackunderflow --help`
+or see [cli-reference.md](cli-reference.md) for the full surface.
 
 ## Public Python API
 
@@ -283,8 +287,8 @@ python -m pytest tests/stackunderflow/store/   # one subtree
 python -m pytest --cov=stackunderflow          # coverage
 ```
 
-Collecting `tests/` finds 2795 tests. The default configuration
-deselects 14 `slow`-marked tests, runs 2781, and skips 2. The frontend
+Collecting `tests/` finds 3321 tests; the default configuration
+deselects the 14 `slow`-marked ones and runs the rest. The frontend
 suite runs separately on the Node test runner. See [tests.md](tests.md)
 for the layout of both.
 
@@ -347,9 +351,9 @@ The backend serves the built React app from
 
 The Vite config also proxies `/ollama-api/*` to
 `http://localhost:11434/api/*` so the UI can talk to a local Ollama
-instance. Ollama is optional, and the proxy returns 502 when it is not
-reachable. This proxy is dev-only — there is no Ollama route in the
-Python backend.
+instance during development, mirroring the backend's own
+`/ollama-api/{path}` proxy in `stackunderflow/routes/misc.py`. Ollama
+is optional, and both proxies return 502 when it is not reachable.
 
 ## Nix
 

@@ -7,13 +7,15 @@
 >
 > **Shipped since this RFC was written:** multi-provider ingest (adapters
 > for Claude Code, Codex, Cursor, Gemini, and more), the shared
-> `SourceAdapter` protocol, and a read-only MCP server (`stackunderflow-mcp`
-> / `stackunderflow mcp`). The MCP server reads the ingested store and
-> exposes session-query and discovery tools — a step toward the §7 query
-> API (specifically the MCP integration mechanism in §7.3). It does **not**
-> implement the knowledge layer this RFC proposes: there is no knowledge
-> artifact extraction, no `/knowledge/query` or `/knowledge/push` endpoint,
-> and no cross-node sync. See [`docs/mcp.md`](mcp.md) for the current MCP
+> `SourceAdapter` protocol, and a read-only agent query surface. That
+> surface shipped first as an MCP server (`stackunderflow-mcp`), which was
+> later retired in favour of the `stackunderflow memory` CLI namespace —
+> the same session-query and discovery tools behind one stable command
+> set — a step toward the §7 query API. It does **not** implement the
+> knowledge layer this RFC proposes: there is no knowledge artifact
+> extraction, no `/knowledge/query` or `/knowledge/push` endpoint, and no
+> cross-node sync. See the "Memory Commands" section of
+> [`docs/cli-reference.md`](cli-reference.md) for the current query
 > surface.
 
 ## 1. Problem Statement
@@ -60,7 +62,7 @@ provider or machine.
          ├──▶ store/queries.py → stats/ (classifier → enricher →
          │       aggregator + formatter) → FastAPI routes → React UI
          │
-         └──▶ MCP server (stackunderflow-mcp) — read-only session tools
+         └──▶ memory CLI (stackunderflow memory) — read-only session queries
 ```
 
 The pipeline files this RFC originally named (`discovery.py`, `reader.py`,
@@ -71,7 +73,9 @@ the adapter layer, and dedup folded into `stats/enricher.py`.
 - Multi-provider ingest — adapters for Claude Code, Codex, Cursor, Gemini,
   and others (see [`docs/multi-provider.md`](multi-provider.md)).
 - The shared `SourceAdapter` protocol (`stackunderflow/adapters/base.py`).
-- A read-only MCP server, so agents *can* query session history mid-session.
+- A read-only agent query surface — the `stackunderflow memory` CLI
+  (originally an MCP server, since retired) — so agents *can* query session
+  history mid-session.
 - A persistent SQLite store (`~/.stackunderflow/store.db`) — the source of
   truth, not an ephemeral cache.
 
@@ -425,10 +429,11 @@ are marked inline (✅ done, ⚠️ partial); the rest stand as proposed.
 
 ### Phase 2: Active agent integration
 
-8. **MCP server** — ⚠️ partially shipped. A read-only MCP server exists
-   (`stackunderflow-mcp`) with session-query and discovery tools. It does
-   not yet expose a knowledge query/push API — that depends on the
-   knowledge store (Phase 0).
+8. **Agent query integration** — ⚠️ partially shipped. A read-only MCP
+   server shipped first and was retired in favour of the
+   `stackunderflow memory` CLI, which carries the same session-query and
+   discovery tools. Neither exposed a knowledge query/push API — that
+   depends on the knowledge store (Phase 0).
 9. **Pre-hook injection** — Agent hooks that query relevant knowledge before
    each session and inject it as context.
 10. **Post-hook persistence** — Agent hooks that push resolved decisions and
@@ -477,7 +482,8 @@ are marked inline (✅ done, ⚠️ partial); the rest stand as proposed.
 - [Codex Adapter Spec](codex-adapter-spec.md) — provider adapter interface
   and pipeline integration
 - [Multi-provider overview](multi-provider.md) — the shipped adapter set
-- [MCP server](mcp.md) — current read-only tool surface
+- [CLI reference](cli-reference.md) — the `memory` commands, the current
+  read-only query surface
 - [README-DEV.md](README-DEV.md) — architecture overview
 - [Memory & latency optimization](memory-and-latency-optimization.md) — cache
   strategy

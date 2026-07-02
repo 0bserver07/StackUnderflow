@@ -1,6 +1,6 @@
 # Multi-provider support
 
-StackUnderflow ingests session data from more than one coding agent. Seventeen adapters are registered: four ship default-on (Claude Code, Codex, Cursor, Cline) and thirteen are opt-in beta (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, OpenClaw, Pi + OMP).
+StackUnderflow ingests session data from more than one coding agent. Twenty adapters are registered: seven ship default-on (Claude Code, Codex, Cursor, Cline, OpenClaw, Pi + OMP, Hermes) and thirteen are opt-in beta (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok). The registry in `stackunderflow/adapters/__init__.py` is the source of truth.
 
 ## Supported providers
 
@@ -10,6 +10,9 @@ StackUnderflow ingests session data from more than one coding agent. Seventeen a
 | Codex | stable | rollout JSONL under `~/.codex/sessions/` | on |
 | Cursor | stable | SQLite `state.vscdb` at `~/Library/Application Support/Cursor/User/globalStorage/` | on |
 | Cline | stable | per-task JSON in `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/` | on |
+| OpenClaw | stable | first existing of `~/.openclaw/`, `~/.clawdbot/`, `~/.moltbot/`, `~/.moldbot/` (`agents/`) | on |
+| Pi + OMP | stable | `~/.pi/agent/sessions/` and `~/.omp/agent/sessions/` (one adapter, both roots) | on |
+| Hermes | stable | recursive JSONL under `~/.hermes/sessions/` | on |
 | KiloCode | beta | per-task JSON in `…/kilocode.kilo-code/tasks/` (Cline parser) | off |
 | Roo Code | beta | per-task JSON in `…/rooveterinaryinc.roo-cline/tasks/` (Cline parser) | off |
 | OpenCode | beta | SQLite under `$XDG_DATA_HOME/opencode/` (or `~/.local/share/opencode/`) | off |
@@ -21,8 +24,8 @@ StackUnderflow ingests session data from more than one coding agent. Seventeen a
 | Continue | beta | `~/.continue/*.{db,sqlite,sqlite3}` (defensive SQLite parser) | off |
 | Droid | beta | `$FACTORY_DIR` (or `~/.factory/sessions/{projectHash}/`) | off |
 | Kiro | beta | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/*.chat` | off |
-| OpenClaw | beta | first existing of `~/.openclaw/`, `~/.clawdbot/`, `~/.moltbot/`, `~/.moldbot/` (`agents/`) | off |
-| Pi + OMP | beta | `~/.pi/agent/sessions/` and `~/.omp/agent/sessions/` (one adapter, both roots) | off |
+| Antigravity | beta | `~/.gemini/antigravity/` + `antigravity-ide/` summary `.pb` files and `antigravity-cli/history.jsonl` (plaintext metadata only — message text and tokens are encrypted) | off |
+| Grok | beta | JSONL in `~/.grok/sessions/<url-encoded-cwd>/<session>/chat_history.jsonl` (no token usage in the source; tokens estimated from content length) | off |
 
 ### Cursor + Cline default-on
 
@@ -30,7 +33,7 @@ Cursor and Cline shipped as opt-in beta in v0.4.0, behind `STACKUNDERFLOW_BETA_C
 
 ## Enabling beta adapters
 
-The remaining 13 beta adapters are gated by environment variables in `stackunderflow/adapters/__init__.py`:
+The 13 beta adapters are gated by environment variables in `stackunderflow/adapters/__init__.py`:
 
 ```bash
 STACKUNDERFLOW_BETA_KILOCODE=1 stackunderflow start
@@ -44,9 +47,11 @@ STACKUNDERFLOW_BETA_CODEIUM=1 stackunderflow start
 STACKUNDERFLOW_BETA_CONTINUE=1 stackunderflow start
 STACKUNDERFLOW_BETA_DROID=1 stackunderflow start
 STACKUNDERFLOW_BETA_KIRO=1 stackunderflow start
-STACKUNDERFLOW_BETA_OPENCLAW=1 stackunderflow start
-STACKUNDERFLOW_BETA_PI=1 stackunderflow start          # toggles both Pi + OMP
+STACKUNDERFLOW_BETA_ANTIGRAVITY=1 stackunderflow start
+STACKUNDERFLOW_BETA_GROK=1 stackunderflow start
 ```
+
+OpenClaw, Pi + OMP, and Hermes are default-on and need no flag; their old `STACKUNDERFLOW_BETA_OPENCLAW` / `STACKUNDERFLOW_BETA_PI` variables are no-ops.
 
 Combine them in one invocation:
 
@@ -124,7 +129,7 @@ flowchart LR
     ingest --> openclaw[OpenClawAdapter]
     ingest --> pi[PiAdapter]
     ingest --> hermes[HermesAdapter]
-    ingest --> betas[10 opt-in beta adapters]
+    ingest --> betas[13 opt-in beta adapters]
     claude --> store[(SQLite store.db)]
     codex --> store
     cursor --> store

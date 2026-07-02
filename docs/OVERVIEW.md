@@ -28,7 +28,7 @@ StackUnderflow’s backend is a Python service structured as a classic data-ware
 * **Incremental Ingest:** When a change is detected, it reads the new lines of logs and writes them to an immutable `raw` layer in a local SQLite database (`~/.stackunderflow/store.db`).
 
 ### 2. Normalization Layer
-* **Provider Adapters:** Custom adapters parse logs from 17 different coding tools, extracting fields like input tokens, output tokens, system prompts, API calls, and tool outputs.
+* **Provider Adapters:** Custom adapters parse logs from 20 different coding tools, extracting fields like input tokens, output tokens, system prompts, API calls, and tool outputs.
 * **Pricing Calculator:** Maps these tokens to an offline price card (per-model cost tables) to calculate estimated dollar costs in real-time.
 * **Unified Schema:** Writes these standard records to a centralized `usage_events` table.
 
@@ -49,7 +49,7 @@ When a coding tool runs edits on a project, it issues file-modification commands
 ### 🧠 Local Command & Session Memory (CLI)
 StackUnderflow exposes a local CLI — the `stackunderflow memory ...` command namespace. 
 * This allows active terminal tools to query their own local run history *before* starting a new task (e.g., running `stackunderflow memory file <path>` to see what previous runs changed in a file, or finding what actions succeeded/failed previously).
-* It provides programmatic, offline semantic search over command outputs using a local sentence-transformers model.
+* It provides programmatic semantic search over past sessions: `stackunderflow memory ask` fuses keyword search with a vector search over Ollama-served embeddings, and degrades to keyword-only matching when no Ollama is reachable.
 
 ### 💬 Local Chat Proxy
 The dashboard sidebar links directly to your localhost Ollama instance (`http://localhost:11434`). It proxies requests through a local FastAPI controller to avoid CORS friction, letting you chat with your local command history using models like `qwen2.5-coder` or `llama3.2` without sending any data over the internet.

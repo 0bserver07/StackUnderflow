@@ -146,14 +146,13 @@ The agent corrects itself with a verifiable citation. If the recall is wrong, th
 
 ### Semantic recall (optional)
 
-`recall-past-decisions` runs over plain `LIKE` substrings by default. If the original conversation used different wording from the user's recall ("watchfiles" vs. "file watching library"), the substring match misses. Install the optional sentence-transformers extra and the skill / CLI can re-rank the substring-matched candidate set by cosine similarity:
+`recall-past-decisions` runs over plain `LIKE` substrings by default. If the original conversation used different wording from the user's recall ("watchfiles" vs. "file watching library"), the substring match misses. With a reachable Ollama, `--use-embeddings` re-ranks the substring-matched candidate set by cosine similarity:
 
 ```
-pip install 'stackunderflow[embeddings]'
 stackunderflow search-past-decisions "file watching library" --use-embeddings
 ```
 
-Each result gains an `embedding_score` in `[0, 1]`; the substring filter still runs first (`--use-embeddings` only re-orders, never widens). Default model is `sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim) and loads lazily on the first call; override via `STACKUNDERFLOW_EMBED_MODEL` or `--embed-model`.
+Each result gains an `embedding_score` in `[0, 1]`; the substring filter still runs first (`--use-embeddings` only re-orders, never widens). The embeddings come from the same Ollama backend `memory ask` uses — a configured endpoint (`STACKUNDERFLOW_OLLAMA_URL`, with `STACKUNDERFLOW_OLLAMA_API_KEY` as a bearer token) or a local daemon at `localhost:11434`. Default model is `nomic-embed-text` (`ollama pull nomic-embed-text`); override via `STACKUNDERFLOW_EMBED_MODEL` or `--embed-model`. When no Ollama answers, the re-rank silently degrades to substring ordering.
 
 ## Optional: project-specific overrides
 
