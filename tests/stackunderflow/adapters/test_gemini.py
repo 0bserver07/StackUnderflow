@@ -412,3 +412,39 @@ class TestGeminiAdapterContractJsonl(unittest.TestCase, AdapterContract):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_non_string_model_falls_back(tmp_path: Path) -> None:
+    """A dict/number ``model`` must not leak into the Record (it would
+    poison the store write) — assistant falls back to ``gemini-auto``."""
+    chats = tmp_path / "tmp" / "proj-a" / "chats"
+    chats.mkdir(parents=True)
+    (chats / "session-1.json").write_text(json.dumps({
+        "sessionId": "s1",
+        "messages": [
+            {
+                "id": "m1",
+                "timestamp": "2026-05-01T10:00:00Z",
+                "type": "gemini",
+                "content": "hello",
+                "model": {"bad": 1},
+                "tokens": {"input": 4, "output": 2},
+            },
+            {
+                "id": "m2",
+                "timestamp": "2026-05-01T10:00:01Z",
+                "type": "user",
+                "content": "hi",
+                "model": 42,
+            },
+        ],
+    }))
+    adapter = GeminiAdapter(projects_root=tmp_path / "tmp")
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 2
+    assert records[0].model == "gemini-auto"
+    assert records[1].model is None

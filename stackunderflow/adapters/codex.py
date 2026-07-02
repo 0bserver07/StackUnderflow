@@ -146,9 +146,17 @@ class CodexAdapter:
             except (json.JSONDecodeError, ValueError) as exc:
                 _log.debug("Skipping malformed JSON line in %s: %s", ref.file_path, exc)
                 continue
+            if not isinstance(event, dict):
+                # Valid JSON that isn't an object (list / string / number)
+                # can't be a rollout event — skip, don't crash the read.
+                continue
 
             etype = event.get("type")
-            payload = event.get("payload") or {}
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                # ``payload`` carrying a string/list would crash the
+                # ``.get`` dispatch below; treat as an empty payload.
+                payload = {}
 
             if etype == "response_item":
                 # seq = byte offset where this line started. Aligns with
@@ -199,6 +207,12 @@ class CodexAdapter:
         try:
             obj = json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(obj, dict):
+            # A non-object first line (bare list / string / number) means
+            # this isn't a rollout we understand. Returning None skips the
+            # file; raising here would abort enumerate() for the whole
+            # provider.
             return None
 
         if obj.get("type") == "session_meta":

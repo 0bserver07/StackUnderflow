@@ -322,3 +322,40 @@ class TestQwenAdapterContract(unittest.TestCase, AdapterContract):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_non_string_model_falls_back(tmp_path: Path) -> None:
+    """A dict/number ``model`` must not leak into the Record (it would
+    poison the store write) — assistant falls back to ``qwen-auto``."""
+    chats = tmp_path / "projects" / "proj-a" / "chats"
+    chats.mkdir(parents=True)
+    (chats / "chat1.jsonl").write_text(
+        json.dumps({
+            "uuid": "u1",
+            "sessionId": "s1",
+            "timestamp": "2026-05-01T10:00:00Z",
+            "type": "assistant",
+            "model": {"bad": 1},
+            "message": {"role": "assistant", "parts": [{"text": "hello"}]},
+            "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2},
+        })
+        + "\n"
+        + json.dumps({
+            "uuid": "u2",
+            "sessionId": "s1",
+            "timestamp": "2026-05-01T10:00:01Z",
+            "type": "user",
+            "model": 42,
+            "message": {"role": "user", "parts": [{"text": "hi"}]},
+        })
+        + "\n"
+    )
+    adapter = QwenAdapter(projects_root=tmp_path / "projects")
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 2
+    assert records[0].model == "qwen-auto"
+    assert records[1].model is None

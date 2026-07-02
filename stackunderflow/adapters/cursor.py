@@ -447,13 +447,25 @@ def _tokens_from_payload(parsed: dict, *, text: str) -> tuple[int, int, bool]:
     """
     tc = parsed.get("tokenCount")
     if isinstance(tc, dict):
-        inp = int(tc.get("inputTokens", 0) or 0)
-        out = int(tc.get("outputTokens", 0) or 0)
+        inp = _safe_int(tc.get("inputTokens"))
+        out = _safe_int(tc.get("outputTokens"))
         if inp > 0 or out > 0:
-            return max(inp, 0), max(out, 0), False
+            return inp, out, False
 
     estimate = max(len(text) // 4, 0)
     return estimate, 0, True
+
+
+def _safe_int(val: object) -> int:
+    """Coerce a token count to a non-negative int; garbage → 0.
+
+    A string / list / ``1e999`` (→ inf) in ``tokenCount`` must degrade to
+    the len//4 estimation path, never raise out of ``read()``.
+    """
+    try:
+        return max(int(val or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 # ── workspace-slug derivation ─────────────────────────────────────────
@@ -529,8 +541,11 @@ def _paths_in_bubble(parsed: dict) -> Iterator[str]:
     """
     ctx = parsed.get("context")
     if isinstance(ctx, dict):
-        # Direct file selections (chip-attached files).
-        for fs in ctx.get("fileSelections") or []:
+        # Direct file selections (chip-attached files). ``or []`` is not
+        # enough here — a truthy non-list (int, dict) would make the for
+        # loop raise; require an actual list.
+        fsel = ctx.get("fileSelections")
+        for fs in fsel if isinstance(fsel, list) else []:
             if isinstance(fs, dict):
                 uri = fs.get("uri")
                 if isinstance(uri, dict):
@@ -549,7 +564,8 @@ def _paths_in_bubble(parsed: dict) -> Iterator[str]:
                             yield k[len("file://"):]
 
     # Folders explicitly attached to the chat (drag-and-dropped).
-    for af in parsed.get("attachedFoldersNew") or []:
+    afn = parsed.get("attachedFoldersNew")
+    for af in afn if isinstance(afn, list) else []:
         if isinstance(af, dict):
             uri = af.get("uri")
             if isinstance(uri, dict):

@@ -266,7 +266,12 @@ class GeminiAdapter:
         tokens = _normalize_tokens(msg.get("tokens"))
 
         timestamp = str(msg.get("timestamp") or "")
-        model = msg.get("model") or (_DEFAULT_MODEL if role == "assistant" else None)
+        raw_model = msg.get("model")
+        if not isinstance(raw_model, str) or not raw_model:
+            # A non-string model (dict / list / number) would poison the
+            # Record contract and crash the store write downstream.
+            raw_model = None
+        model = raw_model or (_DEFAULT_MODEL if role == "assistant" else None)
         uuid = str(msg.get("id") or f"{session_id}:{seq}")
 
         return Record(
@@ -370,6 +375,7 @@ def _safe_int(value: object) -> int:
         return 0
     try:
         out = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON like ``1e999`` parses to float('inf').
         return 0
     return max(out, 0)

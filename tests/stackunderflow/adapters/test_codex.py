@@ -285,3 +285,45 @@ class TestCodexAdapterContract(unittest.TestCase, AdapterContract):
 
     def setUp(self):
         self.adapter = CodexAdapter(sessions_root=FIXTURE_ROOT)
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_enumerate_survives_non_dict_first_line(tmp_path: Path) -> None:
+    """A rollout whose first line is valid JSON but not an object must be
+    skipped without aborting enumerate() for the whole provider."""
+    bogus = tmp_path / "2026" / "04" / "19" / "rollout-bogus.jsonl"
+    _write_jsonl(bogus, ["[1, 2, 3]", _user_msg("hi")])
+    valid = tmp_path / "2026" / "04" / "19" / "rollout-valid.jsonl"
+    _write_jsonl(valid, [_session_meta(session_id="good-uuid"), _user_msg("hi")])
+
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    refs = list(adapter.enumerate())
+    assert [r.session_id for r in refs] == ["good-uuid"]
+
+
+def test_read_skips_non_dict_lines_and_non_dict_payload(tmp_path: Path) -> None:
+    """Non-object JSON lines and a non-dict ``payload`` must be skipped;
+    the surrounding valid records still come through."""
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-mixed.jsonl"
+    _write_jsonl(
+        fp,
+        [
+            _session_meta(session_id="mixed-uuid"),
+            "[1, 2, 3]",
+            '"just a string"',
+            "42",
+            # payload is a (truthy) string — previously crashed .get().
+            {"type": "response_item", "payload": "garbage"},
+            {"type": "event_msg", "payload": [1, 2]},
+            _assistant_msg("still here"),
+        ],
+    )
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    records = list(adapter.read(refs[0]))
+    assert len(records) == 1
+    assert records[0].role == "assistant"
+    assert records[0].content_text == "still here"

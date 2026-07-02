@@ -209,3 +209,77 @@ def test_permission_denied_jsonl_does_not_raise(tmp_path: Path) -> None:
             assert list(adapter.read(ref)) == []
     finally:
         fp.chmod(0o644)
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_non_dict_json_lines_are_skipped(tmp_path: Path) -> None:
+    """Lines that parse as JSON but aren't objects (list/str/number) must be
+    skipped by read(), not crash the generator."""
+    root = tmp_path / "pi" / "agent" / "sessions"
+    root.mkdir(parents=True)
+    (root / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "s", "cwd": "/tmp/w"}) + "\n"
+        + "[1, 2, 3]\n"
+        + '"just a string"\n'
+        + "42\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "a",
+                "message": {
+                    "role": "assistant",
+                    "model": "gpt-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+    adapter = PiAdapter(roots=[(root, "pi")])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].uuid == "a"
+
+
+def test_enumerate_survives_non_dict_first_line(tmp_path: Path) -> None:
+    """A session file whose first line is ``[1,2]`` must not crash
+    enumerate() (the peek helper) — it falls back to the filename stem."""
+    root = tmp_path / "pi" / "agent" / "sessions"
+    root.mkdir(parents=True)
+    (root / "weird.jsonl").write_text("[1, 2]\n")
+    adapter = PiAdapter(roots=[(root, "pi")])
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].session_id == "weird"
+    assert list(adapter.read(refs[0])) == []
+
+
+def test_non_string_cwd_is_dropped(tmp_path: Path) -> None:
+    """A numeric/dict ``cwd`` must not leak into the Record."""
+    root = tmp_path / "pi" / "agent" / "sessions"
+    root.mkdir(parents=True)
+    (root / "s.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "message",
+                "id": "a",
+                "cwd": {"bad": 1},
+                "message": {
+                    "role": "assistant",
+                    "model": "gpt-5",
+                    "content": "x",
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+    adapter = PiAdapter(roots=[(root, "pi")])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].cwd is None

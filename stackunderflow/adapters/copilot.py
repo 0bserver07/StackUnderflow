@@ -473,7 +473,8 @@ def _coerce_int(v: object) -> int:
         )
     try:
         return max(int(v), 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON like ``1e999`` parses to float('inf').
         return 0
 
 

@@ -308,7 +308,8 @@ def _parse_api_req_text(text: object) -> dict[str, int]:
         val = parsed.get(key, 0)
         try:
             out[key] = max(int(val or 0), 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: JSON like ``1e999`` parses to float('inf').
             out[key] = 0
     return out
 
@@ -328,7 +329,12 @@ def _ts_to_iso(ts: object) -> str:
         return ""
     if millis <= 0:
         return ""
-    return datetime.fromtimestamp(millis / 1000.0, tz=UTC).isoformat()
+    try:
+        return datetime.fromtimestamp(millis / 1000.0, tz=UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        # Out-of-range (e.g. 1e300) or NaN timestamps — treat as absent
+        # rather than crash the read.
+        return ""
 
 
 # ── concrete Cline-family adapters ────────────────────────────────────

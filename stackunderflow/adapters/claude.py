@@ -189,6 +189,11 @@ class ClaudeAdapter:
                 obj = orjson.loads(stripped)
             except (orjson.JSONDecodeError, ValueError):
                 continue
+            if not isinstance(obj, dict):
+                # A syntactically-valid JSON line that isn't an object
+                # (bare list / string / number) can't be a session event.
+                # Skip it rather than crash the whole file's read().
+                continue
             record = self._parse_line(obj, ref=ref, seq=line_offset)
             if record is not None:
                 yield record
@@ -199,23 +204,31 @@ class ClaudeAdapter:
         if role is None:
             return None
         usage = msg.get("usage", {}) if isinstance(msg, dict) else {}
+        if not isinstance(usage, dict):
+            # ``message.usage`` carrying a string/list would crash the
+            # ``.get`` calls below — treat it like a missing usage block.
+            usage = {}
+        sid = obj.get("sessionId")
+        raw_uuid = obj.get("uuid", "")
+        parent = obj.get("parentUuid")
+        cwd = obj.get("cwd")
         return Record(
             provider=self.name,
-            session_id=obj.get("sessionId") or ref.session_id,
+            session_id=sid if isinstance(sid, str) and sid else ref.session_id,
             seq=seq,
             timestamp=str(obj.get("timestamp", "")),
             role=role,
             model=_model_from(msg),
-            input_tokens=int(usage.get("input_tokens", 0) or 0),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
-            cache_create_tokens=int(usage.get("cache_creation_input_tokens", 0) or 0),
-            cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+            input_tokens=_safe_int(usage.get("input_tokens")),
+            output_tokens=_safe_int(usage.get("output_tokens")),
+            cache_create_tokens=_safe_int(usage.get("cache_creation_input_tokens")),
+            cache_read_tokens=_safe_int(usage.get("cache_read_input_tokens")),
             content_text=_text_from(msg),
             tools=_tools_from(msg),
-            cwd=obj.get("cwd") or None,
+            cwd=cwd if isinstance(cwd, str) and cwd else None,
             is_sidechain=bool(obj.get("isSidechain", False)),
-            uuid=obj.get("uuid", ""),
-            parent_uuid=obj.get("parentUuid"),
+            uuid=raw_uuid if isinstance(raw_uuid, str) else "",
+            parent_uuid=parent if isinstance(parent, str) else None,
             raw=obj,
             speed=_speed_from(usage),
         )
@@ -236,17 +249,27 @@ class ClaudeAdapter:
                 obj = orjson.loads(stripped)
             except (orjson.JSONDecodeError, ValueError):
                 continue
+            if not isinstance(obj, dict):
+                continue
             project = obj.get("project", "")
-            if not project:
+            if not isinstance(project, str) or not project:
                 continue
             if _slug_for(project) != target_slug:
                 continue
             display = obj.get("display", "")
-            ts_ms = int(obj.get("timestamp", 0))
+            if not isinstance(display, str):
+                display = ""
+            # History timestamps are epoch-millis ints; a malformed entry
+            # (ISO string, list, …) coerces to 0 and is skipped instead of
+            # raising out of the generator.
+            ts_ms = _safe_int(obj.get("timestamp", 0))
             if not ts_ms:
                 continue
             ts_iso = _epoch_ms_to_iso(ts_ms)
-            session_id = obj.get("sessionId") or ref.session_id
+            if not ts_iso:
+                continue
+            sid = obj.get("sessionId")
+            session_id = sid if isinstance(sid, str) and sid else ref.session_id
             yield Record(
                 provider=self.name,
                 session_id=session_id,
@@ -273,10 +296,28 @@ def _slug_for(project_path: str) -> str:
     return os.path.abspath(project_path).rstrip(os.sep).replace(os.sep, "-").replace("_", "-")
 
 
+def _safe_int(val: object) -> int:
+    """Coerce a usage/timestamp field to a non-negative int; garbage → 0.
+
+    Provider JSON occasionally carries strings, nulls, lists, or
+    out-of-range floats where a count belongs. A malformed value must
+    degrade to 0, never raise out of the ``read()`` generator — an
+    exception there aborts the whole file's ingest batch.
+    """
+    try:
+        return max(int(val or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _epoch_ms_to_iso(ts_ms: int) -> str:
+    """Epoch-millis → ISO 8601, or ``""`` when out of datetime range."""
     from datetime import datetime
 
-    return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
+    try:
+        return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def _role_from(obj: dict, msg: dict) -> str | None:

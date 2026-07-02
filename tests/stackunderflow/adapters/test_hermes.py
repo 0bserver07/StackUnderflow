@@ -199,3 +199,50 @@ class TestHermesAdapterContract(unittest.TestCase, AdapterContract):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_non_dict_json_lines_are_skipped(tmp_path: Path) -> None:
+    """Lines that parse as JSON but aren't objects (list/str/number) must be
+    skipped by read(), not crash the generator."""
+    root = tmp_path / "hermes" / "sessions"
+    root.mkdir(parents=True)
+    (root / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "s"}) + "\n"
+        + "[1, 2, 3]\n"
+        + '"just a string"\n'
+        + "42\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "a",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+    adapter = HermesAdapter(roots=[root])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].uuid == "a"
+
+
+def test_enumerate_survives_non_dict_first_line(tmp_path: Path) -> None:
+    """A session file whose first line is ``[1,2]`` must not crash
+    enumerate() (the peek helper) — it falls back to the filename stem."""
+    root = tmp_path / "hermes" / "sessions"
+    root.mkdir(parents=True)
+    (root / "weird.jsonl").write_text("[1, 2]\n")
+    adapter = HermesAdapter(roots=[root])
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].session_id == "weird"
+    assert list(adapter.read(refs[0])) == []

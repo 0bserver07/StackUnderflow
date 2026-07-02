@@ -319,7 +319,8 @@ def _safe_int(val: object) -> int:
     """Coerce arbitrary numeric input to a non-negative int."""
     try:
         return max(int(val or 0), 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON like ``1e999`` parses to float('inf').
         return 0
 
 

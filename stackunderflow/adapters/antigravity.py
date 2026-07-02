@@ -367,6 +367,10 @@ class AntigravityAdapter:
                             obj = json.loads(stripped)
                         except (json.JSONDecodeError, ValueError):
                             continue
+                        if not isinstance(obj, dict):
+                            # Valid JSON that isn't an object can't be a
+                            # history entry — skip, don't crash the read.
+                            continue
                         if obj.get("conversationId") != ref.session_id:
                             continue
                         ts_ms = obj.get("timestamp")
@@ -530,13 +534,18 @@ def _scan_cli_history(path: Path) -> dict[str, dict[str, Any]]:
                     obj = json.loads(stripped)
                 except (json.JSONDecodeError, ValueError):
                     continue
+                if not isinstance(obj, dict):
+                    # A non-object line must not crash enumerate().
+                    continue
                 uuid = obj.get("conversationId")
                 if not isinstance(uuid, str) or not uuid:
                     continue
                 ts_ms = obj.get("timestamp")
                 ts_s = int(ts_ms // 1000) if isinstance(ts_ms, int) else None
+                workspace = obj.get("workspace")
                 entry = grouped.setdefault(uuid, {
-                    "workspace": obj.get("workspace"),
+                    # Non-str workspace would crash _slug_for downstream.
+                    "workspace": workspace if isinstance(workspace, str) else None,
                     "first_ts": ts_s,
                     "last_ts": ts_s,
                 })
@@ -582,7 +591,12 @@ def _to_iso(unix_seconds: int | None) -> str:
     if unix_seconds is None:
         return ""
     from datetime import datetime
-    return datetime.fromtimestamp(unix_seconds, tz=UTC).isoformat()
+    try:
+        return datetime.fromtimestamp(unix_seconds, tz=UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        # Out-of-range timestamps (corrupt varint / absurd epoch-ms) —
+        # treat as absent rather than crash the read.
+        return ""
 
 
 def _ms_to_iso(unix_ms: int) -> str:

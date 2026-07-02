@@ -146,6 +146,10 @@ class OpenClawAdapter:
                     ref.file_path, exc,
                 )
                 continue
+            if not isinstance(event, dict):
+                # Valid JSON that isn't an object (list / string / number)
+                # can't be a session event — skip, don't crash the read.
+                continue
 
             etype = event.get("type")
 
@@ -218,6 +222,10 @@ def _peek_session_id(fp: Path) -> str:
         obj = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
         return ""
+    if not isinstance(obj, dict):
+        # A non-object first line must not crash enumerate() — fall back
+        # to the filename-stem session id.
+        return ""
     if obj.get("type") != "session":
         return ""
     return str(obj.get("id") or "")
@@ -247,6 +255,8 @@ def _scan_for_model(fp: Path, until_offset: int) -> str | None:
                 try:
                     obj = json.loads(stripped)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(obj, dict):
                     continue
                 if obj.get("type") == "model_change":
                     candidate = _model_from_model_change(obj)
@@ -281,7 +291,12 @@ def _normalize_usage(usage: dict) -> dict[str, int]:
 
 def _safe_int(val: object) -> int:
     if isinstance(val, (int, float)):
-        return max(int(val), 0)
+        try:
+            return max(int(val), 0)
+        except (OverflowError, ValueError):
+            # float('inf') / float('nan') — JSON like ``1e999`` parses to
+            # inf; int() on it raises instead of coercing.
+            return 0
     if isinstance(val, str):
         try:
             return max(int(val), 0)

@@ -161,6 +161,10 @@ class DroidAdapter:
                     ref.file_path, exc,
                 )
                 continue
+            if not isinstance(event, dict):
+                # Valid JSON that isn't an object (list / string / number)
+                # can't be a session event — skip, don't crash the read.
+                continue
 
             etype = event.get("type")
 
@@ -171,7 +175,9 @@ class DroidAdapter:
             if etype != "message":
                 continue
 
-            message = event.get("message") or {}
+            message = event.get("message")
+            if not isinstance(message, dict):
+                continue
             role = message.get("role")
             if role not in ("user", "assistant"):
                 continue
@@ -186,7 +192,8 @@ class DroidAdapter:
                 assistant_idx += 1
 
             timestamp = str(event.get("timestamp") or "")
-            cwd = event.get("cwd") or None
+            raw_cwd = event.get("cwd")
+            cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None
             content = message.get("content")
 
             yield Record(
@@ -242,6 +249,10 @@ def _read_session_meta(fp: Path) -> tuple[str, str]:
         obj = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
         return "", ""
+    if not isinstance(obj, dict):
+        # A non-object first line must not crash enumerate() — fall back
+        # to the filename-stem session id.
+        return "", ""
     if obj.get("type") != "session_start":
         return "", ""
     return str(obj.get("id") or ""), str(obj.get("cwd") or "")
@@ -289,7 +300,8 @@ def _load_settings(path: Path) -> tuple[str | None, dict[str, int]]:
 def _safe_int(val: object) -> int:
     try:
         return max(int(val or 0), 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON like ``1e999`` parses to float('inf').
         return 0
 
 
@@ -313,6 +325,8 @@ def _line_is_assistant_message(raw: bytes) -> bool:
     try:
         obj = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(obj, dict):
         return False
     if obj.get("type") != "message":
         return False

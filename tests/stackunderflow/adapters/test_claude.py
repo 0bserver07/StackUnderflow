@@ -285,3 +285,94 @@ class TestClaudeAdapterContract(unittest.TestCase, AdapterContract):
         if self._old_home is not None:
             os.environ["HOME"] = self._old_home
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_read_skips_non_dict_json_lines_and_malformed_usage(fake_home: Path) -> None:
+    """Valid-JSON-but-not-an-object lines and garbage usage blocks must be
+    skipped/coerced, never raise out of the read() generator (an exception
+    there aborts the whole file's ingest batch)."""
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        # Syntactically-valid JSON that is not an object.
+        "[1, 2, 3]\n"
+        '"just a string"\n'
+        "42\n"
+        # usage is a string, not a dict.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:00Z",'
+        '"uuid":"u1","message":{"role":"assistant","model":"claude-sonnet-4-6",'
+        '"content":"a","usage":"not a dict"}}\n'
+        # usage values are non-numeric garbage.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+        '"uuid":"u2","message":{"role":"assistant","model":"claude-sonnet-4-6",'
+        '"content":"b","usage":{"input_tokens":"garbage","output_tokens":[1],'
+        '"cache_creation_input_tokens":null,"cache_read_input_tokens":{"x":1}}}}\n'
+        # A fully valid record must still come through.
+        '{"sessionId":"abc","type":"assistant","timestamp":"2026-01-01T00:00:02Z",'
+        '"uuid":"u3","message":{"role":"assistant","model":"claude-sonnet-4-6",'
+        '"content":"c","usage":{"input_tokens":5,"output_tokens":2}}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 3
+    # usage-as-string degrades to zero tokens.
+    assert records[0].input_tokens == 0
+    assert records[0].output_tokens == 0
+    # garbage usage values coerce to 0 field-by-field.
+    assert records[1].input_tokens == 0
+    assert records[1].output_tokens == 0
+    # the valid record is untouched.
+    assert records[2].input_tokens == 5
+    assert records[2].output_tokens == 2
+
+
+def test_read_coerces_non_string_identity_fields(fake_home: Path) -> None:
+    """Non-string sessionId/uuid/parentUuid/cwd must not poison the Record."""
+    project_dir = fake_home / ".claude" / "projects" / "-a"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "abc.jsonl"
+    fp.write_text(
+        '{"sessionId":{"bad":1},"type":"user","timestamp":"2026-01-01T00:00:00Z",'
+        '"uuid":[1],"parentUuid":7,"cwd":123,'
+        '"message":{"role":"user","content":"hello"}}\n'
+    )
+    a = ClaudeAdapter()
+    ref = list(a.enumerate())[0]
+    records = list(a.read(ref))
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.session_id == ref.session_id  # falls back to the file's id
+    assert rec.uuid == ""
+    assert rec.parent_uuid is None
+    assert rec.cwd is None
+
+
+def test_read_history_skips_malformed_entries(fake_home: Path) -> None:
+    """Legacy history.jsonl: non-dict lines, ISO-string timestamps, and
+    non-string projects are skipped; the valid entry still comes through."""
+    project_dir = fake_home / ".claude" / "projects" / "-Users-me-legacy"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".continuation_cache.json").write_text("{}")
+    history = fake_home / ".claude" / "history.jsonl"
+    history.write_text(
+        "[1, 2]\n"
+        # timestamp is an ISO string, not epoch-millis — previously int() raised.
+        '{"display":"bad ts","timestamp":"2026-01-01T00:00:00Z","project":"/Users/me/legacy"}\n'
+        # project is not a string.
+        '{"display":"bad project","timestamp":1704067200000,"project":{"x":1}}\n'
+        # timestamp astronomically out of range — must skip, not raise.
+        '{"display":"huge ts","timestamp":99999999999999999999999999,"project":"/Users/me/legacy"}\n'
+        # display is not a string — record still emits with empty text.
+        '{"display":[1,2],"timestamp":1704067200000,"project":"/Users/me/legacy"}\n'
+        '{"display":"ok","timestamp":1704067200000,"project":"/Users/me/legacy"}\n'
+    )
+    a = ClaudeAdapter()
+    refs = [r for r in a.enumerate() if r.session_id.startswith("legacy-")]
+    assert len(refs) == 1
+    records = list(a.read(refs[0]))
+    assert [r.content_text for r in records] == ["", "ok"]

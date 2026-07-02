@@ -256,3 +256,54 @@ class TestDroidAdapterContract(unittest.TestCase, AdapterContract):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_malformed_lines_do_not_crash_read(tmp_path: Path) -> None:
+    """Non-object JSON lines and a string ``message`` block must be skipped;
+    the valid assistant turn still gets the distributed session totals."""
+    sessions = tmp_path / "sessions"
+    project_dir = sessions / "projX"
+    project_dir.mkdir(parents=True)
+    fp = project_dir / "sess-bad.jsonl"
+    fp.write_text(
+        json.dumps({"type": "session_start", "id": "sess-bad", "cwd": "/tmp/w"}) + "\n"
+        + "[1, 2, 3]\n"
+        + '"just a string"\n'
+        + json.dumps({"type": "message", "id": "m0", "message": "not a dict"}) + "\n"
+        + json.dumps({
+            "type": "message",
+            "id": "m1",
+            "timestamp": "2026-04-30T10:00:02Z",
+            "cwd": {"bad": 1},  # non-string cwd must be dropped, not crash
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+        }) + "\n"
+    )
+    (project_dir / "sess-bad.settings.json").write_text(json.dumps({
+        "model": "claude-3-5-sonnet",
+        "tokenUsage": {"inputTokens": 10, "outputTokens": 4},
+    }))
+    adapter = DroidAdapter(sessions_root=sessions)
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].role == "assistant"
+    assert records[0].input_tokens == 10
+    assert records[0].output_tokens == 4
+    assert records[0].cwd is None
+
+
+def test_enumerate_survives_non_dict_first_line(tmp_path: Path) -> None:
+    """A session whose first line is ``[1,2]`` must not crash enumerate()
+    (the session-meta peek) — it falls back to the filename stem."""
+    sessions = tmp_path / "sessions"
+    project_dir = sessions / "projX"
+    project_dir.mkdir(parents=True)
+    (project_dir / "weird.jsonl").write_text("[1, 2]\n")
+    adapter = DroidAdapter(sessions_root=sessions)
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].session_id == "weird"
+    assert list(adapter.read(refs[0])) == []

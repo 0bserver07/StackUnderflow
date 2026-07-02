@@ -579,3 +579,48 @@ class TestCursorAdapterContract(unittest.TestCase, AdapterContract):
 
         _cc._default_cache_path = self._orig_cache_path
         self._tmpdir.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_malformed_token_count_and_selections_do_not_crash(tmp_path: Path) -> None:
+    """String token counts fall back to the len//4 estimate, and truthy
+    non-list ``fileSelections`` / ``attachedFoldersNew`` must not crash
+    the workspace-slug derivation inside enumerate()."""
+    fp = tmp_path / "state.vscdb"
+    conn = sqlite3.connect(fp)
+    try:
+        conn.execute(
+            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)"
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            (
+                "bubbleId:conv-bad:b1",
+                json.dumps({
+                    "conversationId": "conv-bad",
+                    "type": 2,  # assistant
+                    "text": "four char chunks here",  # 21 chars -> 5 est
+                    "tokenCount": {"inputTokens": "garbage", "outputTokens": [1]},
+                    "createdAt": 1714000000000,
+                    # Truthy non-lists — previously TypeError in _paths_in_bubble.
+                    "context": {"fileSelections": 7},
+                    "attachedFoldersNew": "not-a-list",
+                }),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    adapter = CursorAdapter(vscdb_path=fp)
+    refs = list(adapter.enumerate())  # slug derivation walks the bubbles
+    assert len(refs) == 1
+    records = list(adapter.read(refs[0]))
+    assert len(records) == 1
+    rec = records[0]
+    # Garbage counts coerce to 0 -> estimation path kicks in.
+    assert rec.input_tokens == len("four char chunks here") // 4
+    assert rec.output_tokens == 0
+    assert rec.raw.get("cost_source") == "estimated"

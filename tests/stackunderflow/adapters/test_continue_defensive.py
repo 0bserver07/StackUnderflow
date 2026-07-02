@@ -194,3 +194,17 @@ def test_permission_denied_db_does_not_raise(tmp_path: Path) -> None:
         assert refs == []
     finally:
         db.chmod(0o644)
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_coerce_int_handles_inf_and_nan() -> None:
+    """JSON ``1e999`` parses to float('inf'); int() raises OverflowError
+    (and ValueError for NaN) — the coercer must return 0, not raise."""
+    from stackunderflow.adapters.continue_adapter import _coerce_int
+
+    assert _coerce_int(float("inf")) == 0
+    assert _coerce_int(float("nan")) == 0
+    assert _coerce_int("garbage") == 0
+    assert _coerce_int(7) == 7

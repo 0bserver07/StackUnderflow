@@ -255,3 +255,59 @@ class TestClineAdapterContract(unittest.TestCase, AdapterContract):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_out_of_range_timestamp_does_not_crash(tmp_path: Path) -> None:
+    """A ``ts`` like 1e300 passes float() but overflows fromtimestamp —
+    the record must still emit (with an empty timestamp), not raise."""
+    tasks_root = tmp_path / "tasks"
+    _write_task(
+        tasks_root,
+        "task-huge-ts",
+        api_events=[
+            {
+                "type": "say",
+                "say": "api_req_started",
+                "ts": 1e300,
+                "text": json.dumps({
+                    "tokensIn": 5,
+                    "tokensOut": 2,
+                    "cacheWrites": 0,
+                    "cacheReads": 0,
+                }),
+            },
+        ],
+    )
+    adapter = ClineAdapter(tasks_root=tasks_root)
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].timestamp == ""
+    assert records[0].input_tokens == 5
+
+
+def test_inf_token_counts_coerce_to_zero(tmp_path: Path) -> None:
+    """JSON ``1e999`` in the api_req payload parses to inf; the coercer
+    must yield 0 instead of raising OverflowError."""
+    tasks_root = tmp_path / "tasks"
+    _write_task(
+        tasks_root,
+        "task-inf-tokens",
+        api_events=[
+            {
+                "type": "say",
+                "say": "api_req_started",
+                "ts": 1700000001000,
+                "text": '{"tokensIn": 1e999, "tokensOut": 3}',
+            },
+        ],
+    )
+    adapter = ClineAdapter(tasks_root=tasks_root)
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].input_tokens == 0
+    assert records[0].output_tokens == 3

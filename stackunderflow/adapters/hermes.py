@@ -102,6 +102,10 @@ class HermesAdapter:
                     ref.file_path, exc,
                 )
                 continue
+            if not isinstance(event, dict):
+                # Valid JSON that isn't an object (list / string / number)
+                # can't be a session event — skip, don't crash the read.
+                continue
 
             etype = event.get("type")
 
@@ -133,6 +137,7 @@ class HermesAdapter:
 
             tokens = _normalize_usage(usage)
             content = message.get("content")
+            cwd = event.get("cwd")
 
             yield Record(
                 provider=self.name,
@@ -147,7 +152,7 @@ class HermesAdapter:
                 cache_read_tokens=tokens["cache_read"],
                 content_text=_message_text(content),
                 tools=_tools_from_content(content),
-                cwd=event.get("cwd") or None,
+                cwd=cwd if isinstance(cwd, str) and cwd else None,
                 is_sidechain=False,
                 uuid=str(event.get("id") or f"{ref.session_id}:{line_offset}"),
                 parent_uuid=None,
@@ -170,6 +175,10 @@ def _peek_session_id(fp: Path) -> str:
     try:
         obj = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(obj, dict):
+        # A non-object first line must not crash enumerate() — fall back
+        # to the filename-stem session id.
         return ""
     if obj.get("type") != "session":
         return ""
@@ -194,6 +203,8 @@ def _scan_for_model(fp: Path, until_offset: int) -> str | None:
                 try:
                     obj = json.loads(stripped)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(obj, dict):
                     continue
                 if obj.get("type") == "model_change":
                     candidate = _model_from_model_change(obj)
@@ -227,7 +238,12 @@ def _normalize_usage(usage: dict) -> dict[str, int]:
 
 def _safe_int(val: object) -> int:
     if isinstance(val, (int, float)):
-        return max(int(val), 0)
+        try:
+            return max(int(val), 0)
+        except (OverflowError, ValueError):
+            # float('inf') / float('nan') — JSON like ``1e999`` parses to
+            # inf; int() on it raises instead of coercing.
+            return 0
     if isinstance(val, str):
         try:
             return max(int(val), 0)

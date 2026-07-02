@@ -205,9 +205,12 @@ class QwenAdapter:
         tokens = _normalize_usage(usage)
 
         session_id = str(entry.get("sessionId") or ref.session_id)
-        model = entry.get("model") or _DEFAULT_MODEL if role == "assistant" else (
-            entry.get("model") or None
-        )
+        raw_model = entry.get("model")
+        if not isinstance(raw_model, str) or not raw_model:
+            # A non-string model (dict / list / number) would poison the
+            # Record contract and crash the store write downstream.
+            raw_model = None
+        model = raw_model or (_DEFAULT_MODEL if role == "assistant" else None)
         timestamp = str(entry.get("timestamp") or "")
         uuid = str(entry.get("uuid") or f"{session_id}:{seq}")
 
@@ -307,6 +310,7 @@ def _safe_int(value: object) -> int:
         return 0
     try:
         out = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON like ``1e999`` parses to float('inf').
         return 0
     return max(out, 0)

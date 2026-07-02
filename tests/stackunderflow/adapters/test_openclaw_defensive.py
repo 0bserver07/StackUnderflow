@@ -223,3 +223,113 @@ def test_permission_denied_jsonl_does_not_raise(tmp_path: Path) -> None:
             assert list(adapter.read(ref)) == []
     finally:
         fp.chmod(0o644)
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_message_event_with_non_dict_usage_is_skipped(tmp_path: Path) -> None:
+    """Regression for the cost-audit #16a item (openclaw ``inner['usage']``):
+    ``usage`` present but not a dict must skip the record, not raise."""
+    base = tmp_path / "openclaw" / "agents"
+    sessions = base / "agent" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "s"}) + "\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "bad-usage",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "content": [{"type": "text", "text": "x"}],
+                    "usage": "not a dict",
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "good",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "content": [{"type": "text", "text": "y"}],
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+    adapter = OpenClawAdapter(base_dirs=[base])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert [r.uuid for r in records] == ["good"]
+
+
+def test_non_dict_json_lines_are_skipped(tmp_path: Path) -> None:
+    """Lines that parse as JSON but aren't objects (list/str/number) must be
+    skipped by read(), not crash the generator."""
+    base = tmp_path / "openclaw" / "agents"
+    sessions = base / "agent" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "s"}) + "\n"
+        + "[1, 2, 3]\n"
+        + '"just a string"\n'
+        + "42\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "a",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+    adapter = OpenClawAdapter(base_dirs=[base])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].uuid == "a"
+
+
+def test_enumerate_survives_non_dict_first_line(tmp_path: Path) -> None:
+    """A session file whose first line is ``[1,2]`` must not crash
+    enumerate() (the peek helper) — it falls back to the filename stem."""
+    base = tmp_path / "openclaw" / "agents"
+    sessions = base / "agent" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "weird.jsonl").write_text("[1, 2]\n")
+    adapter = OpenClawAdapter(base_dirs=[base])
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].session_id == "weird"
+    assert list(adapter.read(refs[0])) == []
+
+
+def test_usage_with_inf_values_coerces_to_zero(tmp_path: Path) -> None:
+    """JSON ``1e999`` parses to float('inf'); int() on it raises — the
+    coercer must return 0 instead."""
+    base = tmp_path / "openclaw" / "agents"
+    sessions = base / "agent" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "s"}) + "\n"
+        + '{"type": "message", "id": "a", "message": {"role": "assistant",'
+        ' "model": "m", "content": "x",'
+        ' "usage": {"input": 1e999, "output": 1}}}\n'
+    )
+    adapter = OpenClawAdapter(base_dirs=[base])
+    ref = next(iter(adapter.enumerate()))
+    records = list(adapter.read(ref))
+    assert len(records) == 1
+    assert records[0].input_tokens == 0
+    assert records[0].output_tokens == 1

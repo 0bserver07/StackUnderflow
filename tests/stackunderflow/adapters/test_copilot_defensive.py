@@ -233,3 +233,11 @@ def test_coerce_int_logs_on_float_and_str(caplog) -> None:
     messages = [r.getMessage() for r in caplog.records]
     assert len(messages) == 3
     assert all("non-int token value" in m for m in messages)
+
+
+def test_coerce_int_handles_inf_and_nan(caplog) -> None:
+    """JSON ``1e999`` parses to float('inf'); int() raises OverflowError
+    (and ValueError for NaN) — the coercer must return 0, not raise."""
+    with caplog.at_level(logging.DEBUG, logger="stackunderflow.adapters.copilot"):
+        assert _coerce_int(float("inf")) == 0
+        assert _coerce_int(float("nan")) == 0

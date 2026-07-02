@@ -334,3 +334,43 @@ class TestAntigravityContract(unittest.TestCase, AdapterContract):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+
+# ── malformed-input hardening (ingest-surface sweep, 2026-07) ─────────
+
+
+def test_history_with_malformed_lines_does_not_crash(tmp_path: Path) -> None:
+    """Non-object JSON lines, a non-string workspace, and an out-of-range
+    timestamp in history.jsonl must not crash enumerate() or read()."""
+    home = tmp_path / ".gemini"
+    (home / "antigravity").mkdir(parents=True)
+    (home / "antigravity-cli").mkdir(parents=True)
+    history = home / "antigravity-cli" / "history.jsonl"
+    history.write_text(
+        "[1, 2]\n"
+        '"just a string"\n'
+        + json.dumps({
+            "display": "ok",
+            "timestamp": 1_779_002_500_000,
+            "workspace": {"bad": 1},  # non-str workspace must not crash _slug_for
+            "conversationId": "uuid-x",
+        })
+        + "\n"
+        + json.dumps({
+            "display": "huge",
+            "timestamp": 10**25,  # overflows datetime.fromtimestamp
+            "workspace": "/Users/x/p",
+            "conversationId": "uuid-x",
+        })
+        + "\n"
+    )
+    adapter = AntigravityAdapter(gemini_home=home)
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    assert refs[0].session_id == "uuid-x"
+    # First entry's (non-str) workspace wins the setdefault → generic slug.
+    assert refs[0].project_slug == "antigravity"
+    records = list(adapter.read(refs[0]))
+    assert [r.content_text for r in records] == ["ok", "huge"]
+    # The out-of-range timestamp degrades to empty, not an exception.
+    assert records[1].timestamp == ""
