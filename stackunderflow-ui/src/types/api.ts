@@ -1304,6 +1304,9 @@ export interface PatternsResponse {
   project: string | null
   since: string
   report: PatternsReportData
+}
+
+// ---------------------------------------------------------------------------
 // Campaign #7 — prescriptive cost. Mirrors `reports/prescribe.py` payloads
 // served by GET /api/optimize/prescriptions and POST
 // /api/optimize/claudemd-preview. All dollar fields arrive pre-converted to
