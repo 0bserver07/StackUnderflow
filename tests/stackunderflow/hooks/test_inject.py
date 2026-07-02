@@ -325,7 +325,7 @@ class TestInstallInject:
         assert "SessionStart" not in data["hooks"]
         assert "PreToolUse" not in data["hooks"]
 
-    def test_inject_install_adds_three_injection_hooks(self, project_root: Path) -> None:
+    def test_inject_install_adds_injection_and_recall_hooks(self, project_root: Path) -> None:
         report = install("project", cwd=project_root, inject=True)
         assert report.inject is True
         assert set(report.hooks_installed) == set(templates.ALL_HOOK_IDS)
@@ -334,9 +334,13 @@ class TestInstallInject:
         assert data["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
             "stackunderflow hooks run stackunderflow-inject-session-start"
         )
+        # PreToolUse carries the in-process injection group AND the recall group.
         ptu = data["hooks"]["PreToolUse"][0]
         assert ptu["matcher"] == "Edit|Write|MultiEdit"
         assert ptu["hooks"][0]["command"] == "stackunderflow hooks run stackunderflow-inject-pre-tool-use"
+        recall_grp = data["hooks"]["PreToolUse"][1]
+        assert recall_grp["matcher"] == "Edit|Write|Bash"
+        assert recall_grp["hooks"][0]["command"] == "stackunderflow hooks run stackunderflow-pretool-recall"
         # UserPromptSubmit carries BOTH a capture and an injection group.
         ups_cmds = {e["command"] for g in data["hooks"]["UserPromptSubmit"] for e in g["hooks"]}
         assert ups_cmds == {
