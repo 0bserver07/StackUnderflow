@@ -92,11 +92,15 @@ backlog (3,223 `ingest_log` rows vs 6,566 files on disk). Two moves:
 - **Enumeration budget / batching**: `iter_refs` should `stat()` in a bounded
   batch and yield, so a cold boot with thousands of files doesn't monopolize a
   core in one burst; the watcher already handles steady-state incrementally.
-- **WAL checkpointing for bulk writers**: the `--force` backfill / chunked
-  rebuilds left a **1.5GB WAL** after an interrupted run that degraded every
-  reader by orders of magnitude (each late chunk took ~3 min purely from WAL
-  scan). Bulk writers should issue `PRAGMA wal_checkpoint(PASSIVE)` every N
-  commits. Low risk, high insurance.
+- **WAL checkpointing for bulk writers** ✅ DONE (this branch): the
+  `--force` backfill / chunked rebuilds left a **1.5GB WAL** after an
+  interrupted run that degraded every reader by orders of magnitude (each late
+  chunk took ~3 min purely from WAL scan). `etl/backfill.py` now issues
+  `PRAGMA wal_checkpoint(PASSIVE)` every `_CHECKPOINT_EVERY_CHUNKS` (5 chunks ≈
+  25k messages) after the chunk COMMIT — PASSIVE never blocks and is
+  best-effort-guarded so a busy WAL just defers to the next pass and a
+  checkpoint hiccup can't abort the backfill. 2 tests (cadence fires,
+  failure-swallowed).
 
 ### Tier 5 — patterns
 After Tier 1–2, re-measure. Likely bound the window default tighter or reuse the

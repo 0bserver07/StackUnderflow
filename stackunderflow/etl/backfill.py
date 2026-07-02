@@ -52,6 +52,17 @@ _CHUNK_SIZE = 5_000
 # small stores without going silent on large ones.
 _PROGRESS_EVERY_EVENTS = 10_000
 
+# Fold the WAL back into the main db every N chunks during a long stream.
+# Each chunk COMMITs but, with a single long-lived connection, nothing
+# checkpoints the WAL until the connection closes — so a full-store backfill
+# grew the WAL into the GBs (observed: a 1.5 GB WAL after an interrupted
+# ``--force`` run, which then degraded every reader by orders of magnitude as
+# each query re-scanned it). A PASSIVE checkpoint every few chunks bounds the
+# WAL without blocking (it checkpoints what it can and returns immediately;
+# a busy reader just defers it to the next pass). 5 chunks × 5k rows ≈ every
+# 25k messages.
+_CHECKPOINT_EVERY_CHUNKS = 5
+
 
 @dataclass
 class BackfillReport:
@@ -217,6 +228,7 @@ def _run_normalizers(
     messages_seen = 0
     last_id = 0
     last_progress_log = 0
+    chunks_done = 0
 
     while True:
         chunk = _fetch_chunk(conn, select_sql, providers, last_id)
@@ -248,6 +260,16 @@ def _run_normalizers(
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+        # Bound the WAL during a long stream. Outside the transaction (post
+        # COMMIT); PASSIVE never blocks and never raises fatally, but guard
+        # anyway so a checkpoint hiccup can't abort an otherwise-good backfill.
+        chunks_done += 1
+        if chunks_done % _CHECKPOINT_EVERY_CHUNKS == 0:
+            try:
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception as exc:  # noqa: BLE001 — checkpoint is best-effort
+                _log.debug("backfill: wal_checkpoint(PASSIVE) raised: %s", exc)
 
         if progress_callback is not None:
             try:
