@@ -97,9 +97,16 @@ non-blocking server startup.
 - `pr_outcomes`/`ci_runs` await webhook configuration (issue #92 closed as shipped).
 - Visual (click-through) audit of the new tabs still owed — the API-level audit
   covered data correctness; the Chrome extension wasn't connected for the visual pass.
-- Reasoning-token attribution (v026) required a full `--force` re-normalization —
-  kicked off 2026-07-01 end-of-session; verify `usage_events.reasoning_tokens > 0`
-  count afterwards, then the Forks tab's reasoning caption shows real data.
+- Reasoning-token attribution (v026): the full `--force` re-normalization COMPLETED
+  2026-07-01 (204,938 events, 38 min, all 8 marts, `pricing doctor` OK at $36,978
+  with $0.39 unpriced exposure) — and `reasoning_tokens > 0` is **0 by design**:
+  Anthropic's `message.usage` carries no reasoning/thinking token split
+  (normalize/claude.py:81), so claude-shaped history correctly stays 0 rather
+  than fabricating. The overlay lights up only for providers that report the
+  split. Possible future enhancement (maintainer call): estimate thinking tokens
+  from thinking-block text length — 2,855 messages in June alone carry thinking
+  blocks, so the estimate would have real coverage; it must be clearly labelled
+  estimated, never mixed into exact cost.
 
 ## Parallel-agent pattern used this campaign
 Worktree-isolated agents on **file-disjoint** scopes, run in background; lead integrates each (copy from worktree → verify on main → commit), FE agents commit **source only** and lead does a single `npm run build`; run the **full suite before pushing** on anything touching a mocked route; push → confirm CI green.
