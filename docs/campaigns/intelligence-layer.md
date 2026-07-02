@@ -60,8 +60,46 @@
 Each machine pushes encrypted **aggregates only** (never raw transcripts) to a self-hostable endpoint; the team sees shared waste/patterns. Grounded in the backup hardlink snapshots + the mart schema (aggregates are already the storage unit). Design work: the privacy contract + sync protocol.
 
 ## Follow-ups noted during the campaign
-- **Docs pass:** `README.md`, `CHANGELOG.md`, `docs/*.md` still reference `pip install stackunderflow[embeddings]` / sentence-transformers, removed in `4cecb46`. (User owns CHANGELOG/README.)
+- ~~**Docs pass**~~ DONE 2026-07-01 (`8e34613` — zero stale refs, CLI/API verified flag-for-flag).
 - Windows **full** test-port: CI runs only the path tests on the Windows leg (deliberate foothold); full port is open-ended.
+
+## Real-store audit — 2026-07-01 (post-campaign verification pass)
+
+Campaign tasks #5/#6/#7 all SHIPPED + integrated (commits `974a28d..1c7580c`); suite
+3,465 passing. Every dormant table was exercised on the real store: embeddings
+42,496 vectors (`memory embed` DONE), `command_day_mart` 1,122, `message_tool_mart`
+105K+ (rebuilt), `static_analysis_findings` live (17 sessions), mode recommender
+verified with real evidence sessions. Issues #86–#93 + #104 closed with evidence.
+
+**Fixed from the audit** (commit `1c7580c`): multi-provider cost overlay (range
+window was silently dead on multi-provider projects), monotonic watermarks,
+non-blocking server startup.
+
+**Known + open, for the next session:**
+- `/api/forks` is 6.7–8.9s on the real store (per-project AND whole-store) — the
+  DAG walk reads raw messages; needs mart backing or a `_project_stats_cached`-style
+  memo. The Forks tab feels broken at this latency.
+- `/api/cost-data` cold on a multi-provider project is ~9s (3 provider ids ⇒ the
+  aggregator pipeline still runs per-id before the overlay replaces blocks; warm is
+  fast). Candidate: share one pipeline across ids or extend the June mart
+  materialization to cover the remaining aggregator-only blocks.
+- API param footgun: unknown query params are silently ignored and several routes
+  quietly fall back to whole-store scope (`?project=` vs `?log_path=` confusion) —
+  consider 400-on-unknown-params or a uniform `project` param.
+- Server startup ingest re-enumerates every provider file on every boot (minutes of
+  CPU on this machine, in the background thread). Consider mtime-gating the startup
+  pass like the watcher does.
+- Bulk writers (backfill/chunked rebuilds) should issue periodic
+  `PRAGMA wal_checkpoint(PASSIVE)` — an interrupted bulk write left a 1.5GB WAL that
+  degraded every reader by orders of magnitude (checkpoint starvation feedback loop).
+- `session_quality_metrics` (#95) + `commit_session_link` (#94) stay 0 rows until an
+  LLM grading pass / attribution backfill runs — issues left open.
+- `pr_outcomes`/`ci_runs` await webhook configuration (issue #92 closed as shipped).
+- Visual (click-through) audit of the new tabs still owed — the API-level audit
+  covered data correctness; the Chrome extension wasn't connected for the visual pass.
+- Reasoning-token attribution (v026) required a full `--force` re-normalization —
+  kicked off 2026-07-01 end-of-session; verify `usage_events.reasoning_tokens > 0`
+  count afterwards, then the Forks tab's reasoning caption shows real data.
 
 ## Parallel-agent pattern used this campaign
 Worktree-isolated agents on **file-disjoint** scopes, run in background; lead integrates each (copy from worktree → verify on main → commit), FE agents commit **source only** and lead does a single `npm run build`; run the **full suite before pushing** on anything touching a mocked route; push → confirm CI green.
