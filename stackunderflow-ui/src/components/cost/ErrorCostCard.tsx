@@ -13,14 +13,10 @@ interface ErrorCostCardProps {
 
 const COLLAPSED_TOOL_COUNT = 6
 
-import { formatCost } from '../../services/format'
+// #60: formatTokens comes from the shared services/format module — this
+// card used to carry its own uppercase-`K` clone.
+import { formatCost, formatTokens } from '../../services/format'
 import { useCurrency } from '../../services/currency'
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
-}
 
 function truncate(s: string, max = 64): string {
   if (!s) return ''

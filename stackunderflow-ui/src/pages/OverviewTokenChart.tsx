@@ -2,22 +2,15 @@ import { memo } from 'react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
+import { formatTokens } from '../services/format'
+import { useChartTheme } from '../components/charts/chartTheme'
 
 // Lazy-loaded chart child of Overview. Kept in its own module so recharts
 // (~444KB) is pulled in via Overview's <Suspense> boundary instead of being a
 // static import of the Overview chunk — the page shell + KPI cards + table
 // paint without waiting on recharts. Markup/behavior is identical to the chart
 // that previously rendered inline in Overview.
-
-// Mirrors Overview's *local* formatTokens (uppercase `K`), which intentionally
-// differs from the shared services/format `formatTokens` (lowercase `k`).
-// Replicated here so the Y-axis labels stay byte-for-byte identical.
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
-}
+// #60: token labels come from the shared services/format formatTokens.
 
 // #58 trend-chart date helpers. Accept either an epoch-ms number (the
 // time-scaled token axis) or a `YYYY-MM-DD` string; appending `T00:00:00`
@@ -44,10 +37,12 @@ interface OverviewTokenChartProps {
 }
 
 function OverviewTokenChart({ data }: OverviewTokenChartProps) {
+  // #59: chart chrome follows the active theme (was fixed dark hexes).
+  const palette = useChartTheme()
   return (
     <ResponsiveContainer width="100%" height={280}>
       <AreaChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+        <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
         {/* #58: time-scaled axis so idle days are spaced by real elapsed
             time instead of collapsing; minTickGap thins crowded labels. */}
         <XAxis
@@ -55,13 +50,13 @@ function OverviewTokenChart({ data }: OverviewTokenChartProps) {
           type="number"
           scale="time"
           domain={['dataMin', 'dataMax']}
-          tick={{ fontSize: 10, fill: '#9CA3AF' }}
+          tick={palette.tick}
           tickFormatter={formatAxisDate}
           minTickGap={40}
         />
-        <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={formatTokens} />
+        <YAxis tick={palette.tick} tickFormatter={formatTokens} />
         <Tooltip
-          contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
+          contentStyle={palette.tooltipContent}
           labelFormatter={formatTooltipDate}
           formatter={(value: number) => [value.toLocaleString(), undefined]}
         />

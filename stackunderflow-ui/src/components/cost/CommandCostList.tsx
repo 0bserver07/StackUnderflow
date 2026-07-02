@@ -43,14 +43,10 @@ function totalTokens(t: Record<string, number> | undefined): number {
   )
 }
 
-import { formatCost } from '../../services/format'
+// #60: token formatting comes from the shared services/format module — this
+// list used to carry a `formatTokenCount` clone (uppercase `K`).
+import { formatCost, formatTokens } from '../../services/format'
 import { useCurrency } from '../../services/currency'
-
-function formatTokenCount(total: number): string {
-  if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`
-  if (total >= 1_000) return `${(total / 1_000).toFixed(1)}K`
-  return total.toLocaleString()
-}
 
 function formatTime(iso: string): string {
   if (!iso) return ''
@@ -395,7 +391,7 @@ export default function CommandCostList({ data, onOpen, initialSort }: CommandCo
                         {pctOfTotal >= 0.1 ? `${pctOfTotal.toFixed(1)}%` : '—'}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
-                        {formatTokenCount(tokens)}
+                        {formatTokens(tokens)}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 tabular-nums">
                         {r.tools_used}

@@ -44,6 +44,8 @@ export interface ChartPalette {
   legend: CSSProperties
   /** Stroke for neutral (non-categorical) reference lines, e.g. the messages line. */
   neutralLine: string
+  /** High-contrast SVG text fill (e.g. a donut's center metric). */
+  textStrong: string
 }
 
 const DARK_PALETTE: ChartPalette = {
@@ -62,6 +64,7 @@ const DARK_PALETTE: ChartPalette = {
   tooltipItem: { color: '#D1D5DB' },
   legend: { fontSize: '11px', color: '#9CA3AF' },
   neutralLine: '#9CA3AF',
+  textStrong: '#F3F4F6',
 }
 
 const LIGHT_PALETTE: ChartPalette = {
@@ -81,6 +84,7 @@ const LIGHT_PALETTE: ChartPalette = {
   tooltipItem: { color: '#374151' },
   legend: { fontSize: '11px', color: '#6B7280' },
   neutralLine: '#6B7280',
+  textStrong: '#111827',
 }
 
 // ── theme subscription ───────────────────────────────────────────────────────

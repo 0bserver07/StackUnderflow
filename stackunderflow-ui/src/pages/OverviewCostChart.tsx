@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { formatCost } from '../services/format'
+import { useChartTheme } from '../components/charts/chartTheme'
 import type { CurrencyInfo } from '../types/api'
 
 // Lazy-loaded chart child of Overview — see OverviewTokenChart for the why.
@@ -33,24 +34,26 @@ interface OverviewCostChartProps {
 }
 
 function OverviewCostChart({ data, currency }: OverviewCostChartProps) {
+  // #59: chart chrome follows the active theme (was fixed dark hexes).
+  const palette = useChartTheme()
   return (
     <ResponsiveContainer width="100%" height={200}>
       <BarChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+        <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
         {/* #58: bars stay on a categorical date axis (so width renders
             reliably), but a compact tick formatter + minTickGap +
             preserveStartEnd fix the overcrowded labels. */}
         <XAxis
           dataKey="date"
-          tick={{ fontSize: 10, fill: '#9CA3AF' }}
+          tick={palette.tick}
           tickFormatter={formatAxisDate}
           minTickGap={40}
           interval="preserveStartEnd"
         />
         {/* #58: Y axis now goes through formatCost (was a raw `${symbol}${v}`). */}
-        <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickFormatter={(v: number) => formatCost(v, currency)} />
+        <YAxis tick={palette.tick} tickFormatter={(v: number) => formatCost(v, currency)} />
         <Tooltip
-          contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '12px' }}
+          contentStyle={palette.tooltipContent}
           labelFormatter={formatTooltipDate}
           formatter={(v: number) => [formatCost(v, currency), 'Cost']}
         />

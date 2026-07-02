@@ -57,7 +57,9 @@ function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-import { formatCost, formatModelName } from '../services/format'
+// #60: token/cost formatting comes from the shared services/format module —
+// this page used to carry its own uppercase-`K` formatTokens clone.
+import { formatCost, formatModelName, formatTokens } from '../services/format'
 import FilterBar from '../components/common/FilterBar'
 import { useFilters } from '../services/filters'
 import { useCurrency } from '../services/currency'
@@ -72,13 +74,6 @@ function formatDuration(firstDate: string | undefined, lastDate: string | undefi
   const remDays = days % 30
   if (months < 12) return remDays > 0 ? `${months}mo ${remDays}d` : `${months}mo`
   return `${Math.floor(months / 12)}y ${months % 12}mo`
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
 }
 
 function rangeLabel(range: DateRange, firstUse: string | undefined): string {

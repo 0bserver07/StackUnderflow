@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { formatTokens } from '../../services/format'
+import { useChartTheme } from '../charts/chartTheme'
 
 type RangeKey = '7d' | '30d' | 'all'
 
@@ -101,6 +102,8 @@ function RichTooltip({ active, label, payload }: RichTooltipProps) {
 }
 
 export default function TokenCompositionStack({ daily, range: rangeProp }: TokenCompositionStackProps) {
+  // #59: theme-aware chart chrome (grid/axes) instead of fixed dark hexes.
+  const palette = useChartTheme()
   // #23: when the tab FilterBar drives the range (prop present) the in-card
   // buttons are hidden; otherwise a local control is kept as a fallback.
   const rangeControlled = rangeProp !== undefined
@@ -205,17 +208,17 @@ export default function TokenCompositionStack({ daily, range: rangeProp }: Token
       ) : (
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={filteredData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+            <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: '#9CA3AF' }}
-              tickLine={{ stroke: '#4B5563' }}
-              axisLine={{ stroke: '#4B5563' }}
+              tick={palette.tick}
+              tickLine={palette.axisLine}
+              axisLine={palette.axisLine}
             />
             <YAxis
-              tick={{ fontSize: 10, fill: '#9CA3AF' }}
-              tickLine={{ stroke: '#4B5563' }}
-              axisLine={{ stroke: '#4B5563' }}
+              tick={palette.tick}
+              tickLine={palette.axisLine}
+              axisLine={palette.axisLine}
               tickFormatter={formatTokens}
             />
             <Tooltip

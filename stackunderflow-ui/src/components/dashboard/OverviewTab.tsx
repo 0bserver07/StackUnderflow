@@ -35,14 +35,6 @@ interface OverviewTabProps {
   stats: DashboardStats
 }
 
-function formatNumber(n: number | null | undefined): string {
-  if (!Number.isFinite(n)) return '0'
-  const v = n as number
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
-  return v.toLocaleString()
-}
-
 /**
  * "2026-01-30T20:58:11.193Z" → "Jan 30, 2026". Falls through to the original
  * string if it's not a parseable ISO timestamp so we never blank out a label.
@@ -57,7 +49,9 @@ function formatDateRange(iso: string): string {
   })
 }
 
-import { formatCost, formatModelName } from '../../services/format'
+// #60: count formatting comes from the shared services/format module — this
+// tab used to carry its own formatNumber clone (2-decimal `M` variant).
+import { formatCost, formatModelName, formatNumber } from '../../services/format'
 import { useCurrency } from '../../services/currency'
 import { useFilters } from '../../services/filters'
 
@@ -132,9 +126,10 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
 
   useEffect(() => {
     let cancelled = false
-    // FLAG (backend): /api/tool-distribution (routes/commands.py) currently
-    // ignores ?provider/?model — it must apply the same filter the rest of the
-    // dashboard uses, or this chart stays project-wide while the others narrow.
+    // #33: /api/tool-distribution (routes/commands.py) applies ?provider/?model
+    // server-side — provider narrows the slug's project rows, model recomputes
+    // the buckets from per-command details — so this chart narrows with the
+    // rest of the dashboard.
     const qs = queryString ? `?${queryString.slice(1)}` : ''
     fetch(`/api/tool-distribution${qs}`)
       .then((res) => (res.ok ? (res.json() as Promise<ToolDistributionResponse>) : null))

@@ -11,6 +11,7 @@ import {
 } from 'recharts'
 import type { SessionCost } from '../../types/api'
 import { openSession } from '../../services/navigation'
+import { useChartTheme } from '../charts/chartTheme'
 
 interface SessionCostBarChartProps {
   data: SessionCost[]
@@ -59,6 +60,17 @@ interface TooltipPayloadEntry {
   payload?: ChartDatum
 }
 
+// #59: the tooltip used hardcoded dark inline styles — Tailwind `dark:`
+// variants let the same markup follow the active theme.
+function TooltipRow({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-gray-500 dark:text-gray-400">{label}</span>
+      <span className={valueClass ?? 'text-gray-900 dark:text-gray-100'}>{value}</span>
+    </div>
+  )
+}
+
 function SessionTooltip({
   active,
   payload,
@@ -82,86 +94,37 @@ function SessionTooltip({
   const truncated = preview.length > 140 ? preview.slice(0, 140) + '…' : preview
 
   return (
-    <div
-      style={{
-        backgroundColor: '#1F2937',
-        border: '1px solid #374151',
-        borderRadius: '6px',
-        fontSize: '12px',
-        maxWidth: 360,
-        padding: '8px 10px',
-        color: '#D1D5DB',
-      }}
-    >
-      <div style={{ fontFamily: 'monospace', color: '#F3F4F6', marginBottom: 4 }}>
-        {p.short_id}
-      </div>
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-xs max-w-[360px] px-2.5 py-2 text-gray-700 dark:text-gray-300 shadow-lg">
+      <div className="font-mono text-gray-900 dark:text-gray-100 mb-1">{p.short_id}</div>
       {truncated && (
-        <div style={{ color: '#9CA3AF', marginBottom: 6, fontStyle: 'italic' }}>
-          {truncated}
-        </div>
+        <div className="text-gray-500 dark:text-gray-400 mb-1.5 italic">{truncated}</div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ color: '#9CA3AF' }}>Cost</span>
-        <span style={{ color: '#F3F4F6', fontWeight: 600 }}>{formatCost(p.cost, currency)}</span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ color: '#9CA3AF' }}>Duration</span>
-        <span style={{ color: '#F3F4F6' }}>{formatDuration(p.duration_s)}</span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ color: '#9CA3AF' }}>Commands</span>
-        <span style={{ color: '#F3F4F6' }}>{p.commands.toLocaleString()}</span>
-      </div>
+      <TooltipRow
+        label="Cost"
+        value={formatCost(p.cost, currency)}
+        valueClass="text-gray-900 dark:text-gray-100 font-semibold"
+      />
+      <TooltipRow label="Duration" value={formatDuration(p.duration_s)} />
+      <TooltipRow label="Commands" value={p.commands.toLocaleString()} />
       {p.errors > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-          <span style={{ color: '#9CA3AF' }}>Errors</span>
-          <span style={{ color: '#F87171' }}>{p.errors.toLocaleString()}</span>
-        </div>
+        <TooltipRow
+          label="Errors"
+          value={p.errors.toLocaleString()}
+          valueClass="text-red-600 dark:text-red-400"
+        />
       )}
-      <div
-        style={{
-          borderTop: '1px solid #374151',
-          marginTop: 6,
-          paddingTop: 6,
-          color: '#9CA3AF',
-        }}
-      >
-        <div style={{ fontSize: '11px', marginBottom: 2, color: '#6B7280' }}>Tokens</div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Input</span>
-          <span style={{ color: '#D1D5DB' }}>{formatTokens(input)}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Output</span>
-          <span style={{ color: '#D1D5DB' }}>{formatTokens(output)}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Cache read</span>
-          <span style={{ color: '#D1D5DB' }}>{formatTokens(cacheRead)}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Cache creation</span>
-          <span style={{ color: '#D1D5DB' }}>{formatTokens(cacheCreation)}</span>
-        </div>
+      <div className="border-t border-gray-200 dark:border-gray-700 mt-1.5 pt-1.5">
+        <div className="text-[11px] mb-0.5 text-gray-400 dark:text-gray-500">Tokens</div>
+        <TooltipRow label="Input" value={formatTokens(input)} />
+        <TooltipRow label="Output" value={formatTokens(output)} />
+        <TooltipRow label="Cache read" value={formatTokens(cacheRead)} />
+        <TooltipRow label="Cache creation" value={formatTokens(cacheCreation)} />
       </div>
       {p.models_used && p.models_used.length > 0 && (
-        <div
-          style={{
-            borderTop: '1px solid #374151',
-            marginTop: 6,
-            paddingTop: 6,
-            color: '#9CA3AF',
-          }}
-        >
-          <div style={{ fontSize: '11px', marginBottom: 2, color: '#6B7280' }}>Models</div>
+        <div className="border-t border-gray-200 dark:border-gray-700 mt-1.5 pt-1.5">
+          <div className="text-[11px] mb-0.5 text-gray-400 dark:text-gray-500">Models</div>
           <div
-            style={{
-              color: '#D1D5DB',
-              fontSize: '11px',
-              whiteSpace: 'normal',
-              wordBreak: 'break-word',
-            }}
+            className="text-[11px] text-gray-700 dark:text-gray-300 whitespace-normal break-words"
             title={p.models_used.join(', ')}
           >
             {p.models_used.map(formatModelName).join(', ')}
@@ -174,6 +137,8 @@ function SessionTooltip({
 
 export default function SessionCostBarChart({ data, onSelect }: SessionCostBarChartProps) {
   const { currency } = useCurrency()
+  // #59: theme-aware chart chrome (grid/axes) instead of fixed dark hexes.
+  const palette = useChartTheme()
   if (!data || data.length === 0) {
     return (
       <div className="bg-gray-100/70 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-800">
@@ -240,20 +205,20 @@ export default function SessionCostBarChart({ data, onSelect }: SessionCostBarCh
       </h3>
       <ResponsiveContainer width="100%" height={Math.max(260, chartData.length * 32)}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 10, right: 20 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} horizontal={false} />
           <XAxis
             type="number"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
             tickFormatter={(v: number) => formatCost(v, currency)}
           />
           <YAxis
             type="category"
             dataKey="label"
-            tick={{ fontSize: 11, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={{ fontSize: 11, fill: palette.tick.fill }}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
             width={320}
             interval={0}
           />

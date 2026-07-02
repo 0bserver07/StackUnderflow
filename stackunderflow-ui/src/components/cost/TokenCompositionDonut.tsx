@@ -10,6 +10,7 @@ import {
   Sector,
 } from 'recharts'
 import { formatTokens } from '../../services/format'
+import { useChartTheme } from '../charts/chartTheme'
 
 interface TokenCompositionDonutProps {
   totals: Record<string, number>
@@ -105,6 +106,9 @@ function renderActiveShape(props: {
 }
 
 export default function TokenCompositionDonut({ totals }: TokenCompositionDonutProps) {
+  // #59: center label / tooltip follow the theme — the fixed near-white
+  // center text was unreadable on the light-mode card.
+  const palette = useChartTheme()
   const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined)
 
   const grandTotal = SERIES.reduce((sum, s) => sum + (totals?.[s.key] ?? 0), 0)
@@ -194,7 +198,7 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
                       y={cy - 6}
                       textAnchor="middle"
                       dominantBaseline="central"
-                      fill="#F3F4F6"
+                      fill={palette.textStrong}
                       fontSize={20}
                       fontWeight={700}
                     >
@@ -205,7 +209,7 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
                       y={cy + 14}
                       textAnchor="middle"
                       dominantBaseline="central"
-                      fill="#9CA3AF"
+                      fill={palette.tickMuted.fill}
                       fontSize={10}
                       letterSpacing="0.06em"
                     >
@@ -217,20 +221,15 @@ export default function TokenCompositionDonut({ totals }: TokenCompositionDonutP
             />
           </Pie>
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
+            contentStyle={palette.tooltipContent}
+            labelStyle={palette.tooltipLabel}
             formatter={(value: number) => {
               const pct = grandTotal > 0 ? (value / grandTotal) * 100 : 0
               return [`${value.toLocaleString()} (${pct.toFixed(1)}%)`, 'Tokens']
             }}
           />
           <Legend
-            wrapperStyle={{ fontSize: '11px', color: '#9CA3AF' }}
+            wrapperStyle={palette.legend}
             content={(props) => {
               const payload = (props as { payload?: Array<{ color?: string }> }).payload
               if (!payload || payload.length === 0) return null

@@ -11,6 +11,7 @@ import {
   LabelList,
 } from 'recharts'
 import type { ToolCost } from '../../types/api'
+import { useChartTheme } from '../charts/chartTheme'
 
 type SortKey = 'cost' | 'calls' | 'tokens'
 
@@ -59,6 +60,9 @@ function formatPct(p: number): string {
 
 export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChartProps) {
   const { currency } = useCurrency()
+  // #59: axis/grid/tooltip chrome follows the active theme instead of the
+  // hardcoded dark palette (which was near-invisible in light mode).
+  const palette = useChartTheme()
   const [sortKey, setSortKey] = useState<SortKey>('cost')
 
   // #20: tool_mart doesn't materialise cache-token columns (backend FLAG —
@@ -195,32 +199,26 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
       {header}
       <ResponsiveContainer width="100%" height={Math.max(260, chartData.length * 32)}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 20, right: 88 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} horizontal={false} />
           <XAxis
             type="number"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
             tickFormatter={xTickFormatter}
           />
           <YAxis
             type="category"
             dataKey="name"
-            tick={{ fontSize: 10, fill: '#9CA3AF' }}
-            tickLine={{ stroke: '#4B5563' }}
-            axisLine={{ stroke: '#4B5563' }}
+            tick={palette.tick}
+            tickLine={palette.axisLine}
+            axisLine={palette.axisLine}
             width={leftMargin}
           />
           <Tooltip
             cursor={{ fill: 'rgba(129, 140, 248, 0.08)' }}
-            contentStyle={{
-              backgroundColor: '#1F2937',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              fontSize: '12px',
-              whiteSpace: 'pre-line',
-            }}
-            labelStyle={{ color: '#D1D5DB' }}
+            contentStyle={{ ...palette.tooltipContent, whiteSpace: 'pre-line' }}
+            labelStyle={palette.tooltipLabel}
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             formatter={(_value: number, _name: string, props: any) => {
               const p = props?.payload as ChartRow | undefined
@@ -258,7 +256,7 @@ export default function ToolCostBarChart({ data, onToolClick }: ToolCostBarChart
             <LabelList
               dataKey="label"
               position="right"
-              style={{ fill: '#D1D5DB', fontSize: 10 }}
+              style={{ fill: palette.tick.fill, fontSize: 10 }}
             />
           </Bar>
         </BarChart>

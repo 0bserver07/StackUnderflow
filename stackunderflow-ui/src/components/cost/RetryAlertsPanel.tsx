@@ -9,14 +9,10 @@ interface RetryAlertsPanelProps {
 
 type SeverityFilter = 'all' | 'ge2' | 'ge3'
 
-import { formatCost } from '../../services/format'
+// #60: formatTokens comes from the shared services/format module — this
+// panel used to carry its own uppercase-`K` clone.
+import { formatCost, formatTokens } from '../../services/format'
 import { useCurrency } from '../../services/currency'
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return n.toLocaleString()
-}
 
 function formatTime(iso: string): string {
   if (!iso) return ''

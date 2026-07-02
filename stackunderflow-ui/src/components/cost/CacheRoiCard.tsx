@@ -44,6 +44,7 @@ interface RoiPoint {
 
 import { formatCost, formatNumber } from '../../services/format'
 import { useCurrency } from '../../services/currency'
+import { useChartTheme } from '../charts/chartTheme'
 
 /**
  * Backend's `cost_saved_base_units` is `tokens × $/M-token-rate` without the
@@ -129,6 +130,8 @@ export default function CacheRoiCard({
   dailyStats,
 }: CacheRoiCardProps) {
   const { currency } = useCurrency()
+  // #59: sparkline tooltip chrome follows the active theme.
+  const palette = useChartTheme()
   // Session-saver disclosure is kept inline (not via `../common/ExpandableRow`)
   // because that primitive is `<tr>`-shaped and this card uses a flex/grid layout.
   const [expanded, setExpanded] = useState(false)
@@ -206,13 +209,12 @@ export default function CacheRoiCard({
               <LineChart data={trend} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
                 <RechartsTooltip
                   contentStyle={{
-                    backgroundColor: '#1F2937',
-                    border: '1px solid #374151',
+                    ...palette.tooltipContent,
                     borderRadius: '4px',
                     fontSize: '10px',
                     padding: '4px 6px',
                   }}
-                  labelStyle={{ color: '#D1D5DB' }}
+                  labelStyle={palette.tooltipLabel}
                   formatter={(value: number) => [`${value.toFixed(2)}×`, 'read / created']}
                 />
                 <Line
