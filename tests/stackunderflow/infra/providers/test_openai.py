@@ -119,3 +119,24 @@ def test_compute_with_raw_shape_equals_compute_with_canonical():
     canonical = {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 200}
     assert raw_norm == canonical
     assert p.compute(raw_norm, "gpt-5.4") == p.compute(canonical, "gpt-5.4")
+
+
+def test_normalize_tokens_tolerates_garbage_values():
+    """``normalize_tokens`` is handed raw provider JSON at ingest time
+    (Codex ``last_token_usage``); string/list/inf values must coerce to 0
+    instead of raising out of the adapter's read() generator."""
+    p = OpenAIPricer()
+    out = p.normalize_tokens({
+        "input_tokens": "garbage",
+        "cached_input_tokens": [1],
+        "output_tokens": None,
+        "reasoning_output_tokens": float("inf"),
+    })
+    assert out == {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
+    # Canonical-shape branch too.
+    out = p.normalize_tokens({"input": "x", "output": float("nan"), "cache_read": {}})
+    assert out == {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
+    # Numeric strings still coerce (pre-existing tolerance preserved).
+    out = p.normalize_tokens({"input_tokens": "100", "output_tokens": "50"})
+    assert out["input"] == 100
+    assert out["output"] == 50

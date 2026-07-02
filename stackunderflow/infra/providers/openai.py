@@ -49,6 +49,22 @@ _RATES: dict[_Family, tuple[float, float, float, float]] = {
 _FALLBACK = _Family.GPT_5_CODEX
 
 
+def _safe_int(val: object) -> int:
+    """Coerce a token count to a non-negative int; garbage → 0.
+
+    ``normalize_tokens`` is the one pricer seam handed *raw provider
+    JSON* at ingest time (Codex ``last_token_usage`` via
+    ``adapters/codex.py`` and ``etl/normalize/codex.py``). A string,
+    list, or ``1e999``-shaped (inf) value must degrade to 0 — raising
+    here propagates out of the adapter's ``read()`` generator and aborts
+    the whole ingest batch.
+    """
+    try:
+        return max(int(val or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 class OpenAIPricer(ProviderPricer):
     provider_name = "openai"
 
@@ -73,10 +89,10 @@ class OpenAIPricer(ProviderPricer):
         the adapter migration.
         """
         if "input_tokens" in raw or "cached_input_tokens" in raw:
-            raw_input = int(raw.get("input_tokens", 0) or 0)
-            cached = int(raw.get("cached_input_tokens", 0) or 0)
-            raw_output = int(raw.get("output_tokens", 0) or 0)
-            reasoning = int(raw.get("reasoning_output_tokens", 0) or 0)
+            raw_input = _safe_int(raw.get("input_tokens", 0))
+            cached = _safe_int(raw.get("cached_input_tokens", 0))
+            raw_output = _safe_int(raw.get("output_tokens", 0))
+            reasoning = _safe_int(raw.get("reasoning_output_tokens", 0))
             return {
                 "input": max(raw_input - cached, 0),
                 "output": raw_output + reasoning,
@@ -84,10 +100,10 @@ class OpenAIPricer(ProviderPricer):
                 "cache_read": cached,
             }
         return {
-            "input": int(raw.get("input", 0) or 0),
-            "output": int(raw.get("output", 0) or 0),
-            "cache_creation": int(raw.get("cache_creation", 0) or 0),
-            "cache_read": int(raw.get("cache_read", 0) or 0),
+            "input": _safe_int(raw.get("input", 0)),
+            "output": _safe_int(raw.get("output", 0)),
+            "cache_creation": _safe_int(raw.get("cache_creation", 0)),
+            "cache_read": _safe_int(raw.get("cache_read", 0)),
         }
 
     def rates_for(

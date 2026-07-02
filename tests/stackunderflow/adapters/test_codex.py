@@ -327,3 +327,38 @@ def test_read_skips_non_dict_lines_and_non_dict_payload(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0].role == "assistant"
     assert records[0].content_text == "still here"
+
+
+def test_read_survives_garbage_token_count_values(tmp_path: Path) -> None:
+    """A ``token_count`` event whose ``last_token_usage`` carries string /
+    inf values must attach zeros, not raise out of read()."""
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-badtokens.jsonl"
+    _write_jsonl(
+        fp,
+        [
+            _session_meta(session_id="bad-tokens-uuid"),
+            _assistant_msg("answer"),
+            {
+                "timestamp": "2026-04-19T20:00:04.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": "garbage",
+                            "cached_input_tokens": [1],
+                            "output_tokens": 1e999,
+                        }
+                    },
+                },
+            },
+        ],
+    )
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    refs = list(adapter.enumerate())
+    assert len(refs) == 1
+    records = list(adapter.read(refs[0]))
+    assert len(records) == 1
+    assert records[0].content_text == "answer"
+    assert records[0].input_tokens == 0
+    assert records[0].output_tokens == 0
