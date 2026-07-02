@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import threading
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -165,7 +166,7 @@ def _project_ids_for(conn, path: str) -> list[int]:
 # refresh — the same self-invalidation contract data.py's ``_DASHBOARD_CACHE``
 # relies on. (Pricing-config edits don't bump the signature; those are rare and
 # self-heal on the next ingest — matching the dashboard cache's blast radius.)
-_STATS_CACHE: dict[tuple[str, str, int], tuple[tuple[str | None, int], dict]] = {}
+_STATS_CACHE: dict[tuple[str, str, int, tuple[int, ...]], tuple[tuple[str | None, int], dict]] = {}
 _STATS_CACHE_LOCK = threading.Lock()
 
 
@@ -207,7 +208,10 @@ def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset:
     the result is cached for the next reader.
     """
     sig = _stats_signature(conn, project_ids)
-    cache_key = (str(deps.store_path), slug, tz_offset)
+    # The id tuple is part of the key so a provider-narrowed subset (#33 —
+    # /api/tool-distribution filtering a multi-provider slug) never collides
+    # with the slug's all-provider entry.
+    cache_key = (str(deps.store_path), slug, tz_offset, tuple(sorted(project_ids)))
     with _STATS_CACHE_LOCK:
         cached = _STATS_CACHE.get(cache_key)
     if cached is not None and cached[0] == sig:
@@ -218,11 +222,17 @@ def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset:
     return copy.deepcopy(stats)
 
 
+# ``?range=`` values the route accepts. ``all`` (and absent) mean "no window";
+# the two windowed values mirror the Cost tab's FilterBar presets.
+_COST_DATA_RANGE_DAYS: dict[str, int | None] = {"all": None, "7d": 7, "30d": 30}
+
+
 @router.get("/api/cost-data")
 async def get_cost_data(
     log_path: str | None = None,
     timezone_offset: int = 0,
     model: Annotated[list[str] | None, Query()] = None,
+    range_: Annotated[str | None, Query(alias="range")] = None,
 ):
     """Return only the 9 cost/analytics sections split off from dashboard-data.
 
@@ -238,6 +248,16 @@ async def get_cost_data(
     chart. Empty/absent == all models (the existing contract). ``token_composition``
     is the block the daily mart can narrow by model; ``tool_mart`` has no model
     dimension, so ``tool_costs`` stays all-model and the frontend badges it.
+
+    #24: ``range`` (``7d`` | ``30d`` | ``all``) windows the ``tool_costs``
+    block on the mart fast-path — ``tool_mart`` is keyed on ``day``, so the
+    per-tool rollup can honour the Cost tab's date filter server-side. The
+    window anchors on the project's most recent ``daily_mart`` day (matching
+    the frontend's "anchor on latest activity" cutoff) rather than today, so
+    idle projects don't collapse to an empty chart. The response's
+    ``tool_costs_windowed`` flag tells the frontend whether the window was
+    actually applied — the aggregator fallback and the model-filtered path
+    (see #57 above) can't window, and keep their honesty badge.
     """
     path = _resolve_log_path(log_path)
     slug = Path(path).name
@@ -248,6 +268,14 @@ async def get_cost_data(
         if normed:
             model_filter = normed
 
+    if range_ is not None and range_ not in _COST_DATA_RANGE_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Unknown range '{range_}'. Valid: {', '.join(sorted(_COST_DATA_RANGE_DAYS))}"),
+        )
+    window_days = _COST_DATA_RANGE_DAYS.get(range_ or "all")
+
+    tool_costs_windowed = False
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path)
@@ -265,8 +293,13 @@ async def get_cost_data(
         # correlations the daily mart can\'t see by itself.
         if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
             stats = _overlay_mart_rollups(
-                conn, project_id=project_ids[0], stats=stats, model_filter=model_filter
+                conn,
+                project_id=project_ids[0],
+                stats=stats,
+                model_filter=model_filter,
+                window_days=window_days,
             )
+            tool_costs_windowed = bool(stats.pop("_tool_costs_windowed", False))
     finally:
         conn.close()
 
@@ -284,11 +317,17 @@ async def get_cost_data(
         for key in COST_KEYS:
             _convert_in_place(payload[key], currency["rate_from_usd"])
     payload["currency"] = currency
+    payload["tool_costs_windowed"] = tool_costs_windowed
     return payload
 
 
 def _overlay_mart_rollups(
-    conn, *, project_id: int, stats: dict, model_filter: set[str] | None = None
+    conn,
+    *,
+    project_id: int,
+    stats: dict,
+    model_filter: set[str] | None = None,
+    window_days: int | None = None,
 ) -> dict:
     """Replace the rollup blocks of ``stats`` with mart-derived values.
 
@@ -305,6 +344,10 @@ def _overlay_mart_rollups(
       dimension, so it can't be model-filtered — when a model filter is active
       we therefore SKIP the tool_costs overlay and leave the aggregator's
       all-model figures (the frontend badges them as all-model).
+      ``window_days`` (#24) narrows the rollup to the last N calendar days,
+      anchored on the project's most recent ``daily_mart`` day; when the
+      window is applied the ``_tool_costs_windowed`` marker is set on
+      ``stats`` so the route can report it (the caller pops the marker).
 
     ``command_costs`` and ``session_costs`` stay aggregator-driven.
     Their existing shapes are per-Interaction / per-session lists keyed
@@ -401,11 +444,33 @@ def _overlay_mart_rollups(
     # leaving the aggregator's all-model tool_costs (badged in the UI) beats
     # silently showing all-model numbers that look model-scoped.
     if model_filter is None and mart_queries.mart_has_tool_rows(conn):
+        # #24: window the per-tool rollup to the last N calendar days,
+        # anchored on the most recent daily_mart day (daily_rows is the full,
+        # unfiltered series here — model_filter is None on this branch). The
+        # anchor day counts as day 1, so 7d == the last 7 calendar days.
+        day_from: str | None = None
+        if window_days is not None:
+            anchor = max((r.get("day") or "") for r in daily_rows)
+            try:
+                anchor_date = date.fromisoformat(anchor)
+                day_from = (anchor_date - timedelta(days=window_days - 1)).isoformat()
+            except ValueError:
+                # Un-parseable anchor day (malformed source timestamp) — fall
+                # back to the unwindowed rollup rather than 500ing; the
+                # frontend badge covers the "window not applied" case.
+                day_from = None
         tool_rows = mart_queries.tool_mart_for_project(
             conn,
             project_id=project_id,
+            day_from=day_from,
         )
-        if tool_rows:
+        if day_from is not None:
+            # Windowed request: an empty in-window rollup means "no tool
+            # activity in range" and must replace the aggregator's all-time
+            # block (an all-time chart under a 7d filter is the #24 bug).
+            stats["tool_costs"] = _tool_mart_to_aggregator_shape(tool_rows)
+            stats["_tool_costs_windowed"] = True
+        elif tool_rows:
             stats["tool_costs"] = _tool_mart_to_aggregator_shape(tool_rows)
 
     return stats

@@ -374,6 +374,124 @@ async def test_tool_distribution_400_without_project(monkeypatch):
     assert exc_info.value.status_code == 400
 
 
+# ── /api/tool-distribution provider/model filters (#33) ─────────────────────
+
+def _seed_two_provider_project(store_db, slug: str) -> dict[str, int]:
+    """Same slug under two providers — returns {provider: project_id}."""
+    conn = db.connect(store_db)
+    schema.apply(conn)
+    ids: dict[str, int] = {}
+    for provider in ("claude", "cursor"):
+        cur = conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (provider, slug, slug, 0.0, 0.0),
+        )
+        ids[provider] = int(cur.lastrowid)
+    conn.commit()
+    conn.close()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_tool_distribution_provider_filter_narrows_project_ids(tmp_path, monkeypatch):
+    """#33: ``?provider=`` narrows the slug's (provider, slug) rows before the
+    stats sweep, so the distribution reflects only the requested provider."""
+    store_db = tmp_path / "store.db"
+    slug = "-tcd-provider"
+    ids = _seed_two_provider_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    per_ids_dist = {
+        (ids["claude"],): {"1": 4},
+        (ids["cursor"],): {"3": 9},
+        (ids["claude"], ids["cursor"]): {"1": 4, "3": 9},
+    }
+
+    def fake_stats(conn, *, project_id, tz_offset=0):  # noqa: ARG001
+        dist = per_ids_dist[tuple(sorted(project_id))]
+        return [], {"user_interactions": {"tool_count_distribution": dist}}
+
+    monkeypatch.setattr(
+        "stackunderflow.routes.commands.queries.get_project_stats",
+        fake_stats,
+    )
+
+    both = await get_tool_distribution()
+    assert both == {"tool_count_distribution": {"1": 4, "3": 9}}
+
+    claude_only = await get_tool_distribution(provider=["Claude"])  # case-insensitive
+    assert claude_only == {"tool_count_distribution": {"1": 4}}
+
+    cursor_only = await get_tool_distribution(provider=["cursor"])
+    assert cursor_only == {"tool_count_distribution": {"3": 9}}
+
+
+@pytest.mark.asyncio
+async def test_tool_distribution_provider_filter_excluding_all_returns_empty(
+    tmp_path, monkeypatch,
+):
+    """A provider filter that matches no row → shape-stable empty map."""
+    store_db = tmp_path / "store.db"
+    slug = "-tcd-provider-miss"
+    _seed_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    def fail_stats(conn, *, project_id, tz_offset=0):  # noqa: ARG001
+        raise AssertionError("stats sweep must not run when the filter excludes every row")
+
+    monkeypatch.setattr(
+        "stackunderflow.routes.commands.queries.get_project_stats",
+        fail_stats,
+    )
+    payload = await get_tool_distribution(provider=["gemini"])
+    assert payload == {"tool_count_distribution": {}}
+
+
+@pytest.mark.asyncio
+async def test_tool_distribution_model_filter_recomputes_from_command_details(
+    tmp_path, monkeypatch,
+):
+    """#33: ``?model=`` rebuilds the distribution from the per-command
+    ``command_details`` rows so only commands attributed to the selected
+    model(s) are counted — interruptions stay excluded, mirroring the
+    aggregator's canonical distribution."""
+    store_db = tmp_path / "store.db"
+    slug = "-tcd-model"
+    _seed_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    details = [
+        {"model": "claude-opus-4-8", "tools_used": 2, "is_interruption": False},
+        {"model": "claude-opus-4-8", "tools_used": 2, "is_interruption": False},
+        {"model": "claude-opus-4-8", "tools_used": 0, "is_interruption": False},
+        # Interruption — never counted, even when the model matches.
+        {"model": "claude-opus-4-8", "tools_used": 5, "is_interruption": True},
+        # Different model — dropped by the filter.
+        {"model": "claude-haiku-4-5", "tools_used": 1, "is_interruption": False},
+    ]
+    fake_stats = {
+        "user_interactions": {
+            "tool_count_distribution": {"0": 1, "1": 1, "2": 2, "5": 1},
+            "command_details": details,
+        },
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.commands.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], fake_stats),
+    )
+
+    payload = await get_tool_distribution(model=["Claude-Opus-4-8"])  # case-insensitive
+    assert payload == {"tool_count_distribution": {2: 2, 0: 1}}
+
+    # A model that matches nothing → empty map, not the all-model fallback.
+    payload = await get_tool_distribution(model=["gpt-5"])
+    assert payload == {"tool_count_distribution": {}}
+
+
 # ── route registration ──────────────────────────────────────────────────────
 
 def test_commands_route_registered_on_app():

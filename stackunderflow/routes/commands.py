@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.costs import compute_cost
@@ -243,7 +243,12 @@ async def get_commands_daily(log_path: str | None = None):
 
 
 @router.get("/api/tool-distribution")
-async def get_tool_distribution(log_path: str | None = None, timezone_offset: int = 0):
+async def get_tool_distribution(
+    log_path: str | None = None,
+    timezone_offset: int = 0,
+    provider: Annotated[list[str] | None, Query()] = None,
+    model: Annotated[list[str] | None, Query()] = None,
+):
     """Return the ``tool_count_distribution`` map split off from dashboard-data.
 
     Mirrors the §A3 ``/api/cost-data`` pattern: same canonical
@@ -251,20 +256,69 @@ async def get_tool_distribution(log_path: str | None = None, timezone_offset: in
     the resulting stats dict so the Overview chart can lazy-fetch this
     section without dragging the rest of the analytics over the wire.
 
+    #33: ``provider`` / ``model`` are repeated query params matching the
+    dashboard's FilterBar so this chart narrows with the rest of the Overview
+    tab instead of staying project-wide. ``provider`` narrows the slug's
+    ``(provider, slug)`` project rows before the stats sweep (a filter that
+    excludes every row returns an empty map). ``model`` recomputes the
+    distribution from the per-command ``command_details`` rows — the same
+    non-interruption commands and per-command ``model`` attribution the
+    aggregator's canonical ``tool_count_distribution`` / ``model_distribution``
+    are built from — keeping the filtered counts consistent with the unfiltered
+    ones. Empty/absent params keep the existing all-project contract.
+
     Shape: ``{tool_count_distribution: {<tool_count>: <command_count>}}``.
     Missing data resolves to ``{}`` so the chart renders its empty state.
     """
     path = _resolve_log_path(log_path)
     slug = Path(path).name
+
+    provider_filter: set[str] | None = None
+    if provider:
+        normed_p = {p.strip().lower() for p in provider if p and p.strip()}
+        if normed_p:
+            provider_filter = normed_p
+
+    model_filter: set[str] | None = None
+    if model:
+        normed_m = {m.strip().lower() for m in model if m and m.strip()}
+        if normed_m:
+            model_filter = normed_m
+
     conn = db.connect(deps.store_path)
     try:
-        project_ids = _project_ids_for(conn, path)
+        rows = queries.get_projects_by_slug(conn, slug=slug)
+        if not rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{slug}' not found in store — try /api/refresh first",
+            )
+        if provider_filter is not None:
+            rows = [r for r in rows if (r.provider or "").lower() in provider_filter]
+            if not rows:
+                # Provider filter excludes every row for this slug → empty
+                # distribution (shape-stable), matching /api/messages' posture.
+                return {"tool_count_distribution": {}}
+        project_ids = [r.id for r in rows]
         # RANK 11: share the memoized stats sweep with /api/cost-data so the
-        # Overview tab doesn't recompute the full pipeline a third time.
+        # Overview tab doesn't recompute the full pipeline a third time. The
+        # memo key includes the (possibly provider-narrowed) id tuple, so a
+        # filtered sweep never collides with the all-provider entry.
         stats = _project_stats_cached(conn, project_ids=project_ids, slug=slug, tz_offset=timezone_offset)
     finally:
         conn.close()
 
     ui = stats.get("user_interactions") if isinstance(stats, dict) else None
+    if model_filter is not None:
+        details = ui.get("command_details") if isinstance(ui, dict) else None
+        dist_c: Counter[int] = Counter()
+        for d in details or []:
+            if not isinstance(d, dict) or d.get("is_interruption"):
+                continue
+            if (d.get("model") or "").lower() not in model_filter:
+                continue
+            dist_c[int(d.get("tools_used", 0) or 0)] += 1
+        return {"tool_count_distribution": dict(dist_c)}
+
     dist = ui.get("tool_count_distribution") if isinstance(ui, dict) else None
     return {"tool_count_distribution": dist if isinstance(dist, dict) else {}}
