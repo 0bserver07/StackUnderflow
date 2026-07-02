@@ -56,6 +56,50 @@
 
 ---
 
+### #8 — Worktree intelligence: detect, attribute, prune  ·  (maintainer idea, 2026-07-02)
+
+**Goal.** Worktrees are the maintainer's biggest agent-era pain beyond analytics:
+parallel agents leave them behind, their sessions fragment per-project analytics
+into phantom sibling projects, and nobody knows what's safe to delete. Make the
+tool know every worktree: which project owns it, what it cost, whether its work
+landed, and whether pruning is safe.
+
+**Evidence it's real (2026-07-02, this repo + this machine):**
+- Manual archaeology found **13 orphaned agent worktrees + 121 stale branches**
+  here; proving all content was merged (`git cherry`, per-file diffs vs main)
+  took an hour of forensics before cleanup was safe.
+- `~/.claude/projects/` holds **4 "projects" that are actually worktrees**
+  (`…chimera--worktrees-all-issues`, `…chimera--worktrees-remaining-features`,
+  `…apify…--worktrees-pipeline-integration`, `…StackUnderflow--claude-worktrees-todo-cleanup`)
+  — their sessions and cost count as separate projects in every surface.
+
+**Approach.**
+- **Detect (read-only, two sources).** (1) Session-level: a session `cwd` where
+  `git rev-parse --git-common-dir` ≠ `--git-dir` is a worktree session; the
+  common dir names the parent repo. Also match the known path shapes
+  (`.claude/worktrees/*`, `--worktrees-*` slug fragments). (2) Repo-level:
+  `git worktree list --porcelain` against each known project root — batched
+  per repo (the yield-route lesson: never one git call per session), cached.
+- **Attribute.** `worktree_of` on `projects` (v027, additive — next free slot)
+  + API-layer roll-up like the multi-provider merge: parent project analytics
+  gain an "includes N worktree sessions ($X)" breakout; phantom siblings
+  disappear from Overview.
+- **Hygiene surface.** `stackunderflow worktrees` CLI + a dashboard panel: per
+  worktree — branch, HEAD, age, dirty-file count, unique commits vs the default
+  branch (`git cherry`), attributed sessions + cost, and a verdict:
+  ACTIVE / MERGED-SAFE-TO-PRUNE / HAS-UNIQUE-WORK. Prune output is a **preview**
+  (the exact `git worktree remove` / `git branch -D` commands) — the tool never
+  deletes git state itself.
+
+**Scope (own).** `services/worktrees.py`, `routes/worktrees.py` + registration,
+CLI subcommand, FE panel (source only), v027 migration, tests with real
+`git worktree add` fixtures under tmp_path. Read-only against git; store writes
+only the additive attribution column.
+
+**Verify.** Fixture repo with live/merged/dirty/unique-work worktrees → verdicts;
+session-cwd → parent mapping incl. the 4 real-world slug shapes above; fragment
+roll-up math; never mutates git state (assert command previews only).
+
 ## Bigger bet (not yet a task) — privacy-preserving team layer
 Each machine pushes encrypted **aggregates only** (never raw transcripts) to a self-hostable endpoint; the team sees shared waste/patterns. Grounded in the backup hardlink snapshots + the mart schema (aggregates are already the storage unit). Design work: the privacy contract + sync protocol.
 
