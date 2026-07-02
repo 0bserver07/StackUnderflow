@@ -19,8 +19,10 @@ gracefully without it.
 
 Hooks come in two families. **Capture** hooks — the default — *record* what
 happens. **Injection** hooks — added with `--inject` — *feed memory back* into
-the live agent before it works. This document covers capture first; context
-injection and the agent-discovery snippet are the last sections.
+the live agent before it works; `--inject` also installs the **active-recall**
+hook, which runs the same `memory file` lookup you would by hand, right before
+an Edit/Write/Bash. This document covers capture first; context injection,
+active recall, and the agent-discovery snippet are the last sections.
 
 ## What gets captured
 
@@ -196,11 +198,12 @@ read what StackUnderflow already knows and feed it back into the live agent,
 before it acts. Injection is opt-in *separately* from capture:
 
 ```
-stackunderflow hooks install --inject     # capture hooks + the 3 injection hooks
+stackunderflow hooks install --inject     # capture hooks + 3 injection hooks + the recall hook
 stackunderflow hooks install              # capture hooks only (unchanged)
 ```
 
-`--inject` adds three hooks alongside the capture four:
+`--inject` adds three in-process injection hooks alongside the capture four
+(plus the active-recall hook — its own section below):
 
 | Claude Code event | hook id | injects |
 |-------------------|---------|---------|
@@ -241,13 +244,84 @@ Injection inherits the capture hooks' non-negotiables, sharpened:
   (`Edit|Write|MultiEdit`) — it never fires on a Read or a Bash call.
 
 `hooks status`, `uninstall`, and `repair` cover the injection hooks with no
-change in contract: `uninstall` removes all seven, and a convergent re-`install`
-*without* `--inject` cleanly drops the three injection hooks again. Injection
-hooks never carry `--capture-content` — they read the store, they don't record.
+change in contract: `uninstall` removes all of ours, and a convergent
+re-`install` *without* `--inject` cleanly drops the injection + recall hooks
+again. Injection hooks never carry `--capture-content` — they read the store,
+they don't record.
+
+## Active recall (PreToolUse → the `memory` CLI)
+
+The fourth hook `--inject` installs turns the `memory` surface into a live
+guardrail. Right before Claude Code runs an **Edit**, **Write**, or **Bash**
+tool call, the recall hook asks memory about the file that's about to be
+touched — the same lookup you'd run by hand — and warns the agent *before* the
+edit if that file has real failure history:
+
+| Claude Code event | hook id | injects |
+|-------------------|---------|---------|
+| `PreToolUse` (Edit/Write/Bash) | `stackunderflow-pretool-recall` | the file's failure history, via `stackunderflow memory file <path> --json` |
+
+Unlike the three injection hooks above (in-process store reads), the recall
+hook **shells the public CLI** — `stackunderflow memory file <path> --json` —
+as a subprocess under a hard deadline, and parses the token-bounded
+`stackunderflow.memory/1` envelope. That buys two things: the lookup runs the
+exact code path agents and humans already use (one contract to trust), and the
+deadline is a *process-level* hard stop — a slow store can be killed, not
+merely tolerated.
+
+**How the target path is found.** For Edit/Write it's the `file_path` in the
+tool call. For Bash, a deliberately light heuristic pulls file-looking tokens
+out of the command (`pytest tests/test_auth.py -q` → `tests/test_auth.py`),
+skipping flags, URLs, and pseudo-files (`/dev/null`); at most three candidate
+paths per command, and a command with no extractable path (`npm run build`,
+`git status`) never triggers a lookup at all.
+
+**What gets injected.** Only a *risk signal* warrants output: past sessions
+that `failed` or `reverted` after touching this file (the `memory file` risk
+block plus its failure-mode rows). A clean file — even one with plenty of
+recorded history — injects nothing. When it fires, the block looks like:
+
+```
+[StackUnderflow memory] risky.py has failure history (2 failed and 1 reverted
+of 7 past sessions touching it). Recent trouble:
+  • 2026-05-17  failed: that broke the build — please look again
+  • 2026-05-12  reverted: git checkout undid the change
+Full history: `stackunderflow memory file /path/to/risky.py --json`.
+```
+
+The block is hard-capped at ~600 tokens (the same chars/4 estimate the other
+hooks use); over budget, the **oldest** failure lines are dropped first. The
+output uses the identical `hookSpecificOutput.additionalContext` envelope as
+the injection hooks.
+
+**The no-op guarantees.** This runs inside your live coding session, so the
+contract is absolute — the hook always exits `0` and is silent on *anything*
+short of a genuine risk signal:
+
+- `stackunderflow` missing from `PATH`, the CLI exiting non-zero, stdout that
+  isn't JSON, an envelope schema it doesn't recognise, any exception at all →
+  empty output, tool proceeds untouched.
+- The lookup runs under one shared wall-clock deadline — **1.5s by default**,
+  tunable via `STACKUNDERFLOW_RECALL_TIMEOUT` (seconds). When it expires the
+  child process is killed and the hook stays silent. Multiple Bash paths share
+  that single deadline; the tool call is never delayed beyond it.
+- Nothing is recorded: recall is read-only end to end (the child process is
+  the same read-only query `memory file` always is).
+
+**Privacy.** The recall hook adds no new data flow. The child process is a
+local, read-only query against your own store; what it injects is drawn from
+what `memory file` already returns (outcome labels, dates, short evidence
+excerpts) and goes only into the local agent's context. Nothing is written,
+nothing is uploaded, nothing leaves the machine.
+
+**Cost.** Each fire is a hook process *plus* a nested CLI process — a few
+hundred milliseconds worst case, bounded by the deadline. The matcher scopes
+it to `Edit|Write|Bash`, and the Bash heuristic means most shell commands
+(no file-looking arguments) skip the lookup entirely.
 
 ## Only Claude Code, for now
 
-Both hook families — capture and injection — wire **Claude Code's** hook system.
+Every hook family — capture, injection, recall — wires **Claude Code's** hook system.
 Other coding agents StackUnderflow ingests (Codex, Cursor, Cline, the beta
 providers) don't expose an equivalent lifecycle-hook mechanism, so there's
 nothing analogous to install for them — those providers stay on passive
