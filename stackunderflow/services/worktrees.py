@@ -163,23 +163,19 @@ def is_worktree_slug(slug: str) -> str | None:
     Returns ``None`` for anything else — in particular a slug where
     ``worktrees`` is a genuine directory name (``-Users-x-worktrees-app`` has a
     single dash before ``worktrees`` and does not match). When markers nest
-    (a worktree inside a worktree) the rightmost marker wins, so the returned
-    parent is the immediate parent.
+    (a worktree inside a worktree) the LEFTMOST marker wins, so the returned
+    parent is the ROOT repo slug — attribution folds cost into the real
+    project, and the projects roll-up only folds into parents that are not
+    themselves fragments (matching ``routes/projects.py`` semantics).
     """
     if not slug:
         return None
-    best_idx = -1
-    best_marker: str | None = None
+    best_idx: int | None = None
     for marker in _WORKTREE_SLUG_MARKERS:
-        idx = slug.rfind(marker)
-        if idx > best_idx:
-            best_idx = idx
-            best_marker = marker
-    if best_marker is None or best_idx <= 0:
-        # Not found, or found at position 0 (empty parent) — no match.
-        return None
-    name = slug[best_idx + len(best_marker):]
-    if not name:
+        idx = slug.find(marker)
+        if idx > 0 and slug[idx + len(marker):]:
+            best_idx = idx if best_idx is None else min(best_idx, idx)
+    if best_idx is None:
         return None
     return slug[:best_idx]
 

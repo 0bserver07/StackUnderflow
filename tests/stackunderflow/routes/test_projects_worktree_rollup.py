@@ -34,8 +34,11 @@ def _connect(store_db):
 
 
 def _add_worktree_of_column(conn):
-    """Simulate the v027 migration shape on a v026 tmp store."""
-    conn.execute("ALTER TABLE projects ADD COLUMN worktree_of TEXT")
+    """Ensure the v027 column exists (no-op post-v027, where schema.apply
+    already created it — this helper predates the migration landing)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    if "worktree_of" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN worktree_of TEXT")
 
 
 def _insert_project(conn, *, provider="claude", slug, last_modified=0.0, path=None, worktree_of=None):
@@ -308,7 +311,10 @@ async def test_pre_migration_store_folds_via_shape_fallback_only(tmp_path, monke
     detect that and carry the classification on slug shape alone. Fragment
     cost resolves through the bulk messages fallback (no mart rows seeded)."""
     store_db = tmp_path / "store.db"
-    conn = _connect(store_db)  # deliberately NO _add_worktree_of_column
+    conn = _connect(store_db)
+    # schema.apply is at v027+ now, so genuinely simulate a pre-migration
+    # store by dropping the column it added (SQLite ≥3.35 supports this).
+    conn.execute("ALTER TABLE projects DROP COLUMN worktree_of")
     parent_pid = _insert_project(conn, slug=PARENT, last_modified=2.0)
     frag_pid = _insert_project(conn, slug=FRAG_SHAPE, last_modified=1.0)
     _insert_sessions(conn, parent_pid, 1)

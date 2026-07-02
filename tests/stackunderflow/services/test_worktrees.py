@@ -487,9 +487,11 @@ class TestStoreIntegration:
             "-Users-yadkonrad-dev-dev-year26-feb26-chimera",
         ),
         ("-home-u-proj--claude-worktrees-agent-a2a90f25e55f4489", "-home-u-proj"),
-        # nested worktrees: the RIGHTMOST marker wins → immediate parent
-        ("-p--worktrees-a--claude-worktrees-b", "-p--worktrees-a"),
-        ("-p--claude-worktrees-a--worktrees-b", "-p--claude-worktrees-a"),
+        # nested worktrees: the LEFTMOST marker wins → ROOT repo slug (the
+        # roll-up only folds into parents that are not themselves fragments,
+        # so root attribution is what makes nested fragments fold at all)
+        ("-p--worktrees-a--claude-worktrees-b", "-p"),
+        ("-p--claude-worktrees-a--worktrees-b", "-p"),
         # non-matches: 'worktrees' as a genuine directory name (single dash)
         ("-Users-x-worktrees-app", None),
         ("-Users-x-git-worktrees-app", None),

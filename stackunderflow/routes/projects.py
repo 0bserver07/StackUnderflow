@@ -12,6 +12,11 @@ from fastapi.responses import JSONResponse
 import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.infra.discovery import locate_logs as find_claude_logs
+
+# Canonical worktree-fragment shape test lives with the detection service;
+# both surfaces MUST agree (leftmost marker → ROOT repo slug) or the fold and
+# the attribute writer would disagree about a fragment's parent.
+from stackunderflow.services.worktrees import is_worktree_slug as _is_worktree_slug
 from stackunderflow.store import db, mart_queries, queries
 
 router = APIRouter()
@@ -451,34 +456,8 @@ def _resolve_log_dir(path: str | None, slug: str) -> str:
 
 
 # ── Campaign #8: worktree fragment detection + roll-up ───────────────────────
-
-_WORKTREE_SLUG_MARKERS = ("--claude-worktrees-", "--worktrees-")
-
-
-def _is_worktree_slug(slug: str) -> str | None:
-    """Map a worktree-session slug to its parent project slug, else ``None``.
-
-    PRIVATE fallback copy — the canonical implementation is
-    ``stackunderflow.services.worktrees.is_worktree_slug`` (built on the
-    parallel #8 detection branch); kept private here so the two branches
-    can't import-collide before the lead reconciles them at integration.
-
-    Claude Code derives the log slug from the session cwd (``/`` → ``-``), so
-    a session inside a git worktree logs under a phantom sibling slug:
-
-      ``<parent>--worktrees-<name>``          (checkout under ``…/.worktrees/``)
-      ``<parent>--claude-worktrees-<name>``   (checkout under ``…/.claude/worktrees/``)
-
-    The leftmost marker wins so a nested worktree still attributes to the
-    root repo slug. The parent prefix and the worktree name must both be
-    non-empty.
-    """
-    best: int | None = None
-    for marker in _WORKTREE_SLUG_MARKERS:
-        idx = slug.find(marker)
-        if idx > 0 and slug[idx + len(marker) :]:
-            best = idx if best is None else min(best, idx)
-    return slug[:best] if best is not None else None
+# (_is_worktree_slug is imported at the top of the module from
+# services.worktrees — the canonical shape test.)
 
 
 def _worktree_parents_from_store(conn) -> dict[str, str]:
