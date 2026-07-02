@@ -193,6 +193,7 @@ async def get_projects(
     limit: int | None = None,
     offset: int = 0,
     provider: Annotated[list[str] | None, Query()] = None,
+    include_worktrees: bool = False,
 ):
     """
     Get all available Claude projects with metadata.
@@ -208,6 +209,13 @@ async def get_projects(
         provider: Optional repeated query param (``?provider=cursor&provider=cline``)
             scoping the project list to those providers. Empty = "all".
             Case-insensitive on read, lowercased before comparison.
+        include_worktrees: Campaign #8 — sessions run inside git worktrees log
+            under phantom sibling slugs (``<parent>--worktrees-<x>``). By
+            default those fragments are FOLDED into their parent row, which
+            gains ``worktree_sessions`` / ``worktree_cost`` / ``worktree_count``.
+            ``?include_worktrees=1`` returns the raw un-folded list instead,
+            with each fragment row annotated ``worktree_of: <parent slug>`` so
+            the frontend can badge it.
 
     Returns:
         JSON with projects list and metadata
@@ -230,6 +238,7 @@ async def get_projects(
             limit=limit,
             offset=offset,
             provider_filter=provider_filter,
+            include_worktrees=include_worktrees,
         )
         return JSONResponse(payload)
     except Exception as e:
@@ -270,14 +279,25 @@ def _compute_projects_payload(
     limit: int | None,
     offset: int,
     provider_filter: set[str] | None,
+    include_worktrees: bool = False,
 ) -> dict:
     """Blocking body of ``GET /api/projects`` — runs in a worker thread.
 
     Opens its own SQLite connection (sqlite handles are single-thread, so
     connecting here keeps connect/use/close on one thread), reads project
     rows + marts, globs each project directory for its on-disk size, then
-    sorts / paginates and applies the active-currency conversion. Returns
-    the JSON payload dict the route ships verbatim.
+    folds worktree fragments into their parents (campaign #8), sorts /
+    paginates and applies the active-currency conversion. Returns the JSON
+    payload dict the route ships verbatim.
+
+    Ordering matters: the worktree fold runs BEFORE the sort + page slice so
+    ``total_count`` / ``has_more`` count folded rows, never phantom fragments.
+
+    Caching note: this payload is computed per-request — nothing memoises it
+    server-side today (the only cache in this module, ``_dir_size_cache``, is
+    keyed on (path, mtime) and its values are fold-mode-independent). If a
+    response cache is ever added, its key MUST include ``include_worktrees``
+    or the folded and raw variants would cross-contaminate.
     """
     limit, offset = _clamp_pagination(limit, offset)
     conn = db.connect(deps.store_path)
@@ -339,6 +359,31 @@ def _compute_projects_payload(
                 }
             )
 
+        # Campaign #8 — worktree attribution roll-up. Sessions run inside git
+        # worktrees log under phantom sibling slugs; fold them into their
+        # parent row (default) or annotate them (?include_worktrees=1). This
+        # runs BEFORE the sort + page slice below so total_count / has_more
+        # stay truthful about the folded list.
+        worktree_parent_by_slug = _worktree_parents_from_store(conn)
+        if include_worktrees:
+            _annotate_worktree_fragments(projects, worktree_parent_by_slug)
+        else:
+            projects, folded = _fold_worktree_fragments(projects, worktree_parent_by_slug)
+            if folded:
+                fragment_cost_usd = _fragment_costs_usd(
+                    conn,
+                    folded,
+                    mart_rows=mart_rows,
+                    cost_by_pid=cost_by_pid,
+                    mart_loaded=include_stats,
+                )
+                parent_by_slug = {p["dir_name"]: p for p in projects}
+                for parent_slug, fragments in folded.items():
+                    parent = parent_by_slug[parent_slug]
+                    parent["worktree_count"] = len(fragments)
+                    parent["worktree_sessions"] = sum(f["file_count"] for f in fragments)
+                    parent["worktree_cost"] = sum(fragment_cost_usd[f["dir_name"]] for f in fragments)
+
         if sort_by == "last_modified":
             projects.sort(key=lambda x: x["last_modified"], reverse=True)
         elif sort_by == "first_seen":
@@ -371,11 +416,17 @@ def _compute_projects_payload(
 
     currency = active_currency_payload()
     rate = currency["rate_from_usd"]
-    if rate != 1.0 and include_stats:
+    if rate != 1.0:
         for proj in projects:
-            stats = proj.get("stats")
-            if isinstance(stats, dict) and "total_cost" in stats:
-                stats["total_cost"] = float(stats["total_cost"]) * rate
+            # ``worktree_cost`` is summed in USD like every other cost field —
+            # convert it with the same rate so a folded parent never mixes
+            # currencies (it exists even when include_stats is off).
+            if "worktree_cost" in proj:
+                proj["worktree_cost"] = float(proj["worktree_cost"]) * rate
+            if include_stats:
+                stats = proj.get("stats")
+                if isinstance(stats, dict) and "total_cost" in stats:
+                    stats["total_cost"] = float(stats["total_cost"]) * rate
 
     return {
         "projects": projects,
@@ -397,6 +448,146 @@ def _resolve_log_dir(path: str | None, slug: str) -> str:
     if path:
         return path
     return str(Path.home() / ".claude" / "projects" / slug)
+
+
+# ── Campaign #8: worktree fragment detection + roll-up ───────────────────────
+
+_WORKTREE_SLUG_MARKERS = ("--claude-worktrees-", "--worktrees-")
+
+
+def _is_worktree_slug(slug: str) -> str | None:
+    """Map a worktree-session slug to its parent project slug, else ``None``.
+
+    PRIVATE fallback copy — the canonical implementation is
+    ``stackunderflow.services.worktrees.is_worktree_slug`` (built on the
+    parallel #8 detection branch); kept private here so the two branches
+    can't import-collide before the lead reconciles them at integration.
+
+    Claude Code derives the log slug from the session cwd (``/`` → ``-``), so
+    a session inside a git worktree logs under a phantom sibling slug:
+
+      ``<parent>--worktrees-<name>``          (checkout under ``…/.worktrees/``)
+      ``<parent>--claude-worktrees-<name>``   (checkout under ``…/.claude/worktrees/``)
+
+    The leftmost marker wins so a nested worktree still attributes to the
+    root repo slug. The parent prefix and the worktree name must both be
+    non-empty.
+    """
+    best: int | None = None
+    for marker in _WORKTREE_SLUG_MARKERS:
+        idx = slug.find(marker)
+        if idx > 0 and slug[idx + len(marker) :]:
+            best = idx if best is None else min(best, idx)
+    return slug[:best] if best is not None else None
+
+
+def _worktree_parents_from_store(conn) -> dict[str, str]:
+    """``{slug: parent_slug}`` from the v027 ``projects.worktree_of`` column.
+
+    Feature-detected via ``PRAGMA table_info`` (the same probe
+    ``schema._column_exists`` uses) so a pre-v027 store — where the column
+    doesn't exist yet — returns ``{}`` and the slug-shape fallback carries
+    the classification alone, with no error.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    if "worktree_of" not in cols:
+        return {}
+    rows = conn.execute(
+        "SELECT slug, worktree_of FROM projects WHERE worktree_of IS NOT NULL AND worktree_of != ''"
+    ).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def _worktree_parent_of(slug: str, parent_by_slug: dict[str, str]) -> str | None:
+    """Resolve a slug's worktree parent: v027 attribution first, shape second."""
+    return parent_by_slug.get(slug) or _is_worktree_slug(slug)
+
+
+def _fold_worktree_fragments(
+    projects: list[dict],
+    parent_by_slug: dict[str, str],
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    """Partition assembled rows into ``(kept, {parent_slug: fragment_rows})``.
+
+    A row folds only when its resolved parent (a) exists in this listing
+    universe (post provider-filter — never fold into a parent that isn't
+    listed; unmatched fragments stay visible) and (b) is not itself a
+    fragment (otherwise the roll-up would sum into a row that then
+    disappears; a chained/cyclic attribution degrades to "stays visible",
+    never to lost data).
+    """
+    listed = {p["dir_name"] for p in projects}
+    kept: list[dict] = []
+    folded: dict[str, list[dict]] = {}
+    for proj in projects:
+        slug = proj["dir_name"]
+        parent = _worktree_parent_of(slug, parent_by_slug)
+        if (
+            parent
+            and parent != slug
+            and parent in listed
+            and _worktree_parent_of(parent, parent_by_slug) is None
+        ):
+            folded.setdefault(parent, []).append(proj)
+        else:
+            kept.append(proj)
+    return kept, folded
+
+
+def _annotate_worktree_fragments(projects: list[dict], parent_by_slug: dict[str, str]) -> None:
+    """``?include_worktrees=1`` path: no folding — badge fragments in place.
+
+    Each fragment row gains ``worktree_of: <parent slug>``. A v027-attributed
+    row is annotated even when its parent isn't listed (the attribution is
+    authoritative store data; the frontend badges the orphan), while a
+    shape-derived match requires a listed parent — the same existence rule
+    the fold applies.
+    """
+    listed = {p["dir_name"] for p in projects}
+    for proj in projects:
+        slug = proj["dir_name"]
+        parent = parent_by_slug.get(slug)
+        if parent is None:
+            shaped = _is_worktree_slug(slug)
+            parent = shaped if shaped in listed else None
+        if parent and parent != slug:
+            proj["worktree_of"] = parent
+
+
+def _fragment_costs_usd(
+    conn,
+    folded: dict[str, list[dict]],
+    *,
+    mart_rows: dict[int, dict],
+    cost_by_pid: dict[int, float],
+    mart_loaded: bool,
+) -> dict[str, float]:
+    """USD cost per fragment row for the parent roll-up — mart-first.
+
+    Reuses ``mart_rows`` / ``cost_by_pid`` when the include_stats pass
+    already loaded them; otherwise loads lazily — ``project_mart`` first
+    (one indexed scan), then the bulk messages fallback only for fragment
+    ids the mart doesn't cover (pre-ETL stores). Fragments with no cost
+    data anywhere roll up as 0.0.
+    """
+    fragments = [frag for group in folded.values() for frag in group]
+    need = {pid for frag in fragments for pid in frag["_ids"]}
+    if not mart_loaded and need:
+        for row in mart_queries.list_project_mart(conn):
+            mart_rows.setdefault(int(row["project_id"]), row)
+    if any(pid not in mart_rows for pid in need) and not cost_by_pid:
+        cost_by_pid = queries.bulk_project_cost(conn)
+    costs: dict[str, float] = {}
+    for frag in fragments:
+        total = 0.0
+        for pid in frag["_ids"]:
+            mart_row = mart_rows.get(pid)
+            if mart_row is not None:
+                total += float(mart_row.get("total_cost_usd", 0.0) or 0.0)
+            else:
+                total += float(cost_by_pid.get(pid, 0.0))
+        costs[frag["dir_name"]] = total
+    return costs
 
 
 # Per-(path, mtime) cache so the project list doesn't re-glob the
