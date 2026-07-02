@@ -65,6 +65,16 @@ Everything else lands in the snapshot: `projects/*.jsonl`,
 `agents/`, `commands/`, `settings.json`, `shell-snapshots/`,
 `statsig-stable-id.txt`, prompt history, and so on.
 
+The backup also captures the four critical `~/.stackunderflow` state
+artifacts — `store.db`, `search_index.db`, `qa_pairs.db`, `tags.json` —
+into `<backup>/stackunderflow-state/`, so a backup passes its own
+`backup verify` and a restore does not silently lose search, Q&A, or
+tags. SQLite files are copied through the online-backup API (safe while
+the watcher or a backfill is writing). These copies are full, not
+hard-linked — a churning database never has an identical previous
+version — so backup size grows with your store; tune `--keep` if disk
+space is tight.
+
 ### The hard-link efficiency contract
 
 `backup create` runs

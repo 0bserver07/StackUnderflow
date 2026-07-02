@@ -26,6 +26,7 @@ import {
   IconHierarchy3,
   IconHistory,
   IconWallet,
+  IconActivityHeartbeat,
 } from '@tabler/icons-react'
 
 export type Tab = {
@@ -61,6 +62,10 @@ export const TABS: readonly Tab[] = [
   // started then dropped). Calls the dedicated /api/forks route. Beta while the
   // abandonment heuristic settles.
   { id: 'forks', label: 'Forks', icon: IconGitFork, isBeta: true },
+  // Cross-session pattern / failure mining (campaign #6) — recurring file
+  // failures, error signatures + resolution hints, command failure clusters.
+  // Calls the dedicated /api/patterns route. Beta while attribution settles.
+  { id: 'health', label: 'Health', icon: IconActivityHeartbeat, isBeta: true },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },

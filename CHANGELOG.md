@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Active-recall hooks** — an opt-in PreToolUse hook (`hooks install --inject`) that, before an Edit/Write/Bash runs, queries `stackunderflow memory file <path> --json` and injects that file's past failure modes into the live agent's context. Hard-capped injection size, 1.5s hard timeout, and always-exit-0 silent no-op on any error, so it can never block or slow a tool call.
+- **Coding-health tab (`Health`, beta)** — cross-session pattern mining at `/api/patterns`: per-file failure rates across sessions, recurring error signatures with resolution hints, and command failure clusters. Window-bounded (default 90d, max 365d); `file_risk()` is exposed programmatically for the recall hook.
+- **Prescriptive cost (Optimize surface)** — `/api/optimize/prescriptions` turns waste findings into actions: model-routing recommendations built from per-model spend + v026 reasoning-token attribution (with dollar deltas priced through `compute_cost`, never invented), and a CLAUDE.md slimming preview (`POST /api/optimize/claudemd-preview`) that emits a unified diff + per-rule savings. Preview-only by construction — the server never writes user files (enforced by an AST source-scan test).
+- **Backup state capture** — `backup create` now copies the four critical `~/.stackunderflow` artifacts (`store.db`, `search_index.db`, `qa_pairs.db`, `tags.json`) into `<backup>/stackunderflow-state/` via the SQLite online-backup API. Previously a fresh backup failed its own `backup verify` and a restore silently lost search/Q&A/tags.
+
+### Fixed
+
+- **Cost-tab data correctness (June-audit WAVE 3)** — tool costs now respect the 7d/30d date range server-side (`tool_costs_windowed`); command tool-distribution honours the provider/model filters; DailyCost labels use the converted currency; single range control drives the token stack; remaining hardcoded dark-theme chart chrome themed for light mode; duplicate dead chart components removed; local number formatters consolidated onto `services/format.ts`.
+- **Ingest hardening** — a malformed session file can no longer abort an ingest batch or kill provider discovery: 10 adapters (claude, codex, openclaw, pi, hermes, droid, cline, cursor, antigravity, qwen/gemini) now skip bad records instead of raising on non-dict JSON lines, garbage token counts, overflowing timestamps, and non-string metadata; `OpenAIPricer.normalize_tokens` tolerates garbage raw-JSON values. 27 malformed-fixture regression tests.
+- **Docs truth pass** — retired sentence-transformers/`[embeddings]`-extra and MCP-server references replaced with the current Ollama embedding flow (`STACKUNDERFLOW_OLLAMA_URL`, `nomic-embed-text`, `memory embed`); CLI/API references now match `cli.py` and `routes/` (added `memory embed`, `pricing doctor`, `backup verify`, `guide`, `analyze`, `/api/forks`, `/api/whatif`, `/api/budgets`, `/api/pricing/doctor`, `/api/static-analysis/*`); provider counts corrected to 20 (7 default-on + 13 beta).
+
 ## [0.9.2] - 2026-05-28
 
 Patch release: two small runtime fixes, a meta-agent model-list update, and refreshed screenshots across the README and docs site.

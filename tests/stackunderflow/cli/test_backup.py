@@ -44,6 +44,28 @@ def claude_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return d
 
 
+@pytest.fixture
+def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A fake ~/.stackunderflow holding all four critical artifacts.
+
+    ``backup create`` captures these into the backup; pointing the CLI at a
+    tmp dir keeps the real state directory untouched.
+    """
+    import sqlite3
+
+    d = tmp_path / "state"
+    d.mkdir()
+    for db_name in ("store.db", "search_index.db", "qa_pairs.db"):
+        conn = sqlite3.connect(d / db_name)
+        conn.execute("CREATE TABLE t (v TEXT)")
+        conn.execute("INSERT INTO t VALUES ('marker')")
+        conn.commit()
+        conn.close()
+    (d / "tags.json").write_text("{}")
+    monkeypatch.setattr(cli_mod, "_STATE_DIR", d)
+    return d
+
+
 # ── backup create: exit codes ───────────────────────────────────────────────
 
 
@@ -74,7 +96,7 @@ def test_backup_create_exits_1_on_timeout(
 
 
 def test_backup_create_succeeds_on_rsync_ok(
-    runner, backup_dir, claude_dir, monkeypatch
+    runner, backup_dir, claude_dir, state_dir, monkeypatch
 ):
     def fake_run(cmd, **kwargs):
         # cmd[-1] is "<dest>/" — materialize it so the summary stat works.
@@ -87,6 +109,59 @@ def test_backup_create_succeeds_on_rsync_ok(
     result = runner.invoke(cli, ["backup", "create"])
     assert result.exit_code == 0, result.output
     assert "Done:" in result.output
+
+
+# ── backup create: state capture (create must satisfy its own verify) ────────
+
+
+def test_backup_create_captures_state_then_verify_passes(
+    runner, backup_dir, claude_dir, state_dir, monkeypatch
+):
+    """A fresh backup must contain every critical artifact — end to end."""
+    import sqlite3
+
+    def fake_run(cmd, **kwargs):
+        dest = Path(cmd[-1].rstrip("/"))
+        dest.mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(cli, ["backup", "create"])
+    assert result.exit_code == 0, result.output
+    assert "State: captured" in result.output
+
+    backup = next(backup_dir.iterdir())
+    state = backup / "stackunderflow-state"
+    for artifact in cli_mod._CRITICAL_ARTIFACTS:
+        assert (state / artifact).is_file(), f"{artifact} not captured"
+
+    # SQLite copies are real, openable snapshots — not torn byte copies.
+    conn = sqlite3.connect(state / "store.db")
+    assert conn.execute("SELECT v FROM t").fetchone() == ("marker",)
+    conn.close()
+
+    verify = runner.invoke(cli, ["backup", "verify"])
+    assert verify.exit_code == 0, verify.output
+
+
+def test_backup_create_warns_when_artifact_missing_and_verify_fails(
+    runner, backup_dir, claude_dir, state_dir, monkeypatch
+):
+    (state_dir / "tags.json").unlink()
+
+    def fake_run(cmd, **kwargs):
+        dest = Path(cmd[-1].rstrip("/"))
+        dest.mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(cli, ["backup", "create"])
+    assert result.exit_code == 0, result.output  # capture gap warns, not fails
+    assert "MISSING tags.json" in result.output
+
+    verify = runner.invoke(cli, ["backup", "verify"])
+    assert verify.exit_code == 1, verify.output
+    assert "tags.json" in verify.output
 
 
 # ── backup verify ───────────────────────────────────────────────────────────

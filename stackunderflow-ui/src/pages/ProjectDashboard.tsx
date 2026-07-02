@@ -37,6 +37,7 @@ const BudgetsTab = lazy(() => import('../components/dashboard/BudgetsTab'))
 const CompareTab = lazy(() => import('../components/dashboard/CompareTab'))
 const YieldTab = lazy(() => import('../components/dashboard/YieldTab'))
 const ForksTab = lazy(() => import('../components/dashboard/ForksTab'))
+const CodingHealthTab = lazy(() => import('../components/dashboard/CodingHealthTab'))
 import {
   useBetaFeatures,
   BETA_ENABLED_KEY,
@@ -387,6 +388,7 @@ export default function ProjectDashboard() {
             {activeTab === 'compare' && <CompareTab />}
             {activeTab === 'yield' && <YieldTab />}
             {activeTab === 'forks' && <ForksTab projectName={name!} />}
+            {activeTab === 'health' && <CodingHealthTab projectName={name!} />}
             {activeTab === 'commands' && <CommandsTab data={dashboardData} />}
             {activeTab === 'messages' && <MessagesTab data={dashboardData} projectName={name!} />}
             {activeTab === 'search' && <SearchTab projectName={name!} initialQuery={initialSearchQuery} />}

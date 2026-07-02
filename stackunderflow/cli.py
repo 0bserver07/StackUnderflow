@@ -843,6 +843,8 @@ def backup_create(label: str | None, keep: int):
             _shutil.rmtree(dest, ignore_errors=True)
             sys.exit(1)
 
+        _capture_state(dest)
+
         # Summarize
         total_files = sum(1 for _ in dest.rglob("*") if _.is_file())
         jsonl_files = sum(1 for _ in dest.rglob("*.jsonl"))
@@ -854,6 +856,7 @@ def backup_create(label: str | None, keep: int):
         click.echo("  rsync not found — falling back to shutil copy")
         shutil.copytree(_CLAUDE_DIR, dest, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns(*[e.rstrip("/") for e in excludes]))
+        _capture_state(dest)
         total_files = sum(1 for _ in dest.rglob("*") if _.is_file())
         click.echo(f"  Done: {total_files} files")
     except subprocess.TimeoutExpired:
@@ -871,6 +874,55 @@ def backup_create(label: str | None, keep: int):
 # sidecar file (services/{search,qa,tag}_service). A backup missing any of
 # these restores to an empty search index / no Q&A / no tags.
 _CRITICAL_ARTIFACTS = ("store.db", "search_index.db", "qa_pairs.db", "tags.json")
+
+
+def _capture_state(dest: Path) -> tuple[list[str], list[str]]:
+    """Copy the critical ``~/.stackunderflow`` artifacts into the backup.
+
+    ``backup verify`` requires every :data:`_CRITICAL_ARTIFACTS` file, but the
+    rsync above only covers ``~/.claude`` — without this step a fresh backup
+    fails its own verify and a restore silently loses search / Q&A / tags.
+    SQLite files go through the online-backup API so a copy taken while the
+    watcher or a backfill is writing can't be torn; ``tags.json`` is a plain
+    copy. A missing or uncopyable artifact is a warning, not a failure —
+    ``backup verify`` is the gate that decides completeness. Note the copies
+    are full (a churning database never hardlinks), so backup size grows with
+    the store; tune ``backup create --keep`` accordingly.
+    """
+    state_dest = dest / "stackunderflow-state"
+    state_dest.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    skipped: list[str] = []
+    for artifact in _CRITICAL_ARTIFACTS:
+        src = _STATE_DIR / artifact
+        if not src.is_file():
+            skipped.append(artifact)
+            continue
+        try:
+            if artifact.endswith(".db"):
+                import sqlite3 as _sqlite3
+
+                src_conn = _sqlite3.connect(src)
+                dst_conn = _sqlite3.connect(state_dest / artifact)
+                try:
+                    src_conn.backup(dst_conn)
+                finally:
+                    src_conn.close()
+                    dst_conn.close()
+            else:
+                import shutil as _shutil
+                _shutil.copy2(src, state_dest / artifact)
+            copied.append(artifact)
+        except Exception as exc:
+            skipped.append(artifact)
+            _log.warning("backup create: could not capture %s: %s", artifact, exc)
+    if copied:
+        click.echo(f"  State: captured {', '.join(copied)}")
+    if skipped:
+        click.echo(
+            f"  State: MISSING {', '.join(skipped)} — `backup verify` will flag this"
+        )
+    return copied, skipped
 
 
 @backup_group.command("verify")
