@@ -120,25 +120,6 @@ async def _lifespan(_app: FastAPI):
     try:
         _schema_conn = db.connect(deps.store_path)
         schema.apply(_schema_conn)
-        # Activate the unified price book as the LIVE source for a running
-        # server: backfill it from the in-code manifest + RATE_CARD (idempotent
-        # UPSERT, gate-proven rate-equal to in-code), wire the seam to this
-        # store, and prime the in-memory cache from the SAME connection so the
-        # first ``compute_cost`` hits memory — no per-call DB I/O. A clean miss
-        # still falls back to the in-code manifest, so this only ever moves
-        # WHERE a rate lives, never WHAT it is. Best-effort: any failure here
-        # leaves the seam in its safe default (off ⇒ in-code pricing).
-        try:
-            from stackunderflow.infra import model_manifest as _mm
-            from stackunderflow.infra.costs import backfill_price_book
-
-            backfill_price_book(_schema_conn)
-            _schema_conn.commit()
-            _mm.use_price_book_store(deps.store_path, enabled=True)
-            _mm.prime_price_book_cache(_schema_conn)
-            logger.info("Price book activated (cache primed from backfilled store)")
-        except Exception as exc:  # noqa: BLE001 — never block startup on pricing
-            logger.warning("Price book activation skipped: %s", exc)
         _schema_conn.close()
     except Exception as e:
         logger.error("Schema apply failed at startup: %s", e)
@@ -146,6 +127,29 @@ async def _lifespan(_app: FastAPI):
     def _background_ingest() -> None:
         try:
             conn = db.connect(deps.store_path)
+            # Activate the unified price book as the LIVE source for a running
+            # server: backfill it from the in-code manifest + RATE_CARD
+            # (idempotent UPSERT, gate-proven rate-equal to in-code), wire the
+            # seam to this store, and prime the in-memory cache. A clean miss
+            # still falls back to the in-code manifest, so this only ever
+            # moves WHERE a rate lives, never WHAT it is. Runs here — not on
+            # the lifespan thread — because ANY synchronous store touch before
+            # ``yield`` delays the port bind; on a store with a pathological
+            # WAL (observed: 1.5 GB after an interrupted bulk write) that
+            # "cheap" touch kept the port dead for minutes. Best-effort: any
+            # failure leaves the seam in its safe default (off ⇒ in-code
+            # pricing).
+            try:
+                from stackunderflow.infra import model_manifest as _mm
+                from stackunderflow.infra.costs import backfill_price_book
+
+                backfill_price_book(conn)
+                conn.commit()
+                _mm.use_price_book_store(deps.store_path, enabled=True)
+                _mm.prime_price_book_cache(conn)
+                logger.info("Price book activated (cache primed from backfilled store)")
+            except Exception as exc:  # noqa: BLE001 — never block ingest on pricing
+                logger.warning("Price book activation skipped: %s", exc)
             counts = run_ingest(conn, registered())
             logger.info("Ingest complete: %s", counts)
             conn.close()

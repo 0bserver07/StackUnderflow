@@ -315,3 +315,71 @@ def test_tool_mart_shape_surfaces_v023_cache_tokens():
     )
     assert legacy["Edit"]["cache_read_tokens"] == 0
     assert legacy["Edit"]["cache_creation_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cost_data_overlays_across_multi_provider_projects(tmp_path, monkeypatch):
+    """UNIQUE(provider, slug) means one slug = several project ids.
+
+    The overlay must aggregate marts across ALL of them — gating on a single
+    id silently dropped the fast path AND the #24 range window for exactly
+    the busiest (multi-provider) projects, leaving the aggregator's lifetime
+    numbers under a 7d/30d filter.
+    """
+    store_db = tmp_path / "store.db"
+    slug = "-multi-provider"
+    conn = _connect(store_db)
+    pid_claude = _insert_project(conn, "claude", slug)
+    pid_codex = _insert_project(conn, "codex", slug)
+    _insert_project_mart(conn, project_id=pid_claude, provider="claude", slug=slug)
+    _insert_project_mart(conn, project_id=pid_codex, provider="codex", slug=slug)
+    _insert_daily_mart(
+        conn, project_id=pid_claude, day="2026-04-02",
+        input_tokens=100, output_tokens=50, cost_usd=0.10,
+    )
+    _insert_daily_mart(
+        conn, project_id=pid_codex, day="2026-04-02", provider="codex",
+        input_tokens=40, output_tokens=10, cost_usd=0.04,
+    )
+    _insert_tool_mart(
+        conn, project_id=pid_claude, day="2026-04-02", provider="claude",
+        tool_name="Read",
+        event_count=10, calls_total=27, cost_usd=0.05,
+        tokens_in=1000, tokens_out=500, session_count=2,
+    )
+    _insert_tool_mart(
+        conn, project_id=pid_codex, day="2026-04-02", provider="codex",
+        tool_name="Read",
+        event_count=3, calls_total=5, cost_usd=0.01,
+        tokens_in=100, tokens_out=50, session_count=1,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+    bogus = {
+        "session_costs": [], "command_costs": [],
+        "tool_costs": {"BOGUS_TOOL": {"calls": 9999, "cost": 999.0}},
+        "token_composition": {"daily": {}, "totals": {}, "per_session": {}},
+        "outliers": {}, "retry_signals": [], "session_efficiency": [],
+        "error_cost": {}, "trends": {},
+    }
+    monkeypatch.setattr(
+        "stackunderflow.routes.cost.queries.get_project_stats",
+        lambda conn, *, project_id, tz_offset=0: ([], bogus),
+    )
+    payload = await get_cost_data(range_="7d")
+
+    # The window applied — multi-provider no longer forces the fallback.
+    assert payload["tool_costs_windowed"] is True
+    tc = payload["tool_costs"]
+    assert "BOGUS_TOOL" not in tc
+    assert tc["Read"]["calls"] == 13            # 10 claude + 3 codex
+    assert tc["Read"]["calls_total"] == 32      # 27 + 5
+    assert round(tc["Read"]["cost"], 6) == 0.06
+    assert tc["Read"]["input_tokens"] == 1100
+    assert tc["Read"]["output_tokens"] == 550
+
+    totals = payload["token_composition"]["totals"]
+    assert totals["input"] == 140               # 100 + 40 across providers
+    assert totals["output"] == 60

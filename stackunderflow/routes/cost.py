@@ -291,10 +291,19 @@ async def get_cost_data(
         # Wave 4. ``trends`` keeps its aggregator-driven shape because
         # the period split (current vs prior) needs interaction-level
         # correlations the daily mart can\'t see by itself.
-        if len(project_ids) == 1 and mart_queries.mart_has_project_row(conn, project_id=project_ids[0]):
+        # A slug maps to one projects row PER PROVIDER (UNIQUE(provider, slug)),
+        # so a multi-provider project legitimately resolves to several ids.
+        # Gating on len == 1 silently dropped the mart overlay (and the #24
+        # window) for exactly the busiest projects — overlay across every id
+        # that has mart rows instead, summing like the aggregator would.
+        mart_pids = [
+            pid for pid in project_ids
+            if mart_queries.mart_has_project_row(conn, project_id=pid)
+        ]
+        if mart_pids:
             stats = _overlay_mart_rollups(
                 conn,
-                project_id=project_ids[0],
+                project_ids=mart_pids,
                 stats=stats,
                 model_filter=model_filter,
                 window_days=window_days,
@@ -324,7 +333,7 @@ async def get_cost_data(
 def _overlay_mart_rollups(
     conn,
     *,
-    project_id: int,
+    project_ids: list[int],
     stats: dict,
     model_filter: set[str] | None = None,
     window_days: int | None = None,
@@ -373,9 +382,13 @@ def _overlay_mart_rollups(
     ``store/mart_queries.command_mart_for_project``. It just isn't a
     drop-in source for THIS route's response shape.
     """
-    daily_rows = mart_queries.daily_for_project(
-        conn, project_id=project_id, model_filter=model_filter
-    )
+    daily_rows: list[dict[str, Any]] = []
+    for _pid in project_ids:
+        daily_rows.extend(
+            mart_queries.daily_for_project(
+                conn, project_id=_pid, model_filter=model_filter
+            )
+        )
     if not daily_rows:
         # A model filter that excludes every row of this project leaves the
         # token_composition blocks empty (shape-stable) so the donut/stack
@@ -459,11 +472,25 @@ def _overlay_mart_rollups(
                 # back to the unwindowed rollup rather than 500ing; the
                 # frontend badge covers the "window not applied" case.
                 day_from = None
-        tool_rows = mart_queries.tool_mart_for_project(
-            conn,
-            project_id=project_id,
-            day_from=day_from,
-        )
+        # Merge per-provider tool_mart rollups by tool name, summing every
+        # numeric column — same result the aggregator produces over the
+        # combined message set.
+        tool_rows: dict[str, dict[str, Any]] = {}
+        for _pid in project_ids:
+            for _tool, _row in mart_queries.tool_mart_for_project(
+                conn,
+                project_id=_pid,
+                day_from=day_from,
+            ).items():
+                merged = tool_rows.get(_tool)
+                if merged is None:
+                    tool_rows[_tool] = dict(_row)
+                    continue
+                for _k, _v in _row.items():
+                    if isinstance(_v, (int, float)) and not isinstance(_v, bool):
+                        merged[_k] = (merged.get(_k) or 0) + _v
+                    else:
+                        merged.setdefault(_k, _v)
         if day_from is not None:
             # Windowed request: an empty in-window rollup means "no tool
             # activity in range" and must replace the aggregator's all-time

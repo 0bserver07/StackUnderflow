@@ -49,6 +49,13 @@ def set_watermark(
 
     Stamps ``last_refresh_ts`` with the current UTC time. Idempotent
     by virtue of ``ON CONFLICT DO UPDATE``.
+
+    The update is MONOTONIC: a concurrent refresher that computed against an
+    older event snapshot cannot move an existing watermark backwards (observed
+    in production: a server-startup refresh committed a stale value over a
+    faster concurrent writer's, silently forcing a full re-scan). Deliberate
+    resets (``etl backfill --force``) DELETE the row first, so the fresh
+    INSERT path is unaffected by the guard.
     """
     now = datetime.now(UTC).isoformat()
     conn.execute(
@@ -56,7 +63,7 @@ def set_watermark(
         INSERT INTO mart_watermark (mart_name, last_event_id, last_refresh_ts)
         VALUES (?, ?, ?)
         ON CONFLICT(mart_name) DO UPDATE SET
-            last_event_id = excluded.last_event_id,
+            last_event_id = MAX(mart_watermark.last_event_id, excluded.last_event_id),
             last_refresh_ts = excluded.last_refresh_ts
         """,
         (mart_name, int(last_event_id), now),

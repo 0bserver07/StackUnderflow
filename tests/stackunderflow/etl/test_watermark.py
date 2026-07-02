@@ -147,3 +147,31 @@ def test_refresh_all_picks_up_from_existing_watermark(conn):
     assert seen == [100]
     assert out == {"rec": 10}
     assert get_watermark(conn, "rec") == 110
+
+
+# ── monotonic guard ──────────────────────────────────────────────────────────
+#
+# A concurrent refresher that computed against an older event snapshot must
+# not move an existing watermark backwards (a server-startup refresh once
+# clobbered a faster concurrent writer's watermark, forcing a full re-scan).
+# Deliberate resets DELETE the row first, so fresh INSERTs are unaffected.
+
+
+def test_set_watermark_never_regresses(conn):
+    set_watermark(conn, "message_tool", 200_000)
+    set_watermark(conn, "message_tool", 130_000)  # stale concurrent write
+    assert get_watermark(conn, "message_tool") == 200_000
+
+
+def test_set_watermark_still_advances(conn):
+    set_watermark(conn, "message_tool", 100)
+    set_watermark(conn, "message_tool", 250)
+    assert get_watermark(conn, "message_tool") == 250
+
+
+def test_watermark_reset_via_delete_allows_lower_value(conn):
+    """The --force path deletes rows; a fresh INSERT may start lower."""
+    set_watermark(conn, "message_tool", 200_000)
+    conn.execute("DELETE FROM mart_watermark WHERE mart_name = 'message_tool'")
+    set_watermark(conn, "message_tool", 10)
+    assert get_watermark(conn, "message_tool") == 10
