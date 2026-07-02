@@ -32,6 +32,8 @@ import type {
   PlaybackResponse,
   ProjectTimelineResponse,
   PlaybackFsSnapshotResponse,
+  PrescriptionsResponse,
+  ClaudeMdPreviewResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -886,4 +888,38 @@ export function writePlaybackSelection(
   }
   const out = params.toString()
   return out.length > 0 ? `?${out}` : ''
+}
+
+// ---------------------------------------------------------------------------
+// Campaign #7 — prescriptive cost (Optimize surface). Read-only endpoints:
+// the server never writes files; "apply" is copy/download client-side.
+// ---------------------------------------------------------------------------
+
+/**
+ * Routing recommendations + CLAUDE.md slim previews. With no `project` the
+ * server scopes to the active project (`deps.current_log_path`), matching
+ * the /api/forks and /api/whatif conventions.
+ */
+export async function getPrescriptions(
+  project?: string,
+  period: string = '30days',
+): Promise<PrescriptionsResponse> {
+  const params = new URLSearchParams({ period })
+  if (project) params.set('project', project)
+  return fetchJson(`${BASE}/optimize/prescriptions?${params}`)
+}
+
+/**
+ * Slim-preview a CLAUDE.md the server can't see (e.g. repo-local): POST the
+ * text, get the diff/rationale/savings back. Pure computation server-side.
+ */
+export async function postClaudeMdPreview(
+  text: string,
+  fileLabel: string = 'CLAUDE.md',
+): Promise<ClaudeMdPreviewResponse> {
+  return fetchJson(`${BASE}/optimize/claudemd-preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, file_label: fileLabel }),
+  })
 }

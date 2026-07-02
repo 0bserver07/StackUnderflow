@@ -42,8 +42,13 @@ __all__ = [
     "Finding",
     "find_patterns",
     "find_waste",
+    "find_claudemd_bloat",
     "find_context_budget_findings",
+    "approx_tokens",
+    "tokens_to_usd",
     "CONTEXT_BUDGET_BLOAT_THRESHOLD",
+    "CLAUDE_MD_TOKEN_THRESHOLD",
+    "WASTE_PRICING_MODEL",
 ]
 
 
@@ -93,6 +98,37 @@ def _tokens_to_usd(tokens: int | None, *, kind: str = "input") -> float | None:
     except Exception:  # noqa: BLE001 — pricing must never break optimize
         return 0.0
     return round(float(breakdown.get("total_cost", 0.0) or 0.0), 4)
+
+
+# Public aliases for sibling report modules (``reports/prescribe.py``) —
+# same token heuristic and the same black-box pricing path, so a preview's
+# "$ saved" figure and a finding's "$ wasted" figure can never disagree on
+# methodology. Aliased rather than renamed to keep this module's own call
+# sites (and their tests) untouched.
+def approx_tokens(text: str) -> int:
+    """Public alias of :func:`_approx_tokens` (~4 chars per token)."""
+    return _approx_tokens(text)
+
+
+def tokens_to_usd(tokens: int | None, *, kind: str = "input") -> float | None:
+    """Public alias of :func:`_tokens_to_usd` (priced via ``compute_cost``)."""
+    return _tokens_to_usd(tokens, kind=kind)
+
+
+def find_claudemd_bloat(
+    conn: sqlite3.Connection,
+    *,
+    project_filter: list[str] | None = None,
+) -> list[Finding]:
+    """Public wrapper around the bloated-CLAUDE.md detector.
+
+    Exists so the prescriptions route can run JUST this detector (the
+    CLAUDE.md slim preview needs the bloat finding + candidate file list)
+    without paying for the full message-scanning ``find_patterns`` sweep.
+    Same read-only filesystem discovery as ``find_patterns`` — no new
+    filesystem surface.
+    """
+    return _detect_bloated_claude_md(conn, project_filter=project_filter)
 
 
 # ── Finding dataclass ───────────────────────────────────────────────────────

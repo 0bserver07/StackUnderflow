@@ -1304,4 +1304,107 @@ export interface PatternsResponse {
   project: string | null
   since: string
   report: PatternsReportData
+// Campaign #7 — prescriptive cost. Mirrors `reports/prescribe.py` payloads
+// served by GET /api/optimize/prescriptions and POST
+// /api/optimize/claudemd-preview. All dollar fields arrive pre-converted to
+// the active currency (same contract as /api/forks).
+// ---------------------------------------------------------------------------
+
+/** One "route work-type X to model Y" recommendation. Delta sign matches
+ *  /api/whatif: `candidate − actual`, so negative = cheaper. */
+export interface RoutingRecommendation {
+  rec_id: 'downshift_low_reasoning' | 'downshift_short_output' | 'upshift_reasoning_quality' | string
+  work_type: string
+  from_model: string
+  provider: string
+  speed: string
+  to_model: string
+  to_label: string
+  window_cost_usd: number
+  candidate_window_cost_usd: number
+  window_delta_usd: number
+  /** Null when the window has no active days to extrapolate from. */
+  estimated_monthly_delta_usd: number | null
+  evidence: {
+    events: number
+    sessions: number
+    days_active: number
+    output_tokens: number
+    reasoning_tokens: number
+    reasoning_share: number
+    avg_output_tokens_per_event: number
+    /** Null when session_quality_metrics has no rows for this model. */
+    avg_quality_score: number | null
+    graded_sessions: number
+  }
+  rationale: string
+  caveats: string[]
+}
+
+/** Per-model evidence row backing the recommendation cards. */
+export interface RoutingModelRow {
+  model: string
+  provider: string
+  speed: string
+  events: number
+  sessions: number
+  days_active: number
+  window_cost_usd: number
+  output_tokens: number
+  reasoning_tokens: number
+  reasoning_share: number
+  reasoning_attributed: boolean
+  work_type: string
+  avg_quality_score: number | null
+  graded_sessions: number
+}
+
+export interface RoutingReport {
+  recommendations: RoutingRecommendation[]
+  models: RoutingModelRow[]
+  observed_days: number
+  monthly_factor: number | null
+  caveats: string[]
+}
+
+/** One rationale entry of a CLAUDE.md slim preview (one slimming rule). */
+export interface ClaudeMdRationaleEntry {
+  rule: string
+  summary: string
+  tokens_saved: number
+  estimated_savings_usd_per_session: number
+  estimated_savings_usd_monthly: number
+  detail: Record<string, unknown>
+}
+
+/** A slimmer-CLAUDE.md preview. The server NEVER writes the file — applying
+ *  is copying/downloading `slimmed_text` client-side. */
+export interface ClaudeMdPreview {
+  file_label: string
+  /** Present on GET /prescriptions previews (the scanned file's path). */
+  source_path?: string
+  changed: boolean
+  preview_diff: string
+  slimmed_text: string
+  rationale: ClaudeMdRationaleEntry[]
+  original_tokens: number
+  slimmed_tokens: number
+  tokens_saved: number
+  estimated_savings_usd_per_session: number
+  estimated_savings_usd_monthly: number
+  sessions_per_month: number
+  heuristic: string
+}
+
+export interface PrescriptionsResponse {
+  scope: string
+  project: string | null
+  routing: RoutingReport
+  claudemd_previews: ClaudeMdPreview[]
+  currency: CurrencyInfo
+}
+
+export interface ClaudeMdPreviewResponse {
+  preview: ClaudeMdPreview
+  currency: CurrencyInfo
 }

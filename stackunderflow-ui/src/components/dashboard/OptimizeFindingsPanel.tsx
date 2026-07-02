@@ -11,6 +11,7 @@ import { useFilters } from '../../services/filters'
 import type { Finding, FindingSeverity } from '../../types/api'
 import Badge from '../common/Badge'
 import { formatCost, formatNumber } from '../../services/format'
+import PrescriptionsSection from '../optimize/PrescriptionsSection'
 
 // ---------------------------------------------------------------------------
 // OptimizeFindingsPanel — v0.6.0 follow-up.
@@ -20,6 +21,12 @@ import { formatCost, formatNumber } from '../../services/format'
 // the user expand to see the rest. Period is fixed to `month` because that
 // matches the spec brief; if we add a control later, share the inline one
 // the Compare/Yield tabs use.
+//
+// Campaign #7: the panel now also mounts <PrescriptionsSection /> (routing
+// recommendations + CLAUDE.md slim previews) as a sibling BELOW the
+// findings card — a sibling, not a child, because prescriptions can exist
+// (e.g. routing recs) even when zero waste patterns fired and the findings
+// card hides itself.
 // ---------------------------------------------------------------------------
 
 const TOP_N = 5
@@ -76,6 +83,15 @@ function FindingRow({ finding }: FindingRowProps) {
 }
 
 export default function OptimizeFindingsPanel() {
+  return (
+    <>
+      <FindingsCard />
+      <PrescriptionsSection />
+    </>
+  )
+}
+
+function FindingsCard() {
   const [expanded, setExpanded] = useState(false)
   const { filters } = useFilters()
   const { data, isLoading, error } = useQuery({
