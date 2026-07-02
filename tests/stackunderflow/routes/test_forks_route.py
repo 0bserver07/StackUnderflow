@@ -9,6 +9,15 @@ from stackunderflow.routes import forks as forks_route
 from stackunderflow.store import db, schema
 
 
+@pytest.fixture(autouse=True)
+def _clear_fork_cache():
+    """The route memoizes reports process-wide — clear between tests so a
+    cached entry from one store can't answer another."""
+    forks_route._FORK_CACHE.clear()
+    yield
+    forks_route._FORK_CACHE.clear()
+
+
 def _seed(store_db, *, slug="demo"):
     """Seed a store with one project + a fork/abandoned-sidechain session."""
     conn = db.connect(store_db)
@@ -130,3 +139,88 @@ def test_forks_route_registered_on_app():
     from stackunderflow.server import app
 
     assert "/api/forks" in app_route_paths(app)
+
+
+@pytest.mark.asyncio
+async def test_forks_route_memoizes_within_signature(tmp_path, monkeypatch):
+    """Second call with no new ingest returns the cached report — the
+    expensive ``analyze_forks`` runs exactly once."""
+    store_db = tmp_path / "store.db"
+    _seed(store_db)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    calls = {"n": 0}
+    real = forks_route.analyze_forks
+
+    def counting(conn, **kw):
+        calls["n"] += 1
+        return real(conn, **kw)
+
+    monkeypatch.setattr(forks_route, "analyze_forks", counting)
+
+    first = await forks_route.get_forks(period="all")
+    second = await forks_route.get_forks(period="all")
+
+    assert calls["n"] == 1  # second served from cache
+    assert first["report"] == second["report"]
+
+
+@pytest.mark.asyncio
+async def test_forks_cache_invalidates_on_new_messages(tmp_path, monkeypatch):
+    """A new ingest (session row + messages) moves the signature, so the next
+    call recomputes rather than serving a stale report."""
+    store_db = tmp_path / "store.db"
+    _seed(store_db)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    calls = {"n": 0}
+    real = forks_route.analyze_forks
+
+    def counting(conn, **kw):
+        calls["n"] += 1
+        return real(conn, **kw)
+
+    monkeypatch.setattr(forks_route, "analyze_forks", counting)
+
+    await forks_route.get_forks(period="all")
+    assert calls["n"] == 1
+
+    # Simulate an ingest cycle: another session with messages bumps the
+    # (max last_ts, summed message_count) signature.
+    conn = db.connect(store_db)
+    pid = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO sessions (project_id, session_id, message_count, last_ts) "
+        "VALUES (?, 'sess2', 2, '2026-06-01T00:00:00+00:00')",
+        (pid,),
+    )
+    conn.commit()
+    conn.close()
+
+    await forks_route.get_forks(period="all")
+    assert calls["n"] == 2  # signature changed → recomputed
+
+
+@pytest.mark.asyncio
+async def test_forks_cache_keyed_by_period(tmp_path, monkeypatch):
+    """Different period selectors are distinct cache entries — a cached
+    'all' report must not answer a 'today' request."""
+    store_db = tmp_path / "store.db"
+    _seed(store_db)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+
+    calls = {"n": 0}
+    real = forks_route.analyze_forks
+
+    def counting(conn, **kw):
+        calls["n"] += 1
+        return real(conn, **kw)
+
+    monkeypatch.setattr(forks_route, "analyze_forks", counting)
+
+    await forks_route.get_forks(period="all")
+    await forks_route.get_forks(period="today")
+    assert calls["n"] == 2  # distinct scopes → two computes

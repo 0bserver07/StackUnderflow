@@ -14,6 +14,8 @@ UI consumers can render it inline.
 
 from __future__ import annotations
 
+import copy
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,78 @@ from stackunderflow.reports.scope import parse_period
 from stackunderflow.store import db
 
 router = APIRouter()
+
+# ``analyze_forks`` loads every scoped ``messages`` row (41K+ on a real project)
+# and walks the conversation DAG in Python on each call — ~6s even warm, with no
+# mart to lean on (a DAG isn't aggregate-grain). Memoize the raw USD report the
+# same way ``routes/cost.py`` memoizes its stats: keyed on (store, scope, ids)
+# plus a sessions signature (max last_ts, summed message_count) that moves the
+# instant ingest writes new rows, so a stale entry can't outlive a refresh.
+# Currency conversion stays OUTSIDE the cache (applied to a deep copy) so an FX
+# change is picked up without recompute — same split cost.py uses.
+_FORK_CACHE: dict[
+    tuple[str, str, tuple[int, ...] | None], tuple[tuple[str | None, int], dict]
+] = {}
+_FORK_CACHE_LOCK = threading.Lock()
+
+
+def _fork_signature(conn: Any, project_ids: list[int] | None) -> tuple[str | None, int]:
+    """(max last_ts, summed message_count) over the scoped sessions.
+
+    ``project_ids is None`` = whole store, so the signature spans every session.
+    Any ingest that writes a message bumps ``last_ts``/``message_count``, which
+    changes the signature and forces a recompute — the self-invalidation
+    contract ``routes/cost.py`` relies on. Advisory: a bad store returns a
+    sentinel that simply misses the cache rather than raising.
+    """
+    try:
+        if project_ids is None:
+            row = conn.execute(
+                "SELECT MAX(last_ts) AS max_ts, "
+                "COALESCE(SUM(message_count), 0) AS n FROM sessions"
+            ).fetchone()
+        elif not project_ids:
+            return (None, 0)
+        else:
+            placeholders = ",".join("?" for _ in project_ids)
+            # noqa justified: ``placeholders`` is only ``?`` marks; the ids are
+            # bound params below — no value is interpolated into the SQL.
+            row = conn.execute(
+                "SELECT MAX(last_ts) AS max_ts, "  # noqa: S608
+                "COALESCE(SUM(message_count), 0) AS n "
+                f"FROM sessions WHERE project_id IN ({placeholders})",
+                tuple(project_ids),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — advisory: a bad store just misses cache
+        return (None, -1)
+    if row is None:
+        return (None, 0)
+    return (row["max_ts"], int(row["n"] or 0))
+
+
+def _analyze_forks_cached(
+    conn: Any, *, scope: Any, project_ids: list[int] | None
+) -> dict:
+    """Read-through cache around :func:`analyze_forks` (returns USD report).
+
+    Deep-copies on read so the caller can convert currency in place without
+    poisoning the shared entry. Miss or signature drift → one recompute, cached
+    for the next reader.
+    """
+    sig = _fork_signature(conn, project_ids)
+    key = (
+        str(deps.store_path),
+        scope.label,
+        tuple(sorted(project_ids)) if project_ids is not None else None,
+    )
+    with _FORK_CACHE_LOCK:
+        cached = _FORK_CACHE.get(key)
+    if cached is not None and cached[0] == sig:
+        return copy.deepcopy(cached[1])
+    report = analyze_forks(conn, scope=scope, project_ids=project_ids)
+    with _FORK_CACHE_LOCK:
+        _FORK_CACHE[key] = (sig, report)
+    return copy.deepcopy(report)
 
 # Friendly period superset — ``week`` maps to ``7days`` inside ``parse_period``
 # via the alias table below. Mirrors ``routes/yield_route.py``'s contract so the
@@ -105,7 +179,7 @@ async def get_forks(
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path) if path else None
-        report = analyze_forks(conn, scope=scope, project_ids=project_ids)
+        report = _analyze_forks_cached(conn, scope=scope, project_ids=project_ids)
     finally:
         conn.close()
 
