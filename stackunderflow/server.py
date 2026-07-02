@@ -33,6 +33,7 @@ from stackunderflow.routes import (
     meta_agent,
     misc,
     optimize,
+    patterns,
     plan,
     playback,
     pricing,
@@ -283,6 +284,7 @@ app.include_router(pricing.router)
 app.include_router(budgets.router)
 app.include_router(whatif.router)
 app.include_router(forks.router)
+app.include_router(patterns.router)
 
 
 

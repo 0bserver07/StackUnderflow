@@ -1223,3 +1223,85 @@ export type LiveSseMessage =
   | { type: 'tool_call'; ts: string; payload: LiveToolCallRowPayload }
   | { type: 'burn_tick'; ts: string; payload: LiveBurnSnapshot }
 
+
+// ---------------------------------------------------------------------------
+// Cross-session pattern mining — `GET /api/patterns` (campaign #6).
+// Shapes mirror `reports/patterns.py` dataclasses; no dollar figures, so no
+// currency conversion applies anywhere in this payload.
+// ---------------------------------------------------------------------------
+
+/** One "what resolved sessions did next" action, with how often it was next. */
+export interface PatternResolutionHint {
+  action: string
+  count: number
+}
+
+/** Cross-session risk profile for one file — `reports/patterns.py::FileRisk`. */
+export interface PatternFileRisk {
+  path: string
+  touch_count: number
+  edit_count: number
+  read_count: number
+  touch_session_count: number
+  failure_count: number
+  failure_session_count: number
+  /** failure sessions / touching sessions (0..1); null when touch history is untracked. */
+  failure_rate: number | null
+  interruption_count: number
+  last_touch_ts: string | null
+  last_failure_ts: string | null
+  categories: Record<string, number>
+  reason: string
+}
+
+/** A normalised error recurring across sessions — `reports/patterns.py::ErrorSignature`. */
+export interface PatternErrorSignature {
+  signature: string
+  category: string
+  count: number
+  session_count: number
+  resolved_session_count: number
+  first_ts: string | null
+  last_ts: string | null
+  top_tools: string[]
+  top_files: string[]
+  resolution_hints: PatternResolutionHint[]
+  example: string
+  reason: string
+}
+
+/** Failing Bash calls grouped by command head — `reports/patterns.py::CommandCluster`. */
+export interface PatternCommandCluster {
+  command: string
+  failure_count: number
+  session_count: number
+  categories: Record<string, number>
+  last_failure_ts: string | null
+  example: string
+  reason: string
+}
+
+/** Full coding-health report — `reports/patterns.py::PatternsReport`. */
+export interface PatternsReportData {
+  window: { since: string; days: number }
+  sources: { message_tool_mart: boolean }
+  totals: {
+    tool_call_count: number
+    error_count: number
+    attributed_error_count: number
+    interruption_count: number
+    interruption_session_count: number
+    session_count: number
+    sessions_with_failures: number
+    files_touched: number
+  }
+  file_risk: PatternFileRisk[]
+  error_signatures: PatternErrorSignature[]
+  command_clusters: PatternCommandCluster[]
+}
+
+export interface PatternsResponse {
+  project: string | null
+  since: string
+  report: PatternsReportData
+}
