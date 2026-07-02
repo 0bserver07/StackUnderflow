@@ -1411,3 +1411,54 @@ export interface ClaudeMdPreviewResponse {
   preview: ClaudeMdPreview
   currency: CurrencyInfo
 }
+
+// ---------------------------------------------------------------------------
+// Campaign #8 — worktree intelligence. Mirrors the payloads served by
+// GET /api/worktrees and POST /api/worktrees/attribute. Cost fields arrive
+// pre-converted to the active currency (same contract as /api/forks).
+// ---------------------------------------------------------------------------
+
+/** Prune verdict for one worktree. The scan is read-only against git; the
+ *  verdict only ever gates *preview* commands — the tool never runs them. */
+export type WorktreeVerdict = 'ACTIVE' | 'MERGED_SAFE_TO_PRUNE' | 'HAS_UNIQUE_WORK'
+
+/** One detected worktree, with its attributed session/cost roll-up. */
+export interface WorktreeInfo {
+  path: string
+  branch: string
+  head: string
+  parent_repo: string
+  parent_slug: string
+  dirty_count: number
+  unique_commits: number
+  age_days: number
+  verdict: WorktreeVerdict
+  /** Sessions attributed to this worktree's checkout. */
+  sessions: number
+  /** Already in the active display currency. */
+  cost_usd: number
+  /** PREVIEW-only shell commands (git worktree remove / git branch -D …).
+   *  StackUnderflow never executes these — the user copies and runs them. */
+  prune_commands: string[]
+}
+
+export interface WorktreesSummary {
+  total: number
+  safe_to_prune: number
+  has_unique_work: number
+  active: number
+  /** Already in the active display currency. */
+  attributed_cost_usd: number
+}
+
+export interface WorktreesResponse {
+  scope: string
+  worktrees: WorktreeInfo[]
+  summary: WorktreesSummary
+  scanned_at: string
+}
+
+/** POST /api/worktrees/attribute — count of records the attribution pass updated. */
+export interface WorktreeAttributeResponse {
+  updated: number
+}

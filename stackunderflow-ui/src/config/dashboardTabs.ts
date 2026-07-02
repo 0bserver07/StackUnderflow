@@ -27,6 +27,7 @@ import {
   IconHistory,
   IconWallet,
   IconActivityHeartbeat,
+  IconBinaryTree2,
 } from '@tabler/icons-react'
 
 export type Tab = {
@@ -66,6 +67,11 @@ export const TABS: readonly Tab[] = [
   // failures, error signatures + resolution hints, command failure clusters.
   // Calls the dedicated /api/patterns route. Beta while attribution settles.
   { id: 'health', label: 'Health', icon: IconActivityHeartbeat, isBeta: true },
+  // Worktree intelligence (campaign #8) — live read-only git scan of the
+  // project's worktrees: prune verdicts, attributed sessions + cost, and
+  // copyable prune-command PREVIEWS (the tool never runs them). Calls the
+  // dedicated /api/worktrees route. Beta while the verdict heuristics settle.
+  { id: 'worktrees', label: 'Worktrees', icon: IconBinaryTree2, isBeta: true },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
