@@ -2,8 +2,9 @@
 
 One place defines:
 
-* the hook ids — four *capture* hooks, three *injection* hooks, and one
-  *active-recall* hook — and which Claude Code lifecycle event each binds to,
+* the hook ids — four *capture* hooks, three *injection* hooks, one
+  *active-recall* hook, and one *proactive-nudge* hook — and which Claude Code
+  lifecycle event each binds to,
 * the *portable* command form (``stackunderflow hooks run <id>`` — never an
   absolute path, so the entry survives a venv move; see hard constraint #6),
 * the matchers we use (``PostToolUse`` capture is scoped to ``Bash``, the tool
@@ -54,23 +55,38 @@ RECALL_EVENT_HOOK_IDS: dict[str, str] = {
     "PreToolUse": "stackunderflow-pretool-recall",
 }
 
+# Proactive-nudge hook (campaign #8 / spec 27 Phase 2) — installed alongside the
+# injection + recall hooks by ``hooks install --inject``. Runs *after* an
+# errored Bash tool call and injects an advisory line when the error's
+# normalised signature matches a mined recurring ``ErrorSignature`` with
+# resolution hints ("this recurred in N sessions; the ones that moved past it
+# ran X next"). It gets its own id + handler path (``proactive.build_posttool_nudge``)
+# because it fires on ``PostToolUse`` — a different event than recall (PreToolUse)
+# and the capture hook it shares the event with (which RECORDS, not injects).
+NUDGE_EVENT_HOOK_IDS: dict[str, str] = {
+    "PostToolUse": "stackunderflow-posttool-nudge",
+}
+
 # hook id → Claude Code event, for every hook we own (capture + injection +
-# recall). Keyed by hook id because that *is* unique — events are not
-# (UserPromptSubmit maps to two, PreToolUse to two). ``parse_hook_command``
-# uses this to recognise our ids.
+# recall + nudge). Keyed by hook id because that *is* unique — events are not
+# (UserPromptSubmit maps to two, PreToolUse to two, PostToolUse to two: the
+# capture recorder and the proactive nudge). ``parse_hook_command`` uses this
+# to recognise our ids.
 HOOK_ID_EVENTS: dict[str, str] = {
     **{hid: ev for ev, hid in EVENT_HOOK_IDS.items()},
     **{hid: ev for ev, hid in INJECT_EVENT_HOOK_IDS.items()},
     **{hid: ev for ev, hid in RECALL_EVENT_HOOK_IDS.items()},
+    **{hid: ev for ev, hid in NUDGE_EVENT_HOOK_IDS.items()},
 }
 
 # Capture hook ids (the original four). Kept as ``HOOK_IDS`` for backward
 # compatibility — re-exported from ``handlers`` and used across the install path
-# and tests. The injection / recall ids and the union get their own names.
+# and tests. The injection / recall / nudge ids and the union get their own names.
 HOOK_IDS: tuple[str, ...] = tuple(EVENT_HOOK_IDS.values())
 INJECT_HOOK_IDS: tuple[str, ...] = tuple(INJECT_EVENT_HOOK_IDS.values())
 RECALL_HOOK_IDS: tuple[str, ...] = tuple(RECALL_EVENT_HOOK_IDS.values())
-ALL_HOOK_IDS: tuple[str, ...] = HOOK_IDS + INJECT_HOOK_IDS + RECALL_HOOK_IDS
+NUDGE_HOOK_IDS: tuple[str, ...] = tuple(NUDGE_EVENT_HOOK_IDS.values())
+ALL_HOOK_IDS: tuple[str, ...] = HOOK_IDS + INJECT_HOOK_IDS + RECALL_HOOK_IDS + NUDGE_HOOK_IDS
 
 # Matchers scope a hook to specific tools. ``PostToolUse`` capture is scoped to
 # ``Bash`` (the clean non-zero-exit failure signal); firing on every tool would
@@ -89,6 +105,11 @@ INJECT_EVENT_MATCHERS: dict[str, str] = {
 # the command (and is a silent no-op when there are none).
 RECALL_EVENT_MATCHERS: dict[str, str] = {
     "PreToolUse": "Edit|Write|Bash",
+}
+# The proactive nudge fires after a Bash call (its error signature is what we
+# match) — same Bash scope as the capture hook, a distinct id/handler.
+NUDGE_EVENT_MATCHERS: dict[str, str] = {
+    "PostToolUse": "Bash",
 }
 
 # Each hook command is ``stackunderflow hooks run <id>`` optionally followed by
@@ -187,14 +208,23 @@ def recall_matcher_group(event: str) -> dict:
     return _matcher_group(RECALL_EVENT_HOOK_IDS[event], RECALL_EVENT_MATCHERS.get(event))
 
 
+def nudge_matcher_group(event: str) -> dict:
+    """The matcher-group ``install --inject`` appends for the *proactive-nudge* hook.
+
+    Never carries ``--capture-content`` — it injects an advisory line, it
+    records nothing.
+    """
+    return _matcher_group(NUDGE_EVENT_HOOK_IDS[event], NUDGE_EVENT_MATCHERS.get(event))
+
+
 def canonical_hooks_block(*, capture_content: bool = False, inject: bool = False) -> dict:
     """The full ``hooks`` mapping ``install`` would write into a fresh file.
 
-    With ``inject=True`` the three injection hooks and the active-recall hook
-    are merged in alongside the capture hooks; ``UserPromptSubmit`` — which
-    carries a capture and an injection hook — ends up with both
-    matcher-groups, and ``PreToolUse`` carries the injection *and* recall
-    groups.
+    With ``inject=True`` the three injection hooks, the active-recall hook, and
+    the proactive-nudge hook are merged in alongside the capture hooks;
+    ``UserPromptSubmit`` — which carries a capture and an injection hook — ends
+    up with both matcher-groups, ``PreToolUse`` carries the injection *and*
+    recall groups, and ``PostToolUse`` carries the capture *and* nudge groups.
     """
     block: dict = {
         event: [matcher_group(event, capture_content=capture_content)]
@@ -205,4 +235,6 @@ def canonical_hooks_block(*, capture_content: bool = False, inject: bool = False
             block.setdefault(event, []).append(inject_matcher_group(event))
         for event in RECALL_EVENT_HOOK_IDS:
             block.setdefault(event, []).append(recall_matcher_group(event))
+        for event in NUDGE_EVENT_HOOK_IDS:
+            block.setdefault(event, []).append(nudge_matcher_group(event))
     return block

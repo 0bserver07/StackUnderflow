@@ -25,6 +25,18 @@ the single deterministic gate for every proactive/recall nudge:
   :func:`refresh_signal_cache`), applies the relevance floor + governance, and
   renders one deterministic advisory line.
 
+* **Phase 2 (error-signature foresight)** — :func:`error_signature_block` runs on
+  a *PostToolUse*/Bash *errored* result: it normalises the error body (via
+  ``patterns._normalise_signature``, reused verbatim for signature-key parity),
+  looks the signature up in the same O(1) cache, and — when it recurred across
+  ``>= 2`` sessions *and* the mining derived non-empty ``resolution_hints`` —
+  emits "this recurred in N sessions; the ones that moved past it ran X next".
+  :func:`build_posttool_nudge` wraps it in the ``hookSpecificOutput`` envelope
+  for the ``stackunderflow-posttool-nudge`` hook id. It rides the *same*
+  governance layer as Phase 1 (``error-signature`` is a first-class type in
+  ``proactive_types``); only ever advisory ``additionalContext`` — a PostToolUse
+  hook can never block the tool, which has already run.
+
 Invariants (this runs inside users' live sessions — non-negotiable):
 
 * **Opt-in, off by default.** ``proactive_enabled`` defaults false. When it is
@@ -76,7 +88,8 @@ _KILL_SWITCH_ENV = "STACKUNDERFLOW_PROACTIVE_DISABLED"
 # The nudge type ids this module understands (mirrors ``proactive_types``).
 TYPE_COMMAND_CLUSTER = "command-cluster"
 TYPE_FILE_RISK = "file-risk"
-_KNOWN_TYPES = frozenset({TYPE_COMMAND_CLUSTER, TYPE_FILE_RISK})
+TYPE_ERROR_SIGNATURE = "error-signature"
+_KNOWN_TYPES = frozenset({TYPE_COMMAND_CLUSTER, TYPE_FILE_RISK, TYPE_ERROR_SIGNATURE})
 
 # Relevance floor: a cluster's last failure must be at most this many days old
 # for the nudge to be "in the moment". Mirrors ``patterns.DEFAULT_SINCE_DAYS``
@@ -85,6 +98,11 @@ _KNOWN_TYPES = frozenset({TYPE_COMMAND_CLUSTER, TYPE_FILE_RISK})
 # ``patterns`` import for non-Bash fires.
 _RECENT_DAYS = 90
 
+# Error-signature floor: recurred in at least this many DISTINCT sessions.
+# Mirrors ``patterns.MIN_RECURRENCE_SESSIONS`` (kept local for the same reason
+# as ``_RECENT_DAYS``) — a one-session error is a retry loop, not a pattern.
+_MIN_RECURRENCE_SESSIONS = 2
+
 # Bounds so neither JSON file can grow without limit (LRU-style eviction).
 _MAX_SESSIONS = 256
 _MAX_COOLDOWNS = 1024
@@ -92,6 +110,8 @@ _MAX_FEEDBACK = 1024
 _MAX_PROJECTS_CACHED = 128
 _MAX_CLUSTERS_PER_PROJECT = 200
 _MAX_FILE_RISK_PER_PROJECT = 200
+_MAX_SIGNATURES_PER_PROJECT = 200
+_MAX_HINTS_CACHED = 3
 
 # File-lock acquisition budget. A short spin, then a stale-lock breaker — a hook
 # must never wedge on a leaked lock.
@@ -99,8 +119,9 @@ _LOCK_TIMEOUT_S = 1.0
 _LOCK_SPIN_S = 0.01
 _LOCK_STALE_S = 10.0
 
-# Rendered command-cluster block is one line — capped defensively.
+# Rendered command-cluster / error-signature block is one line — capped defensively.
 _CMD_MAX_CHARS = 600
+_SIG_MAX_CHARS = 600
 
 _SIGNAL_CACHE_VERSION = 1
 
@@ -398,9 +419,13 @@ def _record_fire(state: dict, signal: Signal, policy: Policy, now: datetime) -> 
 def record_dismissal(key: str, *, now: datetime | None = None) -> None:
     """Register a dashboard 'don't show this again' for a type or a fingerprint.
 
-    The Tier-2 dismiss primitive (the retrospective panel calls this; not wired
-    to a route in the MVP). Increments the ``dismissed`` counter that
-    :func:`should_surface` reads for adaptive quieting. Never raises.
+    The Tier-2 dismiss primitive, wired to ``POST /api/patterns/dismiss`` (the
+    "What almost bit me" panel). *key* is either a nudge type id (mutes the
+    whole kind) or a :attr:`Signal.fingerprint` (mutes that specific nudge) —
+    the route computes the fingerprint with the same :func:`make_signal` Tier-1
+    uses, so a dashboard dismiss lands on the exact key ``should_surface``
+    reads. Increments the ``dismissed`` counter that drives adaptive quieting.
+    Writes only the governance JSON, never the store. Never raises.
     """
     now = now or _utcnow()
     try:
@@ -509,6 +534,12 @@ def _top_category(categories: Any) -> str | None:
 
 def _lookup_cluster(slug: str, key: str) -> dict | None:
     """O(1) read of one cluster from the precomputed cache; ``None`` if absent."""
+    return _lookup_signal(slug, "command_clusters", key)
+
+
+def _lookup_signal(slug: str, family: str, key: str) -> dict | None:
+    """O(1) read of one entry from a cache family (``command_clusters`` /
+    ``error_signatures``) for *slug*; ``None`` when the cache/family/key is absent."""
     cache = _read_json(_signal_path())
     projects = cache.get("projects")
     if not isinstance(projects, dict):
@@ -516,11 +547,166 @@ def _lookup_cluster(slug: str, key: str) -> dict | None:
     entry = projects.get(slug)
     if not isinstance(entry, dict):
         return None
-    clusters = entry.get("command_clusters")
-    if not isinstance(clusters, dict):
+    family_map = entry.get(family)
+    if not isinstance(family_map, dict):
         return None
-    cluster = clusters.get(key)
-    return cluster if isinstance(cluster, dict) else None
+    hit = family_map.get(key)
+    return hit if isinstance(hit, dict) else None
+
+
+# ── the error-signature nudge (Phase 2, PostToolUse/Bash) ────────────────────
+
+
+def build_posttool_nudge(hook_id: str, payload: dict | None) -> str:
+    """Return the PostToolUse injection envelope for an error-signature nudge, or ``""``.
+
+    The Tier-1 surface for Phase 2 (hook id ``stackunderflow-posttool-nudge``,
+    dispatched by ``handlers.run``). Mirrors ``recall.build_recall``: silent on
+    *any* failure, exit-0 caller. Only advisory ``additionalContext`` is ever
+    produced — never a ``decision``/deny (a PostToolUse hook cannot block the
+    tool, which has already run). Inert unless proactive is in *governed* mode
+    (opt-in); the env kill-switch silences it."""
+    try:
+        payload = payload if isinstance(payload, dict) else {}
+        from stackunderflow.hooks import templates
+
+        event = templates.HOOK_ID_EVENTS.get(hook_id)
+        if event is None or hook_id not in templates.NUDGE_HOOK_IDS:
+            return ""
+        if mode() != "governed":
+            return ""  # off (kill-switch) or passthrough (default) → no new nudge
+        text = error_signature_block(payload)
+        if not text.strip():
+            return ""
+        return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
+    except Exception:  # noqa: BLE001 - a nudge must never disrupt the agent
+        logger.debug("proactive.build_posttool_nudge swallowed an error", exc_info=True)
+        return ""
+
+
+def error_signature_block(payload: dict, *, now: datetime | None = None) -> str:
+    """Advisory line for a Bash error whose normalised signature recurs, or ``""``.
+
+    Fires on a PostToolUse/Bash *errored* result whose ``_normalise_signature``
+    matches a mined :class:`~stackunderflow.reports.patterns.ErrorSignature`
+    with non-empty ``resolution_hints`` and ``session_count >= 2``, under the
+    same governance as Phase 1. O(1) cache lookup; never a live scan, never
+    raises."""
+    try:
+        if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+            return ""
+        body = _error_body_from_response(payload)
+        if not body:
+            return ""  # a clean result or no extractable error text — stay silent
+        slug = _slug_from_cwd(payload.get("cwd"))
+        if not slug:
+            return ""
+
+        from stackunderflow.reports.patterns import _normalise_signature
+
+        signature = _normalise_signature(body)  # VERBATIM reuse — signature-key parity
+        sig = _lookup_signal(slug, "error_signatures", signature)
+        if sig is None:
+            return ""
+
+        now = now or _utcnow()
+        session_count = _as_int(sig.get("session_count"), 0)
+        hints = sig.get("resolution_hints")
+        has_hints = isinstance(hints, list) and len(hints) > 0
+        eligible = session_count >= _MIN_RECURRENCE_SESSIONS and has_hints
+        signal = make_signal(
+            TYPE_ERROR_SIGNATURE,
+            signature,
+            _session_id(payload),
+            (session_count, _as_int(sig.get("count"), 0)),
+            eligible=eligible,
+        )
+        if not admit(signal, now=now):
+            return ""
+        return _render_error_signature(sig, signature)
+    except Exception:  # noqa: BLE001 - a nudge must never disrupt the agent
+        logger.debug("proactive.error_signature_block swallowed an error", exc_info=True)
+        return ""
+
+
+def _render_error_signature(sig: dict, signature: str) -> str:
+    """One deterministic advisory line for an error-signature nudge (spec §3.C)."""
+    session_count = _as_int(sig.get("session_count"), 0)
+    sess_word = "session" if session_count == 1 else "sessions"
+    example = sig.get("example")
+    shown = example if isinstance(example, str) and example.strip() else signature
+    shown = _one_line(shown, 160)
+    text = f'[StackUnderflow memory] This error recurred in {session_count} {sess_word}: "{shown}".'
+    action = _top_hint_action(sig.get("resolution_hints"))
+    if action:
+        text += f" The sessions that moved past it ran `{action}` next."
+    if len(text) > _SIG_MAX_CHARS:
+        text = text[: max(1, _SIG_MAX_CHARS - 1)].rstrip() + "…"
+    return text
+
+
+def _top_hint_action(hints: Any) -> str | None:
+    """The highest-count resolution-hint action (cache preserves the miner's order)."""
+    if not isinstance(hints, list) or not hints:
+        return None
+    first = hints[0]
+    if isinstance(first, dict) and isinstance(first.get("action"), str) and first["action"].strip():
+        return first["action"].strip()
+    return None
+
+
+# Error-bearing string fields on a PostToolUse ``tool_response`` (the shapes the
+# capture handler already probes for a failure). Ordered stderr-first — that's
+# where a Bash failure's signature line lives.
+_ERR_STRING_FIELDS = ("stderr", "error", "message")
+
+
+def _content_text(content: Any) -> str:
+    """Flatten a tool_result-style ``content`` (str | list of ``{text}``) to one string."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and isinstance(b.get("text"), str)]
+        return " ".join(p for p in parts if p).strip()
+    return ""
+
+
+def _error_body_from_response(payload: dict) -> str:
+    """Best-effort error text from a PostToolUse ``tool_response``, or ``""``.
+
+    Returns text *only* when the response carries an error signal — an
+    ``stderr`` / ``error`` / ``message`` string, an ``is_error`` tool_result,
+    or an explicit ``success: false``. A clean response (stdout only) yields
+    ``""`` → the handler stays silent. The first meaningful line of the
+    returned text is what ``patterns._normalise_signature`` keys on, matching
+    how the miner saw the errored tool_result content."""
+    resp = payload.get("tool_response")
+    if isinstance(resp, str):
+        return resp.strip()
+    if isinstance(resp, dict):
+        lower = {str(k).lower(): v for k, v in resp.items()}
+        for k in _ERR_STRING_FIELDS:
+            v = lower.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        if lower.get("is_error") is True or lower.get("success") is False:
+            text = _content_text(lower.get("content"))
+            if text:
+                return text
+        return ""
+    if isinstance(resp, list):
+        parts: list[str] = []
+        errored = False
+        for b in resp:
+            if not isinstance(b, dict):
+                continue
+            if b.get("is_error"):
+                errored = True
+            t = b.get("text") if isinstance(b.get("text"), str) else _content_text(b.get("content"))
+            if t:
+                parts.append(t)
+        return "\n".join(parts).strip() if (errored and parts) else ""
+    return ""
 
 
 # ── signal cache precompute (ingest side) ───────────────────────────────────
@@ -561,6 +747,7 @@ def refresh_signal_cache(conn: "sqlite3.Connection", slugs: set[str] | list[str]
                     "generated_at": now_iso,
                     "command_clusters": _clusters_map(report.get("command_clusters")),
                     "file_risk": _file_risk_map(report.get("file_risk")),
+                    "error_signatures": _error_signatures_map(report.get("error_signatures")),
                 }
             cache = {
                 "version": _SIGNAL_CACHE_VERSION,
@@ -595,8 +782,8 @@ def _clusters_map(clusters: Any) -> dict:
 
 
 def _file_risk_map(file_risk: Any) -> dict:
-    """``file_risk`` list → ``{path: trimmed risk}``. Cached for Tier-2 / Phase 2;
-    the MVP hook path does not read it (file-risk stays on the recall CLI path)."""
+    """``file_risk`` list → ``{path: trimmed risk}``. Cached for Tier-2;
+    the hook path does not read it (file-risk stays on the recall CLI path)."""
     out: dict[str, dict] = {}
     if not isinstance(file_risk, list):
         return out
@@ -610,6 +797,41 @@ def _file_risk_map(file_risk: Any) -> dict:
             "failure_count": _as_int(f.get("failure_count"), 0),
             "failure_session_count": _as_int(f.get("failure_session_count"), 0),
             "last_failure_ts": f.get("last_failure_ts") if isinstance(f.get("last_failure_ts"), str) else None,
+        }
+    return out
+
+
+def _error_signatures_map(signatures: Any) -> dict:
+    """``error_signatures`` list → ``{signature: trimmed signature}`` (O(1) lookup).
+
+    Keyed by the normalised ``signature`` string — the exact key
+    ``patterns._normalise_signature`` produces — so the PostToolUse handler can
+    look up a fresh error's normalised signature directly (Phase 2). Only the
+    fields the nudge renders / governs on are kept, and ``resolution_hints`` is
+    trimmed to the top few actions."""
+    out: dict[str, dict] = {}
+    if not isinstance(signatures, list):
+        return out
+    for s in signatures[:_MAX_SIGNATURES_PER_PROJECT]:
+        if not isinstance(s, dict):
+            continue
+        key = s.get("signature")
+        if not isinstance(key, str) or not key:
+            continue
+        hints: list[dict] = []
+        raw_hints = s.get("resolution_hints")
+        if isinstance(raw_hints, list):
+            for h in raw_hints[:_MAX_HINTS_CACHED]:
+                if isinstance(h, dict) and isinstance(h.get("action"), str) and h.get("action").strip():
+                    hints.append({"action": h["action"].strip(), "count": _as_int(h.get("count"), 0)})
+        out[key] = {
+            "signature": key,
+            "category": s.get("category") if isinstance(s.get("category"), str) else "",
+            "session_count": _as_int(s.get("session_count"), 0),
+            "count": _as_int(s.get("count"), 0),
+            "resolution_hints": hints,
+            "last_ts": s.get("last_ts") if isinstance(s.get("last_ts"), str) else None,
+            "example": s.get("example") if isinstance(s.get("example"), str) else "",
         }
     return out
 
@@ -773,6 +995,14 @@ def _locked(target: Path) -> Iterator[bool]:
 def _session_id(payload: dict) -> str:
     sid = payload.get("session_id") if isinstance(payload, dict) else None
     return sid if isinstance(sid, str) and sid else ""
+
+
+def _one_line(text: Any, limit: int) -> str:
+    """Collapse whitespace and clip *text* to *limit* chars with an ellipsis."""
+    one = " ".join(str(text).split())
+    if len(one) <= limit:
+        return one
+    return one[: max(1, limit - 1)].rstrip() + "…"
 
 
 def _utcnow() -> datetime:

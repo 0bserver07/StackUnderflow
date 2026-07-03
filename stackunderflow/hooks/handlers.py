@@ -94,10 +94,11 @@ def run(hook_id: str, payload: dict | None, *, capture_content: bool = False) ->
 
     Dispatches on *hook_id*. The four capture ids record a ``captured_events``
     row (or no-op). The three ``stackunderflow-inject-*`` ids route to
-    :mod:`stackunderflow.hooks.inject`, and ``stackunderflow-pretool-recall``
-    routes to :mod:`stackunderflow.hooks.recall`; both write a
-    context-injection JSON envelope to stdout instead. An unknown id is a
-    no-op. Any exception (malformed payload, store unavailable, …) is logged
+    :mod:`stackunderflow.hooks.inject`, ``stackunderflow-pretool-recall`` routes
+    to :mod:`stackunderflow.hooks.recall`, and ``stackunderflow-posttool-nudge``
+    routes to :func:`stackunderflow.hooks.proactive.build_posttool_nudge`; those
+    write a context-injection JSON envelope to stdout instead. An unknown id is
+    a no-op. Any exception (malformed payload, store unavailable, …) is logged
     at DEBUG and swallowed — neither a recorder nor an injector may make
     Claude Code stumble.
     """
@@ -114,6 +115,13 @@ def run(hook_id: str, payload: dict | None, *, capture_content: bool = False) ->
             from stackunderflow.hooks import recall
 
             output = recall.build_recall(hook_id, payload)
+            if output:
+                sys.stdout.write(output if output.endswith("\n") else output + "\n")
+            return 0
+        if hook_id in templates.NUDGE_HOOK_IDS:
+            from stackunderflow.hooks import proactive
+
+            output = proactive.build_posttool_nudge(hook_id, payload)
             if output:
                 sys.stdout.write(output if output.endswith("\n") else output + "\n")
             return 0

@@ -1420,6 +1420,29 @@ export interface PatternsResponse {
   report: PatternsReportData
 }
 
+/** The nudge kinds the "What almost bit me" panel can dismiss —
+ * `proactive.TYPE_*` / `routes/patterns.py::_DISMISS_TYPES`. */
+export type NudgeType = 'command-cluster' | 'file-risk' | 'error-signature'
+
+/** Body for `POST /api/patterns/dismiss` — `routes/patterns.py::DismissRequest`.
+ *
+ * `scope: 'type'` mutes the whole kind; `scope: 'fingerprint'` (default) mutes
+ * this specific nudge. For fingerprint scope, `target_key` + `counts` are fed
+ * through the same signal builder Tier-1 uses, so the dismissed fingerprint is
+ * byte-identical to the one the in-session hook governance reads. */
+export interface DismissPatternRequest {
+  type: NudgeType
+  scope?: 'fingerprint' | 'type'
+  target_key?: string
+  counts?: [number, number]
+}
+
+export interface DismissPatternResponse {
+  ok: boolean
+  scope: 'fingerprint' | 'type'
+  dismissed: string
+}
+
 // ---------------------------------------------------------------------------
 // Campaign #7 — prescriptive cost. Mirrors `reports/prescribe.py` payloads
 // served by GET /api/optimize/prescriptions and POST

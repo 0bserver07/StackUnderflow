@@ -2,6 +2,13 @@
 
 *Design spec for issue #97. Product design owned by the maintainer — this is a spec, not an implementation. No code, no schema migration, no version edits.*
 
+> **Status:** Phase 0 (governance retrofit), Phase 1 (command-cluster nudge), and
+> **Phase 2 (error-signature foresight + "What almost bit me" dashboard panel)**
+> have shipped (`stackunderflow/hooks/proactive.py`, `hooks/handlers.py`+`templates.py`,
+> `routes/patterns.py`, `stackunderflow-ui/.../CodingHealthTab.tsx`). Phase 3
+> (prompt-similarity) remains speculative / embeddings-gated. See §9 for the
+> per-phase "as built" notes.
+
 ## 0. Corrections to the issue body (read first)
 
 The issue was written before campaign #5/#6 shipped. Three parts of its implementation plan should change, and one framing is now inaccurate:
@@ -27,10 +34,10 @@ Everything else in the issue (default-off, opt-in flag, no schema, "just a nudge
 | File-about-to-be-edited has failure/revert history | ✅ | `recall.py`, `inject._pre_tool_use_context` | Retrofit governance only |
 | Prompt lexically matches a past decision | ✅ | `inject._user_prompt_context` | — |
 | Project digest at session start | ✅ | `inject._session_start_context` | — |
-| **Command about to run is in a failure cluster** | ❌ | `patterns.command_clusters` computed, surfaced nowhere live | **NEW — MVP** |
-| **Recurring error signature + what fixed it last time** | ❌ | `patterns.error_signatures` + `resolution_hints`, surfaced nowhere live | **NEW — Phase 2** |
+| **Command about to run is in a failure cluster** | ✅ | `proactive.command_cluster_block` (PreToolUse/Bash) | **SHIPPED — Phase 1** |
+| **Recurring error signature + what fixed it last time** | ✅ | `proactive.error_signature_block` / `build_posttool_nudge` (PostToolUse/Bash) | **SHIPPED — Phase 2** |
 | **Prompt *semantically* similar to a `failed` session** | ❌ | needs embeddings (Spec 10) | **Speculative — Phase 3** |
-| **Any anti-fatigue governance** (cap, dedupe, snooze, adaptive quieting) | ❌ | nothing exists | **NEW — MVP, the crux** |
+| **Any anti-fatigue governance** (cap, dedupe, snooze, adaptive quieting) | ✅ | `proactive.should_surface` / `admit` + `proactive_state.json` | **SHIPPED — MVP, the crux** |
 
 **Verdict, stated plainly:** the file-edit nudge is done. The load-bearing new value in #97 is **(a) command-cluster triggers, (b) a governance layer the shipped hooks lack entirely, and (c) an optional dashboard surface for phrasing + tuning.** If we skip (b) and just add more triggers, we make the shipped feature *worse* (more noise, no throttle). Governance is not a "hard part" bullet at the end — it is the reason to do this spec.
 
@@ -183,8 +190,41 @@ Wrap the *existing* `recall.py` output in the governance layer (§4): per-sessio
 **Phase 1 — Command-cluster nudge (the MVP new value).**
 Precompute/cache `command_clusters`; add the PreToolUse/Bash command-head lookup + template renderer to the recall path, under governance. Ship template-only. This is the "smallest genuinely-useful *new* nudge."
 
-**Phase 2 — Error-signature foresight + dashboard panel.**
+**Phase 2 — Error-signature foresight + dashboard panel. ✅ SHIPPED (campaign #8).**
 New PostToolUse/Bash nudge using `error_signatures` + `resolution_hints`. Add the "What almost bit me" section to `CodingHealthTab` with dismiss controls writing governance state. Optional Tier-2 LLM phrasing behind `proactive_llm_phrasing`.
+
+*As built:*
+- **Hook:** new id `stackunderflow-posttool-nudge` (PostToolUse, matcher `Bash`),
+  installed alongside recall/inject by `hooks install --inject`, dispatched via
+  `handlers.run` → `proactive.build_posttool_nudge`. It extracts the errored
+  `tool_response` body (`proactive._error_body_from_response` — stderr/error/
+  `is_error` content only; a clean result is silent), normalises it with
+  `patterns._normalise_signature` **reused verbatim** for signature-key parity,
+  looks it up O(1) in the precomputed cache (`refresh_signal_cache` now also
+  emits `error_signatures`), and fires only when `session_count >= 2` **and**
+  `resolution_hints` is non-empty. Rides the *same* governance layer as Phase 1
+  (`should_surface`/`admit`, dedupe/cap/cooldown/adaptive-quieting). Emits only
+  `hookSpecificOutput.additionalContext` — a PostToolUse hook can never block
+  the tool (it already ran); never a `decision`/deny; error/timeout → empty,
+  exit 0.
+- **Type gate:** `error-signature` is a first-class type in `_KNOWN_TYPES`, so it
+  is governed by the `proactive_types` allowlist like the others. The shipped
+  `settings.py` default (`command-cluster,file-risk`) does **not** include it yet
+  (that default + the `--proactive` install flag are maintainer-owned), so until
+  the maintainer widens the default, enabling it is `proactive_enabled=1` **plus**
+  adding `error-signature` to `proactive_types` (or `STACKUNDERFLOW_PROACTIVE_TYPES`).
+- **Dashboard:** `CodingHealthTab` gained a "What almost bit me" panel listing the
+  would-have-fired nudges (command-cluster + file-risk + error-signature) from the
+  existing `/api/patterns` report, each with **Dismiss** (fingerprint scope) and
+  **Don't show again** (type scope) controls. Both call the new
+  `POST /api/patterns/dismiss`, which computes the fingerprint with the *same*
+  `proactive.make_signal` Tier-1 uses and calls `proactive.record_dismissal` —
+  so a dashboard dismiss lands on the exact governance key the in-session gate
+  reads (round-trip verified). The endpoint writes only `proactive_state.json`,
+  never the store.
+- **Deferred:** Tier-2 LLM phrasing (`proactive_llm_phrasing`) — the template
+  renderer is the shipped floor, as spec'd; LLM polish stays a later, opt-in,
+  dashboard-only add.
 
 **Phase 3 — Prompt-similarity (only if embeddings ship and Phases 1–2 earn trust).**
 Semantic match vs. `failed` sessions on UserPromptSubmit. Highest annoyance risk; build last, guard hardest, or defer indefinitely.

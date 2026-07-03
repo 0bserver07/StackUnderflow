@@ -7,7 +7,11 @@
 // mirrors `api.ts::fetchJson` exactly.
 // ---------------------------------------------------------------------------
 
-import type { PatternsResponse } from '../types/api'
+import type {
+  DismissPatternRequest,
+  DismissPatternResponse,
+  PatternsResponse,
+} from '../types/api'
 
 const BASE = '/api'
 
@@ -37,4 +41,21 @@ export async function getPatterns(
   const params = new URLSearchParams({ since })
   if (project) params.set('project', project)
   return fetchJson(`${BASE}/patterns?${params}`)
+}
+
+/**
+ * Dismiss a proactive nudge from the "What almost bit me" panel. Writes the
+ * governance `dismissed` counter the in-session hooks read (Tier-2 → Tier-1),
+ * quieting the nudge. `scope: 'type'` mutes the whole kind; the default
+ * fingerprint scope mutes just this one — see `DismissPatternRequest`. The
+ * server only ever touches the governance JSON file, never the store.
+ */
+export async function dismissPattern(
+  body: DismissPatternRequest,
+): Promise<DismissPatternResponse> {
+  return fetchJson(`${BASE}/patterns/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }
