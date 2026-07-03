@@ -161,6 +161,29 @@ class Settings:
     # the wrong number of components falls back to the default. A future
     # ``cite_rate`` term (citation-feedback spec) appends a fourth weight.
     discovery_rank_weights       = _Opt("0.5,0.2,0.3", "STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS")
+    # ── Proactive surfacing (spec 27 / #97) — the anti-annoyance governance
+    # knobs for the pre-tool nudge surface (:mod:`stackunderflow.hooks.proactive`).
+    # OPT-IN: ``proactive_enabled`` is false by default, so the retrofitted
+    # recall governance and the command-cluster nudge stay dormant until a
+    # user turns them on. A hard env kill-switch
+    # ``STACKUNDERFLOW_PROACTIVE_DISABLED=1`` (read directly in the hook, not a
+    # setting here) wins over every one of these.
+    proactive_enabled            = _Opt(False, "STACKUNDERFLOW_PROACTIVE_ENABLED")
+    # Per-type allowlist — comma-separated nudge type ids. Only listed types may
+    # surface. Env-settable so a shell can flip it fast on the hook path.
+    proactive_types              = _Opt("command-cluster,file-risk",
+                                        "STACKUNDERFLOW_PROACTIVE_TYPES")
+    # Frequency cap: at most this many nudges per Claude Code session, global
+    # across all nudge types. Cap reached → silent.
+    proactive_max_per_session    = _Opt(3, "STACKUNDERFLOW_PROACTIVE_MAX_PER_SESSION")
+    # Cross-session cooldown: once a nudge fingerprint fires, it stays quiet for
+    # this many hours even across sessions (a chronically risky target doesn't
+    # nag every session).
+    proactive_cooldown_hours     = _Opt(24, "STACKUNDERFLOW_PROACTIVE_COOLDOWN_HOURS")
+    # Adaptive quieting: after this many dashboard dismissals of a type (or a
+    # specific fingerprint) it is auto-suppressed. File-only — a dashboard-side
+    # tuning knob, not a hot-path env read.
+    proactive_dismiss_suppress_after = _Opt(3, None)
 
     # ── public helpers (used by server.py / cli.py) ──────────────────────
 
