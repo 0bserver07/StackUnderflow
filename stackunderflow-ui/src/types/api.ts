@@ -1599,3 +1599,128 @@ export interface WorktreesResponse {
 export interface WorktreeAttributeResponse {
   updated: number
 }
+
+// ── Multi-device sync (#100 Phase 2 — the union read overlay) ───────────────
+// Shapes mirror `stackunderflow/routes/sync.py` exactly. Both endpoints are
+// read-only and safe on a core install: `/api/sync/status` is a pure local
+// read, and `/api/sync/overview` only runs the cross-device union on the opt-in
+// `?scope=all-devices` path (the default returns a tiny not-merged stub).
+
+/** One peer device from `sync_remote_devices` (empty until the first pull).
+ *  Nullable columns are typed defensively — `alias`/`key_fingerprint` are set
+ *  to NULL on first sight and populated later; timestamps come from upserts. */
+export interface SyncPeer {
+  remote_device_uuid: string
+  alias: string | null
+  key_fingerprint: string | null
+  first_seen: string | null
+  last_seen: string | null
+  last_generation: number
+}
+
+/** GET /api/sync/status — local sync config + known peers + availability.
+ *  Works whether sync is on or off; never touches the network. */
+export interface SyncStatus {
+  enabled: boolean
+  device_uuid: string | null
+  fingerprint: string | null
+  bucket_url: string | null
+  endpoint_url: string | null
+  shard_count: number
+  pending: string[]
+  pending_count: number
+  last_push_ts: string | null
+  peers: SyncPeer[]
+  peer_count: number
+  /** Total rows landed across every `<mart>_remote` table (0 ⇒ nothing pulled). */
+  remote_rows: number
+  /** True only when sync is enabled AND cross-device rows exist — the FE gates
+   *  the all-devices view on this flag. */
+  all_devices_available: boolean
+  scanned_at: string
+}
+
+/** Merged totals across every contributing device (cost pre-converted). */
+export interface SyncTotals {
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  cache_read: number
+  cache_create: number
+  message_count: number
+  /** Deduped unique sessions across devices (a session never spans machines). */
+  session_count: number
+}
+
+/** One point on the merged per-day cost/token/message trend. */
+export interface SyncByDay {
+  day: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  message_count: number
+}
+
+/** Merged per-project totals at the stable `(provider, slug)` grain. */
+export interface SyncByProject {
+  provider: string
+  slug: string
+  display_name: string | null
+  first_ts: string | null
+  last_ts: string | null
+  total_messages: number
+  total_sessions: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cache_read: number
+  total_cache_create: number
+  total_cost_usd: number
+}
+
+/** Merged per-provider-day roll-up (additive measures are exact). */
+export interface SyncByProviderDay {
+  day: string
+  provider: string
+  cost_usd: number
+  message_count: number
+  session_count: number
+  project_count: number
+}
+
+/** Per-contributing-device breakdown (this device + each pulled peer). */
+export interface SyncDevice {
+  device_uuid: string
+  alias: string | null
+  is_local: boolean
+  projects: number
+  cost_usd: number
+}
+
+/** GET /api/sync/overview default / sync-off — a minimal not-merged stub; no
+ *  union query runs. Discriminated from the merged payload by `merged: false`. */
+export interface SyncOverviewStub {
+  scope: 'this-device'
+  merged: false
+  sync_enabled: boolean
+  hint: string
+}
+
+/** GET /api/sync/overview?scope=all-devices (sync enabled) — the
+ *  `local UNION ALL <mart>_remote` roll-up. Cost figures are pre-converted into
+ *  the active currency, matching every other cost endpoint's contract. */
+export interface SyncOverviewMerged {
+  scope: 'all-devices'
+  merged: true
+  sync_enabled: true
+  totals: SyncTotals
+  by_day: SyncByDay[]
+  by_project: SyncByProject[]
+  by_provider_day: SyncByProviderDay[]
+  devices: SyncDevice[]
+  merge_warnings: number
+  currency: CurrencyInfo
+  generated_at: string
+}
+
+/** GET /api/sync/overview — discriminated on `merged`. */
+export type SyncOverview = SyncOverviewStub | SyncOverviewMerged
