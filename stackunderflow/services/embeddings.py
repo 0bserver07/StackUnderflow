@@ -46,6 +46,8 @@ from pathlib import Path
 
 import httpx
 
+from stackunderflow.infra import egress
+
 logger = logging.getLogger(__name__)
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -250,9 +252,21 @@ def _embed_one(text: str, *, model: str, base: str, api_key: str | None = None) 
     if not text or not text.strip():
         return None
     try:
+        # Funnel the outbound body through the egress chokepoint: it asserts the
+        # body carries only the allowlisted top-level keys ({"model", "prompt"})
+        # before it can leave the machine. Cheap shape check, no I/O — the hot
+        # embed path keeps its latency. The prompt text itself crosses by design
+        # (you cannot embed text without sending it); that reviewed allowance is
+        # asserted in tests/stackunderflow/infra/test_egress_leak.py. The bearer
+        # credential rides the Authorization header (below), never this body.
+        body = egress.guard_json_body(
+            {"model": model, "prompt": text},
+            allow=egress.OLLAMA_EMBED_KEYS,
+            kind="ollama/embeddings",
+        )
         resp = httpx.post(
             f"{base}/api/embeddings",
-            json={"model": model, "prompt": text},
+            json=body,
             headers=_headers(api_key),
             timeout=_EMBED_TIMEOUT_S,
         )

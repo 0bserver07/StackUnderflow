@@ -1,0 +1,7 @@
+# RFC 5737 documentation ranges: TEST-NET-1 192.0.2.0/24, TEST-NET-2
+# 198.51.100.0/24, TEST-NET-3 203.0.113.0/24. These never route on the public
+# internet — they are reserved for examples. Synthetic. Safe to commit.
+192.0.2.1
+192.0.2.55
+198.51.100.23
+203.0.113.9

@@ -182,13 +182,15 @@ async def _run_chat_stream(  # noqa: C901, PLR0912 — single complex orchestrat
                     )
                     return
 
-                req: dict[str, Any] = {
-                    "model": model,
-                    "messages": rolling,
-                    "stream": True,
-                }
-                if tools_enabled:
-                    req["tools"] = meta_agent.TOOL_CATALOG
+                # Build the live chat body through the egress chokepoint (spec #11)
+                # so the only top-level keys that can cross the now-cloud-capable
+                # boundary are the allowlisted ones; an un-allowlisted field fails
+                # closed instead of silently shipping to a remote LLM.
+                req: dict[str, Any] = meta_agent.build_chat_request(
+                    model=model,
+                    messages=rolling,
+                    tools_enabled=tools_enabled,
+                )
 
                 content_streamed = ""
                 tool_calls: list[Any] = []

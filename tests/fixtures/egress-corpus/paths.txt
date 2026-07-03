@@ -1,0 +1,7 @@
+# Synthetic local filesystem paths under a fake user ("fake"). No such user or
+# files exist; these are secret-LOCATION-shaped strings (home dirs, ssh keys,
+# credential files, dotenvs) for the leak-scan. Safe to commit.
+/Users/fake/secret
+/Users/fake/.ssh/id_rsa
+/Users/fake/.aws/credentials
+/home/fake/.env

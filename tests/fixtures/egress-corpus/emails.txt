@@ -1,0 +1,7 @@
+# RFC 2606 / RFC 6761 reserved example domains (.invalid never resolves;
+# example.com / example.org are reserved for documentation). Synthetic
+# addresses — nobody receives mail here. Safe to commit. Used to prove the
+# egress leak-scan catches PII-shaped substrings in an outbound body.
+person@example.invalid
+alice@example.com
+secret-user@example.org

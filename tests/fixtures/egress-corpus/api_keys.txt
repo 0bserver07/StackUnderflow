@@ -1,0 +1,10 @@
+# Synthetic, non-functional API-key-shaped strings for the egress leak-scan.
+# Every value below is OBVIOUSLY FAKE (contains "FAKE") and matches no live
+# credential — safe to commit publicly. They exist only to prove the egress
+# chokepoint's leak-scan detects credential-shaped substrings in an outbound
+# request body. One line per fixture; lines starting with '#' are comments.
+sk-FAKE0000000000000000000000000000000000000000000000
+sk-FAKE-OLLAMA-CLOUD-BEARER-000000000000000000000000
+AKIAFAKE000000000000
+ghp_FAKE0000000000000000000000000000000000
+xoxb-FAKE-0000000000-0000000000-FAKEFAKEFAKEFAKEFAKEFAKE

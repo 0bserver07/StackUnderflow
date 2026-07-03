@@ -37,15 +37,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from stackunderflow.infra import egress
 from stackunderflow.reports.aggregate import build_report
 from stackunderflow.reports.scope import parse_period
 from stackunderflow.services import discovery, playback_fs
 
 __all__ = [
     "TOOL_CATALOG",
-    "ToolResult",
-    "execute_tool",
     "MAX_TOOL_HOPS",
+    "ToolResult",
+    "build_chat_request",
+    "execute_tool",
 ]
 
 
@@ -1299,6 +1301,37 @@ def execute_tool(
 
 
 # ── helpers for the route ──────────────────────────────────────────────────
+
+
+def build_chat_request(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools_enabled: bool,
+    stream: bool = True,
+) -> dict[str, Any]:
+    """Assemble the Ollama ``/api/chat`` request body for one turn, shape-guarded.
+
+    This is the meta-agent's outbound chat-payload builder. It funnels the final
+    body through the egress chokepoint (:func:`egress.guard_json_body`) so the
+    set of top-level keys that can cross the — now cloud-capable — network
+    boundary is an explicit allowlist (:data:`egress.OLLAMA_CHAT_KEYS`):
+    ``messages`` (the conversation + tool results the user asked the agent to
+    read), the static ``tools`` catalogue, ``model`` and ``stream``. A field
+    added here that isn't allowlisted fails **closed** rather than silently
+    shipping to a remote LLM.
+
+    The bearer credential for a hosted endpoint is an HTTP *header* (see
+    ``embeddings._headers``); it is deliberately never part of this body.
+
+    Wiring note: the live chat route (``routes/meta_agent.py``) currently
+    assembles this dict inline; switch it to call this builder so the guard is
+    on the live path. That one-liner lives outside this spec's file scope.
+    """
+    req: dict[str, Any] = {"model": model, "messages": messages, "stream": stream}
+    if tools_enabled:
+        req["tools"] = TOOL_CATALOG
+    return egress.guard_json_body(req, allow=egress.OLLAMA_CHAT_KEYS, kind="ollama/chat")
 
 
 def now_iso() -> str:
