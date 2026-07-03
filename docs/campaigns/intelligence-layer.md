@@ -100,6 +100,164 @@ only the additive attribution column.
 session-cwd → parent mapping incl. the 4 real-world slug shapes above; fragment
 roll-up math; never mutates git state (assert command previews only).
 
+---
+
+## Retrieval-hardening batch (specs #9–#12)  ·  added 2026-07-02
+
+> Derived from a teardown of a same-space external CLI (full named analysis lives
+> machine-local: memory `reference_ctx_parallel_project`). Framed here as **our**
+> improvements. **Wave plan:** #9/#10/#11 are file-disjoint → run as one parallel
+> worktree wave; #10 captures its golden fixtures at integration (after #9's row
+> shape settles). #12 is Wave 2 (larger). Backlog (maintainer-gated) at the end.
+> Invariants that gate every one of these: `test_pricing_invariants.py` green,
+> mart `<100ms` perf tests green, **no MCP** (`548d33f`), `pack_within_budget`
+> token-budgeting preserved (it's our edge — FTS replaces ranking, not packing).
+
+> **WAVE 1 EXECUTION — 2026-07-02: implemented, combined suite GREEN, holding for maintainer.**
+> Three file-disjoint worktree agents implemented #9/#10/#11. Combined on branch
+> `wave1-integration` (temp-commits on `worktree-agent-{aa2295dfd82fc08d0, af6d94d36a6e0e8be,
+> a56ff0784d305c1ee}`): merges clean (zero conflicts), `ruff E,F` + version-guard +
+> contract-validator green, **full suite 3637 passed / 2 skipped / 14 deselected (96s)**.
+> **NOT committed to main, not pushed.** Branches carry the work durably even if the
+> worktrees are pruned. Pending maintainer calls before landing:
+> (1) ratify #9 routing **only `decisions`** to FTS, leaving `worked/file/sessions` on
+> exact/LIKE (rationale below in #9's notes) — or extend `file`/`worked`'s content half
+> (`lexical_session_hits` is ready to reuse);
+> (2) activate #11's chat guard — swap the inline body in `routes/meta_agent.py:185` to
+> `meta_agent.build_chat_request(...)` (built + tested, not yet wired live);
+> (3) regenerate #10's `decisions` golden fixture post-#9 (`fixtures/regenerate.sh`;
+> envelope stays valid, fidelity only) + `None`-guard the dynamic import in
+> `test_agent_output.py` (Pyright, not CI-gated);
+> (4) landing shape: per-spec commits + PR, vs hold. #12 + backlog untouched.
+
+### #9 — Unify agent retrieval on FTS/bm25 (kill the LIKE full-scan)  ·  highest leverage
+**Goal.** The structured memory commands (`memory decisions/worked/file/sessions`)
+run on `services/discovery.py`'s leading-wildcard `content_text LIKE '%needle%'`
+full scan — it says so verbatim ("No FTS dependency … queried via plain `LIKE`")
+— with a hand-rolled Python relevance term, **while we already shipped**
+(`020a5f6`) a full FTS5 + `bm25` + `snippet()` + hybrid-RRF + vector path in
+`services/search_service.py` that **only `memory ask` uses**. Route the structured
+commands through the FTS path: stop the unindexed scan on the agent surface, get
+bm25 relevance + snippets for free.
+**Approach.** Point `search_past_decisions` / `find_sessions_touching_file` / the
+session finders at `SearchService` (lexical FTS at minimum; hybrid where the query
+is natural language) instead of LIKE. **Preserve `pack_within_budget` + the
+`ContextResult` shape unchanged** — FTS replaces only candidate-gathering + ranking,
+never the budget packing. Add **session clustering** (one best hit per session +
+`more_matches_in_session` count) so a chatty session can't fill the page — promote
+the "first-hit-per-session" dedupe `search_past_decisions` already does into the
+shared path. Add **query hygiene**: strip + re-quote every FTS token so an agent's
+free text (a note containing `NOT`/`AND`/`*`) can never reach the FTS5 parser as
+syntax (audit `_sanitize_fts_query`, which today passes operator-bearing queries
+through), plus a `search_has_intent()` gate that rejects empty/punctuation-only
+queries **before** opening the store.
+**Scope (own).** `services/discovery.py`, `services/search_service.py`, `cli.py`
+(the `_run_*_query` memory wrappers only). Tests in `tests/stackunderflow/services/`
++ `tests/stackunderflow/cli/`. Do **not** touch the envelope shape (that's #10) —
+only which rows the ranker produces.
+**Verify.** Same query, LIKE vs FTS on a fixture store: FTS returns the known-relevant
+session, ordered by bm25, with no `LIKE '%…'` on the hot path. Clustering: a fixture
+session with N hits → one row + `more_matches_in_session = N-1`. Hygiene:
+`memory ask "use NOT null"` searches literally instead of raising; empty / `"!!!"`
+→ intent error, store never opened. `pack_within_budget` + `memory file` <100ms
+tests stay green; hybrid `ask` (`afb07b5`) not regressed.
+**Gotchas.** `search_index.db` is a **separate** SQLite file from `store.db` — that's
+exactly why discovery fell back to LIKE. Decide deliberately: query `search_index.db`
+cross-DB from discovery vs `ATTACH`. The FTS index only covers what's been indexed —
+handle the not-yet-indexed store gracefully (fall back, don't error).
+
+### #10 — Formalize the `stackunderflow.memory/1` contract (schema + golden fixtures + validator)
+**Goal.** The agent-output envelope is a hand-written function
+(`cli_helpers/agent_output.py`, `SCHEMA="stackunderflow.memory/1"`) documented only
+in prose (`docs/specs/agent-memory-cli.md`) and asserted with inline dicts — not
+machine-checkable, not portable to a non-Python consumer (e.g. a hook). Make it a
+real, versioned, conformance-tested contract. The high-value/low-cost piece is a
+**product-shaped JSON-Schema + golden fixtures + a stdlib-only validator** (not SDKs
+— those are a hand-maintained trap; skip them).
+**Approach.** Emit `schema.json` (draft 2020-12) for the envelope's stable outer
+fields (`schema`, `command`, `results[]`, `token_estimate`, `budget`, `truncated`,
+error shape), keeping `results[]` rows as `command`-tagged objects (they're
+command-specific by design — product-shaped, never mirroring SQLite columns). Capture
+one golden fixture per `memory` subcommand × {success, empty, error} from **real CLI
+output**. Write one ~150-line stdlib validator (`scripts/check_memory_contract.py`)
+walking `$ref`/`const`/`enum`/`required` over every fixture; wire it into CI; repoint
+the existing Python tests at the fixtures. The `/1` integer is a **maintainer-only**
+bump (project version rule) — never an agent's.
+**Scope (own).** `cli_helpers/agent_output.py`, new `contracts/stackunderflow-memory-v1/`
+(`schema.json` + `fixtures/*.json`), new `scripts/check_memory_contract.py`, CI yaml,
+`tests/stackunderflow/cli/test_agent_output.py` (repoint at fixtures). Envelope only —
+row internals belong to #9.
+**Verify.** Validator passes on all fixtures; a mutated fixture (drop a required
+field / wrong `const`) fails it. Forward-compat: an unknown extra field is
+preserved/ignored, not rejected. CI runs the validator.
+**Gotchas.** Capture fixtures **after** #9's row shape settles (regenerate at
+integration) so goldens aren't stale. Do not leak SQLite column names into the public
+schema — product-shaped, not storage-shaped.
+
+### #11 — Egress leak-oracle + payload allowlist (guard the cloud-Ollama path)
+**Goal.** We now ship **cloud-first Ollama** (`afb07b5`): embeddings, the watcher, and
+`meta_agent` chat can send text to a remote endpoint. Nothing mechanically proves raw
+transcript text / secrets don't cross that boundary unintentionally, or that structured
+outbound payloads are shape-bounded. Add the cheapest high-leverage safeguard — a
+synthetic-secret corpus + two assertions — **before** the intelligence layer widens
+egress further.
+**Approach.** Corpus of **RFC-reserved synthetic** secret-shaped fixtures (`sk-…`,
+`AKIA…`, `person@example.invalid`, `192.0.2.x`, fake local paths). (a) **Leak-scan**:
+drive each outbound builder (embeddings request body, `meta_agent` chat payload) with
+corpus input; assert the serialized body never contains substrings that must not cross
+the boundary — and where text legitimately must be sent (embeddings), assert that as an
+**explicit, reviewed** allowance, not an accident. (b) **Property allowlist**: any
+structured metadata/telemetry payload must match an allowlist of permitted keys, not a
+denylist. Route outbound bodies through a single `infra/egress.py` chokepoint so the
+allowlist has one home.
+**Scope (own).** New `stackunderflow/infra/egress.py`, new
+`tests/stackunderflow/infra/test_egress_leak.py` + `tests/fixtures/egress-corpus/`,
+interface-only touch on `services/embeddings.py` / `services/meta_agent*.py` to route
+bodies through the chokepoint. Disjoint from #9/#10.
+**Verify.** Corpus drives each path; leak-scan holds the boundary; allowlist rejects an
+injected stray key; the "embeddings send text" allowance is asserted with a comment, not
+silent.
+**Gotchas.** Don't break the cloud→local Ollama probe or add latency to the hot embed
+path — the chokepoint is a cheap string/shape check, not a network wrapper. This is a
+**guard, not redaction** — we deliberately preserve transcript text at rest.
+
+### #12 — External history-source plugin contract (unblock Amp)  ·  WAVE 2
+**Goal.** Amp is deferred as cloud-gated (no local transcript — memory
+`adapters_amp_grok`). The pattern for "sources we don't want to own forever": a manifest
++ a **user-supplied argv command** that streams a stable JSONL to stdout, resumed by an
+opaque cursor we never interpret, all landing under one `custom` provider. A user with
+Amp creds on their machine supplies the export command; we own only the contract.
+**Approach.** Define `stackunderflow-history-jsonl-v1` (small record-type stream:
+session / message / file-touch, mirroring the adapter DTOs) + a manifest
+(`stackunderflow-history-plugin.json`: `command`, `source_id`, `cursor`, `timeout`).
+`stackunderflow import --history-source <name>` runs the argv (**no shell**, env
+allowlist, byte/timeout caps, **fail-closed** — cursor doesn't advance on failure),
+validates the stream, upserts under a `custom` provider namespaced by `source_id`. The
+cursor is an opaque string we store + replay.
+**Scope (own).** `stackunderflow/adapters/` (a `custom_jsonl.py` reader + the stream
+contract), `cli.py` (`import --history-source`), a contract doc, tests with a fake
+export-script fixture. Additive; no existing adapter touched.
+**Verify.** Fake `amp-export` script emitting the stream imports; re-run with unchanged
+cursor is a no-op (idempotent upsert); a failing script leaves the cursor un-advanced;
+malformed line → typed error, whole import fails closed.
+**Gotchas.** The plugin command is local code running as the user — env allowlist + no
+shell + caps are **guardrails, not a sandbox** (say so in the doc). One `custom`
+provider; plugin identity lives in metadata — never grow the provider enum per plugin.
+
+### Backlog (maintainer-gated — not in the wave)
+- **Deterministic content-hash import IDs** — complement `UNIQUE(provider, slug)` with
+  session/event IDs derived from a content hash so re-import is idempotent at the PK and
+  cross-machine-merge-safe (a stray write path can't duplicate rows).
+- **Honest per-adapter support matrix** — publish per-field fidelity flags
+  (`tool_output`, `costs`, …) + a status vocabulary (supported / when-supported /
+  preview) instead of a binary "supported".
+- **`stackunderflow doctor`** — a read-only `store.db` health check (integrity + FK +
+  orphan/watermark sanity) usable outside the running server.
+- **Agent-facing `SKILL.md`** — promote the CLAUDE.md/AGENTS.md memory prose into a
+  frontmatter-triggered skill + cross-host plugin manifests. *Maintainer call:* the
+  campaign says CLI + the AGENTS.md/CLAUDE.md snippet are the interface — decide whether
+  a SKILL.md adds reach or just duplicates the snippet mechanism.
+
 ## Bigger bet (not yet a task) — privacy-preserving team layer
 Each machine pushes encrypted **aggregates only** (never raw transcripts) to a self-hostable endpoint; the team sees shared waste/patterns. Grounded in the backup hardlink snapshots + the mart schema (aggregates are already the storage unit). Design work: the privacy contract + sync protocol.
 
