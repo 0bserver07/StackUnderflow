@@ -36,6 +36,7 @@ DEFAULT_PREFIX = "stackunderflow/v1"
 MANIFEST_SCHEMA = "stackunderflow.sync/1"
 
 Encryptor = Callable[[bytes], bytes]
+Decryptor = Callable[[bytes], bytes]
 
 
 class SyncError(RuntimeError):
@@ -288,6 +289,280 @@ def run_push(
         device_uuid=identity["device_uuid"],
         key_fingerprint=identity["key_fingerprint"],
         encryptor=_encrypt,
+        now=now,
+    )
+
+
+# ── pull (Phase 2) ─────────────────────────────────────────────────────────────
+#
+# ``pull`` is the mirror of ``push``: dependency-free and injectable (a
+# *decryptor* callable + an ``ObjectStore``), so idempotency / cursor / merge
+# landing behaviour is fully testable without ``pyrage`` or ``boto3``.
+# ``run_pull`` is the thin deps-wiring wrapper the CLI uses. Pull is strictly
+# READ-ONLY against the bucket — it only ``list``/``get`` other devices' prefixes
+# and never writes any object (the "merge doesn't write to remote on read"
+# invariant, §4.1), and it never touches ``usage_events`` / ``price_book`` /
+# transcripts — decrypted remote rows land only in the ``<mart>_remote`` tables.
+
+
+def _remote_device_uuids(
+    store, self_device_uuid: str, *, prefix: str = DEFAULT_PREFIX
+) -> list[str]:
+    """LIST the sync root and return every *other* device's UUID (skip our own)."""
+    root = f"{prefix}/"
+    uuids: set[str] = set()
+    for key in store.list(root):
+        if not key.startswith(root):
+            continue
+        seg = key[len(root):].split("/", 1)[0]
+        if seg and seg != self_device_uuid:
+            uuids.add(seg)
+    return sorted(uuids)
+
+
+def _last_generation(conn: sqlite3.Connection, remote_uuid: str) -> int:
+    """Highest manifest generation we have accepted for *remote_uuid* (0 if new)."""
+    row = conn.execute(
+        "SELECT last_generation FROM sync_remote_devices WHERE remote_device_uuid = ?",
+        (remote_uuid,),
+    ).fetchone()
+    return int(row["last_generation"]) if row is not None else 0
+
+
+def _upsert_remote_device(
+    conn: sqlite3.Connection,
+    remote_uuid: str,
+    *,
+    key_fingerprint: str | None,
+    generation: int,
+    now: str,
+) -> None:
+    """Record/refresh a peer: first/last seen, fingerprint, monotonic generation."""
+    conn.execute(
+        "INSERT INTO sync_remote_devices "
+        "(remote_device_uuid, alias, key_fingerprint, first_seen, last_seen, last_generation) "
+        "VALUES (?, NULL, ?, ?, ?, ?) "
+        "ON CONFLICT(remote_device_uuid) DO UPDATE SET "
+        "  key_fingerprint = excluded.key_fingerprint, "
+        "  last_seen = excluded.last_seen, "
+        "  last_generation = MAX(sync_remote_devices.last_generation, excluded.last_generation)",
+        (remote_uuid, key_fingerprint, now, now, generation),
+    )
+
+
+def _cursor_hash(conn: sqlite3.Connection, remote_uuid: str, shard_key: str) -> str | None:
+    """The content-hash we last ingested for ``(remote device, shard)`` — or ``None``."""
+    row = conn.execute(
+        "SELECT remote_content_hash FROM sync_cursors "
+        "WHERE remote_device_uuid = ? AND shard_key = ?",
+        (remote_uuid, shard_key),
+    ).fetchone()
+    return row["remote_content_hash"] if row is not None else None
+
+
+def _advance_cursor(
+    conn: sqlite3.Connection, remote_uuid: str, shard_key: str, content_hash: str, now: str
+) -> None:
+    """Record that ``(remote device, shard)`` is landed at *content_hash*."""
+    conn.execute(
+        "INSERT INTO sync_cursors "
+        "(remote_device_uuid, shard_key, remote_content_hash, pulled_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(remote_device_uuid, shard_key) DO UPDATE SET "
+        "  remote_content_hash = excluded.remote_content_hash, "
+        "  pulled_at = excluded.pulled_at",
+        (remote_uuid, shard_key, content_hash, now),
+    )
+
+
+def _land_shard(conn: sqlite3.Connection, remote_uuid: str, shard) -> None:
+    """REPLACE *remote_uuid*'s rows for this ``(family, month)`` in ``<family>_remote``.
+
+    Table + column names come only from the fixed ``serialize`` family list
+    (the caller has already checked ``shard.family``/``shard.columns`` against
+    it), never from decrypted content, so the interpolation can't inject. The
+    delete is month-scoped so re-ingesting one month never wipes the device's
+    other months; a month-less mart (``project_mart``) replaces the device wholesale.
+    """
+    table = serialize.remote_table(shard.family)
+    month_col = serialize.MONTH_COLUMN[shard.family]
+    if month_col is None:
+        conn.execute(f"DELETE FROM {table} WHERE device_uuid = ?", (remote_uuid,))
+    else:
+        conn.execute(
+            f"DELETE FROM {table} WHERE device_uuid = ? AND substr({month_col}, 1, 7) = ?",
+            (remote_uuid, shard.month),
+        )
+    columns = ("device_uuid", *shard.columns)
+    placeholders = ", ".join(["?"] * len(columns))
+    collist = ", ".join(columns)
+    conn.executemany(
+        f"INSERT OR REPLACE INTO {table} ({collist}) VALUES ({placeholders})",
+        [(remote_uuid, *row) for row in shard.rows],
+    )
+
+
+@dataclass
+class PullResult:
+    """Outcome of a :func:`pull`."""
+
+    devices_seen: int
+    shards_ingested: int
+    downloaded: int
+    skipped: int
+    warnings: list[str] = field(default_factory=list)
+    device_uuids: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {
+            "devices_seen": self.devices_seen,
+            "shards_ingested": self.shards_ingested,
+            "downloaded": self.downloaded,
+            "skipped": self.skipped,
+            "warnings": list(self.warnings),
+            "warning_count": len(self.warnings),
+            "device_uuids": list(self.device_uuids),
+        }
+
+
+def pull(
+    conn: sqlite3.Connection,
+    store,
+    *,
+    self_device_uuid: str,
+    decryptor: Decryptor,
+    now: str | None = None,
+    prefix: str = DEFAULT_PREFIX,
+) -> PullResult:
+    """Fetch, decrypt and land every *other* device's changed aggregate shards.
+
+    Pure w.r.t. optional dependencies — *decryptor* and *store* are injected.
+    Idempotent: a shard whose manifest content-hash equals its ``sync_cursors``
+    row is skipped without a download (unchanged remote ⇒ zero shard GETs; only
+    the tiny per-device manifest — the commit point — is always read). Per-device
+    and per-shard failures never raise: they are collected into ``warnings`` and
+    the pull continues, so one corrupt blob or unreachable peer can't abort the
+    whole read (§9 failure injection). A manifest whose generation is *lower*
+    than the last we accepted for that device is rejected as a replay (§3.4).
+    """
+    now = now or utcnow_iso()
+    remote_uuids = _remote_device_uuids(store, self_device_uuid, prefix=prefix)
+    warnings: list[str] = []
+    seen = ingested = downloaded = skipped = 0
+
+    for remote_uuid in remote_uuids:
+        try:
+            manifest_ct = store.get(manifest_key(remote_uuid, prefix=prefix))
+        except Exception as exc:  # ObjectNotFound / transport error — skip peer
+            warnings.append(f"{remote_uuid}: manifest unreadable ({exc})")
+            continue
+        try:
+            manifest = json.loads(decryptor(manifest_ct))
+        except Exception as exc:  # DecryptError / bad JSON — skip peer
+            warnings.append(f"{remote_uuid}: manifest decrypt/parse failed ({exc})")
+            continue
+        if not isinstance(manifest, dict) or manifest.get("schema") != MANIFEST_SCHEMA:
+            warnings.append(f"{remote_uuid}: unrecognised manifest schema")
+            continue
+
+        gen = int(manifest.get("generation", 0))
+        last_gen = _last_generation(conn, remote_uuid)
+        if gen < last_gen:
+            warnings.append(
+                f"{remote_uuid}: stale manifest (generation {gen} < accepted {last_gen}) — rejected"
+            )
+            continue
+
+        seen += 1
+        _upsert_remote_device(
+            conn, remote_uuid,
+            key_fingerprint=manifest.get("key_fingerprint"),
+            generation=gen, now=now,
+        )
+
+        for shard_key, entry in sorted(manifest.get("shards", {}).items()):
+            expected = entry.get("content_hash")
+            if _cursor_hash(conn, remote_uuid, shard_key) == expected:
+                skipped += 1
+                continue  # unchanged remote shard ⇒ no download (idempotent)
+            try:
+                shard_ct = store.get(entry.get("object_key"))
+            except Exception as exc:  # manifest references a missing/unreadable object
+                warnings.append(f"{remote_uuid}/{shard_key}: object unreadable ({exc})")
+                continue
+            downloaded += 1
+            try:
+                shard = serialize.shard_from_bytes(decryptor(shard_ct))
+            except Exception as exc:  # DecryptError / truncated / bad bytes
+                warnings.append(f"{remote_uuid}/{shard_key}: decrypt/parse failed ({exc})")
+                continue
+            if shard.content_hash != expected:
+                warnings.append(f"{remote_uuid}/{shard_key}: content-hash mismatch — skipped")
+                continue
+            if shard.family not in serialize.MART_FAMILIES:
+                warnings.append(f"{remote_uuid}/{shard_key}: unknown family {shard.family!r} — skipped")
+                continue
+            if tuple(shard.columns) != serialize.SHARD_COLUMNS[shard.family]:
+                warnings.append(f"{remote_uuid}/{shard_key}: shard columns differ from local schema — skipped")
+                continue
+            _land_shard(conn, remote_uuid, shard)
+            _advance_cursor(conn, remote_uuid, shard_key, expected, now)
+            ingested += 1
+
+    return PullResult(
+        devices_seen=seen,
+        shards_ingested=ingested,
+        downloaded=downloaded,
+        skipped=skipped,
+        warnings=warnings,
+        device_uuids=remote_uuids,
+    )
+
+
+def run_pull(
+    conn: sqlite3.Connection,
+    *,
+    state_dir,
+    store=None,
+    env: dict[str, str] | None = None,
+    now: str | None = None,
+) -> PullResult:
+    """Resolve the key + bucket, then :func:`pull`. Wires the optional deps.
+
+    In the v1 shared-key model every device holds the *same* age identity, so the
+    local secret decrypts peers' manifests and shards. Raises the same
+    config/key failure modes as :func:`run_push`.
+    """
+    from . import bucket, cipher, keys
+
+    identity = load_identity(conn)
+    if identity is None:
+        raise SyncNotConfigured("sync is not configured — run `stackunderflow sync init` first")
+
+    secret = keys.resolve_secret(state_dir, env=env)
+    if secret is None:
+        raise SyncKeyMissing(
+            "no sync key found — set STACKUNDERFLOW_SYNC_KEY, add it to the keychain, "
+            f"or place it at {keys.identity_path(state_dir)}"
+        )
+
+    recipient = keys.recipient_for(secret)
+    if keys.fingerprint(recipient) != identity["key_fingerprint"]:
+        raise SyncKeyMismatch(
+            "the resolved key does not match the fingerprint recorded at `sync init` "
+            f"({identity['key_fingerprint']}) — check STACKUNDERFLOW_SYNC_KEY / the key file"
+        )
+
+    def _decrypt(ciphertext: bytes) -> bytes:
+        return cipher.decrypt(ciphertext, secret)
+
+    if store is None:
+        store = bucket.s3_store_from_url(identity["bucket_url"], identity["endpoint_url"])
+
+    return pull(
+        conn, store,
+        self_device_uuid=identity["device_uuid"],
+        decryptor=_decrypt,
         now=now,
     )
 

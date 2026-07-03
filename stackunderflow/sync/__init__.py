@@ -22,10 +22,14 @@ Layering:
 * :mod:`stackunderflow.sync.serialize` — canonical, deterministic mart-shard
   serialization + SHA-256 content-hash, and the ``project_id`` → ``(provider,
   slug)`` re-keying.
-* :mod:`stackunderflow.sync.runner` — ``init`` / ``push`` / ``status`` with a
-  two-phase manifest commit and a skip-if-unchanged outbox.
+* :mod:`stackunderflow.sync.runner` — ``init`` / ``push`` / ``pull`` / ``status``
+  with a two-phase manifest commit, a skip-if-unchanged outbox, and (Phase 2)
+  per-remote-device pull cursors landing into the ``<mart>_remote`` tables.
+* :mod:`stackunderflow.sync.merge` — the Phase 2 cross-device union overlay
+  (``local UNION ALL <mart>_remote`` SUMmed at the stable grain), read-only and
+  opt-in behind ``?scope=all-devices``.
 """
 
 from __future__ import annotations
 
-__all__ = ["bucket", "cipher", "keys", "runner", "serialize"]
+__all__ = ["bucket", "cipher", "keys", "merge", "runner", "serialize"]

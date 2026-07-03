@@ -135,6 +135,22 @@ _SPECS: tuple[_MartSpec, ...] = (
 #: The mart families the MVP syncs, in a stable order.
 MART_FAMILIES: tuple[str, ...] = tuple(spec.family for spec in _SPECS)
 
+#: Canonical shard columns per family — the single source of truth the v029
+#: ``<mart>_remote`` landing DDL and the pull upsert both key off, so a column
+#: added to a shard here can't silently drift from where pull lands it.
+SHARD_COLUMNS: dict[str, tuple[str, ...]] = {spec.family: spec.columns for spec in _SPECS}
+
+#: The column whose ``YYYY-MM`` prefix buckets a family into monthly shards
+#: (``None`` = a single ``"all"`` shard). Pull uses it to scope a REPLACE to the
+#: one ``(family, month)`` it re-ingested, so re-pulling one month never wipes
+#: a remote device's other months.
+MONTH_COLUMN: dict[str, str | None] = {spec.family: spec.month_column for spec in _SPECS}
+
+
+def remote_table(family: str) -> str:
+    """Landing-table name for a mart *family* (``daily_mart`` → ``daily_mart_remote``)."""
+    return f"{family}_remote"
+
 #: Serialization format version, embedded in each shard's canonical bytes.
 FORMAT_VERSION = 1
 

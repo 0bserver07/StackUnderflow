@@ -151,3 +151,80 @@ def test_push_end_to_end_with_fake_bucket(tmp_path, monkeypatch, seed_marts):
     # status now shows no pending.
     r3 = CliRunner().invoke(cli, ["sync", "status"])
     assert "pending upload:  0" in r3.output
+
+
+# ── sync pull (Phase 2) ─────────────────────────────────────────────────────────
+
+
+def test_pull_not_configured_exits_nonzero(tmp_path, monkeypatch):
+    _prep(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli_mod, "_sync_missing_deps", lambda **_: [])  # pretend deps present
+    r = CliRunner().invoke(cli, ["sync", "pull"])
+    assert r.exit_code == 1
+    assert "not configured" in r.output
+
+
+def test_pull_no_peers_in_bucket(tmp_path, monkeypatch):
+    pytest.importorskip("pyrage")
+    _prep(tmp_path, monkeypatch)
+    assert CliRunner().invoke(cli, ["sync", "init", "--bucket", "s3://b"]).exit_code == 0
+
+    from stackunderflow.sync import bucket as bkt
+
+    fake = bkt.InMemoryObjectStore()
+    monkeypatch.setattr("stackunderflow.sync.bucket.s3_store_from_url", lambda *a, **k: fake)
+    monkeypatch.setattr("stackunderflow.sync.keys._read_keychain", lambda service=None: None)
+    monkeypatch.setattr(cli_mod, "_sync_missing_deps", lambda **_: [])
+
+    r = CliRunner().invoke(cli, ["sync", "pull"])
+    assert r.exit_code == 0, r.output
+    assert "No other devices" in r.output
+
+
+def test_pull_end_to_end_with_peer(tmp_path, monkeypatch, seed_marts):
+    pytest.importorskip("pyrage")
+    from stackunderflow.sync import bucket as bkt
+    from stackunderflow.sync import cipher, keys, runner
+
+    store, state = _prep(tmp_path, monkeypatch)
+    assert CliRunner().invoke(cli, ["sync", "init", "--bucket", "s3://b"]).exit_code == 0
+
+    # A peer device pushes into the SAME bucket, encrypted to the shared key
+    # (v1 shared-key model — every device holds the one identity).
+    secret = (state / "sync-identity").read_text().strip()
+    recipient = keys.recipient_for(secret)
+    fake = bkt.InMemoryObjectStore()
+    peer = db.connect(tmp_path / "peer.db")
+    schema.apply(peer)
+    seed_marts(peer, alpha_id=7, beta_id=8, session_id="s-peer")
+    runner.push(
+        peer, fake, device_uuid="dev-peer", key_fingerprint=keys.fingerprint(recipient),
+        encryptor=lambda pt: cipher.encrypt(pt, recipient),
+    )
+    peer.close()
+
+    monkeypatch.setattr("stackunderflow.sync.bucket.s3_store_from_url", lambda *a, **k: fake)
+    monkeypatch.setattr("stackunderflow.sync.keys._read_keychain", lambda service=None: None)
+    monkeypatch.setattr(cli_mod, "_sync_missing_deps", lambda **_: [])
+
+    r = CliRunner().invoke(cli, ["sync", "pull"])
+    assert r.exit_code == 0, r.output
+    assert "Pulled" in r.output and "peer" in r.output
+
+    # Idempotent second pull — nothing new.
+    r2 = CliRunner().invoke(cli, ["sync", "pull"])
+    assert r2.exit_code == 0, r2.output
+    assert "Up to date" in r2.output
+
+    r3 = CliRunner().invoke(cli, ["sync", "pull", "--json"])
+    payload = json.loads(r3.output)
+    assert payload["devices_seen"] == 1
+    assert payload["shards_ingested"] == 0  # already ingested on the first pull
+
+    # The merged view is now populated in the local store.
+    conn = db.connect(store)
+    landed = conn.execute(
+        "SELECT COUNT(*) FROM daily_mart_remote WHERE device_uuid='dev-peer'"
+    ).fetchone()[0]
+    conn.close()
+    assert landed > 0

@@ -56,6 +56,9 @@ from stackunderflow.routes import (
 from stackunderflow.routes import (
     static_analysis as static_analysis_routes,
 )
+from stackunderflow.routes import (
+    sync as sync_routes,
+)
 from stackunderflow.services.bookmark_service import BookmarkService
 from stackunderflow.services.pricing_service import PricingService
 from stackunderflow.services.qa_service import QAService
@@ -295,6 +298,7 @@ app.include_router(forks.router)
 app.include_router(benchmark.router)
 app.include_router(patterns.router)
 app.include_router(worktrees.router)
+app.include_router(sync_routes.router)  # #100 Phase 2 — opt-in multi-device sync read surface
 
 
 

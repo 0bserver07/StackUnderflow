@@ -1365,6 +1365,54 @@ def sync_push():
         click.echo(f"  Generation {result.generation}. Manifest committed.")
 
 
+@sync_group.command("pull")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON")
+def sync_pull(as_json: bool):
+    """Fetch and merge every OTHER device's encrypted aggregates from your bucket.
+
+    Reads each peer's prefix (never writes to it), downloads only the shards that
+    changed since the last pull, decrypts + verifies them, and lands them in the
+    local remote tables. The unified cross-device view is then available at
+    /api/sync/overview?scope=all-devices. Idempotent — an unchanged peer downloads
+    nothing. Exits non-zero on a hard failure (e.g. bucket unreachable) so it is
+    safe to script; per-peer/per-shard problems are reported as warnings, not fatal.
+    """
+    if _sync_missing_deps(need_bucket=True):
+        click.echo(_SYNC_INSTALL_HINT)
+        sys.exit(1)
+    from stackunderflow.sync import runner
+
+    conn = _open_store()
+    try:
+        if not runner.is_enabled(conn):
+            click.echo("  Sync is not configured. Run: stackunderflow sync init --bucket s3://your-bucket")
+            sys.exit(1)
+        try:
+            result = runner.run_pull(conn, state_dir=_STATE_DIR)
+        except Exception as exc:
+            click.echo(f"  sync pull failed: {exc}")
+            sys.exit(1)
+    finally:
+        conn.close()
+
+    if as_json:
+        click.echo(json.dumps(result.as_dict(), indent=2))
+        return
+
+    if result.devices_seen == 0:
+        click.echo("  No other devices found in the bucket yet.")
+    elif result.shards_ingested == 0:
+        click.echo(f"  Up to date — {result.devices_seen} peer(s), nothing new to pull.")
+    else:
+        click.echo(
+            f"  Pulled {result.shards_ingested} shard(s) from {result.devices_seen} peer(s); "
+            f"{result.skipped} unchanged."
+        )
+        click.echo("  Merged view: /api/sync/overview?scope=all-devices")
+    for warning in result.warnings:
+        click.echo(f"  warning: {warning}")
+
+
 @sync_group.command("status")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON")
 def sync_status(as_json: bool):

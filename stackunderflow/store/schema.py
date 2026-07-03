@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 28
+CURRENT_VERSION = 29
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -123,6 +123,12 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     # ``user_version`` behind — bump the version without re-executing the body.
     # ``_column_exists`` doubles as a "does this table exist with this column?" probe.
     28: ("sync_identity", "device_uuid"),
+    # v029 CREATEs the Phase 2 pull tables (``sync_cursors`` +
+    # ``sync_remote_devices`` + the five ``<mart>_remote`` landing tables). All
+    # ``CREATE TABLE IF NOT EXISTS`` so re-running is safe; the guard makes the
+    # partial-application path — tables present, ``user_version`` behind — bump
+    # the version without re-executing the body.
+    29: ("sync_cursors", "remote_device_uuid"),
 }
 
 
