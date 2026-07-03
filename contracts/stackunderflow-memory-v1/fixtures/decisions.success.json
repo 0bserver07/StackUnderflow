@@ -1,0 +1,38 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "decisions",
+  "query": {
+    "text": "retry",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "43da8464-3633-45cc-a2a4-a056daaffb84",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-05-01T04:27:10.652Z",
+      "last_ts": "2026-05-06T22:19:03.110Z",
+      "message_count": 2756,
+      "cost_usd": 503.6437945,
+      "snippet": "\u2026om real errors, so the badge never crashes the dashboard while Wave 4C is in flight. - React Query `retry` is disabled for `EtlPipelineNotReadyError` to keep the console clean. - Settings page reuses `quer\u2026"
+    },
+    {
+      "session_id": "8d900c3b-10f7-4dea-a759-1949205ac44c",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-05-16T03:00:26.772Z",
+      "last_ts": "2026-05-19T20:47:12.422Z",
+      "message_count": 2379,
+      "cost_usd": 482.6491255,
+      "snippet": "Same stale-staged-files issue from my checkout-fetch trick. Cleaning + retrying."
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 248,
+  "budget": 2000,
+  "truncated": false
+}

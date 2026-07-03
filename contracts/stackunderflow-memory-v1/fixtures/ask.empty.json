@@ -1,0 +1,17 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "ask",
+  "query": {
+    "question": "zqxjklmnopurpleelephantxyzzy",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2
+  },
+  "results": [],
+  "result_count": 0,
+  "token_estimate": 1,
+  "budget": 2000,
+  "truncated": false,
+  "note": "keyword search over past decisions (local semantic vector search unavailable \u2014 start Ollama to enable it).",
+  "vector_used": false
+}

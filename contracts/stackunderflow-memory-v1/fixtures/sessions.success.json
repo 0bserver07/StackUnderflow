@@ -1,0 +1,39 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "sessions",
+  "query": {
+    "path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2,
+    "scope": "path"
+  },
+  "results": [
+    {
+      "session_id": "49e02802-6f8f-4cca-a9fb-9f7efeae9095",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-07-02T02:45:04.247Z",
+      "last_ts": "2026-07-02T02:54:38.182Z",
+      "message_count": 820,
+      "cost_usd": 224.5492545,
+      "snippet": null
+    },
+    {
+      "session_id": "019e7bf3-04d8-7570-a348-853eaf9c7fe6",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "codex",
+      "first_ts": "2026-05-31T02:54:44.404Z",
+      "last_ts": "2026-05-31T02:54:44.404Z",
+      "message_count": 12,
+      "cost_usd": 0.0,
+      "snippet": null
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 172,
+  "budget": 2000,
+  "truncated": false
+}

@@ -1,0 +1,49 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "file",
+  "query": {
+    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py",
+    "project": null,
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "686ec6c1-7d6e-45c8-8635-077f9dc83b48",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-04-16T01:21:23.388Z",
+      "last_ts": "2026-04-16T01:21:23.388Z",
+      "message_count": 3145,
+      "cost_usd": 499.25254474999997,
+      "snippet": null,
+      "kind": "touched"
+    },
+    {
+      "session_id": "019d8e06-9b40-7bd1-bc9a-bce99bca0282",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "codex",
+      "first_ts": "2026-04-14T22:06:09.677Z",
+      "last_ts": "2026-04-14T22:06:09.677Z",
+      "message_count": 29,
+      "cost_usd": 0.0,
+      "snippet": null,
+      "kind": "touched"
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 182,
+  "budget": 2000,
+  "truncated": false,
+  "risk": {
+    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py",
+    "since": null,
+    "total_sessions": 4,
+    "reverted": 0,
+    "failed": 0,
+    "worked": 0,
+    "recent_session_ids": []
+  }
+}

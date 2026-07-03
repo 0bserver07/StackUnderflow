@@ -1,0 +1,16 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "sessions",
+  "query": {
+    "path": "/opt/stackunderflow-contract-empty-zzz",
+    "project": null,
+    "since": null,
+    "limit": 2,
+    "scope": "path"
+  },
+  "results": [],
+  "result_count": 0,
+  "token_estimate": 1,
+  "budget": 2000,
+  "truncated": false
+}

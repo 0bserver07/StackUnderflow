@@ -6,6 +6,8 @@ on:
     paths:
       - 'stackunderflow/**'
       - 'tests/**'
+      - 'contracts/**'
+      - 'scripts/**'
       - 'pyproject.toml'
       - 'requirements.txt'
       - 'requirements-dev.txt'
@@ -15,6 +17,8 @@ on:
     paths:
       - 'stackunderflow/**'
       - 'tests/**'
+      - 'contracts/**'
+      - 'scripts/**'
       - 'pyproject.toml'
       - 'requirements.txt'
       - 'requirements-dev.txt'
@@ -58,6 +62,24 @@ jobs:
       run: |
         # Fail if coverage is below 60%
         coverage report --fail-under=60
+
+  contract:
+    # Conformance gate for the `stackunderflow.memory/1` agent-output contract.
+    # The checker is stdlib-only (no pip install needed): it validates every
+    # golden fixture under contracts/stackunderflow-memory-v1/ against the
+    # shipped JSON-Schema, proves an unknown additive field is forward-compatible,
+    # and self-tests that a broken envelope is rejected.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Check the stackunderflow.memory/1 contract
+      run: python scripts/check_memory_contract.py
 
   test-windows:
     # Windows pytest foothold. Runs the cross-platform path-resolution tests

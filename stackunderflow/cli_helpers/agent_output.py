@@ -33,6 +33,17 @@ Contract guarantees (see the spec):
 This module is **pure**: it builds and returns dicts, it never prints and
 it never opens a store. The CLI command owns ``click.echo`` so that, in
 ``--format json`` mode, stdout stays pure JSON with nothing on stderr.
+
+The envelope is a versioned, conformance-tested contract. Its stable OUTER
+shape is pinned by a JSON-Schema at
+``contracts/stackunderflow-memory-v1/schema.json`` with golden fixtures
+(one per ``memory`` subcommand x {success, empty, error}) under
+``contracts/stackunderflow-memory-v1/fixtures/``; ``scripts/check_memory_contract.py``
+validates them in CI. The ``results[]`` ROW internals are deliberately left
+out of the schema (they are product-shaped and owned by the discovery layer).
+If you change the envelope's outer shape here, regenerate the fixtures
+(``contracts/stackunderflow-memory-v1/fixtures/regenerate.sh``) and re-run the
+checker.
 """
 
 from __future__ import annotations

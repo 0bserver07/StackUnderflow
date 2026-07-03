@@ -1,15 +1,58 @@
-"""Unit tests for the agent-output envelope module.
+"""Tests for the agent-output envelope module and its versioned contract.
 
-``stackunderflow.cli_helpers.agent_output`` is pure — it builds and
-returns dicts, never prints, never opens a store — so these tests need
-no store fixture, only the functions themselves.
+Two layers:
+
+* ``stackunderflow.cli_helpers.agent_output`` is pure -- it builds and returns
+  dicts, never prints, never opens a store -- so the builder tests need no store
+  fixture, only the functions themselves.
+* The ``stackunderflow.memory/1`` contract is pinned by golden fixtures under
+  ``contracts/stackunderflow-memory-v1/`` (one per envelope-emitting subcommand
+  x {success, empty, error}) plus ``scripts/check_memory_contract.py`` (the
+  stdlib schema checker). Rather than re-asserting example envelopes from inline
+  dicts, the contract tests below load those golden fixtures and validate them
+  against the shipped JSON-Schema, so the tests and CI check the same artefacts.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
+
+import pytest
 
 from stackunderflow.cli_helpers import agent_output
+
+# ── contract artefacts: golden fixtures + the stdlib checker ─────────────────
+# <repo>/tests/stackunderflow/cli/test_agent_output.py -> parents[3] == <repo>.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_CONTRACT_DIR = _REPO_ROOT / "contracts" / "stackunderflow-memory-v1"
+_FIXTURES_DIR = _CONTRACT_DIR / "fixtures"
+_ENVELOPE_COMMANDS = {"decisions", "file", "worked", "sessions", "ask"}
+
+
+def _load_checker():
+    """Import ``scripts/check_memory_contract.py`` (not an installed package)."""
+    spec = importlib.util.spec_from_file_location(
+        "check_memory_contract", _REPO_ROOT / "scripts" / "check_memory_contract.py"
+    )
+    assert spec is not None and spec.loader is not None, (
+        "could not load scripts/check_memory_contract.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+checker = _load_checker()
+_SCHEMA = checker.load_schema()
+_FIXTURE_FILES = sorted(_FIXTURES_DIR.glob("*.json"))
+_FIXTURE_IDS = [p.stem for p in _FIXTURE_FILES]
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((_FIXTURES_DIR / f"{name}.json").read_text())
+
 
 # ── schema constant ─────────────────────────────────────────────────────────
 
@@ -130,3 +173,97 @@ def test_render_is_deterministic():
         budget=2000, truncated=True,
     )
     assert agent_output.render(env) == agent_output.render(env)
+
+
+# ── golden-fixture contract (stackunderflow.memory/1) ────────────────────────
+# These load the shipped golden fixtures and validate them against the shipped
+# JSON-Schema via the same stdlib checker CI runs -- the envelope contract, not
+# hand-written example dicts, is the source of truth.
+
+
+def test_one_fixture_per_command_and_case():
+    # 5 envelope-emitting commands x {success, empty, error} = 15 golden files.
+    assert len(_FIXTURE_FILES) == 15, [p.name for p in _FIXTURE_FILES]
+    expected = {
+        f"{cmd}.{case}"
+        for cmd in _ENVELOPE_COMMANDS
+        for case in ("success", "empty", "error")
+    }
+    assert set(_FIXTURE_IDS) == expected
+
+
+@pytest.mark.parametrize("name", _FIXTURE_IDS)
+def test_fixture_conforms_to_schema(name):
+    errors = checker.validate(_fixture(name), _SCHEMA, _SCHEMA)
+    assert errors == [], errors
+
+
+def test_full_checker_passes():
+    # Runs conformance + forward-compat + the negative self-test, exactly as CI.
+    assert checker.main() == 0
+
+
+@pytest.mark.parametrize(
+    "name", [n for n in _FIXTURE_IDS if not n.endswith("error")]
+)
+def test_result_envelope_fixtures_carry_the_core_fields(name):
+    env = _fixture(name)
+    assert set(agent_output._CORE_FIELDS) <= set(env)
+    assert env["schema"] == "stackunderflow.memory/1"
+    assert env["command"] in _ENVELOPE_COMMANDS
+    assert isinstance(env["results"], list)
+    assert env["result_count"] == len(env["results"])
+    assert isinstance(env["budget"], int)
+    assert isinstance(env["truncated"], bool)
+
+
+@pytest.mark.parametrize("name", [n for n in _FIXTURE_IDS if n.endswith("error")])
+def test_error_envelope_fixtures_have_the_error_shape(name):
+    env = _fixture(name)
+    assert set(env) == {"schema", "command", "query", "error"}
+    assert "results" not in env
+    assert env["schema"] == "stackunderflow.memory/1"
+    assert isinstance(env["error"], str) and env["error"]
+
+
+def test_file_fixtures_carry_the_risk_extra():
+    for name in ("file.success", "file.empty"):
+        assert isinstance(_fixture(name)["risk"], dict)
+
+
+def test_ask_fixtures_carry_note_and_vector_used():
+    for name in ("ask.success", "ask.empty"):
+        env = _fixture(name)
+        assert isinstance(env["note"], str)
+        assert isinstance(env["vector_used"], bool)
+
+
+def test_builder_reproduces_a_golden_success_envelope():
+    # Repoint: drive build_envelope from a golden fixture (not an inline dict)
+    # and assert it round-trips the frozen outer shape byte-for-byte.
+    fx = _fixture("decisions.success")
+    rebuilt = agent_output.build_envelope(
+        command=fx["command"], query=fx["query"], results=fx["results"],
+        budget=fx["budget"], truncated=fx["truncated"],
+    )
+    for key in (
+        "schema", "command", "query", "results",
+        "result_count", "token_estimate", "budget", "truncated",
+    ):
+        assert rebuilt[key] == fx[key], key
+
+
+def test_builder_reproduces_a_golden_error_envelope():
+    fx = _fixture("worked.error")
+    rebuilt = agent_output.build_error_envelope(
+        command=fx["command"], query=fx["query"], error=fx["error"],
+    )
+    assert rebuilt == fx
+
+
+def test_unknown_additive_field_is_forward_compatible():
+    # A field a future version might add must validate (be ignored), not reject.
+    env = _fixture("sessions.success")
+    env["x_future_additive_field"] = {"added": "later"}
+    env["results"][0]["x_future_row_field"] = "ignored"
+    assert checker.validate(env, _SCHEMA, _SCHEMA) == []

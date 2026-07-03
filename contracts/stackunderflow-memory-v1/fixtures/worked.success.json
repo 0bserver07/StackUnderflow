@@ -1,0 +1,46 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "worked",
+  "query": {
+    "action": "npm run build",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "858b49d9-034c-4d5b-a7b0-b9814c8f7d88",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-04-24T05:03:49.871Z",
+      "last_ts": "2026-04-24T05:06:24.776Z",
+      "message_count": 101,
+      "cost_usd": 2.63282125,
+      "snippet": null,
+      "outcome": "worked",
+      "outcome_evidence": "user wrote: '<teammate-message teammate_id=\"team-lead\"> {\"type\":\"shutdown_request\",\"requestId\":\"shutdown-1777007178404@beta-qa\",\"from\":\"team-lead\",\"reason\":\"G4 done. Thanks\u2026'",
+      "outcome_msg_id": 213620,
+      "outcome_confidence": 0.8
+    },
+    {
+      "session_id": "5915aa3e-1ac0-42a9-9837-e9363111ce31",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-04-24T05:01:08.271Z",
+      "last_ts": "2026-04-24T05:06:22.659Z",
+      "message_count": 112,
+      "cost_usd": 3.9881487499999997,
+      "snippet": null,
+      "outcome": "worked",
+      "outcome_evidence": "user wrote: '<teammate-message teammate_id=\"team-lead\"> {\"type\":\"shutdown_request\",\"requestId\":\"shutdown-1777007178379@beta-settings\",\"from\":\"team-lead\",\"reason\":\"G2 merged\u2026'",
+      "outcome_msg_id": 213552,
+      "outcome_confidence": 0.8
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 319,
+  "budget": 2000,
+  "truncated": false
+}
