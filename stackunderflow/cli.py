@@ -1224,6 +1224,179 @@ def _prune_backups(keep: int) -> None:
         click.echo(f"  Pruned old backup: {old.name}")
 
 
+# ── sync ──────────────────────────────────────────────────────────────────────
+#
+# Opt-in, client-side-encrypted, bring-your-own-bucket backup of the analytics
+# aggregates (docs/specs/multi-device-sync.md, Phase 1 MVP). Default OFF: with
+# no ``sync_identity`` row there is no network, no credentials, and the optional
+# ``[sync]`` dependencies need not be installed. Raw transcripts, ``usage_events``
+# and the price book NEVER leave the machine — only the derived marts, re-keyed
+# from the local ``project_id`` to the machine-stable ``(provider, slug)``.
+
+_SYNC_INSTALL_HINT = (
+    "  This command needs optional dependencies that aren't installed.\n"
+    "  Install them with:  pip install 'stackunderflow[sync]'"
+)
+
+
+def _sync_missing_deps(*, need_bucket: bool) -> list[str]:
+    """Return the missing optional ``[sync]`` package names (empty = all present)."""
+    import importlib.util
+    missing: list[str] = []
+    if importlib.util.find_spec("pyrage") is None:
+        missing.append("pyrage")
+    if need_bucket and importlib.util.find_spec("boto3") is None:
+        missing.append("boto3")
+    return missing
+
+
+def _print_sync_init_banner(identity, device_uuid: str, bucket_url: str) -> None:
+    """Loud, unmissable zero-knowledge / key-loss warning shown once at ``sync init``."""
+    line = "  " + "─" * 64
+    click.echo(line)
+    click.echo("  SYNC ENCRYPTION KEY — READ THIS BEFORE YOU CONTINUE")
+    click.echo(line)
+    click.echo(
+        "  This device just generated a private encryption key. Everything\n"
+        "  pushed to your bucket is encrypted with it, and NOTHING can decrypt\n"
+        "  it without this key — not the bucket host, not this project, no one.\n"
+    )
+    click.echo(
+        "  IF YOU LOSE THIS KEY, THE OFF-SITE COPY IS UNRECOVERABLE CIPHERTEXT.\n"
+        "  There is no reset, no recovery, no backdoor. That is the point.\n"
+    )
+    click.echo(
+        "  Save the key below in your password manager NOW. To read this data on\n"
+        "  another device, copy the SAME key there — devices must share one key.\n"
+    )
+    click.echo("  Key (store securely — shown once):")
+    click.echo(f"    {identity.secret}")
+    click.echo("")
+    click.echo(f"  Fingerprint: {identity.fingerprint}")
+    click.echo(f"  Device:      {device_uuid}")
+    click.echo(f"  Bucket:      {bucket_url}")
+    click.echo(f"  Key file:    {_STATE_DIR / 'sync-identity'}  (mode 0600)")
+    click.echo(line)
+
+
+@cli.group("sync")
+def sync_group():
+    """Encrypted, bring-your-own-bucket backup of your analytics aggregates (opt-in)."""
+
+
+@sync_group.command("init")
+@click.option("--bucket", "bucket_url", required=True,
+              help="Destination bucket, e.g. s3://my-bucket or s3://my-bucket/prefix")
+@click.option("--endpoint", "endpoint_url", default=None,
+              help="Custom object-store endpoint URL (set it for non-default storage providers)")
+@click.option("--force", is_flag=True, default=False,
+              help="Replace an existing sync key on this device (destroys access to data "
+                   "encrypted under the old key — back it up first)")
+def sync_init(bucket_url: str, endpoint_url: str | None, force: bool):
+    """Generate this device's encryption key and record the bucket destination.
+
+    Prints the freshly generated key ONCE — save it, and copy it to your other
+    devices. Only the key's fingerprint is stored in the database; the secret
+    lives in a 0600 file (or the keychain / STACKUNDERFLOW_SYNC_KEY env var).
+    """
+    if _sync_missing_deps(need_bucket=False):
+        click.echo(_SYNC_INSTALL_HINT)
+        sys.exit(1)
+    from stackunderflow.sync import keys, runner
+
+    conn = _open_store()
+    try:
+        existing = runner.load_identity(conn)
+        if existing is not None and not force:
+            click.echo("  Sync is already configured on this device.")
+            click.echo(f"    device:          {existing['device_uuid']}")
+            click.echo(f"    key fingerprint: {existing['key_fingerprint']}")
+            click.echo("  Re-running will NOT change the key. To replace it, back up the")
+            click.echo("  current key first, then re-run with --force (this destroys access")
+            click.echo("  to any data already encrypted under the old key).")
+            sys.exit(1)
+
+        identity = keys.generate_identity()
+        keys.store_secret_file(identity.secret, _STATE_DIR)
+        device_uuid = existing["device_uuid"] if existing is not None else runner.new_device_uuid()
+        runner.write_identity(
+            conn,
+            device_uuid=device_uuid,
+            key_fingerprint=identity.fingerprint,
+            bucket_url=bucket_url,
+            endpoint_url=endpoint_url,
+            created_at=runner.utcnow_iso(),
+        )
+        _print_sync_init_banner(identity, device_uuid, bucket_url)
+    finally:
+        conn.close()
+
+
+@sync_group.command("push")
+def sync_push():
+    """Encrypt and upload changed aggregate shards to your bucket.
+
+    Idempotent — an unchanged shard is skipped (zero uploads). Exits non-zero on
+    any failure so it is safe to script.
+    """
+    if _sync_missing_deps(need_bucket=True):
+        click.echo(_SYNC_INSTALL_HINT)
+        sys.exit(1)
+    from stackunderflow.sync import runner
+
+    conn = _open_store()
+    try:
+        if not runner.is_enabled(conn):
+            click.echo("  Sync is not configured. Run: stackunderflow sync init --bucket s3://your-bucket")
+            sys.exit(1)
+        try:
+            result = runner.run_push(conn, state_dir=_STATE_DIR)
+        except Exception as exc:
+            click.echo(f"  sync push failed: {exc}")
+            sys.exit(1)
+    finally:
+        conn.close()
+
+    if result.uploaded == 0:
+        click.echo(f"  Up to date — {result.skipped} shard(s) unchanged, nothing to upload.")
+    else:
+        mb = result.bytes_uploaded / (1 << 20)
+        click.echo(f"  Pushed {result.uploaded} shard(s) ({mb:.2f} MB); {result.skipped} unchanged.")
+        click.echo(f"  Generation {result.generation}. Manifest committed.")
+
+
+@sync_group.command("status")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON")
+def sync_status(as_json: bool):
+    """Show sync configuration and how many shards are pending upload (local only)."""
+    from stackunderflow.sync import runner
+
+    conn = _open_store()
+    try:
+        st = runner.status(conn)
+    finally:
+        conn.close()
+
+    if as_json:
+        click.echo(json.dumps(st.as_dict(), indent=2))
+        return
+
+    if not st.enabled:
+        click.echo("  Sync: off (no key on this device).")
+        click.echo("  Enable with: stackunderflow sync init --bucket s3://your-bucket")
+        return
+
+    click.echo("  Sync: on")
+    click.echo(f"    device:          {st.device_uuid}")
+    click.echo(f"    key fingerprint: {st.fingerprint}")
+    click.echo(f"    bucket:          {st.bucket_url}")
+    if st.endpoint_url:
+        click.echo(f"    endpoint:        {st.endpoint_url}")
+    click.echo(f"    shards (local):  {st.shard_count}")
+    click.echo(f"    pending upload:  {len(st.pending)}")
+    click.echo(f"    last push:       {st.last_push_ts or 'never'}")
+
+
 # ── data commands ────────────────────────────────────────────────────────────
 
 _VALID_FORMATS = ("text", "json")
