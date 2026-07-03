@@ -1243,7 +1243,11 @@ def _run_touching_file_query(file_path, *, limit, mode, budget):
     """Run ``discovery.find_sessions_touching_file`` against the store.
 
     Shared by ``memory sessions`` (file form), ``memory file``, and the
-    ``find-sessions-touching-file`` alias.
+    ``find-sessions-touching-file`` alias. Routes the free-text content-half
+    through the FTS5/bm25 index (``mode='any'`` only); the exact tool-arg
+    half stays on the store and the FTS open is gated on the exact half being
+    thin, so a well-worn file keeps its fast path. Degrades to the LIKE scan
+    when the index is unpopulated (``_lexical_search_service`` → ``None``).
     """
     from stackunderflow.services.discovery import find_sessions_touching_file
 
@@ -1251,6 +1255,7 @@ def _run_touching_file_query(file_path, *, limit, mode, budget):
     try:
         return find_sessions_touching_file(
             conn, file_path, limit=limit, mode=mode, context_budget=budget,
+            search_service=_lexical_search_service(),
         )
     finally:
         conn.close()
@@ -1482,6 +1487,7 @@ def _run_action_worked_query(
         matches = find_sessions_where_action_worked(
             conn, action=action, project=slug, file_path=file_path,
             since=since, limit=limit, min_confidence=min_confidence,
+            search_service=_lexical_search_service(),
         )
         return matches, slug
     finally:
@@ -1524,7 +1530,13 @@ def _run_file_report(path, *, since, limit):
         failure_modes = find_failure_modes_for_file(
             conn, path, since=since, limit=limit,
         )
-        touching = find_sessions_touching_file(conn, path, limit=limit, mode="any")
+        # ``memory file`` is on the <100ms hot path: the FTS content-half is
+        # gated inside ``find_sessions_touching_file`` on the exact tool-arg
+        # half being thin, so a well-worn file never pays the second-DB open.
+        touching = find_sessions_touching_file(
+            conn, path, limit=limit, mode="any",
+            search_service=_lexical_search_service(),
+        )
         risk = file_risk_summary(conn, path, since=since)
         return failure_modes, touching, risk
     finally:

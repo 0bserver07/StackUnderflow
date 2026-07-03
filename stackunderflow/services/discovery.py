@@ -10,11 +10,16 @@ return ``list[SessionMatch]``. Used by:
 
 Design notes
 ------------
-* No FTS dependency. The auxiliary ``search_index.db`` (populated on
-  demand by ``SearchService``) is *not* connected here — the contract
-  is that callers pass the main store and we work with whatever's in
-  it. ``messages.content_text`` is queried via plain ``LIKE``;
-  ``snippet`` excerpts are computed in Python.
+* FTS is opt-in, never required. By default the auxiliary
+  ``search_index.db`` (populated on demand by ``SearchService``) is *not*
+  connected: callers pass the main store and ``messages.content_text`` is
+  queried via plain ``LIKE`` with Python-built ``snippet`` excerpts. A
+  caller may inject a ``search_service`` into ``search_past_decisions`` /
+  ``find_sessions_touching_file`` / ``find_sessions_where_action_worked``
+  to route the **free-text content half** through FTS5/bm25 (ranking +
+  clustering); the exact path/tool-arg half stays on the store, and an
+  unpopulated index degrades back to the ``LIKE`` scan. The two databases
+  are joined by ``session_id`` in Python, never via ``ATTACH``.
 * No write paths. Every query is read-only.
 * Uses ``session_mart`` for cost when populated (post-Wave 4B
   backfill), falls back to ``0.0`` otherwise.
@@ -779,22 +784,158 @@ _TOUCHING_FILE_RELEVANCE = {"tool": 1.0, "content": 0.5}
 
 def _relevance_touching_file(
     match_kind_by_sid: dict[str, str],
+    bm25_by_sid: dict[str, float] | None = None,
 ) -> Callable[[SessionMatch], float]:
+    """Relevance term for ``find_sessions_touching_file``.
+
+    An exact tool-arg match scores ``1.0``. A free-text content mention
+    scores ``0.5`` by default; when ``bm25_by_sid`` is supplied (the FTS
+    content half) it carries its normalised bm25 signal scaled into the
+    ``[0, 0.5]`` content band, so an exact tool match always outranks any
+    content mention while the content mentions still order by bm25.
+    """
+    bm25_by_sid = bm25_by_sid or {}
+
     def _rel(m: SessionMatch) -> float:
-        return _TOUCHING_FILE_RELEVANCE.get(match_kind_by_sid.get(m.session_id, ""), 0.25)
+        kind = match_kind_by_sid.get(m.session_id, "")
+        if kind == "content" and bm25_by_sid:
+            return _TOUCHING_FILE_RELEVANCE["content"] * bm25_by_sid.get(m.session_id, 1.0)
+        return _TOUCHING_FILE_RELEVANCE.get(kind, 0.25)
 
     return _rel
 
 
+def _touching_content_half(
+    search_service: Any,
+    resolved: str,
+    *,
+    exclude: set[str],
+    limit: int,
+) -> tuple[list[str], dict[str, float], dict[str, int]] | None:
+    """Content-mention sessions for ``resolved`` via FTS bm25 + clustering.
+
+    Returns ``(sids_in_bm25_order, bm25_by_sid, more_by_sid)`` — sessions
+    whose ``content_text`` mentions the path, best-bm25 first, excluding
+    ``exclude`` (the already-matched tool sids) — or ``None`` when the index
+    is unpopulated / the lexical query errors, the signal to fall back to
+    the store's ``content_text LIKE`` scan. A populated index that matched
+    nothing returns ``([], {}, {})`` (never ``None``), so a genuine no-match
+    doesn't silently reintroduce the full scan.
+    """
+    candidate_k = max(int(limit) * 10, 200) if limit and limit > 0 else 500
+    try:
+        hits = search_service.lexical_session_hits(resolved, candidate_k=candidate_k)
+    except Exception:  # noqa: BLE001 — the content half must never break the query
+        return None
+    if hits is None:
+        return None
+    sids: list[str] = []
+    bm25_by_sid: dict[str, float] = {}
+    more_by_sid: dict[str, int] = {}
+    for h in hits:
+        sid = h.get("session_id")
+        if not sid or sid in exclude or sid in bm25_by_sid:
+            continue
+        sids.append(sid)
+        bm25_by_sid[sid] = float(h["bm25"])
+        more_by_sid[sid] = int(h.get("more_matches_in_session") or 0)
+    return sids, bm25_by_sid, more_by_sid
+
+
+def _touching_file_fts(
+    conn: sqlite3.Connection,
+    resolved: str,
+    search_service: Any,
+    *,
+    limit: int,
+    context_budget: int | None,
+) -> list[SessionMatch] | BudgetedResult | None:
+    """FTS content-half routing for ``find_sessions_touching_file`` (mode='any').
+
+    The exact tool-arg half stays a store LIKE/exact scan; the free-text
+    content-mention half is gathered + bm25-ranked + clustered via
+    ``search_service.lexical_session_hits`` — but only when the exact half is
+    *thin* (fewer than ``limit`` sessions), so a well-worn file (many prior
+    edits) keeps its sub-100ms exact path and never pays the second-DB FTS
+    open. Exact matches rank first; content mentions follow in bm25 order.
+
+    Returns the merged result, or ``None`` when the FTS index is unpopulated
+    (or errored) *and* we needed it — the caller then runs the original
+    combined ``(tools_json OR content_text) LIKE`` scan.
+    """
+    pattern = f"%{resolved}%"
+    # Exact tool-arg half — one store scan, refined in Python. ``mode="any"``
+    # here counts any Read/Edit/Write-family tool arg (the file-mention exact
+    # half); the free-text content half is handled below via FTS.
+    tool_rows = conn.execute(
+        "SELECT s.session_id AS sid, m.tools_json AS tools_json "
+        "FROM messages m JOIN sessions s ON s.id = m.session_fk "
+        "WHERE m.tools_json LIKE ?",
+        [pattern],
+    ).fetchall()
+    tool_sids: list[str] = []
+    tool_seen: set[str] = set()
+    for r in tool_rows:
+        sid = r["sid"]
+        if sid in tool_seen:
+            continue
+        if _tools_json_mentions_file(r["tools_json"], file_path=resolved, mode="any"):
+            tool_seen.add(sid)
+            tool_sids.append(sid)
+
+    match_kind_by_sid: dict[str, str] = {sid: "tool" for sid in tool_sids}
+    content_sids: list[str] = []
+    bm25_by_sid: dict[str, float] = {}
+    more_by_sid: dict[str, int] = {}
+
+    # Perf gate: consult FTS only when the exact half hasn't already filled the
+    # page. An unbounded ``limit`` (<= 0) always consults it.
+    exact_thin = (not limit) or (limit <= 0) or (len(tool_sids) < limit)
+    if exact_thin:
+        content = _touching_content_half(
+            search_service, resolved, exclude=tool_seen, limit=limit,
+        )
+        if content is None:
+            return None  # index unpopulated → caller falls back to LIKE scan
+        content_sids, bm25_by_sid, more_by_sid = content
+        for sid in content_sids:
+            match_kind_by_sid[sid] = "content"
+
+    ordered_sids = tool_sids + content_sids  # exact first, then bm25 order
+    rel_bm25 = _bm25_relevance(bm25_by_sid) if bm25_by_sid else {}
+    rank_fn = _build_rank_fn(_relevance_touching_file(match_kind_by_sid, rel_bm25))
+
+    if not ordered_sids:
+        if context_budget is not None:
+            return _budgeted([], context_budget=context_budget, rank_fn=rank_fn)
+        return []
+
+    rows_by_sid = _sessions_by_id(conn, ordered_sids, None)
+    out: list[SessionMatch] = []
+    for sid in ordered_sids:
+        row = rows_by_sid.get(sid)
+        if row is None:
+            continue  # FTS/tool hit with no store provenance — skip
+        out.append(
+            _row_to_match(row, more_matches_in_session=more_by_sid.get(sid, 0) or None)
+        )
+        if limit and limit > 0 and len(out) >= limit:
+            break
+    _record_loaded(conn, "find_sessions_touching_file", out)
+    if context_budget is not None:
+        return _budgeted(out, context_budget=context_budget, rank_fn=rank_fn)
+    return out
+
+
 @overload
 def find_sessions_touching_file(
     conn: sqlite3.Connection, file_path: str | Path, *, limit: int = ...,
-    mode: str = ..., context_budget: None = ...,
+    mode: str = ..., context_budget: None = ..., search_service: Any = ...,
 ) -> list[SessionMatch]: ...
 @overload
 def find_sessions_touching_file(
     conn: sqlite3.Connection, file_path: str | Path, *, limit: int = ...,
-    mode: str = ..., context_budget: int,
+    mode: str = ..., context_budget: int, search_service: Any = ...,
 ) -> BudgetedResult: ...
 def find_sessions_touching_file(
     conn: sqlite3.Connection,
@@ -803,6 +944,7 @@ def find_sessions_touching_file(
     limit: int = 20,
     mode: str = "any",
     context_budget: int | None = None,
+    search_service: Any = None,
 ) -> list[SessionMatch] | BudgetedResult:
     """Sessions where ``file_path`` shows up in tools or message content.
 
@@ -818,6 +960,22 @@ def find_sessions_touching_file(
     ``context_budget`` is ``None``; when set, the ``limit``-capped rows
     are re-ranked (recency + cost + tool-vs-content match strength),
     packed greedily, and returned as a :class:`BudgetedResult`.
+
+    ``search_service``
+        Optional lexical FTS retriever (a
+        :class:`services.search_service.SearchService`). When supplied and
+        ``mode == "any"``, the **content half** — the free-text mentions of
+        the path in ``messages.content_text`` — is gathered, bm25-ranked and
+        clustered (``more_matches_in_session``) via
+        :meth:`SearchService.lexical_session_hits` instead of a
+        leading-wildcard ``content_text LIKE`` full scan. The exact
+        **tool-arg half** stays a store LIKE/exact match, and exact matches
+        rank first. The FTS content half is gated on the exact half being
+        *thin* (fewer than ``limit`` sessions) so a well-worn file keeps its
+        fast exact path and never pays the second-DB FTS open. When ``None``
+        (the default — every non-CLI caller), or the index is unpopulated,
+        the original combined scan runs and behaviour is byte-identical to
+        before. Duck-typed: any object exposing ``lexical_session_hits`` works.
     """
     if mode not in {"read", "write", "any"}:
         raise ValueError(
@@ -825,6 +983,19 @@ def find_sessions_touching_file(
         )
     _ensure_row_factory(conn)
     resolved = _resolve_input_path(file_path)
+
+    # FTS content-half routing (only for the free-text mention mode, and only
+    # when a lexical index is injected). Exact tool-arg matching stays on the
+    # store; the content half gains bm25 + clustering, gated so the fast exact
+    # path stays fast. A ``None`` return ⇒ index unpopulated ⇒ fall through to
+    # the original combined scan below (behave exactly like before).
+    if mode == "any" and search_service is not None:
+        fts = _touching_file_fts(
+            conn, resolved, search_service,
+            limit=limit, context_budget=context_budget,
+        )
+        if fts is not None:
+            return fts
 
     # Stage 1: cheap substring filter at SQL level so we don't pull
     # every message into Python. ``content_text`` LIKE plus
@@ -1756,6 +1927,7 @@ def _row_to_outcome_match(
     evidence: str,
     outcome_msg_id: int,
     outcome_confidence: float = 0.0,
+    more_matches_in_session: int | None = None,
 ) -> OutcomeMatch:
     return OutcomeMatch(
         session_id=row["session_id"],
@@ -1771,6 +1943,7 @@ def _row_to_outcome_match(
         outcome_evidence=evidence,
         outcome_msg_id=int(outcome_msg_id),
         outcome_confidence=float(outcome_confidence),
+        more_matches_in_session=more_matches_in_session,
     )
 
 
@@ -1781,6 +1954,7 @@ def _outcome_matches_for(
     wanted_outcomes: set[str],
     limit: int,
     min_confidence: float = DEFAULT_MIN_OUTCOME_CONFIDENCE,
+    more_by_fk: dict[int, int] | None = None,
 ) -> list[OutcomeMatch]:
     """Back half shared by the two outcome functions.
 
@@ -1792,7 +1966,13 @@ def _outcome_matches_for(
     ``wanted_outcomes`` *and* ``outcome_confidence >= min_confidence``.
     ``limit`` (> 0) caps the count and lets us stop loading early once
     we've got enough.
+
+    ``more_by_fk`` (optional) carries the FTS content-half clustering count
+    per ``sessions.id`` (how many *further* content-mention messages the
+    session had). It rides onto each match's ``more_matches_in_session``;
+    absent/zero leaves that field ``None`` so the JSON shape is unchanged.
     """
+    more_by_fk = more_by_fk or {}
     if not anchor_seq_by_fk:
         return []
     fks = list(anchor_seq_by_fk)
@@ -1819,11 +1999,124 @@ def _outcome_matches_for(
         if confidence < min_confidence:
             continue
         out.append(
-            _row_to_outcome_match(meta, outcome, evidence, msg_id, confidence),
+            _row_to_outcome_match(
+                meta, outcome, evidence, msg_id, confidence,
+                more_matches_in_session=more_by_fk.get(sfk) or None,
+            ),
         )
         if limit and limit > 0 and len(out) >= limit:
             break
     return out
+
+
+def _action_worked_fts(
+    conn: sqlite3.Connection,
+    needle: str,
+    *,
+    project: str | None,
+    since_iso: str | None,
+    file_path: str | None,
+    limit: int,
+    min_confidence: float,
+    search_service: Any,
+) -> list[OutcomeMatch] | None:
+    """Content-half FTS routing for ``find_sessions_where_action_worked``.
+
+    Exact tool-arg matches keep their ``tools_json LIKE`` + ``MAX(seq)``
+    anchor scan; the free-text content-mention candidates are gathered,
+    bm25-ranked and clustered via ``lexical_session_hits`` (killing the
+    leading-wildcard ``content_text LIKE`` *full* scan), with the outcome
+    anchor resolved by a ``content_text LIKE`` **bounded** to just the
+    FTS-selected sessions. The two halves are unioned by session; on a
+    collision the anchor is the *later* of the two ``seq`` s — exactly the
+    ``MAX(seq)`` over the union the single combined scan computes, so the
+    outcome the anchor is classified from is unchanged. Clustering counts
+    ride onto each match.
+
+    Returns the outcome matches, or ``None`` when the FTS index is
+    unpopulated (the caller then runs the original combined scan).
+    """
+    candidate_k = max(int(limit) * 10, 200) if limit and limit > 0 else 500
+    try:
+        hits = search_service.lexical_session_hits(
+            needle, project=project, date_from=since_iso, candidate_k=candidate_k,
+        )
+    except Exception:  # noqa: BLE001 — the content half must never break the query
+        return None
+    if hits is None:
+        return None  # index unpopulated → caller falls back to combined scan
+
+    # ── exact tool-arg half (unchanged: LIKE + MAX(seq) anchor) ──
+    tool_where = ["m.tools_json LIKE ?"]
+    tool_params: list[Any] = [f"%{needle}%"]
+    if project:
+        tool_where.append("p.slug = ?")
+        tool_params.append(project)
+    if since_iso:
+        tool_where.append("m.timestamp >= ?")
+        tool_params.append(since_iso)
+    tool_sql = (
+        "SELECT s.id AS sfk, MAX(m.seq) AS anchor_seq "  # noqa: S608 — fixed clauses + placeholders
+        "FROM messages m "
+        "JOIN sessions s ON s.id = m.session_fk "
+        "JOIN projects p ON p.id = s.project_id "
+        "WHERE " + " AND ".join(tool_where) + " GROUP BY s.id"
+    )
+    anchor_seq_by_fk: dict[int, int] = {
+        int(r["sfk"]): int(r["anchor_seq"])
+        for r in conn.execute(tool_sql, tool_params).fetchall()
+    }
+
+    # ── content half: FTS-selected sessions → bounded anchor lookup ──
+    content_sids = [h["session_id"] for h in hits if h.get("session_id")]
+    more_by_sid = {
+        h["session_id"]: int(h.get("more_matches_in_session") or 0)
+        for h in hits if h.get("session_id")
+    }
+    more_by_fk: dict[int, int] = {}
+    chunk_size = 500
+    for start in range(0, len(content_sids), chunk_size):
+        chunk = content_sids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        c_where = [f"s.session_id IN ({placeholders})", "m.content_text LIKE ?"]
+        c_params: list[Any] = [*chunk, f"%{needle}%"]
+        if since_iso:
+            c_where.append("m.timestamp >= ?")
+            c_params.append(since_iso)
+        c_sql = (
+            "SELECT s.id AS sfk, s.session_id AS sid, MAX(m.seq) AS anchor_seq "  # noqa: S608 — placeholders + fixed clauses
+            "FROM messages m JOIN sessions s ON s.id = m.session_fk "
+            "WHERE " + " AND ".join(c_where) + " GROUP BY s.id"
+        )
+        for r in conn.execute(c_sql, c_params).fetchall():
+            fk = int(r["sfk"])
+            c_anchor = int(r["anchor_seq"])
+            # Union anchor == MAX(seq) over both halves: on a tool∩content
+            # collision keep the later message so the classified outcome
+            # matches the single combined scan.
+            anchor_seq_by_fk[fk] = max(anchor_seq_by_fk.get(fk, -1), c_anchor)
+            more_by_fk[fk] = more_by_sid.get(r["sid"], 0)
+
+    # ── optional file narrowing (unchanged) ──
+    if file_path and anchor_seq_by_fk:
+        resolved = _resolve_input_path(file_path)
+        like = f"%{resolved}%"
+        touch_rows = conn.execute(
+            "SELECT DISTINCT s.id AS sfk FROM messages m "
+            "JOIN sessions s ON s.id = m.session_fk "
+            "WHERE m.tools_json LIKE ? OR m.content_text LIKE ?",
+            [like, like],
+        ).fetchall()
+        touched = {int(r["sfk"]) for r in touch_rows}
+        anchor_seq_by_fk = {
+            fk: seq for fk, seq in anchor_seq_by_fk.items() if fk in touched
+        }
+        more_by_fk = {fk: c for fk, c in more_by_fk.items() if fk in anchor_seq_by_fk}
+
+    return _outcome_matches_for(
+        conn, anchor_seq_by_fk, wanted_outcomes={"worked"}, limit=limit,
+        min_confidence=min_confidence, more_by_fk=more_by_fk,
+    )
 
 
 def find_sessions_where_action_worked(
@@ -1835,6 +2128,7 @@ def find_sessions_where_action_worked(
     since: str | None = None,
     limit: int = 20,
     min_confidence: float = DEFAULT_MIN_OUTCOME_CONFIDENCE,
+    search_service: Any = None,
 ) -> list[OutcomeMatch]:
     """Sessions where ``action`` was performed and the next user turn confirmed success.
 
@@ -1874,6 +2168,16 @@ def find_sessions_where_action_worked(
         Minimum ``outcome_confidence`` for a row to be returned. Defaults
         to :data:`DEFAULT_MIN_OUTCOME_CONFIDENCE` (``0.5``). Clamped into
         ``[0.0, 1.0]``.
+    search_service:
+        Optional lexical FTS retriever. When supplied and its index is
+        populated, the **content half** — free-text mentions of ``action``
+        in ``messages.content_text`` — is gathered + bm25-ranked + clustered
+        via :meth:`SearchService.lexical_session_hits` (the leading-wildcard
+        ``content_text LIKE`` *full* scan is replaced by an FTS lookup plus a
+        bounded anchor query), while the exact **tool-arg half** keeps its
+        ``tools_json LIKE`` anchor scan. ``None`` (the default, every
+        non-CLI caller) or an unpopulated index runs the original combined
+        scan, byte-identical to before. Duck-typed on ``lexical_session_hits``.
     """
     _ensure_row_factory(conn)
     if not action or not action.strip():
@@ -1881,6 +2185,19 @@ def find_sessions_where_action_worked(
     min_confidence = max(0.0, min(1.0, float(min_confidence)))
     needle = action.strip()
     since_iso = parse_since(since)
+
+    # FTS content-half routing — the exact tool-arg half stays LIKE; the
+    # free-text content half is gathered + bm25-ranked + clustered. ``None``
+    # ⇒ index unpopulated ⇒ fall through to the original combined scan.
+    if search_service is not None:
+        fts = _action_worked_fts(
+            conn, needle,
+            project=project, since_iso=since_iso, file_path=file_path,
+            limit=limit, min_confidence=min_confidence,
+            search_service=search_service,
+        )
+        if fts is not None:
+            return fts
 
     where = ["(m.tools_json LIKE ? OR m.content_text LIKE ?)"]
     params: list[Any] = [f"%{needle}%", f"%{needle}%"]
