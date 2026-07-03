@@ -2268,6 +2268,223 @@ def memory_embed(batch):
         )
 
 
+# ── benchmark: outcome-aware "which model wins for your work" ─────────────────
+#
+# ``stackunderflow benchmark`` surfaces the comparative benchmark engine
+# (spec 26 / issue #99): an observational, statistically-honest verdict over the
+# user's own history — per-task-type winners, or an honest "insufficient
+# evidence". ``show`` prints the leaderboard + per-stratum honesty; ``recommend``
+# picks a model for a described task. ``--json`` emits the same
+# ``stackunderflow.memory/1`` envelope the ``memory`` namespace uses, so an agent
+# can ask "which model for this refactor?" and splice a bounded, evidence-
+# carrying answer straight into its context. There is deliberately no ``run``
+# subcommand — nothing is executed; the benchmark is computed from history.
+
+_BENCH_PERIOD_ALIASES = {
+    "today": "today", "week": "7days", "7days": "7days",
+    "month": "month", "30days": "30days", "all": "all",
+}
+
+
+def _bench_scope(period):
+    """Resolve a friendly period to a Scope, raising a Click error on a bad one."""
+    from stackunderflow.reports.scope import parse_period
+
+    spec = _BENCH_PERIOD_ALIASES.get(period)
+    if spec is None:
+        raise click.BadParameter(
+            f"Invalid period {period!r}. Valid: {', '.join(_BENCH_PERIOD_ALIASES)}",
+            param_hint="--period",
+        )
+    return parse_period(spec)
+
+
+def _bench_project_ids(conn, project):
+    """Resolve a ``--project`` slug/path to a project_ids list, or None for all."""
+    if not project:
+        return None
+    slug = Path(project).name
+    try:
+        rows = conn.execute(
+            "SELECT id FROM projects WHERE slug = ?", (slug,)
+        ).fetchall()
+    except Exception:  # noqa: BLE001 — advisory: a bad store scopes to nothing
+        return []
+    return [int(r["id"]) for r in rows]
+
+
+def _bench_pack(rows, budget):
+    """Greedily keep leading strata within ``budget`` estimated tokens.
+
+    Returns ``(kept, truncated)``. A non-positive budget disables packing.
+    """
+    from stackunderflow.cli_helpers import agent_output
+
+    if not budget or budget <= 0:
+        return rows, False
+    kept: list = []
+    for r in rows:
+        trial = [*kept, r]
+        if agent_output.estimate_tokens(trial) > budget and kept:
+            return kept, True
+        kept = trial
+    return kept, False
+
+
+@cli.group("benchmark")
+def benchmark_group():
+    """Which model wins for the kind of work you actually do.
+
+    An observational benchmark over your own history — a natural experiment you
+    already ran, not live replay. Every verdict carries n, coverage, confidence
+    intervals and a ``confidence`` label, and says "insufficient evidence"
+    rather than guess. Run any subcommand with ``--json`` for the stable,
+    token-bounded agent-output envelope.
+    """
+
+
+@benchmark_group.command("show")
+@click.option("--period", default="all", show_default=True, help="today | week | month | all")
+@click.option("--project", default=None, help="Project slug/path to scope to. Default: whole store.")
+@click.option("--intent", default=None, help="Filter to one intent stratum (build/fix/explore/refactor/test/ops).")
+@click.option("--context-budget", "context_budget", type=int, default=None,
+              help="Token budget for --json output (strata are packed to fit).")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Shortcut for --format json.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text", show_default=True,
+              help="Output format. 'json' emits the stable agent-output envelope.")
+def benchmark_show(period, project, intent, context_budget, as_json, fmt):
+    """Leaderboard + per-stratum honesty for the current scope."""
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    from stackunderflow.reports.benchmark import analyze_benchmark
+
+    scope = _bench_scope(period)
+    conn = _open_store()
+    try:
+        project_ids = _bench_project_ids(conn, project)
+        report = analyze_benchmark(
+            conn, scope=scope, project_ids=project_ids, intent=intent,
+        )
+    finally:
+        conn.close()
+
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        rows, truncated = _bench_pack(report.get("strata") or [], budget)
+        envelope = agent_output.build_envelope(
+            command="benchmark",
+            query={"period": period, "project": project, "intent": intent},
+            results=rows,
+            budget=budget,
+            truncated=truncated,
+            extra={
+                "verdict": report.get("verdict"),
+                "coverage": report.get("coverage"),
+                "weights": report.get("weights"),
+                "rubric_version": report.get("rubric_version"),
+                "ci_level": report.get("ci_level"),
+                "warning": report.get("warning"),
+            },
+        )
+        click.echo(agent_output.render(envelope))
+        return
+
+    _emit_benchmark_text(report, period=period, scope=scope.label)
+
+
+@benchmark_group.command("recommend")
+@click.option("--intent", required=True, help="Task intent: build/fix/explore/refactor/test/ops.")
+@click.option("--size", default=None, help="Task size band: tiny/small/med/large.")
+@click.option("--language", default=None, help="Dominant language hint (e.g. python).")
+@click.option("--project", default=None, help="Project slug/path to scope to.")
+@click.option("--context-budget", "context_budget", type=int, default=None, help="Token budget for --json output.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Shortcut for --format json.")
+@click.option("--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text", show_default=True,
+              help="Output format. 'json' emits the stable agent-output envelope.")
+def benchmark_recommend(intent, size, language, project, context_budget, as_json, fmt):
+    """Outcome-aware model pick for a described task."""
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+    from stackunderflow.reports.benchmark import recommend_from_history
+
+    conn = _open_store()
+    try:
+        project_ids = _bench_project_ids(conn, project)
+        rec = recommend_from_history(
+            conn, intent=intent, size=size, language=language, project_ids=project_ids,
+        )
+    finally:
+        conn.close()
+
+    if json_mode:
+        from stackunderflow.cli_helpers import agent_output
+
+        envelope = agent_output.build_envelope(
+            command="benchmark-recommend",
+            query={"intent": intent, "size": size, "language": language, "project": project},
+            results=[rec],
+            budget=budget,
+            truncated=False,
+        )
+        click.echo(agent_output.render(envelope))
+        return
+
+    click.echo(f"Task: intent={intent} size={size or 'any'} language={language or 'any'}")
+    if rec.get("recommended_model"):
+        click.echo(
+            f"  → {rec['recommended_model']}  "
+            f"(confidence: {rec.get('confidence')}, basis: {rec.get('basis')})"
+        )
+    else:
+        click.echo("  → insufficient evidence")
+    if rec.get("rationale"):
+        click.echo(f"  {rec['rationale']}")
+
+
+def _emit_benchmark_text(report, *, period, scope):
+    """Human-readable leaderboard for ``benchmark show``."""
+    v = report.get("verdict") or {}
+    cov = report.get("coverage") or {}
+    click.echo(f"Benchmark — {scope} (period: {period})")
+    click.echo("")
+    if v.get("winning_model"):
+        cpo = v.get("cost_per_outcome_usd")
+        cpo_s = f" at ${cpo:.4f}/successful outcome" if cpo is not None else ""
+        click.echo(f"Verdict: {v['headline']}{cpo_s}")
+        click.echo(
+            f"  confidence: {v.get('confidence')}   runner-up: {v.get('runner_up') or '—'}"
+        )
+    else:
+        click.echo(f"Verdict: {v.get('headline', 'insufficient evidence')}")
+        for c in (v.get("caveats") or [])[:1]:
+            click.echo(f"  {c}")
+    click.echo("")
+    click.echo(
+        f"Coverage: {cov.get('sessions_scored', 0)}/{cov.get('sessions_total', 0)} "
+        f"sessions scored · grade coverage {cov.get('grade_coverage', 0) * 100:.0f}%"
+    )
+    strata = report.get("strata") or []
+    if strata:
+        click.echo("")
+        click.echo("Per-stratum (intent × size):")
+        for s in strata:
+            head = f"  {s['intent']} × {s['size_band']}: {s['cell_verdict']}"
+            if s.get("winner"):
+                head += f" — {s['winner']} leads"
+            click.echo(head)
+            for m in s.get("models", []):
+                sr = m["success_rate"]["point"]
+                sr_s = f"{sr * 100:.0f}%" if sr is not None else "n/a"
+                cpo = m["cost_per_outcome"]["point"]
+                cpo_s = f"${cpo:.4f}/outcome" if cpo is not None else "—"
+                floor = "" if m["qualified"] else "  [below sample floor]"
+                click.echo(
+                    f"      {m['model']}: n={m['n']}, success {sr_s}, "
+                    f"{cpo_s}, composite {m['composite']:.2f}{floor}"
+                )
+
+
 # ── context replay: reconstruct what the model "saw" at a point in a session ──
 #
 # ``stackunderflow context-replay <SESSION_ID> --at <seq>`` reconstructs the

@@ -84,6 +84,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from stackunderflow.services import task_classifier
+
 __all__ = [
     "Recommendation",
     "extract_features",
@@ -98,47 +100,11 @@ __all__ = [
 
 CACHE_TTL_HOURS = 24
 
-# Token bands for the "same shape" filter. Edges are token-count thresholds
-# (chars/4 estimate) — anything below the upper bound of a band falls in it.
-# Keeping bands wide on purpose: v1 is matching shape, not token-budget
-# accounting.
-TOKEN_BANDS: tuple[tuple[str, int], ...] = (
-    ("tiny", 200),
-    ("small", 800),
-    ("med", 3000),
-    ("large", 10**9),  # catch-all
-)
-
-# Intent keyword lookup. Earlier patterns win on overlap (a prompt that
-# says "fix the test" maps to ``fix``, not ``test``). Keep the keyword
-# lists short and obvious — heuristic v1, not NLP.
-_INTENT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "fix",
-        ("fix", "bug", "broken", "regression", "debug", "patch",
-         "error", "fail", "crash", "stack trace"),
-    ),
-    (
-        "refactor",
-        ("refactor", "clean up", "rename", "extract", "rewrite",
-         "simplify", "deduplicate", "tidy", "untangle"),
-    ),
-    (
-        "test",
-        ("test", "tests", "unit test", "pytest", "spec", "coverage",
-         "fixture", "snapshot test"),
-    ),
-    (
-        "build",
-        ("build", "add", "implement", "create", "new feature",
-         "ship", "write a", "scaffold"),
-    ),
-    (
-        "explore",
-        ("explain", "what does", "how does", "summarise", "summarize",
-         "describe", "trace", "show me", "find", "search"),
-    ),
-)
+# Token bands for the "same shape" filter — re-exported from the canonical
+# ``task_classifier`` so the recommender, the tag service, and the benchmark
+# share one definition (Move 0 of spec 26). Same thresholds this module has
+# always used; ``_token_band`` below still applies them to a chars/4 estimate.
+TOKEN_BANDS: tuple[tuple[str, int], ...] = task_classifier.TOKEN_BANDS
 
 # Language hints. Lowercased substring match. The list is intentionally
 # short and high-signal — extending it is cheap (no ALTER TABLE because
@@ -211,23 +177,16 @@ class Recommendation:
 
 
 def _intent_of(prompt: str) -> str:
-    """Map the prompt to a coarse intent label.
+    """Map the prompt to a single coarse intent label.
 
-    Scans the keyword lists in declaration order and returns the **first
-    label whose keyword set has the most hits**. Ties broken by
-    declaration order (so ``fix`` beats ``test`` on a "fix the test"
-    prompt). Default ``"explore"`` when nothing matches — read-only
-    questions are the most common no-keyword case.
+    Delegates to the canonical :func:`task_classifier.classify_intent` (Move 0
+    of spec 26) so the recommender, the tag service, and the benchmark agree on
+    the taxonomy. The canonical classifier adopts the 6-label set (adds
+    ``ops``) and resolves multi-intent prompts by a fixed precedence that
+    keeps this module's historical single-label picks intact (e.g. "fix the
+    failing test" → ``fix``). Default ``"explore"`` when nothing matches.
     """
-    if not prompt:
-        return "explore"
-    lowered = prompt.lower()
-    best: tuple[str, int] = ("explore", 0)
-    for label, keywords in _INTENT_KEYWORDS:
-        hits = sum(1 for kw in keywords if kw in lowered)
-        if hits > best[1]:
-            best = (label, hits)
-    return best[0]
+    return task_classifier.classify_intent(prompt or "")
 
 
 def _token_band(prompt: str) -> str:

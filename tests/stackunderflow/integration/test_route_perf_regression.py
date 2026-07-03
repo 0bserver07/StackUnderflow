@@ -40,6 +40,7 @@ from fastapi.testclient import TestClient
 
 import stackunderflow.deps as deps
 from stackunderflow.routes import (
+    benchmark,
     bookmarks,
     cfg,
     commands,
@@ -316,7 +317,7 @@ def perf_client(perf_store, monkeypatch) -> Iterator[TestClient]:
         sessions.router, search.router, qa.router, tags.router,
         bookmarks.router, misc.router, optimize.router, plan.router,
         compare.router, yield_route.router, context_budget.router,
-        cfg.router,
+        cfg.router, benchmark.router,
     ):
         app.include_router(router)
 
@@ -347,6 +348,9 @@ _ROUTES: tuple[tuple[str, int, bool], ...] = (
     ("/api/compare?period=month", 100, False),
     ("/api/yield?period=week", 200, False),
     ("/api/optimize?period=month", 200, False),
+    # Comparative benchmark — analytical composite, cache-backed (spec 26 §5):
+    # the 200 ms tier, not the 100 ms mart tier.
+    ("/api/benchmark?period=all", 200, False),
     ("/api/messages/summary", 50, False),
     ("/api/etl/status", 50, True),
 )
