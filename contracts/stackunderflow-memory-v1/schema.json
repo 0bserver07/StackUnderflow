@@ -13,8 +13,8 @@
       "const": "stackunderflow.memory/1"
     },
     "command": {
-      "description": "Which memory subcommand produced this envelope. Also tags which product-shaped row shape `results[]` carries.",
-      "enum": ["decisions", "file", "worked", "sessions", "ask"]
+      "description": "Which agent-facing command produced this envelope -- a `memory` subcommand (decisions/file/worked/sessions/ask) or a top-level command that reuses the same envelope (context-replay). Also tags which product-shaped row shape `results[]` carries. This enum is ADDITIVE: a new producer appends a value (existing consumers pinned to the old set still validate every envelope they were built for); it is not a breaking change and does not bump the schema major.",
+      "enum": ["decisions", "file", "worked", "sessions", "ask", "context-replay"]
     },
     "query": {
       "description": "Command-specific echo of the resolved inputs (e.g. decisions->text, file->path, worked->action, sessions->path+scope, ask->question, plus project/since/limit). Present in both success and error envelopes so a caller can correlate the response with its call. Internals vary by command and are intentionally NOT constrained here.",

@@ -25,6 +25,7 @@ import {
   IconGitFork,
   IconHierarchy3,
   IconHistory,
+  IconStack2,
   IconWallet,
   IconActivityHeartbeat,
   IconBinaryTree2,
@@ -48,6 +49,12 @@ export const TABS: readonly Tab[] = [
   // tabs handle the empty-data case via their own EmptyState components —
   // see PlaybackTab.tsx and AgentsTab.tsx.
   { id: 'playback', label: 'Playback', icon: IconHistory, isBeta: true },
+  // Context replay (issue #96) — the context-window analog of Playback. Scrub
+  // a `seq` cutoff and watch what the model "saw" up to that turn, with a
+  // running token total. Calls the dedicated /api/context-replay route. Beta
+  // while the MVP "session sequence up to seq" semantics settle (harness-side
+  // context eviction is a later refinement).
+  { id: 'contextreplay', label: 'Context Replay', icon: IconStack2, isBeta: true },
   { id: 'cost', label: 'Cost', icon: IconCurrencyDollar },
   // Cost-intelligence tab (audit #7p2) — spend budgets + cross-provider
   // what-if repricing. Slots right after Cost since it consumes the same
