@@ -677,6 +677,87 @@ export interface ForksResponse {
   warning: string
 }
 
+// ---------------------------------------------------------------------------
+// Comparative benchmark engine (`GET /api/benchmark`, spec 26 / issue #99).
+// An observational "which model wins for your work" verdict over the user's own
+// history, with the full statistical-honesty machinery. All cost fields are
+// pre-converted to the active currency by the route.
+// ---------------------------------------------------------------------------
+
+/** A cost point estimate with its confidence interval (currency-converted). */
+export interface BenchmarkCostBlock {
+  point: number | null
+  ci: [number, number] | null
+}
+
+/** One model's row within a stratum. */
+export interface BenchmarkModelRow {
+  model: string
+  n: number
+  qualified: boolean
+  coverage: number
+  success_measured_n: number
+  success_rate: { point: number | null; ci_wilson: [number, number] | null }
+  cost_per_outcome: BenchmarkCostBlock
+  median_cost: BenchmarkCostBlock
+  median_turns: number
+  reasoning_share: number
+  composite: number
+}
+
+export type BenchmarkCellVerdict = 'clear' | 'weak' | 'insufficient evidence'
+
+/** One (intent × size) stratum: like-for-like tasks. */
+export interface BenchmarkStratum {
+  intent: string
+  size_band: string
+  models: BenchmarkModelRow[]
+  assignment_balance: Record<string, number>
+  cell_verdict: BenchmarkCellVerdict
+  winner: string | null
+  effect: {
+    success_risk_difference?: number
+    cost_relative_delta?: number
+    statistically_separated?: boolean
+    practically_separated?: boolean
+  }
+}
+
+export type BenchmarkConfidence = 'none' | 'low' | 'medium' | 'high'
+
+export interface BenchmarkVerdict {
+  headline: string
+  winning_model: string | null
+  confidence: BenchmarkConfidence
+  cost_per_outcome_usd: number | null
+  runner_up: string | null
+  caveats: string[]
+}
+
+export interface BenchmarkReportData {
+  verdict: BenchmarkVerdict
+  strata: BenchmarkStratum[]
+  coverage: {
+    sessions_total: number
+    sessions_scored: number
+    grade_coverage: number
+  }
+  rubric_version: number
+  weights: Record<string, number>
+  ci_level: number
+  success_threshold: number
+  warning: string
+  method_notes: string[]
+}
+
+export interface BenchmarkResponse {
+  period: string
+  scope: string
+  report: BenchmarkReportData
+  currency: CurrencyInfo
+  warning: string | null
+}
+
 /**
  * Plan + usage payload from `GET /api/plan`. Both fields are nullable —
  * when no plan is configured, the route returns `{plan: null, usage: null}`

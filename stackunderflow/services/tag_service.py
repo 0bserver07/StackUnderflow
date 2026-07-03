@@ -11,6 +11,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from stackunderflow.services import task_classifier
+
 logger = logging.getLogger(__name__)
 
 # Well-known GitHub language colors
@@ -127,25 +129,11 @@ INTENT_COLORS = {
     "intent:ops": "#64748b",        # slate — deploy / config / infra
 }
 
-# Intent detection patterns. Order matters: first match wins when a session
-# has evidence of multiple intents, but we keep all matches (a session CAN
-# have multiple intents — e.g. a "build" that ends in "fix").
-INTENT_PATTERNS = [
-    # build — adding something new
-    (r"\b(add|adding|added|implement|implementing|implemented|create|creating|created|build|building|built|new feature|scaffold|scaffolding|set up|setup)\b", "intent:build"),
-    # fix — bug or error
-    (r"\b(fix|fixing|fixed|bug|bugs|broken|breaks|breaking|crash|crashes|crashing|error|errors|traceback|stack trace|exception|regression|doesn't work|not working|failing|failed)\b", "intent:fix"),
-    # explore — reading / understanding
-    (r"\b(explain|explaining|explained|understand|understanding|walk me through|how does|how do|what does|what is|where is|show me|why is|why does|read|reading|review|reviewing|reviewed|look at|trace)\b", "intent:explore"),
-    # refactor — restructuring without behavior change
-    (r"\b(refactor|refactoring|refactored|clean up|cleanup|cleaning up|simplify|simplifying|simplified|restructure|restructuring|reorganize|reorganizing|rename|renaming|extract|extracting|inline|consolidate|dedup|deduplicate)\b", "intent:refactor"),
-    # test — writing or running tests
-    (r"\b(test|tests|testing|tested|unit test|integration test|pytest|jest|vitest|mocha|jasmine|rspec|assert|asserts|asserting|mock|mocking|mocked|spec|specs|coverage|tdd)\b", "intent:test"),
-    # ops — deployment, config, infra
-    # NOTE: `.env` is matched as a separate alternative with lookarounds because
-    # word-boundary (\b) can't anchor a pattern starting with a non-word char (.).
-    (r"(?:\b(?:deploy|deploying|deployed|deployment|ci/cd|ci\b|cd\b|github actions|gitlab ci|jenkins|docker|dockerfile|kubernetes|k8s|terraform|ansible|helm|env var|environment variable|nginx|caddy|systemd|pm2)\b|(?<!\w)\.env(?!\w))", "intent:ops"),
-]
+# Intent detection now lives in the canonical ``services.task_classifier``
+# (Move 0 of spec 26 / issue #99) so the tag service, the mode recommender, and
+# the benchmark engine all classify a task the same way. The 6-label taxonomy
+# (build/fix/explore/refactor/test/ops) and its regexes moved there verbatim;
+# ``_detect_intents`` below delegates and re-applies the ``intent:`` prefix.
 
 TOOL_COLORS = {
     "Read": "#718096",
@@ -359,15 +347,17 @@ class TagService:
         """Return the set of intent:* tags that match the given text.
 
         A session can legitimately have multiple intents (e.g. the user started
-        building something, hit an error, and debugged it). We return all matches.
+        building something, hit an error, and debugged it). We return all
+        matches. Delegates to the canonical multi-label classifier and
+        re-applies the ``intent:`` storage prefix, so tags, the recommender,
+        and the benchmark never drift on what a "fix" is.
         """
-        matches: set[str] = set()
         if not combined_text:
-            return matches
-        for pattern, intent in INTENT_PATTERNS:
-            if re.search(pattern, combined_text, re.IGNORECASE):
-                matches.add(intent)
-        return matches
+            return set()
+        return {
+            f"intent:{label}"
+            for label in task_classifier.classify_intents(combined_text)
+        }
 
     def auto_tag_session(self, session_id: str, messages: list[dict]) -> list[str]:
         """Auto-detect tags for a session from its messages.

@@ -19,6 +19,7 @@ import stackunderflow.deps as deps
 # Route modules
 from stackunderflow.routes import (
     agent_teams,
+    benchmark,
     bookmarks,
     budgets,
     cfg,
@@ -291,6 +292,7 @@ app.include_router(pricing.router)
 app.include_router(budgets.router)
 app.include_router(whatif.router)
 app.include_router(forks.router)
+app.include_router(benchmark.router)
 app.include_router(patterns.router)
 app.include_router(worktrees.router)
 
