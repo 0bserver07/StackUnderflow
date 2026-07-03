@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 27
+CURRENT_VERSION = 28
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -117,6 +117,12 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     # guard so a partial prior run (column added, ``user_version`` behind)
     # bumps the version instead of erroring on "duplicate column".
     27: ("projects", "worktree_of"),
+    # v028 CREATEs ``sync_identity`` + ``sync_outbox`` (opt-in multi-device sync,
+    # Phase 1). Both are ``CREATE TABLE IF NOT EXISTS`` so re-running is already
+    # safe; the guard makes the partial-application path — table present,
+    # ``user_version`` behind — bump the version without re-executing the body.
+    # ``_column_exists`` doubles as a "does this table exist with this column?" probe.
+    28: ("sync_identity", "device_uuid"),
 }
 
 

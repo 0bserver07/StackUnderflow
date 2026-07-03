@@ -1,6 +1,6 @@
 # Session Schema v1 — open exchange format for AI coding sessions
 
-**Status:** v1 (pinned to `schema_version = 27`).
+**Status:** v1 (pinned to `schema_version = 28`).
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
@@ -20,7 +20,7 @@ The schema described here is **additive-only**. Any future column requires a new
 
 ## Schema version
 
-Pin to `schema_version = 27`. The current migration set is:
+Pin to `schema_version = 28`. The current migration set is:
 
 | version | file | what it adds |
 |---|---|---|
@@ -50,6 +50,7 @@ Pin to `schema_version = 27`. The current migration set is:
 | 25 | `v025_command_day_mart.sql` | `command_day_mart` (per-`(day, project_id)` user-command count; windows the Overview "Commands" KPI — ui-perf #25) |
 | 26 | `v026_reasoning_tokens.sql` | adds `usage_events.reasoning_tokens` (reasoning/"thinking" attribution — an additive-metadata SUBSET of `output_tokens`, never priced; `DEFAULT 0`) |
 | 27 | `v027_worktree_of.sql` | adds `projects.worktree_of` (nullable parent-project slug for git-worktree fragment projects; NULL = normal project — campaign #8) |
+| 28 | `v028_sync_identity_outbox.sql` | `sync_identity` + `sync_outbox` (opt-in multi-device sync — device identity + per-shard push watermark; #100 Phase 1) |
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 

@@ -53,6 +53,15 @@ analysis = [
     "mypy>=1.5.0",
     "coverage>=7.0.0",
 ]
+# Opt-in multi-device sync (docs/specs/multi-device-sync.md). The core product
+# never pulls these — they are needed only for the `sync` CLI commands, which
+# are import-guarded and print a one-line install hint when the extra is absent.
+# `pyrage` = the age file-encryption binding (client-side encryption); `boto3` =
+# the S3-compatible bucket client (bring-your-own bucket / credentials).
+sync = [
+    "boto3>=1.34",
+    "pyrage>=1.1",
+]
 
 [project.scripts]
 stackunderflow = "stackunderflow.cli:cli"
