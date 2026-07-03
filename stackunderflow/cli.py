@@ -765,6 +765,89 @@ def clear_cache_cmd(project: str | None):
     click.echo("  use `stackunderflow start --fresh` to also wipe the disk cache.")
 
 
+# ── import: external history-source plugins ─────────────────────────────────────
+
+# Named ``--history-source`` values resolve under these roots (a project-local
+# one, then the user-global state dir): ``<root>/<name>/<manifest>``.
+_HISTORY_PLUGIN_DIRNAME = "history-plugins"
+
+
+@cli.command("import")
+@click.option(
+    "--history-source",
+    "history_source",
+    required=True,
+    metavar="NAME|PATH",
+    help="A named history source (resolved under ./.stackunderflow/"
+         f"{_HISTORY_PLUGIN_DIRNAME}/ or ~/.stackunderflow/{_HISTORY_PLUGIN_DIRNAME}/) "
+         "or a path to a stackunderflow-history-plugin.json manifest (file or "
+         "its directory).",
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(("text", "json")),
+    default="text", show_default=True, help="Output format.",
+)
+def import_history_cmd(history_source: str, fmt: str):
+    """Import external agent history via a user-supplied export command.
+
+    For sources with no local transcript (cloud-gated tools), you supply an
+    export command in a ``stackunderflow-history-plugin.json`` manifest; we own
+    only the ``stackunderflow-history-jsonl-v1`` stream format. The command is
+    run with **no shell**, a cleared + allowlisted environment, and byte + time
+    caps; its stream is validated whole and upserted under the ``custom``
+    provider (namespaced by the manifest's ``source_id``). Resumption uses an
+    opaque cursor we store and replay but never interpret.
+
+    Fail-closed: a non-zero exit, a timeout, or a malformed line aborts the
+    whole import and leaves the stored cursor un-advanced. Re-running an
+    unchanged export is an idempotent no-op (content-addressed ids).
+
+    Also available as ``stax import``.
+    """
+    from stackunderflow.adapters import custom_import
+    from stackunderflow.adapters.custom_jsonl import HistorySourceError
+
+    search_roots = [
+        Path.cwd() / ".stackunderflow" / _HISTORY_PLUGIN_DIRNAME,
+        _STATE_DIR / _HISTORY_PLUGIN_DIRNAME,
+    ]
+    try:
+        manifest_path = custom_import.resolve_manifest_path(
+            history_source, search_roots=search_roots
+        )
+    except HistorySourceError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    conn = _open_store()
+    try:
+        result = custom_import.import_history_source(
+            manifest_path=manifest_path,
+            conn=conn,
+            state_dir=_STATE_DIR,
+        )
+    except HistorySourceError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        conn.close()
+
+    if fmt == "json":
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
+    click.echo(f"Imported history source {result.source_id!r} (provider: {result.provider})")
+    click.echo(f"  projects:          {', '.join(result.projects) or '(none)'}")
+    click.echo(f"  sessions:          {result.sessions_seen}")
+    click.echo(f"  messages ingested: {result.messages_ingested}")
+    click.echo(f"  file touches:      {result.file_touches_seen}")
+    click.echo(f"  records validated: {result.records_validated}")
+    if result.cursor_advanced:
+        click.echo(
+            f"  cursor advanced:   {result.cursor_before!r} -> {result.cursor_after!r}"
+        )
+    else:
+        click.echo(f"  cursor:            unchanged ({result.cursor_after!r})")
+
+
 # ── backup ────────────────────────────────────────────────────────────────────
 
 _CLAUDE_DIR = Path.home() / ".claude"

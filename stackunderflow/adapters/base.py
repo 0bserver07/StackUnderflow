@@ -2,10 +2,57 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+
+def content_hash_id(*parts: object, prefix: str = "", length: int = 32) -> str:
+    """Derive a deterministic id from *parts* by hashing their content.
+
+    Two imports of identical content — on the same machine or a different
+    one — produce the same id. That is what a content-addressed import
+    needs: the store's integer primary keys are machine-local and cannot
+    be merged across machines, but a stable content hash can, and a
+    re-import of the same record maps back onto the same id instead of
+    duplicating it.
+
+    The digest is order- and boundary-sensitive. Each part is
+    length-prefixed before it is folded in, so ``("a", "bc")`` and
+    ``("ab", "c")`` never collide, and ``None`` hashes distinctly from the
+    empty string. The part count is bound in first so a trailing ``None``
+    cannot alias a shorter argument list. Non-``str`` parts are stringified
+    with ``str()`` — callers pass already-canonical scalars (ints, a
+    normalised ISO timestamp, the source id) so the mapping stays stable
+    across Python versions and machines.
+
+    ``prefix`` (e.g. a provider/source tag) is prepended verbatim to the
+    returned id so ids minted in different namespaces stay visibly
+    distinct. ``length`` truncates the hex digest — the default 32 hex
+    chars is 128 bits, ample headroom against accidental collision at any
+    realistic import volume.
+
+    This helper is **additive**: nothing in the existing adapters or the
+    ingest writer calls it, and it does not change any row id. New,
+    content-addressed import paths (the ``custom`` history-source reader)
+    opt in explicitly.
+    """
+    h = hashlib.blake2b(digest_size=32)
+    # Bind the arity up front: a trailing None vs. a missing part must hash
+    # differently.
+    h.update(str(len(parts)).encode("ascii"))
+    h.update(b"\x1e")
+    for part in parts:
+        token = b"\x00NULL\x00" if part is None else str(part).encode("utf-8")
+        # Length-prefix each token so adjacent tokens can't be re-partitioned
+        # into the same byte stream.
+        h.update(str(len(token)).encode("ascii"))
+        h.update(b"\x1f")
+        h.update(token)
+    digest = h.hexdigest()[: max(1, length)]
+    return f"{prefix}{digest}" if prefix else digest
 
 
 @dataclass(frozen=True, slots=True)
