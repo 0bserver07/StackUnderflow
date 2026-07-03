@@ -29,6 +29,7 @@ import {
   IconWallet,
   IconActivityHeartbeat,
   IconBinaryTree2,
+  IconArrowsLeftRight,
 } from '@tabler/icons-react'
 
 export type Tab = {
@@ -79,6 +80,13 @@ export const TABS: readonly Tab[] = [
   // copyable prune-command PREVIEWS (the tool never runs them). Calls the
   // dedicated /api/worktrees route. Beta while the verdict heuristics settle.
   { id: 'worktrees', label: 'Worktrees', icon: IconBinaryTree2, isBeta: true },
+  // Multi-device sync overlay (#100 Phase 2) — the cross-device analytics view.
+  // Gated behind sync being configured (via /api/sync/status): with sync off the
+  // tab shows a clean "not set up" empty state and never touches the per-device
+  // Overview/Cost render paths. A This device ↔ All devices toggle flips to the
+  // merged `local UNION ALL <mart>_remote` roll-up (/api/sync/overview). Beta
+  // while the union overlay settles.
+  { id: 'devices', label: 'Devices', icon: IconArrowsLeftRight, isBeta: true },
   { id: 'commands', label: 'Commands', icon: IconTerminal2 },
   { id: 'messages', label: 'Messages', icon: IconMessageCircle },
   { id: 'search', label: 'Search', icon: IconSearch },
