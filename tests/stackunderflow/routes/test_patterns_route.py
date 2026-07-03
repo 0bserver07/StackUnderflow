@@ -202,3 +202,91 @@ def test_patterns_route_registered_on_app():
     from tests.conftest import app_route_paths
 
     assert "/api/patterns" in app_route_paths(app)
+
+
+# ── POST /api/patterns/dismiss — the Tier-2 → governance write (Phase 2) ──────
+
+
+@pytest.mark.asyncio
+async def test_dismiss_writes_the_exact_tier1_fingerprint(tmp_path, monkeypatch):
+    # A dashboard dismiss must land on the SAME governance key the in-session
+    # hook governance reads — the round-trip guarantee.
+    monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+    from stackunderflow.hooks import proactive
+    from stackunderflow.routes.patterns import DismissRequest, dismiss_pattern
+
+    target = "ModuleNotFoundError: No module named <n>"
+    # What Tier-1 (error_signature_block) builds for this recurring signature:
+    tier1 = proactive.make_signal("error-signature", target, "any-session", (4, 9), eligible=True)
+
+    body = await dismiss_pattern(
+        DismissRequest(type="error-signature", scope="fingerprint", target_key=target, counts=[4, 9])
+    )
+    assert body["ok"] is True
+    assert body["scope"] == "fingerprint"
+    assert body["dismissed"] == tier1.fingerprint  # byte-identical to Tier-1's
+
+    state = json.loads(proactive._state_path().read_text())
+    assert state["feedback"][tier1.fingerprint]["dismissed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dismiss_fingerprint_scope_quiets_tier1(tmp_path, monkeypatch):
+    # After suppress_after (default 3) dismissals of a fingerprint, the exact
+    # Tier-1 signal is suppressed by should_surface.
+    monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+    monkeypatch.setattr("stackunderflow.settings._CFG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("STACKUNDERFLOW_PROACTIVE_ENABLED", "1")
+    monkeypatch.setenv("STACKUNDERFLOW_PROACTIVE_TYPES", "error-signature")
+    from stackunderflow.hooks import proactive
+    from stackunderflow.routes.patterns import DismissRequest, dismiss_pattern
+
+    target, counts = "some recurring signature", [3, 7]
+    for _ in range(3):
+        await dismiss_pattern(
+            DismissRequest(type="error-signature", scope="fingerprint", target_key=target, counts=counts)
+        )
+    sig = proactive.make_signal("error-signature", target, "s1", (3, 7), eligible=True)
+    state = json.loads(proactive._state_path().read_text())
+    assert proactive.should_surface(sig, state) is False  # adaptive quieting kicked in
+
+
+@pytest.mark.asyncio
+async def test_dismiss_type_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+    from stackunderflow.hooks import proactive
+    from stackunderflow.routes.patterns import DismissRequest, dismiss_pattern
+
+    body = await dismiss_pattern(DismissRequest(type="command-cluster", scope="type"))
+    assert body["scope"] == "type"
+    assert body["dismissed"] == "command-cluster"
+    state = json.loads(proactive._state_path().read_text())
+    assert state["feedback"]["command-cluster"]["dismissed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dismiss_defaults_to_type_scope_without_target(tmp_path, monkeypatch):
+    monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+    from stackunderflow.routes.patterns import DismissRequest, dismiss_pattern
+
+    # fingerprint scope but no target_key → falls back to a type-scope mute.
+    body = await dismiss_pattern(DismissRequest(type="file-risk", scope="fingerprint"))
+    assert body["scope"] == "type"
+    assert body["dismissed"] == "file-risk"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_rejects_unknown_type(tmp_path, monkeypatch):
+    monkeypatch.setattr("stackunderflow.deps.store_path", tmp_path / "store.db")
+    from stackunderflow.routes.patterns import DismissRequest, dismiss_pattern
+
+    with pytest.raises(HTTPException) as exc:
+        await dismiss_pattern(DismissRequest(type="not-a-real-type"))
+    assert exc.value.status_code == 400
+
+
+def test_dismiss_route_registered_on_app():
+    from stackunderflow.server import app
+    from tests.conftest import app_route_paths
+
+    assert "/api/patterns/dismiss" in app_route_paths(app)

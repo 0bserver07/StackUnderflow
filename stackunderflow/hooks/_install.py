@@ -285,11 +285,12 @@ def _add_our_hooks(settings: dict, *, capture_content: bool, inject: bool) -> di
     """Append our canonical matcher-groups to each event array (creating as needed).
 
     Always installs the four capture hooks; with ``inject`` also installs the
-    three injection hooks plus the active-recall hook. ``UserPromptSubmit``
-    then carries two of our matcher-groups (a capture hook and an injection
-    hook) and ``PreToolUse`` carries two (the in-process injection hook and
-    the recall hook) — Claude Code runs every hook registered for an event,
-    so they coexist cleanly.
+    three injection hooks, the active-recall hook, and the proactive-nudge hook.
+    ``UserPromptSubmit`` then carries two of our matcher-groups (a capture hook
+    and an injection hook), ``PreToolUse`` carries two (the in-process injection
+    hook and the recall hook), and ``PostToolUse`` carries two (the capture
+    recorder and the proactive nudge) — Claude Code runs every hook registered
+    for an event, so they coexist cleanly.
     """
     new = json.loads(json.dumps(settings))
     hooks = new.setdefault("hooks", {})
@@ -309,6 +310,8 @@ def _add_our_hooks(settings: dict, *, capture_content: bool, inject: bool) -> di
             _append(event, templates.inject_matcher_group(event))
         for event in templates.RECALL_EVENT_HOOK_IDS:
             _append(event, templates.recall_matcher_group(event))
+        for event in templates.NUDGE_EVENT_HOOK_IDS:
+            _append(event, templates.nudge_matcher_group(event))
     return new
 
 

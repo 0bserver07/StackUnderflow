@@ -1,16 +1,20 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   IconActivityHeartbeat,
   IconAlertTriangle,
+  IconBolt,
   IconCircleCheck,
   IconFileText,
   IconHistory,
   IconRefresh,
   IconTerminal,
+  IconX,
 } from '@tabler/icons-react'
-import { getPatterns, type PatternsSince } from '../../services/patterns'
+import { dismissPattern, getPatterns, type PatternsSince } from '../../services/patterns'
 import type {
+  DismissPatternRequest,
+  NudgeType,
   PatternCommandCluster,
   PatternErrorSignature,
   PatternFileRisk,
@@ -198,6 +202,162 @@ function CommandClusterRow({ cluster }: { cluster: PatternCommandCluster }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// "What almost bit me" (spec 27 Phase 2) — the would-have-fired nudges, with
+// Dismiss / "Don't show again" controls. Each dismiss writes the proactive
+// governance state the *in-session* hooks read, so tuning here quiets Tier-1.
+// The list is derived from the SAME `/api/patterns` report, filtered to each
+// nudge type's relevance floor — a preview of what the hooks would surface.
+// ---------------------------------------------------------------------------
+
+interface WouldFireNudge {
+  key: string // stable react key + optimistic-dismiss key
+  type: NudgeType
+  targetKey: string // command / signature / path — the fingerprint target
+  counts: [number, number] // the two salient counts Tier-1 fingerprints on
+  typeLabel: string
+  badgeColor: 'red' | 'orange' | 'yellow'
+  icon: React.ReactNode
+  text: string
+}
+
+const MAX_ALMOST = 8
+
+/** Derive the would-have-fired nudges from the report, newest/worst first. */
+function buildAlmostList(report: PatternsReportData): WouldFireNudge[] {
+  const items: WouldFireNudge[] = []
+
+  // Error-signature (Phase 2): recurred >= 2 sessions AND has a resolution hint.
+  for (const s of report.error_signatures) {
+    if (s.session_count < 2) continue
+    const hint = s.resolution_hints[0]
+    if (!hint) continue // no derivable "what fixed it" → the hook stays silent too
+    items.push({
+      key: `error-signature:${s.category}:${s.signature}`,
+      type: 'error-signature',
+      targetKey: s.signature,
+      counts: [s.session_count, s.count],
+      typeLabel: 'error',
+      badgeColor: 'red',
+      icon: <IconRefresh size={14} />,
+      text: `Recurring "${s.signature}" (${s.session_count} sessions). Next step that worked: ${hint.action}.`,
+    })
+  }
+
+  // Command-cluster (Phase 1): failed >= 2 times across >= 2 sessions.
+  for (const c of report.command_clusters) {
+    if (c.failure_count < 2 || c.session_count < 2) continue
+    const cat = topCategory(c.categories)
+    items.push({
+      key: `command-cluster:${c.command}`,
+      type: 'command-cluster',
+      targetKey: c.command,
+      counts: [c.failure_count, c.session_count],
+      typeLabel: 'command',
+      badgeColor: 'orange',
+      icon: <IconTerminal size={14} />,
+      text: `\`${c.command}\` failed in ${c.session_count} recent sessions${cat ? ` — mostly ${cat}` : ''}.`,
+    })
+  }
+
+  // File-risk (Phase 0): at least one failing session on the file.
+  for (const f of report.file_risk) {
+    if (f.failure_session_count < 1) continue
+    items.push({
+      key: `file-risk:${f.path}`,
+      type: 'file-risk',
+      targetKey: f.path,
+      counts: [f.failure_count, f.failure_session_count],
+      typeLabel: 'file',
+      badgeColor: 'yellow',
+      icon: <IconFileText size={14} />,
+      text: `${basename(f.path)} has failure history (${f.failure_session_count}/${f.touch_session_count} sessions${f.failure_rate !== null ? `, ${pct(f.failure_rate)}` : ''}).`,
+    })
+  }
+
+  return items.slice(0, MAX_ALMOST)
+}
+
+function AlmostBitMe({ nudges }: { nudges: WouldFireNudge[] }) {
+  // Optimistic hiding — the governance write is advisory, and `/api/patterns`
+  // doesn't read governance state, so there's nothing to refetch.
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set())
+  const [mutedTypes, setMutedTypes] = useState<Set<NudgeType>>(() => new Set())
+  const mutation = useMutation({
+    mutationFn: (body: DismissPatternRequest) => dismissPattern(body),
+  })
+
+  if (nudges.length === 0) return null
+  const visible = nudges.filter(n => !dismissed.has(n.key) && !mutedTypes.has(n.type))
+
+  const dismissOne = (n: WouldFireNudge) => {
+    setDismissed(prev => new Set(prev).add(n.key))
+    mutation.mutate({ type: n.type, scope: 'fingerprint', target_key: n.targetKey, counts: n.counts })
+  }
+  const muteType = (n: WouldFireNudge) => {
+    setMutedTypes(prev => new Set(prev).add(n.type))
+    mutation.mutate({ type: n.type, scope: 'type' })
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <IconBolt size={14} className="text-amber-500" />
+        <h3 className="text-xs uppercase tracking-wider text-gray-500 font-medium">What almost bit me</h3>
+        <span className="text-[11px] text-gray-400">
+          nudges that would fire in-session — dismiss to quiet them
+        </span>
+      </div>
+      {visible.length === 0 ? (
+        <div className="px-1 text-xs italic text-gray-500">All caught up — nothing to review.</div>
+      ) : (
+        <div className="space-y-2">
+          {visible.map(n => (
+            <div
+              key={n.key}
+              className="flex items-start justify-between gap-3 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3"
+            >
+              <div className="flex min-w-0 items-start gap-2">
+                <span className="mt-0.5 text-gray-400">{n.icon}</span>
+                <div className="min-w-0">
+                  <Badge color={n.badgeColor} size="sm">{n.typeLabel}</Badge>
+                  <p className="mt-1 break-words text-xs text-gray-700 dark:text-gray-300">{n.text}</p>
+                </div>
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => dismissOne(n)}
+                  disabled={mutation.isPending}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title="Quiet this specific nudge in future sessions"
+                >
+                  <IconX size={12} />
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  onClick={() => muteType(n)}
+                  disabled={mutation.isPending}
+                  className="whitespace-nowrap rounded-md px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title={`Stop showing ${n.typeLabel} nudges`}
+                >
+                  Don&apos;t show again
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {mutation.isError && (
+        <div className="px-1 text-[11px] text-red-600 dark:text-red-400">
+          Couldn&apos;t record that dismissal — it may reappear next time.
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function CodingHealthTab({ projectName }: CodingHealthTabProps) {
   const [since, setSince] = useState<PatternsSince>('90d')
 
@@ -215,6 +375,7 @@ export default function CodingHealthTab({ projectName }: CodingHealthTabProps) {
     (report.file_risk.length > 0 ||
       report.error_signatures.length > 0 ||
       report.command_clusters.length > 0)
+  const almost = useMemo(() => (report ? buildAlmostList(report) : []), [report])
 
   return (
     <div className="space-y-4">
@@ -299,6 +460,8 @@ export default function CodingHealthTab({ projectName }: CodingHealthTabProps) {
           />
         </div>
       )}
+
+      {!isLoading && !error && almost.length > 0 && <AlmostBitMe nudges={almost} />}
 
       {!isLoading && !error && report && !hasFindings && (
         <EmptyState
