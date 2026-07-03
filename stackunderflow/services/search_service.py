@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 # Location of the search index database
 SEARCH_DB_PATH = Path.home() / ".stackunderflow" / "search_index.db"
 
+# A single word character (unicode-aware) — the presence of one is what
+# distinguishes a real search from empty / punctuation-only input.
+_WORD_RE = re.compile(r"\w", re.UNICODE)
+
+
+def search_has_intent(query: str | None) -> bool:
+    """True when ``query`` carries at least one searchable term.
+
+    The gate the ``memory`` commands run *before* opening the store: empty,
+    whitespace-only, or pure-punctuation input (``""``, ``"   "``,
+    ``"!!!"``, ``"***"``) has no term to match and is rejected up front
+    rather than opening the store to return nothing. Any word character
+    (alphanumeric or ``_``, incl. non-ASCII) counts as intent.
+
+    Pure — never opens a connection, never raises.
+    """
+    if not query:
+        return False
+    return bool(_WORD_RE.search(query))
+
 
 class SearchService:
     """Service for full-text search across all Claude Code sessions."""
@@ -703,34 +723,132 @@ class SearchService:
             conn.close()
 
     def _sanitize_fts_query(self, query: str) -> str:
-        """Sanitize user input for safe FTS5 querying.
+        """Neutralise user input into a safe FTS5 ``MATCH`` expression.
 
-        Handles common FTS5 syntax issues by wrapping terms in quotes
-        if the query contains special characters that would break FTS5.
-        Simple queries (plain words) are left as-is for natural matching.
+        Every run of word characters becomes a quoted prefix term; FTS5
+        operators and punctuation — ``AND`` / ``OR`` / ``NOT`` / ``NEAR``,
+        ``*``, ``"``, ``(`` / ``)``, ``:``, ``-`` … — are treated as
+        **literal search text**, never as query syntax. So agent free text
+        like ``use NOT null`` searches for the words ``use``, ``not`` and
+        ``null`` instead of reaching the FTS5 parser as a ``NOT`` operator
+        (which would silently change the meaning) — and a stray bare ``*``
+        or an unbalanced ``"`` can no longer raise
+        ``sqlite3.OperationalError`` back at the agent.
+
+        This deliberately drops FTS5 operator *syntax* from the query
+        surface: the ``memory`` CLI (and the Search tab that shares this
+        method) is free-text-first, so safety wins over a power-user DSL.
+
+        Empty / punctuation-only input returns ``'""'`` (matches nothing);
+        callers gate that earlier with :func:`search_has_intent`, but the
+        floor keeps this method total.
+
+        The output for an operator-free query is byte-identical to the old
+        per-word ``"word"*`` form, so existing plain-text callers are
+        unaffected.
         """
-        query = query.strip()
-
-        if not query:
+        tokens = re.findall(r"\w+", query or "")
+        if not tokens:
             return '""'
+        return " ".join(f'"{t}"*' for t in tokens)
 
-        # If user explicitly uses FTS5 operators, let them through
-        # (AND, OR, NOT, NEAR, quotes, *)
-        fts5_operators = re.compile(r'\b(AND|OR|NOT|NEAR)\b|[*"]', re.IGNORECASE)
-        if fts5_operators.search(query):
-            return query
+    def lexical_session_hits(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        candidate_k: int = 200,
+    ) -> list[dict] | None:
+        """Best-bm25-first, one representative hit per session.
 
-        # For plain text queries, wrap each word as a prefix match for flexibility
-        # This lets "fastapi" match "FastAPI" and "fast" match "fastapi"
-        words = query.split()
-        if len(words) == 1:
-            # Single word: use prefix match
-            escaped = words[0].replace('"', '""')
-            return f'"{escaped}"*'
-        else:
-            # Multiple words: match all terms (implicit AND in FTS5)
-            parts = []
-            for word in words:
-                escaped = word.replace('"', '""')
-                parts.append(f'"{escaped}"*')
-            return " ".join(parts)
+        The lexical retriever the structured ``memory`` commands
+        (``decisions`` and friends) use in place of a leading-wildcard
+        ``content_text LIKE '%needle%'`` full scan. Runs the same FTS5
+        ``MATCH`` + bm25 ``rank`` + project/date filter path as
+        :meth:`search`, then **clusters** to one row per session (the
+        best-ranked message) and counts the further hits that session had,
+        so a chatty session can't fill the page.
+
+        Returns:
+
+        * ``None`` when the index isn't populated (no rows in ``messages``)
+          — the caller (``discovery.search_past_decisions``) then falls
+          back to its LIKE scan. This is the *only* "index not populated"
+          signal; a populated index that simply matched nothing returns
+          ``[]`` so the caller never silently reintroduces the full scan.
+        * ``[]`` when the index is populated but nothing matched (incl. an
+          FTS5 syntax hiccup that survived sanitising).
+        * otherwise a list of dicts, best-bm25-first, each::
+
+              {"session_id": str,
+               "content": str,      # representative message's full text
+               "bm25": float,       # SQLite raw rank (lower = better)
+               "more_matches_in_session": int}  # further hits, 0+
+
+        ``content`` is the raw message text (not an FTS ``snippet()``) so
+        the caller builds the same Python snippet the LIKE path does,
+        keeping the snippet format identical across both paths.
+
+        Never raises: any operational error degrades to ``[]`` (or ``None``
+        for the populated check), matching the swallow in :meth:`search`.
+        """
+        if not query or not query.strip():
+            return []
+        conn = self._get_conn()
+        try:
+            # Populated? One cheap probe. Empty/absent → signal LIKE fallback.
+            try:
+                populated = conn.execute(
+                    "SELECT 1 FROM messages LIMIT 1"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return None
+            if populated is None:
+                return None
+
+            safe_query = self._sanitize_fts_query(query)
+            where_clauses, params = self._build_filter_clauses(
+                project=project, date_from=date_from, date_to=date_to,
+                model=None, role=None,
+            )
+            where_sql = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+                SELECT m.session_id AS session_id, m.content AS content, rank AS bm25
+                FROM messages_fts
+                JOIN messages m ON messages_fts.rowid = m.id
+                WHERE messages_fts MATCH ?
+                {where_sql}
+                ORDER BY rank
+                LIMIT ?
+            """
+            try:
+                rows = conn.execute(
+                    sql, [safe_query, *params, max(1, int(candidate_k))]
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # Index IS populated but the MATCH failed — return [] (a
+                # genuine "no lexical hits"), never None: falling back to
+                # the LIKE full scan on a syntax hiccup is the anti-pattern
+                # this method exists to remove.
+                return []
+
+            best: dict[str, dict] = {}
+            for r in rows:
+                sid = r["session_id"]
+                if not sid:
+                    continue
+                if sid in best:
+                    best[sid]["more_matches_in_session"] += 1
+                    continue
+                best[sid] = {
+                    "session_id": sid,
+                    "content": r["content"] or "",
+                    "bm25": float(r["bm25"]),
+                    "more_matches_in_session": 0,
+                }
+            # dict preserves insertion order == bm25-best-first (ORDER BY rank).
+            return list(best.values())
+        finally:
+            conn.close()

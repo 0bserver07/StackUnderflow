@@ -1179,6 +1179,47 @@ def _open_store():
 # is the new enveloped surface.
 
 
+def _lexical_search_service():
+    """Best-effort ``SearchService`` for the memory commands' bm25 path.
+
+    Derives the FTS index path from ``deps.store_path`` (the same
+    derivation ``memory ask`` uses in :func:`_hybrid_session_order`), so a
+    test that redirects the store to a tmp dir gets a tmp index and
+    production reads ``~/.stackunderflow/search_index.db``. Returns
+    ``None`` on any failure so ``search_past_decisions`` degrades cleanly
+    to its LIKE scan — the lexical routing is strictly additive.
+    """
+    try:
+        import stackunderflow.deps as deps
+        from stackunderflow.services.search_service import SearchService
+
+        store_path = getattr(deps, "store_path", None)
+        if store_path is None:
+            return None
+        index_path = Path(store_path).parent / "search_index.db"
+        return SearchService(db_path=index_path)
+    except Exception:  # noqa: BLE001 — lexical FTS is strictly additive
+        return None
+
+
+def _require_search_intent(query) -> None:
+    """Raise ``ValueError`` when ``query`` carries no searchable term.
+
+    Runs in the ``memory`` subcommands *before* the store is opened, so an
+    empty / punctuation-only query (``""``, ``"   "``, ``"!!!"``) returns a
+    clean intent error to the agent instead of opening the store to return
+    nothing. Delegates the decision to
+    :func:`services.search_service.search_has_intent`.
+    """
+    from stackunderflow.services.search_service import search_has_intent
+
+    if not search_has_intent(query):
+        raise ValueError(
+            "query has no searchable terms — provide at least one word to "
+            "search for"
+        )
+
+
 def _run_in_path_query(path, *, since, limit, provider, budget):
     """Run ``discovery.find_sessions_in_path`` against the store.
 
@@ -1234,10 +1275,14 @@ def _run_decisions_query(
         slug = project
         if slug is None and scope_to_cwd:
             slug = _detect_cwd_project_slug(conn)
+        # Route the lexical (non-embeddings) search through the FTS5/bm25
+        # index when one is available; the embeddings path keeps its own
+        # substring+cosine pipeline, so it stays on ``search_service=None``.
+        lexical = None if use_embeddings else _lexical_search_service()
         result = search_past_decisions(
             conn, query, project=slug, since=since, limit=limit,
             context_budget=budget, use_embeddings=use_embeddings,
-            model_name=model_name,
+            model_name=model_name, search_service=lexical,
         )
         return result, slug
     finally:
@@ -1659,6 +1704,7 @@ def memory_decisions(
     budget = _resolve_context_budget(context_budget)
     q = {"text": query, "project": project, "since": since, "limit": limit}
     try:
+        _require_search_intent(query)
         result, slug = _run_decisions_query(
             query, project=project, since=since, limit=limit, budget=budget,
             scope_to_cwd=True,
@@ -1746,6 +1792,7 @@ def memory_worked(
         pack_within_budget,
     )
     try:
+        _require_search_intent(action)
         matches, slug = _run_action_worked_query(
             action, project=project, file_path=None, since=since, limit=limit,
             min_confidence=DEFAULT_MIN_OUTCOME_CONFIDENCE, scope_to_cwd=True,
@@ -1861,6 +1908,7 @@ def memory_ask(
     budget = _resolve_context_budget(context_budget)
     q = {"question": question, "project": project, "since": since, "limit": limit}
     try:
+        _require_search_intent(question)
         result, slug, vector_used = _run_ask_query(
             question, project=project, since=since, limit=limit, budget=budget,
             scope_to_cwd=True,

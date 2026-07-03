@@ -71,6 +71,14 @@ class SessionMatch:
     snippet, mapped to ``[0, 1]``. ``None`` when semantic mode is off
     (the default) so the JSON contract for substring-mode callers is
     unchanged.
+
+    ``more_matches_in_session`` is the session-clustering count: how many
+    *further* messages in this session also matched the query beyond the
+    one that produced the ``snippet``. Only ``search_past_decisions``
+    populates it (both its FTS and LIKE paths), and only when > 0; it stays
+    ``None`` — and is dropped from :meth:`to_dict` — otherwise, so the JSON
+    shape for single-hit sessions and for the other discovery functions is
+    unchanged.
     """
 
     session_id: str
@@ -83,17 +91,21 @@ class SessionMatch:
     cost_usd: float
     snippet: str | None = None
     embedding_score: float | None = None
+    more_matches_in_session: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dict.
 
-        ``embedding_score`` is dropped when ``None`` so substring-mode
-        callers see the original 9-key shape; only semantic-mode results
-        carry the extra field.
+        ``embedding_score`` and ``more_matches_in_session`` are dropped
+        when ``None`` so substring-mode / single-hit callers see the
+        original 9-key shape; only the results that carry the extra signal
+        expose the field.
         """
         out = asdict(self)
         if out.get("embedding_score") is None:
             out.pop("embedding_score", None)
+        if out.get("more_matches_in_session") is None:
+            out.pop("more_matches_in_session", None)
         return out
 
 
@@ -332,6 +344,7 @@ def _row_to_match(
     row: sqlite3.Row,
     snippet: str | None = None,
     embedding_score: float | None = None,
+    more_matches_in_session: int | None = None,
 ) -> SessionMatch:
     return SessionMatch(
         session_id=row["session_id"],
@@ -344,6 +357,7 @@ def _row_to_match(
         cost_usd=float(row["cost_usd"] or 0.0),
         snippet=snippet,
         embedding_score=embedding_score,
+        more_matches_in_session=more_matches_in_session,
     )
 
 
@@ -1062,17 +1076,155 @@ def _compute_embedding_scores(
     }
 
 
+# ── FTS lexical path (bm25) ──────────────────────────────────────────────────
+#
+# ``search_past_decisions`` defaults to the leading-wildcard
+# ``content_text LIKE '%needle%'`` full scan above. When the caller injects
+# a ``search_service`` (an FTS5 index living in the *separate*
+# ``search_index.db``), the candidate-gathering + ranking is routed through
+# bm25 instead: the store's leading-wildcard scan disappears from the hot
+# path. The store is still the provenance authority — the FTS index yields
+# ranked ``session_id`` s + snippets + clustering counts, and we hydrate
+# session/date/cost from the store by ``session_id`` (the two databases are
+# joined at the id level in Python, never via ``ATTACH``: they have
+# independent WAL/lock domains and the existing ``memory ask`` path already
+# bridges them the same way).
+
+
+def _sessions_by_id(
+    conn: sqlite3.Connection,
+    session_ids: Sequence[str],
+    project: str | None,
+) -> dict[str, sqlite3.Row]:
+    """Hydrate ``{session_id: row}`` provenance for FTS-matched session ids.
+
+    Mirrors the LIKE path's ``sessions ⨯ projects ⨯ session_mart`` join but
+    keys on the provider-facing ``session_id`` (what the FTS index stores),
+    chunked under SQLite's 999-parameter limit. ``project`` (a slug) is
+    re-applied as a belt-and-suspenders scope even though the FTS half
+    already filtered on it. Later duplicate ids keep the first row seen.
+    """
+    out: dict[str, sqlite3.Row] = {}
+    ids = list(dict.fromkeys(s for s in session_ids if s))
+    if not ids:
+        return out
+    chunk_size = 500
+    for start in range(0, len(ids), chunk_size):
+        part = ids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in part)
+        params: list[Any] = list(part)
+        where_extra = ""
+        if project:
+            where_extra = " AND p.slug = ?"
+            params.append(project)
+        sql = (
+            "SELECT " + _SESSION_SELECT + " "  # noqa: S608 — placeholders + fixed clause
+            + _SESSION_FROM
+            + f" WHERE s.session_id IN ({placeholders})"
+            + where_extra
+        )
+        for r in conn.execute(sql, params).fetchall():
+            out.setdefault(r["session_id"], r)
+    return out
+
+
+def _bm25_relevance(bm25_by_sid: dict[str, float]) -> dict[str, float]:
+    """Map raw SQLite bm25 ``rank`` values to a ``[0, 1]`` relevance score.
+
+    FTS5 ``rank`` is negative and *lower is better*. We min-max normalise
+    across the candidate set so the best-ranked session scores ``1.0`` and
+    the worst ``0.0`` — the shape the ``pack_within_budget`` rank fn wants
+    (each term in ``[0, 1]``, higher better). All-equal candidates all
+    score ``1.0``.
+    """
+    if not bm25_by_sid:
+        return {}
+    vals = list(bm25_by_sid.values())
+    lo, hi = min(vals), max(vals)          # lo = best (most negative)
+    span = hi - lo
+    if span <= 0:
+        return dict.fromkeys(bm25_by_sid, 1.0)
+    return {sid: 1.0 - (v - lo) / span for sid, v in bm25_by_sid.items()}
+
+
+def _fts_decisions(
+    conn: sqlite3.Connection,
+    search_service: Any,
+    needle: str,
+    *,
+    project: str | None,
+    since_iso: str | None,
+    limit: int,
+) -> tuple[list[SessionMatch], Callable[[SessionMatch], float]] | None:
+    """FTS5/bm25 candidate-gathering + ranking for ``search_past_decisions``.
+
+    Returns ``(matches, rank_fn)`` on success, or ``None`` when the FTS
+    index isn't populated — the caller then falls back to the LIKE scan.
+    A *populated* index that matched nothing returns ``([], rank_fn)`` so
+    the caller does **not** silently reintroduce the full scan.
+
+    Matches carry the Python snippet (built from the FTS row's content, so
+    it's byte-for-byte the format the LIKE path emits) plus the
+    per-session ``more_matches_in_session`` clustering count. The rank_fn's
+    relevance term is the bm25 score mapped to ``[0, 1]``. The returned
+    list is ``last_ts DESC`` (the function's documented plain-list order);
+    the bm25 signal rides in ``rank_fn`` for the budgeted path.
+    """
+    candidate_k = max(int(limit) * 10, 200) if limit and limit > 0 else 500
+    try:
+        hits = search_service.lexical_session_hits(
+            needle, project=project, date_from=since_iso, candidate_k=candidate_k,
+        )
+    except Exception:  # noqa: BLE001 — the lexical half must never break the query
+        return None
+    if hits is None:
+        return None  # index not populated → LIKE fallback
+
+    rel_by_sid = _bm25_relevance({h["session_id"]: h["bm25"] for h in hits})
+    rank_fn = _build_rank_fn(lambda m: rel_by_sid.get(m.session_id, 0.0))
+
+    if not hits:
+        return [], rank_fn  # populated + genuinely no match — never LIKE-scan
+
+    order = [h["session_id"] for h in hits]
+    rows_by_sid = _sessions_by_id(conn, order, project)
+    snippet_by_sid = {
+        h["session_id"]: _build_snippet(h["content"], needle) for h in hits
+    }
+    more_by_sid = {h["session_id"]: int(h["more_matches_in_session"] or 0) for h in hits}
+
+    out: list[SessionMatch] = []
+    for sid in order:
+        row = rows_by_sid.get(sid)
+        if row is None:
+            continue  # FTS hit with no store provenance (index/store drift) — skip
+        more = more_by_sid.get(sid, 0)
+        out.append(
+            _row_to_match(
+                row,
+                snippet=snippet_by_sid.get(sid),
+                more_matches_in_session=more or None,
+            )
+        )
+    out.sort(key=lambda m: m.last_ts or "", reverse=True)
+    if limit and limit > 0:
+        out = out[:limit]
+    return out, rank_fn
+
+
 @overload
 def search_past_decisions(
     conn: sqlite3.Connection, query: str, *, project: str | None = ...,
     since: str | None = ..., limit: int = ..., context_budget: None = ...,
     use_embeddings: bool = ..., model_name: str | None = ...,
+    search_service: Any = ...,
 ) -> list[SessionMatch]: ...
 @overload
 def search_past_decisions(
     conn: sqlite3.Connection, query: str, *, project: str | None = ...,
     since: str | None = ..., limit: int = ..., context_budget: int,
     use_embeddings: bool = ..., model_name: str | None = ...,
+    search_service: Any = ...,
 ) -> BudgetedResult: ...
 def search_past_decisions(
     conn: sqlite3.Connection,
@@ -1084,22 +1236,35 @@ def search_past_decisions(
     context_budget: int | None = None,
     use_embeddings: bool = False,
     model_name: str | None = None,
+    search_service: Any = None,
 ) -> list[SessionMatch] | BudgetedResult:
-    """Substring search over ``messages.content_text``.
+    """Search past decisions — FTS5/bm25 when indexed, LIKE otherwise.
 
-    The store does not currently host an FTS5 virtual table for
-    ``content_text`` (the auxiliary ``search_index.db`` does, but it's
-    a separate connection). We therefore use ``LIKE`` here and
-    generate snippets in Python — fast enough for the expected query
-    cardinality (one query per agent invocation) and free of
-    cross-database wiring.
+    When the caller injects a ``search_service`` (an FTS5 index in the
+    separate ``search_index.db``) and it is populated, candidate-gathering
+    and ranking run through bm25: the leading-wildcard
+    ``content_text LIKE '%needle%'`` full scan disappears from the hot
+    path, results carry a bm25 relevance signal, and each session is
+    clustered to one representative hit plus a ``more_matches_in_session``
+    count so a chatty session can't fill the page. The store stays the
+    provenance authority (session / date / cost are hydrated from it by
+    ``session_id``).
+
+    When no ``search_service`` is given, or its index isn't populated (a
+    fresh install, or ``use_embeddings=True`` — that path keeps its own
+    substring+cosine pipeline), it degrades gracefully to the original
+    ``LIKE`` scan with Python-built snippets. Both paths return the same
+    ``SessionMatch`` shape and honour ``pack_within_budget``.
 
     Parameters
     ----------
     conn:
         Main store connection.
     query:
-        Free-form text. Empty/whitespace strings return no matches.
+        Free-form text. Empty/whitespace strings return no matches. (The
+        ``memory`` CLI additionally gates empty / punctuation-only queries
+        with :func:`services.search_service.search_has_intent` before the
+        store is even opened; this function's empty-return is the floor.)
     project:
         Optional ``projects.slug`` filter.
     since:
@@ -1129,6 +1294,14 @@ def search_past_decisions(
         ``STACKUNDERFLOW_EMBED_MODEL`` env var, or
         ``embeddings.DEFAULT_EMBED_MODEL`` (``nomic-embed-text``). Ignored
         when ``use_embeddings`` is ``False``.
+    search_service:
+        Optional lexical FTS retriever (a
+        :class:`services.search_service.SearchService`). When supplied and
+        ``use_embeddings`` is ``False``, the bm25 path above is used; when
+        ``None`` (the default, and what every non-CLI caller passes) the
+        original ``LIKE`` scan runs, so hooks / meta-agent / test callers
+        are byte-compatible. Duck-typed: any object exposing
+        ``lexical_session_hits(...)`` works.
     """
     _ensure_row_factory(conn)
     if not query or not query.strip():
@@ -1141,6 +1314,22 @@ def search_past_decisions(
 
     needle = query.strip()
     since_iso = parse_since(since)
+
+    # FTS5/bm25 fast path — only when a lexical index is injected and we're
+    # not in embeddings mode (that path keeps its substring+cosine
+    # pipeline). ``None`` return ⇒ index not populated ⇒ fall through to
+    # the LIKE scan below.
+    if search_service is not None and not use_embeddings:
+        fts = _fts_decisions(
+            conn, search_service, needle,
+            project=project, since_iso=since_iso, limit=limit,
+        )
+        if fts is not None:
+            out, rank_fn = fts
+            _record_loaded(conn, "search_past_decisions", out)
+            if context_budget is not None:
+                return _budgeted(out, context_budget=context_budget, rank_fn=rank_fn)
+            return out
 
     where_extra = ""
     params: list[Any] = [f"%{needle}%"]
@@ -1179,10 +1368,15 @@ def search_past_decisions(
     # raw needle hit).
     first_mid_by_sfk: dict[int, int] = {}
     occ_by_sid: dict[str, int] = {}
+    # matching *messages* per session_fk → the session-clustering count
+    # (``more_matches_in_session`` = this - 1). Promoted into the shared
+    # path so the LIKE branch clusters exactly like the FTS branch.
+    msg_count_by_sfk: dict[int, int] = {}
     for hr in hit_rows:
         sfk = int(hr["sfk"])
         content = hr["content_text"] or ""
         occ_by_sid[hr["sid"]] = occ_by_sid.get(hr["sid"], 0) + content.lower().count(needle_lower)
+        msg_count_by_sfk[sfk] = msg_count_by_sfk.get(sfk, 0) + 1
         if sfk in snippet_by_sfk:
             continue
         snippet_by_sfk[sfk] = _build_snippet(content, needle)
@@ -1233,11 +1427,13 @@ def search_past_decisions(
     for r in rows:
         sfk = int(r["session_fk"])
         emb_score = score_by_sfk.get(sfk) if use_embeddings else None
+        more = msg_count_by_sfk.get(sfk, 1) - 1
         out.append(
             _row_to_match(
                 r,
                 snippet=snippet_by_sfk.get(sfk),
                 embedding_score=emb_score,
+                more_matches_in_session=more or None,
             )
         )
         if limit and limit > 0 and len(out) >= limit:
