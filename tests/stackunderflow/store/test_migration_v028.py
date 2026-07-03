@@ -80,9 +80,12 @@ def test_v028_is_purely_additive_on_a_genuine_v27_store(tmp_path: Path) -> None:
         before_tables = _tables(conn)
         before_cols = {t: _columns(conn, t) for t in before_tables}
 
-        schema.apply(conn)  # v27 → head
+        # Apply ONLY v028 (not the whole chain to head, so later additive
+        # migrations don't pollute the v28-specific diff this test isolates).
+        v028_path = next(p for v, p in schema._discover() if v == 28)
+        conn.executescript(v028_path.read_text())
 
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.CURRENT_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 28
         after_tables = _tables(conn)
         # Exactly the two new tables were added.
         assert after_tables - before_tables == {"sync_identity", "sync_outbox"}

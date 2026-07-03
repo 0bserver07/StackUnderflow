@@ -1,6 +1,6 @@
 # Multi-Device Sync — opt-in, client-side-encrypted, bring-your-own bucket
 
-**Status:** Design spec (issue #100, Spec 28 — `needs-design`, `size-xl`, wave-6). No code yet.
+**Status:** Phases 1–2 shipped (issue #100, Spec 28 — `size-xl`, wave-6). Phase 1 (one-way encrypted backup, schema v028) and Phase 2 (two-way multi-device read, schema v029) are implemented under `stackunderflow/sync/` + `routes/sync.py`; Phases 3–4 remain design.
 **Audience:** maintainer; anyone implementing cross-device sync.
 **Scope:** aggregate one person's several machines (laptop + work box + dev container) into one analytics view, by pushing **client-side-encrypted aggregates** to the user's **own** S3-compatible bucket. Zero-knowledge: the bucket stores ciphertext only, no StackUnderflow-hosted service exists, and **raw transcripts never leave the machine**.
 **Unblocks the issue's gate:** issue #100 stays `needs-design` "until `docs/specs/sync-protocol-v1.md` lands." This document is that spec (filename `docs/specs/multi-device-sync.md`).
@@ -309,11 +309,15 @@ Each phase is independently useful and shippable.
 
 **Phase 0 — design.** This document. Satisfies the issue's `needs-design` gate.
 
-**Phase 1 — MVP: one-way, encrypted backup-to-bucket.**
+**Phase 1 — MVP: one-way, encrypted backup-to-bucket. (SHIPPED — schema v028.)**
 `sync init`, `sync push`, `sync status`. Encrypt the Overview/Cost-core marts → the user's own prefix. No pull, no merge. Delivers an **off-site, zero-knowledge encrypted backup of your aggregates** and exercises the whole stack — keys, `age`, `ObjectStore`, canonical serialization, outbox, manifest commit — end to end at minimum risk. New module `stackunderflow/sync/`: `keys.py`, `cipher.py`, `bucket.py`, `serialize.py`, `runner.py`; the `sync` Click group beside `backup` in `cli.py`; the additive migration (`sync_identity`, `sync_outbox`).
 
-**Phase 2 — two-way: multi-device read.**
-`sync pull` + `sync/merge.py` union overlay + `sync_cursors` + `sync_remote_devices` + `<mart>_remote` tables + the `?scope=all-devices` read path and `GET /api/sync/status`. This is the issue's headline goal: laptop + work + dev-container in one analytics view.
+**Phase 2 — two-way: multi-device read. (SHIPPED — schema v029.)**
+`sync pull` + `sync/merge.py` union overlay + `sync_cursors` + `sync_remote_devices` + the five `<mart>_remote` landing tables + the `?scope=all-devices` read path and `routes/sync.py` (`GET /api/sync/status` + `GET /api/sync/overview`). This is the issue's headline goal: laptop + work + dev-container in one analytics view.
+
+`sync pull` LISTs every *other* device's prefix (skipping our own), fetches + decrypts each `manifest.age`, enforces the monotonic-generation replay guard (§3.4), and downloads only shards whose content-hash moved since the last pull — **idempotent: an unchanged peer downloads nothing** (only the tiny per-device manifest, the commit point, is re-read). Each shard's plaintext hash is re-verified before it REPLACE-lands into `<mart>_remote` (month-scoped, so re-ingesting one month never wipes a device's others) and its `sync_cursors` row advances. Pull is strictly **read-only against the bucket** — it never PUTs to any prefix — and never writes `usage_events` / `price_book` / transcripts. `sync/merge.py` then overlays `local (JOIN projects for slug) UNION ALL <mart>_remote`, SUMming at the stable `(provider, slug, …)` grain, and dedups `session_mart` by the globally-unique `session_id` (deterministic local-then-lowest-device tiebreak) into a `merge_warnings` counter (§5.3).
+
+**Read surface — default-off, byte-identical.** The merged view is opt-in behind an explicit **`?scope=all-devices`**; the default `this-device` scope runs no union at all, so the existing dashboard path is unchanged and off the mart `<100ms` fast-path. `GET /api/sync/overview?scope=all-devices` returns the merged totals / per-day trend / per-project / per-provider-day / per-device breakdown + `merge_warnings`; `GET /api/sync/status` reports local config, known peers, and whether cross-device data is available. CLI: `stackunderflow sync pull` (add `--json` for a scriptable envelope); the merged dashboard read is then live at `/api/sync/overview?scope=all-devices`.
 
 **Phase 3 — daemon, pruning, hardening.**
 `sync auto --enable` — a daemon-thread continuous push modeled on `etl/watcher.py` (`watchfiles`, debounce) under a single-instance lock modeled on `etl/lock.py`. Retention: prune shards older than `--keep-months` **after** merge confirmation; GC orphan shards not referenced by the current manifest. Optional opaque-manifest layout (§4.4).
