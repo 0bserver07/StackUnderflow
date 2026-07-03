@@ -1,0 +1,11 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "file",
+  "query": {
+    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py",
+    "project": null,
+    "since": "notadate",
+    "limit": 20
+  },
+  "error": "Invalid since value 'notadate': expected '7d'/'1w'/'1m'/'24h' or an ISO date/datetime."
+}

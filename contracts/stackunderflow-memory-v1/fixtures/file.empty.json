@@ -1,0 +1,24 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "file",
+  "query": {
+    "path": "/private/tmp/stackunderflow-contract-nonexistent-zzz.py",
+    "project": null,
+    "since": null,
+    "limit": 2
+  },
+  "results": [],
+  "result_count": 0,
+  "token_estimate": 1,
+  "budget": 2000,
+  "truncated": false,
+  "risk": {
+    "path": "/private/tmp/stackunderflow-contract-nonexistent-zzz.py",
+    "since": null,
+    "total_sessions": 0,
+    "reverted": 0,
+    "failed": 0,
+    "worked": 0,
+    "recent_session_ids": []
+  }
+}

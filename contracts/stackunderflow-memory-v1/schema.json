@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackunderflow.local/contracts/stackunderflow-memory-v1/schema.json",
+  "title": "stackunderflow.memory/1 agent-output envelope",
+  "description": "The stable, versioned contract for `stackunderflow memory <cmd> --json`. Every envelope-emitting subcommand (decisions/file/worked/sessions/ask) renders through cli_helpers/agent_output.py into one of two shapes: a success envelope or, on a non-zero exit, an error envelope. This schema freezes the STABLE OUTER envelope only. The per-command `results[]` row internals are deliberately product-shaped and left unconstrained here (see $defs.result_row): they are owned by the discovery layer and evolve independently, so validate rows at the envelope level, not field-by-field. Objects are intentionally open (no additionalProperties:false) so an unknown ADDITIVE field is forward-compatible -- preserved and ignored, never rejected.",
+  "oneOf": [
+    { "$ref": "#/$defs/success_envelope" },
+    { "$ref": "#/$defs/error_envelope" }
+  ],
+  "$defs": {
+    "schema_tag": {
+      "description": "The frozen contract id. The trailing integer is the MAJOR version and bumps only on a breaking change to the envelope; a consumer pins it and refuses an unknown major.",
+      "const": "stackunderflow.memory/1"
+    },
+    "command": {
+      "description": "Which memory subcommand produced this envelope. Also tags which product-shaped row shape `results[]` carries.",
+      "enum": ["decisions", "file", "worked", "sessions", "ask"]
+    },
+    "query": {
+      "description": "Command-specific echo of the resolved inputs (e.g. decisions->text, file->path, worked->action, sessions->path+scope, ask->question, plus project/since/limit). Present in both success and error envelopes so a caller can correlate the response with its call. Internals vary by command and are intentionally NOT constrained here.",
+      "type": "object"
+    },
+    "result_row": {
+      "description": "One product-shaped result row. The envelope's top-level `command` tags which row shape this is (a session match, an outcome match, a file-touch record, ...). Row internals are DELIBERATELY unconstrained at the contract level: they are owned by the discovery layer, are product-shaped (never a 1:1 mirror of SQLite columns), and evolve on their own cadence. Constrain rows here only to `object`.",
+      "type": "object"
+    },
+    "success_envelope": {
+      "description": "Emitted on exit 0: the token-bounded result envelope an agent splices into its context window.",
+      "type": "object",
+      "required": [
+        "schema",
+        "command",
+        "query",
+        "results",
+        "result_count",
+        "token_estimate",
+        "budget",
+        "truncated"
+      ],
+      "properties": {
+        "schema": { "$ref": "#/$defs/schema_tag" },
+        "command": { "$ref": "#/$defs/command" },
+        "query": { "$ref": "#/$defs/query" },
+        "results": {
+          "description": "The command-specific rows, in the order the discovery layer produced them (rank- or recency-ordered per command). Packed to fit `budget`; `truncated` says whether rows were dropped.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/result_row" }
+        },
+        "result_count": {
+          "description": "Number of rows in `results` after budget packing (len(results)).",
+          "type": "integer"
+        },
+        "token_estimate": {
+          "description": "chars/4 token estimate of `results` -- what the caller is about to spend.",
+          "type": "integer"
+        },
+        "budget": {
+          "description": "The --context-budget that was enforced (0 means packing was disabled).",
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "True when the budget dropped at least one otherwise-matching row.",
+          "type": "boolean"
+        },
+        "risk": {
+          "description": "Documented optional extra, present only for `command:file`: the file-risk summary (revert/fail/work counts + touch total). Its internals are command-owned and not constrained here.",
+          "type": "object"
+        },
+        "note": {
+          "description": "Documented optional extra, present only for `command:ask`: a human-readable note on which retrieval mode ran (keyword-only vs hybrid).",
+          "type": "string"
+        },
+        "vector_used": {
+          "description": "Documented optional extra, present only for `command:ask`: whether the semantic vector half of hybrid retrieval ran.",
+          "type": "boolean"
+        }
+      }
+    },
+    "error_envelope": {
+      "description": "Emitted on a non-zero exit: stdout is this error envelope, NOT a result envelope. `schema`/`command`/`query` are retained so a caller can correlate the failure with the call it made.",
+      "type": "object",
+      "required": ["schema", "command", "query", "error"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/schema_tag" },
+        "command": { "$ref": "#/$defs/command" },
+        "query": { "$ref": "#/$defs/query" },
+        "error": {
+          "description": "Human-readable failure message. Its presence (and the absence of `results`) is what distinguishes an error envelope from a success envelope.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

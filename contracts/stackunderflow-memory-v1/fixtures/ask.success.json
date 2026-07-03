@@ -1,0 +1,40 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "ask",
+  "query": {
+    "question": "how does caching work",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "e2cb5172-7154-4d1b-9a8f-a82dc28e17b1",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-05-14T01:07:51.216Z",
+      "last_ts": "2026-05-14T01:07:51.216Z",
+      "message_count": 1785,
+      "cost_usd": 396.12446475,
+      "snippet": null
+    },
+    {
+      "session_id": "42f45b99-782c-4f9e-9572-c9d2a726efc6",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-04-19T23:17:23.311Z",
+      "last_ts": "2026-04-20T01:49:25.034Z",
+      "message_count": 2571,
+      "cost_usd": 600.7909187500001,
+      "snippet": null
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 177,
+  "budget": 2000,
+  "truncated": false,
+  "note": "keyword search over past decisions (local semantic vector search unavailable \u2014 start Ollama to enable it).",
+  "vector_used": false
+}
