@@ -258,6 +258,63 @@ provider; plugin identity lives in metadata — never grow the provider enum per
   campaign says CLI + the AGENTS.md/CLAUDE.md snippet are the interface — decide whether
   a SKILL.md adds reach or just duplicates the snippet mechanism.
 
+## WAVE 2 — superiority batch (specs #13–#18)  ·  approved 2026-07-03
+
+> Make StackUnderflow unambiguously the broader/deeper tool, on our own terms.
+> Decisions locked: short command = **`stax`**; positioning = **own-the-category, no
+> competitor named anywhere** (honors the no-external-references rule; precedence via
+> our own first-commit/PyPI/blog dates); execution = build-all + auto-merge on CI-green.
+> Runs as two file-disjoint sub-waves off Wave-1 main. Invariants unchanged:
+> `test_pricing_invariants` green, mart `<100ms`, no MCP, no version-string edits
+> (maintainer-only), `pack_within_budget` preserved.
+>
+> **Sub-wave 2a (parallel, disjoint):** #14 adoption · #13+#18 positioning · #15 retrieval.
+> **Sub-wave 2b (parallel off 2a-merged main):** #12 Amp + #16 IDs · #17 credibility.
+
+### #13 — `stax` short command
+**Goal.** A memorable short alias so agents/humans type less. **Scope.** `pyproject.toml`
+`[project.scripts]` → add `stax = "stackunderflow.cli:cli"` beside the long form; mention
+in README/docs (owned by #18's agent). **Verify.** `stax --help` == `stackunderflow --help`;
+long form still works. Not a version change.
+
+### #14 — Agent adoption surface (SKILL.md + cross-harness plugins)
+**Goal.** Get the `memory` CLI into every agent's workflow across Claude Code / Codex /
+Cursor — the biggest "make it known to the ecosystem" lever. **Approach.** Ship a
+frontmatter-triggered `SKILL.md` (WHEN-to-use + a JSON-is-expensive rule + citation/safety
+rules) and thin per-host `plugin.json` + `marketplace.json`, one synced body; extend the
+existing `services/skill_synth.py` / `agentsmd.py` to emit them. **Scope (own).** new
+`skills/`, `plugins/`, `services/skill_synth.py`, `agentsmd.py`, new `docs/agent-skill-install.md`.
+**No `cli.py`.** **Verify.** manifests validate; skill body byte-synced across copies; a
+sync-check test. No competitor named.
+
+### #15 — Complete retrieval (extend FTS to `file`/`worked` content-half)
+**Goal.** Finish Wave-1 #9 — route the *content* half of `memory file`/`worked` through
+FTS5/bm25 while keeping exact path/tool-arg matching (reuse `lexical_session_hits`).
+**Scope (own).** `services/discovery.py`, `services/search_service.py`, `cli.py` (memory +
+find-sessions region only). **Verify.** file/worked content queries rank via bm25; exact-path
+matching un-regressed; `memory file` <100ms held; `pack_within_budget` preserved.
+
+### #16 — Deterministic content-hash import IDs
+**Goal.** Re-import idempotency at the PK + cross-machine-merge-safety (a stray write can't
+duplicate rows). **Scope (own).** `adapters/base.py` (+ per-adapter id derivation),
+`store/migrations/v028_*`. **Verify.** re-importing the same transcript reproduces identical
+ids; a fixture proves no dupes; additive migration, downgrade-guarded.
+
+### #17 — Honest support matrix + `stax doctor` + embedded docs
+**Goal.** Credibility (per-field fidelity, not a binary "supported") + offline self-service.
+**Scope (own).** new `services/support_matrix.py`, new docs-embed module, `cli.py` (append
+`doctor` + `docs` commands), docs content. Reads adapter metadata; does not edit adapter files.
+**Verify.** matrix emits per-adapter fidelity flags + status vocabulary; `doctor` is read-only
+store health (integrity + FK + watermark sanity); `docs` serves embedded pages offline.
+
+### #18 — Positioning refresh (own the category, no names)
+**Goal.** Make the story loud on our terms — sharpen the **Local Agent Memory** pillar
+(FTS + vector + formal contract + `stax` + skill/plugins), tighten the four-pillars framing,
+assert local-first provenance via our own dates. **Scope (own).** `README.md`, `pyproject.toml`
+(the `stax` line for #13), docs positioning. **HARD RULE: name no other library/tool anywhere**
+(README/CHANGELOG/docs/UI) — precedence via our own first-commit/PyPI/blog, never a comparison.
+**Verify.** README reads strong standalone; zero external-tool references; `stax` documented.
+
 ## Bigger bet (not yet a task) — privacy-preserving team layer
 Each machine pushes encrypted **aggregates only** (never raw transcripts) to a self-hostable endpoint; the team sees shared waste/patterns. Grounded in the backup hardlink snapshots + the mart schema (aggregates are already the storage unit). Design work: the privacy contract + sync protocol.
 
