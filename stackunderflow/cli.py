@@ -2095,6 +2095,161 @@ def memory_embed(batch):
         )
 
 
+# ── context replay: reconstruct what the model "saw" at a point in a session ──
+#
+# ``stackunderflow context-replay <SESSION_ID> --at <seq>`` reconstructs the
+# ordered message sequence that had accumulated in a session up to a ``seq``
+# cutoff — role, a content preview, an estimated token footprint, tool calls,
+# and a running token total. Read-only + advisory (an unknown session yields an
+# empty-but-valid result), and in ``--json`` it emits the same
+# ``stackunderflow.memory/1`` envelope the ``memory`` namespace uses. The MVP
+# context semantics live in ``services/context_replay.py``.
+
+
+def _session_in_project(conn, session_id: str, project_slug: str) -> bool:
+    """True when ``session_id`` belongs to project ``project_slug``.
+
+    The CLI's same-project fence (mirrors the route's): with ``--project`` set,
+    a session in a different project is treated as out-of-scope.
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sessions s JOIN projects p ON p.id = s.project_id "
+            "WHERE s.session_id = ? AND p.slug = ? LIMIT 1",
+            (session_id, project_slug),
+        ).fetchone()
+    except Exception:  # noqa: BLE001 — advisory: a bad store just fails the fence
+        return False
+    return row is not None
+
+
+def _emit_context_replay_text(result: dict, events: list) -> None:
+    """Human-readable rendering of a context reconstruction."""
+    sid = result.get("session_id", "")
+    at_seq = result.get("at_seq")
+    scope = f"up to seq {at_seq}" if at_seq is not None else "full session"
+    click.echo(f"Context replay for {sid} ({scope})")
+    click.echo(
+        f"  messages: {result.get('message_count', 0)}   "
+        f"est. context tokens: {result.get('total_tokens', 0)}"
+    )
+    for w in result.get("warnings") or []:
+        click.echo(f"  ! {w}")
+    if not events:
+        click.echo("  (no messages in range)")
+        return
+    click.echo("")
+    for e in events:
+        click.echo(
+            f"  #{e['seq']:>4} [{e['role']:>9}]  {e['cumulative_tokens']:>8} tok"
+        )
+        if e.get("tool_calls"):
+            click.echo(f"        tools: {', '.join(e['tool_calls'])}")
+        preview = (e.get("content_preview") or "").splitlines()
+        if preview:
+            click.echo(f"        {preview[0][:100]}")
+
+
+@cli.command("context-replay")
+@click.argument("session_id")
+@click.option(
+    "--at", "at_seq", type=int, default=None,
+    help="seq cutoff (inclusive). Omit for the whole session's context.",
+)
+@click.option(
+    "--project", "project", default=None,
+    help="Project slug to fence to. A session in another project is treated "
+         "as out-of-scope (empty-but-valid).",
+)
+@click.option(
+    "--limit", type=int, default=100, show_default=True,
+    help="Cap on the number of events returned (earliest first, in seq order).",
+)
+@click.option(
+    "--context-budget", "context_budget", type=int, default=None,
+    help="Token budget for --json results: events are kept in order until "
+         "~this many estimated tokens are used. Pass 0 to disable.",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, default=False,
+    help="Shortcut for --format json.",
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(_VALID_FORMATS), default="text",
+    show_default=True,
+    help="Output format. 'json' emits the stable agent-output envelope.",
+)
+@click.pass_context
+def context_replay_cmd(
+    ctx, session_id, at_seq, project, limit, context_budget, as_json, fmt,
+):
+    """Reconstruct what the model "saw" in SESSION_ID up to a --at seq.
+
+    Returns the ordered message sequence (role, preview, tool calls, per-turn
+    token estimate) with a running token total, so you can watch the context
+    grow. Read-only and advisory: an unknown session yields an empty result,
+    never an error. MVP semantics = the session's message sequence up to --at
+    (harness-side context eviction is a future refinement).
+    """
+    from stackunderflow.cli_helpers import agent_output
+    from stackunderflow.services import context_replay as context_replay_service
+
+    json_mode = _memory_format(fmt, as_json) == "json"
+    budget = _resolve_context_budget(context_budget)
+
+    conn = _open_store()
+    try:
+        result = context_replay_service.reconstruct_context(
+            conn, session_id=session_id, at_seq=at_seq,
+        )
+        # Same-project fence: --project scopes the reconstruction to that
+        # project; a session that lives elsewhere is out-of-scope.
+        if project and not _session_in_project(conn, session_id, project):
+            result = context_replay_service.empty_context(
+                session_id, at_seq=at_seq,
+                warnings=[f"session {session_id} is outside project {project!r}"],
+            )
+    finally:
+        conn.close()
+
+    events = list(result.get("events") or [])
+    truncated = False
+    if limit and limit > 0 and len(events) > limit:
+        events = events[:limit]
+        truncated = True
+    if budget and budget > 0:
+        packed: list = []
+        used = 0
+        for e in events:
+            est = agent_output.estimate_tokens(e)
+            if packed and used + est > budget:
+                truncated = True
+                break
+            packed.append(e)
+            used += est
+        events = packed
+
+    if json_mode:
+        q = {
+            "session_id": session_id, "at": at_seq,
+            "project": project, "limit": limit,
+        }
+        envelope = agent_output.build_envelope(
+            command="context-replay", query=q, results=events,
+            budget=budget, truncated=truncated,
+            extra={
+                "session_id": result.get("session_id", session_id),
+                "at_seq": result.get("at_seq"),
+                "total_tokens": result.get("total_tokens", 0),
+                "message_count": result.get("message_count", 0),
+                "warnings": result.get("warnings") or [],
+            },
+        )
+        click.echo(agent_output.render(envelope))
+    else:
+        _emit_context_replay_text(result, events)
+
+
 # ── ingest-on-read helpers ───────────────────────────────────────────────────
 #
 # Read-only data commands (``status``, ``today``, ``month``, ``report``,

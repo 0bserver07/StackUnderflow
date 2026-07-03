@@ -32,6 +32,7 @@ const TagsTab = lazy(() => import('../components/dashboard/TagsTab'))
 const SessionsTab = lazy(() => import('../components/dashboard/SessionsTab'))
 const AgentsTab = lazy(() => import('../components/dashboard/AgentsTab'))
 const PlaybackTab = lazy(() => import('../components/dashboard/PlaybackTab'))
+const ContextReplayTab = lazy(() => import('../components/dashboard/ContextReplayTab'))
 const CostTab = lazy(() => import('../components/dashboard/CostTab'))
 const BudgetsTab = lazy(() => import('../components/dashboard/BudgetsTab'))
 const CompareTab = lazy(() => import('../components/dashboard/CompareTab'))
@@ -400,6 +401,7 @@ export default function ProjectDashboard() {
             {activeTab === 'sessions' && <SessionsTab projectName={name!} sessionEfficiency={stats.session_efficiency} />}
             {activeTab === 'agents' && <AgentsTab projectName={name!} />}
             {activeTab === 'playback' && <PlaybackTab projectName={name!} />}
+            {activeTab === 'contextreplay' && <ContextReplayTab projectName={name!} />}
           </Suspense>
         </ErrorBoundary>
       </div>

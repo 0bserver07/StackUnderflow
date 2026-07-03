@@ -25,6 +25,7 @@ from stackunderflow.routes import (
     commands,
     compare,
     context_budget,
+    context_replay,
     cost,
     data,
     etl,
@@ -276,6 +277,7 @@ app.include_router(plan.router)
 app.include_router(compare.router)
 app.include_router(yield_route.router)
 app.include_router(context_budget.router)
+app.include_router(context_replay.router)
 app.include_router(cfg.router)
 app.include_router(etl.router)
 app.include_router(agent_teams.router)

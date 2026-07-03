@@ -1092,6 +1092,39 @@ export interface ProjectTimelineResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Context replay (issue #96) — the context-window analog of Playback. For a
+// `seq` cutoff, the ordered message sequence that had accumulated as the
+// model's context, each turn with a content preview, an estimated token
+// footprint, its tool calls, and a running token total. Read-only + advisory:
+// an unknown session yields an empty-but-valid body. MVP semantics = "the
+// session's message sequence up to `at_seq`" (see services/context_replay.py).
+// ---------------------------------------------------------------------------
+
+export interface ContextReplayEvent {
+  /** Message `seq` — file/wire order, i.e. chronological within the session. */
+  seq: number
+  role: string
+  /** Capped preview of the turn's text (or a bracketed tool-activity stand-in). */
+  content_preview: string
+  /** Estimated token footprint of THIS message (chars/4 of text + tool payload). */
+  tokens: number
+  /** Running total through this message — monotonic non-decreasing over `seq`. */
+  cumulative_tokens: number
+  /** One-line labels for the tool calls this turn issued, e.g. "Edit a.py". */
+  tool_calls: string[]
+}
+
+export interface ContextReplayResponse {
+  session_id: string
+  /** The `seq` cutoff echoed back; `null` when the whole session was returned. */
+  at_seq: number | null
+  message_count: number
+  total_tokens: number
+  events: ContextReplayEvent[]
+  warnings: string[]
+}
+
+// ---------------------------------------------------------------------------
 // Playback v2 — virtual-filesystem reconstruction at a point in time.
 // ``GET /api/playback/{session_id}/fs?at=<iso>&paths=<csv>&include_content=…``
 // replays Read/Write/Edit/MultiEdit/NotebookEdit calls up to ``at`` and

@@ -32,6 +32,7 @@ import type {
   PlaybackResponse,
   ProjectTimelineResponse,
   PlaybackFsSnapshotResponse,
+  ContextReplayResponse,
   PrescriptionsResponse,
   ClaudeMdPreviewResponse,
 } from '../types/api'
@@ -856,6 +857,28 @@ export async function getPlaybackFsSnapshot(
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
   }
   return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// Context replay (issue #96) — GET /api/context-replay/{session}?at=<seq>.
+//
+// Reconstructs what the model "saw" up to a `seq` cutoff. Always 200 (advisory:
+// an unknown session → empty-but-valid body). The tab fetches the FULL timeline
+// once (omit `at`) and slices client-side as the user scrubs, using each
+// event's `cumulative_tokens`. `project` fences to a project slug the same way
+// the /api/forks route does; omit to use the server's active project.
+// See stackunderflow/services/context_replay.py.
+// ---------------------------------------------------------------------------
+
+export async function getContextReplay(
+  sessionId: string,
+  opts?: { at?: number | null; project?: string },
+): Promise<ContextReplayResponse> {
+  const params = new URLSearchParams()
+  if (typeof opts?.at === 'number') params.set('at', String(opts.at))
+  if (opts?.project) params.set('project', opts.project)
+  const qs = params.toString()
+  return fetchJson(`${BASE}/context-replay/${encodeURIComponent(sessionId)}${qs ? `?${qs}` : ''}`)
 }
 
 // ---------------------------------------------------------------------------
