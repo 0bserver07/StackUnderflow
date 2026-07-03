@@ -4824,3 +4824,249 @@ def _ensure_state_dir() -> None:
         "version": __version__,
         "created": datetime.now().isoformat(),
     }))
+
+
+# ── doctor: read-only store health check ──────────────────────────────────────
+#
+# ``stackunderflow doctor`` (short: ``stax doctor``) is a read-only sanity check
+# on ``~/.stackunderflow/store.db`` that runs without the server. It opens the
+# store **read-only** (``mode=ro`` + ``PRAGMA query_only``) so it can never
+# migrate, write, or repair — a missing/corrupt/unopenable store is reported as
+# a finding, never a crash. The check logic lives in ``_run_store_health_checks``
+# (pure: takes a path, returns a dict) so it is unit-testable without the CLI.
+
+
+def _doctor_store_path() -> Path:
+    """Resolve the active store path the same way the rest of the CLI does."""
+    import stackunderflow.deps as deps
+
+    return Path(deps.store_path)
+
+
+def _sqlite_object_exists(conn: Any, name: str) -> bool:
+    """True when a table or view named *name* exists (read-only probe)."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def _run_store_health_checks(store_path: Path) -> dict[str, Any]:
+    """Open *store_path* READ-ONLY and return ``{ok, store_path, findings}``.
+
+    Runs SQLite ``integrity_check`` + ``foreign_key_check``, plus watermark and
+    orphan sanity on the ETL marts. Never opens for write, never migrates. Any
+    failure to open (missing file, not a database) becomes a finding rather than
+    an exception, so callers get a clean report in every case.
+    """
+    import sqlite3
+
+    store_path = Path(store_path)
+    findings: list[dict[str, str]] = []
+
+    def _finding(check: str, message: str) -> None:
+        findings.append({"check": check, "message": message})
+
+    def _result() -> dict[str, Any]:
+        return {
+            "ok": not findings,
+            "store_path": str(store_path),
+            "findings": findings,
+        }
+
+    if not store_path.exists():
+        _finding(
+            "store",
+            f"store not found at {store_path} — run `stackunderflow start` "
+            "to create it",
+        )
+        return _result()
+
+    try:
+        conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        _finding("store", f"cannot open store read-only: {exc}")
+        return _result()
+
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only = ON")
+
+        # 1) Physical integrity. A non-database file raises here — that IS the
+        #    finding, and nothing else is worth checking on a corrupt file.
+        try:
+            for row in conn.execute("PRAGMA integrity_check").fetchall():
+                if row[0] != "ok":
+                    _finding("integrity", row[0])
+        except sqlite3.DatabaseError as exc:
+            _finding("integrity", f"integrity check failed: {exc}")
+            return _result()
+
+        # 2) Declared foreign keys (projects → sessions → messages → events).
+        try:
+            for row in conn.execute("PRAGMA foreign_key_check").fetchall():
+                table, rowid, referred = row[0], row[1], row[2]
+                where = f"row {rowid}" if rowid is not None else "a row"
+                _finding(
+                    "foreign_key",
+                    f"foreign-key violation: {table} {where} points at a "
+                    f"missing {referred}",
+                )
+        except sqlite3.DatabaseError as exc:
+            _finding("foreign_key", f"foreign-key check failed: {exc}")
+
+        # 3) Schema written by a newer build (downgrade risk). Behind-schema is
+        #    the normal pre-migration state, so only newer-than-code is flagged.
+        try:
+            from stackunderflow.store import schema
+
+            user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if user_version > schema.CURRENT_VERSION:
+                _finding(
+                    "schema",
+                    f"store schema is v{user_version} but this build "
+                    f"understands up to v{schema.CURRENT_VERSION} — it was "
+                    "written by a newer version",
+                )
+        except Exception:  # noqa: BLE001 - advisory check, never fatal
+            pass
+
+        # 4) Watermark sanity: no mart may claim to have consumed an event id
+        #    newer than the newest event that exists (an interrupted rebuild).
+        if _sqlite_object_exists(conn, "mart_watermark") and _sqlite_object_exists(
+            conn, "usage_events"
+        ):
+            max_eid = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM usage_events"
+            ).fetchone()[0]
+            for row in conn.execute(
+                "SELECT mart_name, last_event_id FROM mart_watermark"
+            ).fetchall():
+                if row["last_event_id"] > max_eid:
+                    _finding(
+                        "watermark",
+                        f"mart '{row['mart_name']}' watermark (event "
+                        f"{row['last_event_id']}) is ahead of the newest event "
+                        f"(id {max_eid})",
+                    )
+
+        # 5) Orphan sanity: denormalized mart rows are not FK-enforced, so check
+        #    they still point at a project that exists.
+        if _sqlite_object_exists(conn, "projects"):
+            for mart in ("session_mart", "daily_mart", "project_mart"):
+                if not _sqlite_object_exists(conn, mart):
+                    continue
+                count = conn.execute(
+                    f"SELECT COUNT(*) FROM {mart} "
+                    "WHERE project_id NOT IN (SELECT id FROM projects)"
+                ).fetchone()[0]
+                if count:
+                    _finding(
+                        "orphan",
+                        f"{mart}: {count} row(s) reference a project that no "
+                        "longer exists",
+                    )
+    finally:
+        conn.close()
+
+    return _result()
+
+
+@cli.command("doctor")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help='Emit {"ok": bool, "findings": [...]} as JSON.',
+)
+def doctor_cmd(as_json: bool) -> None:
+    """Read-only health check of the local store.
+
+    Runs SQLite integrity + foreign-key checks plus watermark/orphan sanity on
+    ``~/.stackunderflow/store.db``, opening it read-only (never migrates or
+    writes). Prints ``ok`` or one finding per line; exits non-zero on findings.
+    """
+    result = _run_store_health_checks(_doctor_store_path())
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "ok": result["ok"],
+                    "findings": result["findings"],
+                    "store_path": result["store_path"],
+                },
+                indent=2,
+            )
+        )
+    elif result["ok"]:
+        click.echo("ok")
+    else:
+        for item in result["findings"]:
+            click.echo(item["message"])
+    if not result["ok"]:
+        raise SystemExit(1)
+
+
+# ── docs: StackUnderflow's own documentation, offline from the package ────────
+#
+# ``stackunderflow docs list`` / ``docs show <topic>`` (short: ``stax docs``)
+# serve the pages embedded in ``stackunderflow/embedded_docs.py`` — no network,
+# no repo checkout, no running server. Pages are audience-tagged so an agent can
+# filter to what's written for it.
+
+
+@cli.group("docs")
+def docs_group() -> None:
+    """Read StackUnderflow's own docs, offline from the installed package."""
+
+
+@docs_group.command("list")
+@click.option(
+    "--audience",
+    default=None,
+    help="Filter to pages for this audience (all, agent, user).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the topic list as JSON.")
+def docs_list_cmd(audience: str | None, as_json: bool) -> None:
+    """List available documentation topics."""
+    from stackunderflow import embedded_docs
+
+    try:
+        docs = embedded_docs.list_docs(audience=audience)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc)) from exc
+
+    if as_json:
+        click.echo(json.dumps(docs, indent=2))
+        return
+    if not docs:
+        click.echo("No topics.")
+        return
+    width = max(len(d["slug"]) for d in docs)
+    for d in docs:
+        click.echo(f"{d['slug']:<{width}}  [{d['audience']}]  {d['summary']}")
+
+
+@docs_group.command("show")
+@click.argument("topic")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit {slug, title, audience, summary, body} as JSON.",
+)
+def docs_show_cmd(topic: str, as_json: bool) -> None:
+    """Print an embedded documentation topic."""
+    from stackunderflow import embedded_docs
+
+    doc = embedded_docs.get_doc(topic)
+    if doc is None:
+        available = ", ".join(embedded_docs.topics())
+        raise click.BadParameter(
+            f"unknown topic {topic!r}. Available topics: {available}"
+        )
+    if as_json:
+        click.echo(json.dumps(doc, indent=2))
+    else:
+        click.echo(doc["body"], nl=False)
