@@ -1,8 +1,8 @@
 # StackUnderflow
 
-**Offline, local-first observability toolkit for AI coding agents.**
+**Offline, local-first observability and memory toolkit for AI coding agents.**
 
-StackUnderflow ingests and indexes session logs from 20 coding agent providers to surface cost analytics, interactive session playback (with step-by-step filesystem reconstruction), and a searchable knowledge base that both developers and agents can query to learn from past decisions and failures. Everything runs locally with zero external dependencies or telemetry.
+StackUnderflow ingests session logs from 20 coding-agent providers into one local SQLite store, then builds four pillars on top: cost analytics, time-travel playback with step-by-step filesystem reconstruction, a local agent-memory layer your coding agents query mid-task, and an offline chat sidebar over your own history. Local-first from the first commit (2026-03-31): everything runs on your machine — no account, no telemetry, nothing leaves `~/.stackunderflow/`.
 
 <p align="center">
   <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> &nbsp;
@@ -23,7 +23,7 @@ StackUnderflow ingests and indexes session logs from 20 coding agent providers t
 ### The Four Pillars
 *   **Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
 *   **Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
-*   **Local Agent Memory**: Exposes a CLI so that active coding agents can query past sessions, decisions, and failure modes to reuse knowledge and avoid repeating errors.
+*   **Local Agent Memory**: A retrieval layer your coding agents query mid-task — `stax memory decisions/file/worked/ask` — to reuse what worked and stop repeating past failures. Candidates rank by FTS5 + bm25, with an optional hybrid semantic (vector) pass, and come back through a formal, versioned `stackunderflow.memory/1` contract: a JSON-Schema, golden fixtures for every subcommand, and a stdlib validator that runs in CI. It ships as native Claude Code skills and a harness-agnostic CLI any agent can shell out to.
 *   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
 20 providers supported (7 default-on, 13 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
@@ -45,6 +45,8 @@ pip install stackunderflow
 stackunderflow init
 ```
 
+`stax` is a short alias for `stackunderflow` — the same entry point, so `stax init`, `stax status`, and `stax memory decisions "cache"` all behave identically. This README uses the long form; substitute `stax` anywhere you like.
+
 Browser opens to `http://localhost:8081` with every project the local store knows about, indexed and ready. Background ingest + watcher start immediately; the dashboard is interactive while ingest runs.
 
 If port 8081 is taken: `stackunderflow cfg set port 8090` then re-run.
@@ -55,7 +57,7 @@ stackunderflow cfg set port 8090            # change the port
 stackunderflow cfg set currency GBP         # display costs in another currency
 stackunderflow plan set claude-pro          # track against a monthly budget
 stackunderflow init --no-browser            # don't auto-open the browser
-stackunderflow --help                       # full CLI
+stackunderflow --help                       # full CLI  (or: stax --help)
 ```
 
 ### Nix
@@ -127,10 +129,10 @@ Structural patterns:
       fix: Cache file contents in working memory or use Grep to search.
 ```
 
-### 4. Search past decisions (`stackunderflow memory decisions "<term>"`)
-Active agents (or developers) can query the database directly from the CLI to view past decisions and context-rich changes to avoid duplicating work:
+### 4. Query the memory layer (`stax memory decisions "<term>"`)
+Active agents (or developers) query the local store straight from the CLI — `stax memory decisions/file/worked/sessions/ask` — to reuse past decisions and avoid redoing work. Add `--json` to any subcommand for the stable, token-bounded `stackunderflow.memory/1` envelope:
 ```ansi
-$ stackunderflow memory decisions "cache"
+$ stax memory decisions "cache"
 Past decisions matching 'cache' (14 session(s))
 
   [claude] 18d87ee4-b01…  2026-05-20T03:21:26  msgs=445  $115.0498
@@ -199,10 +201,13 @@ A **right-docked sidebar** lets you talk to an Ollama LLM about your own coding 
 
 ![Step-by-step playback with the reconstructed file tree at each moment](assets/playback.png)
 
-### Self-referential discovery (for coding agents)
-- **`find-sessions-in-path` / `-touching-file`** + **`search-past-decisions`** — CLI commands that let a Claude Code / Cursor / Codex agent query its own session history before doing work ("what did I learn here last time?"). Token-budgeted output ranks by recency + cost + relevance; opt-in **`--use-embeddings`** re-ranks by cosine similarity using Ollama-served embeddings (default model `nomic-embed-text`), degrading to substring ranking when Ollama is absent.
-- **`find-sessions-where-action-worked` / `find-failure-modes-for-file`** — outcome-aware variants. Returns sessions whose subsequent turns confirmed (or contradicted) the action, with a confidence score so silence isn't mistaken for success.
-- **`skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files. Project-scoped by default.
+### Local agent memory (self-referential recall)
+A coding agent — Claude Code, Cursor, Codex, or anything that can run a shell command — queries its own history *before* it acts, so it stops relearning the same lessons. One command group, one versioned contract:
+
+- **`stax memory decisions "<text>"`** — past decisions on a topic. **`stax memory file <path>`** — a file's history: prior edits, failure modes, and a risk summary. **`stax memory worked "<action>"`** — outcome-aware recall that returns sessions whose *later turns confirmed or contradicted* the action, with a confidence score so silence isn't mistaken for success. **`stax memory sessions [path]`** — sessions that touched a path. **`stax memory ask "<question>"`** — a natural-language query over the whole store.
+- **Lexical + semantic ranking.** Candidates rank by FTS5 + bm25; `stax memory ask` fuses that keyword search with a local semantic vector search (reciprocal-rank fusion) over Ollama-served embeddings (default `nomic-embed-text`), and degrades cleanly to keyword-only when Ollama isn't running — so it always answers, and gets sharper when a local model is available.
+- **A formal, versioned contract.** Add `--json` to any subcommand for the `stackunderflow.memory/1` envelope — a stable, token-bounded shape (`schema`, `command`, `results[]`, `token_estimate`, `budget`, `truncated`) frozen by a JSON-Schema, with golden fixtures for every subcommand × {success, empty, error} and a stdlib validator (`scripts/check_memory_contract.py`) enforced in CI. Any harness, not just Python, can parse it. (The older `find-sessions-*` / `search-past-decisions` names remain as aliases, with an opt-in `--use-embeddings`.)
+- **`stax skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files; the shipped skills auto-surface prior context when you open a project or name a file. Project-scoped by default.
 - **Bookmarks** — pin conversations you want to find later.
 
 ### Real-time sync
