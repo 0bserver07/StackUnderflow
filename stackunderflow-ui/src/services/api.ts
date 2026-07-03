@@ -17,6 +17,7 @@ import type {
   CostByProviderResponse,
   YieldResponse,
   ForksResponse,
+  BenchmarkResponse,
   PlanResponse,
   BudgetResponse,
   BudgetUpdate,
@@ -451,6 +452,21 @@ export type ForksPeriod = 'today' | 'week' | 'month' | 'all'
 export async function getForks(period: ForksPeriod = 'all'): Promise<ForksResponse> {
   const params = new URLSearchParams({ period })
   return fetchJson(`${BASE}/forks?${params}`)
+}
+
+/** Period selector accepted by `/api/benchmark`. */
+export type BenchmarkPeriod = 'today' | 'week' | 'month' | 'all'
+
+/**
+ * Fetch the comparative benchmark verdict ("which model wins for your work")
+ * for the active project. Like forks, the server scopes to the active project
+ * via `deps.current_log_path`, so project identity is folded into the caller's
+ * query key rather than passed here. Dollar figures arrive pre-converted to the
+ * active currency.
+ */
+export async function getBenchmark(period: BenchmarkPeriod = 'all'): Promise<BenchmarkResponse> {
+  const params = new URLSearchParams({ period })
+  return fetchJson(`${BASE}/benchmark?${params}`)
 }
 
 export async function getPlan(): Promise<PlanResponse> {

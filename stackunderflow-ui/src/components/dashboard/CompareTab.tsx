@@ -10,6 +10,7 @@ import { formatCost, formatNumber, formatModelName } from '../../services/format
 import { useCurrency } from '../../services/currency'
 import { shortenModelId } from '../../services/providerStyle'
 import { useFilters } from '../../services/filters'
+import ModelWinsPanel from './ModelWinsPanel'
 
 // ---------------------------------------------------------------------------
 // CompareTab — v0.6.1 multi-provider polish.
@@ -399,6 +400,9 @@ export default function CompareTab() {
           </table>
         </div>
       )}
+
+      {/* "Which model wins" — outcome-aware benchmark beneath the cost table. */}
+      <ModelWinsPanel />
     </div>
   )
 }

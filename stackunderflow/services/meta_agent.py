@@ -595,6 +595,49 @@ TOOL_CATALOG: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_model_for_task",
+            "description": (
+                "Recommend which model to use for a described task, based on "
+                "the user's own OUTCOMES — not just cost. Where "
+                "``recommend_mode`` ranks on cost alone, this consults the "
+                "comparative benchmark: for the matching task stratum (intent × "
+                "size) it returns the model that historically won on the "
+                "composite of success, cost-per-successful-outcome, and effort, "
+                "with its evidence. Returns 'insufficient_evidence' honestly "
+                "when the user's history can't support a call. Use for 'which "
+                "model should I use for this refactor?' style routing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": (
+                            "Task intent. One of build / fix / explore / "
+                            "refactor / test / ops. Required."
+                        ),
+                        "enum": ["build", "fix", "explore", "refactor", "test", "ops"],
+                    },
+                    "size": {
+                        "type": "string",
+                        "description": (
+                            "Optional task size band: tiny / small / med / "
+                            "large. Narrows to that stratum when given."
+                        ),
+                        "enum": ["tiny", "small", "med", "large"],
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Optional dominant language hint (e.g. python).",
+                    },
+                },
+                "required": ["intent"],
+            },
+        },
+    },
 ]
 
 
@@ -1215,6 +1258,33 @@ def _exec_get_session_quality(
     return quality_to_dict(quality)
 
 
+def _exec_recommend_model_for_task(
+    conn: sqlite3.Connection, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Outcome-aware model recommendation from the comparative benchmark.
+
+    Hands off to :func:`reports.benchmark.recommend_from_history`, which is
+    advisory-never-raises and returns an honest ``insufficient_evidence`` basis
+    when the user's history can't support a call. ``intent`` is required.
+    """
+    from stackunderflow.reports import benchmark
+
+    intent = str(args.get("intent") or "").strip()
+    if not intent:
+        return {"error": "intent is required"}
+    valid = {"build", "fix", "explore", "refactor", "test", "ops"}
+    if intent not in valid:
+        return {"error": f"intent must be one of {sorted(valid)} (got {intent!r})"}
+    size = args.get("size")
+    language = args.get("language")
+    return benchmark.recommend_from_history(
+        conn,
+        intent=intent,
+        size=str(size) if size else None,
+        language=str(language) if language else None,
+    )
+
+
 # Dispatcher table — name → (conn, args) callable. Keeping this flat
 # (instead of dynamic getattr) makes the surface explicit: a new tool
 # has to be added in three places: catalogue, dispatcher, and tests.
@@ -1233,6 +1303,7 @@ _EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_pr_outcomes": _exec_get_pr_outcomes,
     "get_ci_runs": _exec_get_ci_runs,
     "get_session_quality": _exec_get_session_quality,
+    "recommend_model_for_task": _exec_recommend_model_for_task,
 }
 
 
