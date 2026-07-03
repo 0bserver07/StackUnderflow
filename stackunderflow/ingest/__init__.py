@@ -155,6 +155,18 @@ def auto_reindex_touched(
     finally:
         deps.is_reindexing = prior_flag
 
+    # Proactive signal cache (spec 27 / #97): precompute the O(1) command /
+    # file signal snapshot that the pre-tool hook reads, so the hook never runs
+    # a live pattern scan. Self-gates on ``proactive_enabled`` (zero cost when
+    # the feature is off) and swallows its own errors — additive, never blocks
+    # ingest.
+    try:
+        from stackunderflow.hooks import proactive
+
+        proactive.refresh_signal_cache(conn, slug_list)
+    except Exception as e:  # noqa: BLE001 — signal precompute must never break ingest
+        _logger.debug("proactive signal-cache refresh skipped: %s", e)
+
 
 def _lookup(adapters: list[SourceAdapter], name: str) -> SourceAdapter:
     for a in adapters:

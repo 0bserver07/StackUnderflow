@@ -52,7 +52,7 @@ import subprocess
 import time
 from typing import Any
 
-from stackunderflow.hooks import templates
+from stackunderflow.hooks import proactive, templates
 
 logger = logging.getLogger("stackunderflow.hooks")
 
@@ -97,6 +97,15 @@ def build_recall(hook_id: str, payload: dict | None) -> str:
     Never raises. Any failure — unknown id, bad payload, missing CLI, timeout,
     garbage output — returns ``""`` so the caller emits nothing and exits 0.
     An empty return is also the normal "file is clean" outcome.
+
+    Governance (spec 27 / #97) rides on top without changing the default:
+
+    * ``proactive`` disabled (the default) → **passthrough**: the shipped
+      file-risk warning is emitted exactly as before, ungoverned.
+    * kill-switch set → **off**: every pre-tool nudge is silenced.
+    * ``proactive_enabled`` → **governed**: the file-risk warning passes through
+      the dedupe / cap / cooldown layer (Phase 0), and a command-cluster nudge
+      (Phase 1) may be appended on the Bash path.
     """
     try:
         payload = payload if isinstance(payload, dict) else {}
@@ -104,33 +113,62 @@ def build_recall(hook_id: str, payload: dict | None) -> str:
         if event is None or hook_id not in templates.RECALL_HOOK_IDS:
             return ""
 
-        paths = _candidate_paths(payload)
-        if not paths:
+        pmode = proactive.mode()
+        if pmode == "off":
+            return ""  # env kill-switch — silence every pre-tool nudge
+
+        blocks: list[str] = []
+
+        # ── file-risk (shipped in #5; #97 only retrofits governance) ──────────
+        recalls = _collect_recalls(payload)
+        file_text = _render(recalls)
+        if file_text.strip():
+            if pmode != "governed" or proactive.admit_file_risk(recalls, payload):
+                blocks.append(file_text)
+
+        # ── command-cluster nudge (Phase 1 — governed mode, Bash path only) ───
+        if pmode == "governed":
+            cmd_text = proactive.command_cluster_block(payload)
+            if cmd_text.strip():
+                blocks.append(cmd_text)
+
+        if not blocks:
             return ""
-
-        cwd = payload.get("cwd")
-        cwd = cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
-
-        deadline = time.monotonic() + _timeout_seconds()
-        recalls: list[dict] = []
-        for path in paths:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.05:
-                break  # deadline spent — never stretch it for more paths
-            envelope = _query_memory_file(path, timeout=remaining, cwd=cwd)
-            if envelope is None:
-                continue
-            recall = _extract_recall(envelope, path)
-            if recall is not None:
-                recalls.append(recall)
-
-        text = _render(recalls)
-        if not text.strip():
-            return ""
+        text = "\n\n".join(blocks)
         return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
     except Exception:  # noqa: BLE001 - a recall hook must never disrupt the agent
         logger.debug("recall hook %s swallowed an error", hook_id, exc_info=True)
         return ""
+
+
+def _collect_recalls(payload: dict) -> list[dict]:
+    """Run the file-risk lookups for a fire and return the risk findings.
+
+    The path-extraction + shared-deadline CLI loop, factored out of
+    :func:`build_recall` so the findings can be handed to the governance layer
+    before rendering. Empty list when there is nothing to look up (no
+    extractable path) or nothing risky came back.
+    """
+    paths = _candidate_paths(payload)
+    if not paths:
+        return []
+
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
+
+    deadline = time.monotonic() + _timeout_seconds()
+    recalls: list[dict] = []
+    for path in paths:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.05:
+            break  # deadline spent — never stretch it for more paths
+        envelope = _query_memory_file(path, timeout=remaining, cwd=cwd)
+        if envelope is None:
+            continue
+        recall = _extract_recall(envelope, path)
+        if recall is not None:
+            recalls.append(recall)
+    return recalls
 
 
 # ── payload → candidate paths ───────────────────────────────────────────────
