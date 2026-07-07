@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.3] - 2026-07-07
-
 ### Added
 
 - **Worktree intelligence (campaign #8)** — the tool now knows every git worktree: `stackunderflow worktrees list` / `GET /api/worktrees` scan each project's worktrees read-only (batched `git worktree list`, an allowlisted git chokepoint that refuses any mutating command) and report branch, age, dirty files, unique commits vs the default branch, attributed sessions + cost, and a conservative verdict (`ACTIVE` / `HAS_UNIQUE_WORK` / `MERGED_SAFE_TO_PRUNE` — never "safe" on any git error). Prune commands are copyable previews only; the tool never deletes git state. A new beta **Worktrees** dashboard tab surfaces all of it.

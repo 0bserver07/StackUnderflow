@@ -23,11 +23,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Maintainer-only: updated as part of a deliberate release commit.
 PINNED = {
-    "stackunderflow/__version__.py": "0.9.3",
-    "pyproject.toml": "0.9.3",
-    "stackunderflow-ui/package.json": "0.9.3",
-    "stackunderflow-ui/package-lock.json": "0.9.3",
-    "flake.nix": "0.9.3",
+    "stackunderflow/__version__.py": "0.9.2-dev.002",
+    "pyproject.toml": "0.9.2",
+    "stackunderflow-ui/package.json": "0.9.2-dev.001",
+    "stackunderflow-ui/package-lock.json": "0.9.1",
+    "flake.nix": "0.9.2-dev.002",
 }
 
 
