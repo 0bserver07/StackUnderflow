@@ -5,10 +5,12 @@ rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl.
 
 Each rollout is JSONL; the first line is a `session_meta` event that carries
 the `id`, `cwd`, `originator` (must start with "codex"), `cli_version`, and
-`model_provider`. Subsequent lines are `response_item` entries (messages and
-function calls) and periodic `event_msg` token-count updates. This adapter
-normalises those into the cross-source `Record` shape declared in
-`stackunderflow/adapters/base.py`.
+`model_provider`. Subsequent lines are `turn_context` entries (which carry
+the **model id** — its only home in real rollouts; it can change
+mid-session), `response_item` entries (messages and function calls) and
+periodic `event_msg` token-count updates. This adapter normalises those into
+the cross-source `Record` shape declared in `stackunderflow/adapters/base.py`,
+stamping the current turn_context model onto every record.
 
 Token shape: this adapter emits the *raw* OpenAI shape — cached input
 tokens are kept inside `input_tokens` and reasoning tokens stay separate
@@ -126,6 +128,16 @@ class CodexAdapter:
         # can retroactively attach tokens to the last assistant record
         # in the turn before flushing in original order.
         buffer: list[Record] = []
+        # The model id lives in ``turn_context`` events (verified against
+        # every 2026 rollout on a real install: ``payload.model``, one per
+        # turn; it can change mid-session via /model). Track the current
+        # value and stamp it on every record — a ``None`` model makes the
+        # codex normalizer drop the turn as unpriceable, which is exactly
+        # how 1,486 base messages sat at 0 usage_events. On a
+        # ``since_offset`` resume, turn_contexts before the offset are
+        # unseen, so early records may carry ``model=None`` until the next
+        # turn boundary restores it.
+        current_model: str | None = None
 
         # ``iter_jsonl_lines`` enforces the 128 MB defensive cap and
         # streams line-by-line; rollouts above the cap are skipped with
@@ -158,12 +170,22 @@ class CodexAdapter:
                 # ``.get`` dispatch below; treat as an empty payload.
                 payload = {}
 
+            if etype in ("session_meta", "turn_context"):
+                # ``turn_context.payload.model`` is the model's real home;
+                # some builds also inline one on ``session_meta``. Either
+                # way: remember it, emit nothing.
+                event_model = payload.get("model")
+                if isinstance(event_model, str) and event_model:
+                    current_model = event_model
+                continue
+
             if etype == "response_item":
                 # seq = byte offset where this line started. Aligns with
                 # the Claude adapter so the storage-aware contract test
                 # ("resume from seq=midpoint") works for both providers.
                 record = self._record_from_response_item(
                     event, payload, ref=ref, seq=line_offset,
+                    model=current_model,
                 )
                 if record is not None:
                     buffer.append(record)
@@ -182,8 +204,7 @@ class CodexAdapter:
                 continue
 
             # Other event_msg types (task_started, task_complete, error,
-            # user_message, etc.) and turn_context events are ignored in
-            # Phase 1. session_meta was already consumed during enumerate.
+            # user_message, etc.) are ignored.
 
         # End of file: flush any records that never saw a token_count.
         yield from buffer
@@ -236,6 +257,7 @@ class CodexAdapter:
         *,
         ref: SessionRef,
         seq: int,
+        model: str | None,
     ) -> Record | None:
         kind = payload.get("type")
         timestamp = str(event.get("timestamp") or "")
@@ -253,7 +275,7 @@ class CodexAdapter:
                 seq=seq,
                 timestamp=timestamp,
                 role=role,
-                model=None,
+                model=model,
                 input_tokens=0,
                 output_tokens=0,
                 cache_create_tokens=0,
@@ -281,7 +303,7 @@ class CodexAdapter:
                 seq=seq,
                 timestamp=timestamp,
                 role="assistant",
-                model=None,
+                model=model,
                 input_tokens=0,
                 output_tokens=0,
                 cache_create_tokens=0,

@@ -55,7 +55,8 @@ def _session_meta(
             "cwd": cwd,
             "originator": originator,
             "cli_version": "0.121.0",
-            "model": "gpt-5.4",
+            # NOTE: real session_meta carries NO model — it lives in
+            # turn_context events. Keep this fixture shaped like reality.
         },
     }
 
@@ -80,6 +81,20 @@ def _assistant_msg(text: str, ts: str = "2026-04-19T20:00:03.000Z") -> dict:
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": text}],
+        },
+    }
+
+
+def _turn_context(
+    model: str = "gpt-5.4", ts: str = "2026-04-19T20:00:01.500Z"
+) -> dict:
+    return {
+        "timestamp": ts,
+        "type": "turn_context",
+        "payload": {
+            "cwd": "/Users/test/dev/sample-project",
+            "model": model,
+            "reasoning_effort": "medium",
         },
     }
 
@@ -271,6 +286,66 @@ def test_since_offset_resumes_mid_file() -> None:
     # Partial read SHOULD still contain content from after the offset.
     assistant_texts = [r.content_text for r in partial if r.role == "assistant"]
     assert any("refactor" in t for t in assistant_texts)
+
+
+# ── model attribution (turn_context) ───────────────────────────────────
+#
+# The model's only home in real rollouts is turn_context.payload.model
+# (verified against every 2026 rollout on a real install). A None model
+# makes the normalizer drop the turn as unpriceable — the bug that left
+# 1,486 base messages at 0 usage_events while unit suites stayed green.
+
+
+def test_records_carry_model_from_turn_context(tmp_path: Path) -> None:
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-m1.jsonl"
+    _write_jsonl(fp, [
+        _session_meta(session_id="m1-uuid"),
+        _turn_context(model="gpt-5.5"),
+        _user_msg("hi"),
+        _assistant_msg("hello"),
+        {"timestamp": "2026-04-19T20:00:04.000Z", "type": "response_item",
+         "payload": {"type": "function_call", "name": "exec_command",
+                     "arguments": "{}"}},
+    ])
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    ref = list(adapter.enumerate())[0]
+    records = list(adapter.read(ref))
+    assert records, "fixture yielded no records"
+    for rec in records:
+        assert rec.model == "gpt-5.5", (rec.role, rec.content_text)
+
+
+def test_model_switch_mid_session_applies_to_later_records(
+    tmp_path: Path,
+) -> None:
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-m2.jsonl"
+    _write_jsonl(fp, [
+        _session_meta(session_id="m2-uuid"),
+        _turn_context(model="gpt-5.4"),
+        _assistant_msg("first turn", ts="2026-04-19T20:00:02.000Z"),
+        _turn_context(model="gpt-5.5", ts="2026-04-19T20:00:03.000Z"),
+        _assistant_msg("second turn", ts="2026-04-19T20:00:04.000Z"),
+    ])
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    ref = list(adapter.enumerate())[0]
+    by_text = {r.content_text: r.model for r in adapter.read(ref)}
+    assert by_text["first turn"] == "gpt-5.4"
+    assert by_text["second turn"] == "gpt-5.5"
+
+
+def test_records_before_any_turn_context_have_no_model(
+    tmp_path: Path,
+) -> None:
+    """Legacy rollouts without turn_context stay model-less — never invented."""
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-m3.jsonl"
+    _write_jsonl(fp, [
+        _session_meta(session_id="m3-uuid"),
+        _assistant_msg("no context yet"),
+    ])
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    ref = list(adapter.enumerate())[0]
+    records = list(adapter.read(ref))
+    assert records[0].model is None
 
 
 # ── shared adapter contract ────────────────────────────────────────────
