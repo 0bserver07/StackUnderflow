@@ -67,8 +67,19 @@ def _safe_int(val: object) -> int:
 
 class OpenAIPricer(ProviderPricer):
     provider_name = "openai"
+    provider_aliases = ("codex",)  # Record.provider string that prices here
+    model_id_substrings = ("gpt", "codex")
 
     def canonicalize(self, model_id: str) -> str:
+        # Manifest first: a family declared in ``data/models.toml`` with
+        # provider="openai" wins (identity + rates as DATA — new dotted
+        # point-releases like gpt-5.5 need no code change). The in-code
+        # ``_identify`` ladder remains the fallback for everything else.
+        from stackunderflow.infra.model_manifest import canonicalize as _m_canon
+
+        fam = _m_canon(model_id, provider="openai")
+        if fam is not None:
+            return fam
         return self._identify(model_id).name
 
     def normalize_tokens(self, raw: dict[str, int]) -> dict[str, int]:
@@ -109,6 +120,18 @@ class OpenAIPricer(ProviderPricer):
     def rates_for(
         self, canonical: str
     ) -> tuple[float, float, float, float] | None:
+        # Manifest first: a family declared in ``data/models.toml`` is
+        # authoritative (it may share a name with the in-code enum — e.g.
+        # GPT_54 — and the manifest's current row must win so rate
+        # corrections are data edits). The in-code table remains the
+        # fallback for families the manifest doesn't carry.
+        from stackunderflow.infra.model_manifest import (
+            rates_for as _m_rates,
+        )
+
+        manifest = _m_rates(canonical, provider="openai")
+        if manifest is not None:
+            return manifest
         try:
             fam = _Family[canonical]
         except KeyError:
@@ -117,6 +140,34 @@ class OpenAIPricer(ProviderPricer):
 
     def supports_per_message_tokens(self) -> bool:
         return True
+
+    # ── effective-dated compute override ─────────────────────────────
+
+    def compute(
+        self,
+        tokens: dict[str, int],
+        model: str,
+        *,
+        speed: str = "standard",  # noqa: ARG002 — OpenAI has no fast tier
+        at_ts: str | None = None,
+    ) -> dict[str, float]:
+        """Price at the manifest rate in effect at ``at_ts``.
+
+        Mirrors ``AnthropicPricer.compute``: manifest families resolve
+        through effective-dated price rows (e.g. GPT_54's $20→$15 output
+        cut), so a historical event keeps the rate that was actually
+        billed. Families the manifest doesn't carry fall back to the
+        in-code table exactly as before.
+        """
+        canonical = self.canonicalize(model)
+        from stackunderflow.infra.model_manifest import (
+            rates_for as _m_rates,
+        )
+
+        rates = _m_rates(canonical, provider="openai", at_ts=at_ts)
+        if rates is None:
+            rates = self.rates_for(canonical)
+        return self._apply_overlay_rates(tokens, rates)
 
     # ── internals ────────────────────────────────────────────────────
 

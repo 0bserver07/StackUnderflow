@@ -20,6 +20,7 @@ from .openai import OpenAIPricer
 
 class PiPricer(ProviderPricer):
     provider_name = "pi"
+    provider_aliases = ("omp",)  # Pi/OMP share rates
 
     def __init__(self) -> None:
         self._openai = OpenAIPricer()

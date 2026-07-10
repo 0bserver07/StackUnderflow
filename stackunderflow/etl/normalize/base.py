@@ -187,7 +187,8 @@ class Normalizer(ABC):
             breakdown = compute_cost(
                 tokens,
                 model,
-                provider=_provider_for(self.provider_name),
+                provider=self.provider_name,  # get_pricer resolves adapter
+                # provider strings (and aliases like omp) directly
                 speed=speed,
                 at_ts=at_ts,
             )
@@ -197,41 +198,6 @@ class Normalizer(ABC):
 
 
 # ── helpers ─────────────────────────────────────────────────────────
-
-# Internal: map StackUnderflow's provider_name (the ``projects.provider``
-# / ``Normalizer.provider_name`` value) to the pricer-side provider key.
-# Anything not listed falls back to ``"anthropic"`` so cost lookups don't
-# raise — the Anthropic pricer's family heuristic returns conservative
-# rates for unknown ids. Beta providers each route to their own pricer
-# (which may itself delegate by model-id prefix, e.g. cline / copilot).
-_PROVIDER_TO_PRICER = {
-    "claude": "anthropic",
-    "anthropic": "anthropic",
-    "codex": "openai",
-    "openai": "openai",
-    "cursor": "anthropic",  # Cursor uses Anthropic + OpenAI mix; default to Anthropic rates
-    "cline": "cline",  # Cline pricer routes by vendor prefix
-    "kilocode": "kilocode",
-    "roocode": "roocode",
-    "opencode": "opencode",
-    "cursor-agent": "cursor-agent",
-    "cursor_agent": "cursor-agent",  # registry key uses underscore
-    "qwen": "qwen",
-    "gemini": "gemini",
-    "copilot": "copilot",
-    "codeium": "codeium",
-    "continue": "continue",
-    "droid": "droid",
-    "kiro": "kiro",
-    "openclaw": "openclaw",
-    "pi": "pi",
-    "omp": "pi",
-}
-
-
-def _provider_for(name: str) -> str:
-    return _PROVIDER_TO_PRICER.get(name, "anthropic")
-
 
 def _day_from_ts(ts: str) -> str:
     """Derive ``YYYY-MM-DD`` from an ISO 8601 timestamp.

@@ -51,6 +51,7 @@ from stackunderflow.reports.optimize import (
     approx_tokens,
     tokens_to_usd,
 )
+from stackunderflow.infra.model_catalog import routing_candidates
 from stackunderflow.reports.scope import Scope
 from stackunderflow.services.context_budget import DEFAULT_SESSIONS_PER_MONTH
 
@@ -110,20 +111,12 @@ QUALITY_SCORE_FLOOR = 3.5
 # Monthly extrapolation baseline: window_delta * (30 / observed_days).
 BASELINE_MONTH_DAYS = 30
 
-# Candidate models a workload can be routed to, keyed by provider. Names
-# models only — never rates; ``compute_cost`` is the single source of every
-# dollar figure. Mirrors the ``services/whatif.py`` candidate set minus the
-# proxy-priced entries (a routing recommendation should name a model the
-# user can actually pick in their tool).
-ROUTING_CANDIDATES: tuple[tuple[str, str, str], ...] = (
-    ("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
-    ("anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"),
-    ("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
-    ("openai", "gpt-5-mini", "GPT-5 mini"),
-    ("openai", "gpt-5", "GPT-5"),
-    ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash"),
-    ("gemini", "gemini-2.5-pro", "Gemini 2.5 Pro"),
-)
+# Candidate models a workload can be routed to. Loaded from
+# ``infra/model_candidates.json`` (routing_candidate entries only) —
+# the same catalog ``services/whatif.py`` reads, so the sets can no
+# longer drift. Names models only — never rates; ``compute_cost`` is
+# the single source of every dollar figure.
+ROUTING_CANDIDATES: tuple[tuple[str, str, str], ...] = routing_candidates()
 
 _ROUTING_CAVEATS: tuple[str, ...] = (
     "Candidate costs are a rate-card swap of the observed token shape, not a "

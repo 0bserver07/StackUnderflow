@@ -83,6 +83,7 @@ _CURSOR_RATES: dict[str, tuple[float, float, float, float]] = {
 
 class CursorPricer(ProviderPricer):
     provider_name = "cursor"
+    model_id_prefixes = ("composer-", "cursor-")
 
     def __init__(self) -> None:
         # Delegate targets for vendor-prefixed model ids. Reusing the

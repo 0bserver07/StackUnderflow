@@ -78,7 +78,9 @@ def test_rates_for_known_codex():
 
 def test_rates_for_known_base_gpt():
     p = OpenAIPricer()
-    assert p.rates_for("GPT_54") == (2.50, 20.0, 0.0, 0.25)
+    # GPT_54 rates are manifest-owned now (data/models.toml, effective-dated
+    # $20→$15 output cut at 2026-04-26); undated rates_for = current era.
+    assert p.rates_for("GPT_54") == (2.50, 15.0, 0.0, 0.25)
     assert p.rates_for("GPT_4O") == (2.50, 10.0, 0.0, 1.25)
 
 

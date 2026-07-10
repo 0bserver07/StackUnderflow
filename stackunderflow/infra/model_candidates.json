@@ -1,0 +1,16 @@
+{
+  "schema": "stackunderflow.model-candidates/1",
+  "_comment": "Single source of the what-if / routing model catalog. Entries name MODELS only, never rates — compute_cost is the single source of every dollar figure. 'pricer' is the compute_cost routing key; order is roughly cheap → premium within a pricer. 'routing_candidate': false marks entries excluded from routing recommendations (proxy-priced or not directly pickable in the user's tool) while still available to what-if repricing. Consumed by services/whatif.py (all entries) and reports/prescribe.py (routing_candidate only).",
+  "candidates": [
+    {"pricer": "anthropic", "model": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "routing_candidate": true},
+    {"pricer": "anthropic", "model": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5", "routing_candidate": true},
+    {"pricer": "anthropic", "model": "claude-opus-4-8", "label": "Claude Opus 4.8", "routing_candidate": true},
+    {"pricer": "openai", "model": "gpt-5-mini", "label": "GPT-5 mini", "routing_candidate": true},
+    {"pricer": "openai", "model": "gpt-5", "label": "GPT-5", "routing_candidate": true},
+    {"pricer": "openai", "model": "gpt-5-codex", "label": "GPT-5 Codex", "routing_candidate": false},
+    {"pricer": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "routing_candidate": true},
+    {"pricer": "gemini", "model": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "routing_candidate": true},
+    {"pricer": "qwen", "model": "qwen-coder-plus", "label": "Qwen Coder Plus", "routing_candidate": false},
+    {"pricer": "anthropic", "model": "glm-5", "label": "GLM-5", "routing_candidate": false}
+  ]
+}

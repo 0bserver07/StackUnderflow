@@ -54,6 +54,7 @@ _RATES: dict[str, tuple[float, float, float, float]] = {
 
 class QwenPricer(ProviderPricer):
     provider_name = "qwen"
+    model_id_prefixes = ("qwen",)
 
     def canonicalize(self, model_id: str) -> str:
         """Lower-case the model id; otherwise pass through.

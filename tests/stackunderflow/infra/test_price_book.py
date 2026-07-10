@@ -384,12 +384,23 @@ class TestBackfillAndLiveAppend:
         )
         assert by_source.get("manifest", 0) > 0
         assert by_source.get("rate_card", 0) > 0
-        # Every manifest family row matches the in-code manifest rate exactly.
-        for row in conn.execute(
-            "SELECT model, input, output, cache_write, cache_read FROM price_book WHERE source='manifest'"
-        ):
-            rates = mm.rates_for(row["model"], "anthropic")
-            assert rates == (row["input"], row["output"], row["cache_write"], row["cache_read"])
+        # Every manifest-sourced DB row is exactly one of the rows the
+        # manifest emits — provider- AND era-aware (families now carry
+        # effective-dated price rows; comparing against the undated
+        # "current" rate would false-fail every historical era).
+        expected = {
+            (r["provider"], r["model"], r["effective_from"], r["effective_until"],
+             r["input"], r["output"], r["cache_write"], r["cache_read"])
+            for r in mm.manifest_price_book_rows()
+        }
+        db_rows = conn.execute(
+            "SELECT provider, model, effective_from, effective_until, "
+            "input, output, cache_write, cache_read "
+            "FROM price_book WHERE source='manifest'"
+        ).fetchall()
+        assert db_rows, "backfill wrote no manifest rows"
+        for row in db_rows:
+            assert tuple(row) in expected, tuple(row)
         conn.close()
 
     def test_backfill_is_idempotent(self, tmp_path):

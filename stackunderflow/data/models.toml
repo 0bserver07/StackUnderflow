@@ -12,6 +12,10 @@
 #   match           token set; an id matches when ALL tokens are present after
 #                   splitting the lowercased id on "-" and "." (most-specific
 #                   entries MUST come first — matching stops at the first hit)
+#   ids             optional EXACT id list, checked before any token matching.
+#                   Needed when token sets collide (splitting collapses
+#                   duplicates: "gpt-5.5" → {gpt,5} — indistinguishable from
+#                   "gpt-5" by tokens alone).
 #   fast_multiplier optional input/output multiplier for the priority/fast tier
 #   fallback        optional; the family returned when nothing else matches
 #   [[model.price]] one or more EFFECTIVE-DATED rate rows, $/M tokens:
@@ -239,3 +243,99 @@ display_name = "Claude Haiku 3"
   output = 1.25
   cache_write = 0.30
   cache_read = 0.03
+
+# ── OpenAI (exact-id entries; set-based token match cannot tell "gpt-5.5"
+# from "gpt-5". Other OpenAI family rates still live in
+# ``infra/providers/openai.py`` — the pricer consults this manifest FIRST,
+# so migrating a family here needs no code change.) ─────────────────────────
+[[model]]
+family = "GPT_54"
+provider = "openai"
+ids = ["gpt-5.4"]
+display_name = "GPT-5.4"
+  # $20/M output era. Evidence trail for the 2026-04-26 boundary:
+  #   - launch Mar 5 2026 (openrouter.ai/openai/gpt-5.4);
+  #   - this repo contemporaneously recorded output $20/M in commit 5749324
+  #     (2026-04-30, infra/providers/openai.py) — the last confirmed $20;
+  #   - official page (developers.openai.com/api/docs/pricing, fetched
+  #     2026-07-09) shows $15/M today;
+  #   - the cut anchors to the gpt-5.5 launch window (first gpt-5.5 usage
+  #     in the wild here: 2026-04-26). One secondary source (benchlm)
+  #     claims $15 as early as Apr 1 — conflicts with the repo's Apr 30
+  #     record; boundary is adjustable when a primary announcement date
+  #     surfaces.
+  [[model.price]]
+  effective_until = "2026-04-26"
+  input = 2.50
+  output = 20.0
+  cache_write = 0.0
+  cache_read = 0.25
+  # Current era ($15/M output; same official-page fetch as above).
+  [[model.price]]
+  effective_from = "2026-04-26"
+  input = 2.50
+  output = 15.0
+  cache_write = 0.0
+  cache_read = 0.25
+
+[[model]]
+family = "GPT_55"
+provider = "openai"
+ids = ["gpt-5.5"]
+display_name = "GPT-5.5"
+  [[model.price]]
+  # Source: developers.openai.com/api/docs/pricing (fetched 2026-07-09):
+  # $5.00/M input, $0.50/M cached input, $30.00/M output. OpenAI bills no
+  # prompt-cache writes.
+  input = 5.0
+  output = 30.0
+  cache_write = 0.0
+  cache_read = 0.50
+
+
+# ── Canonical ids — RATE_CARD membership ────────────────────────────────────
+# The concrete model ids the rate card recognises; membership is what the ETL
+# normalizers use to stamp ``cost_source`` (``rate_card`` vs ``unknown``).
+# Grouped by the pricer that owns their rates (non-Anthropic rates still live
+# in ``infra/providers/*.py`` — this section is identity only, never prices).
+# Adding a model id = editing THIS file, not ``infra/costs.py``.
+# CONTRACT: each group name below IS the pricer key the id routes to
+# (``costs._provider_for_model`` builds its exact-id map from these groups).
+[canonical_ids]
+anthropic = [
+  "claude-fable-5",
+  "claude-opus-4-8", "claude-opus-4-7",
+  "claude-opus-4-6", "claude-sonnet-4-6",
+  "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
+  "claude-opus-4-20250514", "claude-sonnet-4-20250514",
+  "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+  "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
+  # Un-dated alias emitted by vendor-shape normalizing adapters (e.g. Kiro).
+  "claude-3-5-sonnet",
+  # ZhipuAI GLM — surfaced behind a Claude-shape proxy (anthropic pricer);
+  # manifest families route them to dedicated GLM_5 / GLM_51 rates.
+  "glm-5", "glm-5.1",
+]
+openai = [
+  "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",
+  "gpt-5.5", "gpt-5.4", "gpt-5", "gpt-5-mini",
+  "gpt-4o", "gpt-4o-mini", "gpt-4.1",
+]
+qwen = [
+  "qwen-max", "qwen-max-longcontext",
+  "qwen-plus", "qwen-turbo",
+  "qwen-coder", "qwen-coder-plus", "qwen3-coder",
+  "qwen-auto",
+]
+gemini = [
+  "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+  "gemini-1.5-pro", "gemini-1.5-flash",
+  "gemini-3.0-pro", "gemini-3.1-pro",
+  # Preview ids the Gemini CLI emits in the wild today.
+  "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+  "gemini-auto",
+]
+cursor = ["composer-1", "composer-2", "cursor-auto", "cursor-fast"]
+# Autoselector defaults — pegged to Sonnet-tier rates in their own pricers.
+droid = ["droid-auto"]
+cline = ["cline-auto"]

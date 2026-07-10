@@ -15,6 +15,14 @@ _MILLION = 1_000_000.0
 
 
 class ProviderPricer(ABC):
+    # Optional model-id routing hints consumed by
+    # ``costs._provider_for_model``: ids matching a prefix/substring route
+    # to this pricer when not exact-listed in ``models.toml``
+    # ``[canonical_ids]``. Longest hint wins; declare on the subclass like
+    # ``provider_name``.
+    model_id_prefixes: tuple[str, ...] = ()
+    model_id_substrings: tuple[str, ...] = ()
+
     """Each provider implements this contract once."""
 
     provider_name: str

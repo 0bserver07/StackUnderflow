@@ -81,6 +81,38 @@ def _models() -> list[dict]:
     return valid
 
 
+@lru_cache(maxsize=1)
+def canonical_id_groups() -> dict[str, tuple[str, ...]]:
+    """``[canonical_ids]`` groups, keyed by PRICER KEY (the contract: each
+    group name in the manifest is the pricer the ids route to). Identity
+    only — never prices."""
+    with open(_MANIFEST_PATH, "rb") as fh:
+        data = tomllib.load(fh)
+    groups = data.get("canonical_ids", {})
+    out: dict[str, tuple[str, ...]] = {}
+    if isinstance(groups, dict):
+        for pricer, ids in groups.items():
+            if isinstance(ids, list):
+                out[str(pricer)] = tuple(str(i) for i in ids)
+    return out
+
+
+@lru_cache(maxsize=1)
+def canonical_ids() -> tuple[str, ...]:
+    """Concrete model ids the rate card recognises (``[canonical_ids]``).
+
+    Identity only — never prices. Order is stable and load-bearing for
+    display: groups in file order, ids in listed order (``RATE_CARD`` is
+    built in this order). Unknown/missing section yields an empty tuple —
+    loudly wrong (everything prices as unknown) rather than silently
+    hardcoded in Python.
+    """
+    out: list[str] = []
+    for ids in canonical_id_groups().values():
+        out.extend(ids)
+    return tuple(out)
+
+
 def _for_provider(provider: str) -> list[dict]:
     return [m for m in _models() if m.get("provider") == provider]
 
@@ -99,14 +131,21 @@ def _fallback_family(provider: str) -> str | None:
 def canonicalize(model_id: str, provider: str = "anthropic") -> str | None:
     """Map a free-form model id to a manifest family key.
 
-    Splits the id on ``-`` / ``.`` into a token set and returns the first
-    entry (in manifest order) whose ``match`` tokens are all present. Falls
-    back to the provider's ``fallback`` family when nothing matches.
+    Exact ``ids`` entries win first (manifest order); otherwise splits the
+    id on ``-`` / ``.`` into a token set and returns the first entry whose
+    ``match`` tokens are all present. Falls back to the provider's
+    ``fallback`` family when nothing matches.
     """
     fallback = _fallback_family(provider)
     if not model_id:
         return fallback
-    parts = set(model_id.lower().replace(".", "-").split("-"))
+    lowered = model_id.lower()
+    # Exact ids first: token sets collapse duplicates ("gpt-5.5" → {gpt,5}),
+    # so dotted point-releases are only distinguishable by exact id.
+    for entry in _for_provider(provider):
+        if any(lowered == str(i).lower() for i in entry.get("ids") or []):
+            return entry["family"]
+    parts = set(lowered.replace(".", "-").split("-"))
     for entry in _for_provider(provider):
         match = entry.get("match") or []
         if match and set(match).issubset(parts):
@@ -344,11 +383,13 @@ def price_book_lookup(
 ) -> tuple[float, float, float, float] | None:
     """Resolve ``(input, output, cache_write, cache_read)`` $/M from the book.
 
-    Precedence — same as ``costs.compute_cost`` (live > rate_card > manifest):
+    Precedence: live > dated manifest family > undated rate_card snapshot:
 
       1. ``source='live'`` keyed by the concrete model id (LiteLLM overlay).
-      2. ``source='rate_card'`` keyed by the concrete model id.
-      3. ``source='manifest'`` keyed by the canonical family (``canonicalize``).
+      2. ``source='manifest'`` keyed by the canonical family (``canonicalize``)
+         — effective-DATED rows, so historical corrections apply.
+      3. ``source='rate_card'`` keyed by the concrete model id (undated
+         current-rate snapshot; last so it can never shadow a dated row).
 
     Returns ``None`` on a clean miss (book empty / model absent) so the caller
     falls back to the in-code manifest — guaranteeing a fresh store prices
@@ -356,14 +397,18 @@ def price_book_lookup(
     """
     if not model:
         return None
-    for source in (_SOURCE_LIVE, _SOURCE_RATE_CARD):
-        hit = _lookup_by_model_source(conn, provider, model, source, at_ts)
-        if hit is not None:
-            return hit
+    hit = _lookup_by_model_source(conn, provider, model, _SOURCE_LIVE, at_ts)
+    if hit is not None:
+        return hit
+    # Dated manifest family rows outrank the undated rate_card snapshots:
+    # rate_card rows are effective-undated by construction (current rates),
+    # so a dated rate correction must never be shadowed by them.
     family = canonicalize(model, provider)
     if family:
-        return _lookup_by_model_source(conn, provider, family, _SOURCE_MANIFEST, at_ts)
-    return None
+        hit = _lookup_by_model_source(conn, provider, family, _SOURCE_MANIFEST, at_ts)
+        if hit is not None:
+            return hit
+    return _lookup_by_model_source(conn, provider, model, _SOURCE_RATE_CARD, at_ts)
 
 
 # ── store wiring + in-memory cache for the connection-free ``compute_cost`` ───
@@ -541,7 +586,7 @@ def store_price_book_lookup(
 ) -> tuple[float, float, float, float] | None:
     """Book lookup for the connection-free path, served from the in-memory cache.
 
-    Mirrors ``price_book_lookup``'s precedence (live > rate_card > manifest) but
+    Mirrors ``price_book_lookup``'s precedence (live > manifest > rate_card) but
     reads the module-level ``_book_cache`` — NO per-call DB query. Returns
     ``None`` (→ in-code fallback) when the seam is disabled, the store is
     missing/empty, or the model is absent. Never raises: pricing must not break
@@ -552,11 +597,15 @@ def store_price_book_lookup(
     cache = _ensure_book_cache()
     if cache is None:  # seam disabled
         return None
-    for source in (_SOURCE_LIVE, _SOURCE_RATE_CARD):
-        hit = _cached_lookup_by_model_source(provider, model, source, at_ts)
-        if hit is not None:
-            return hit
+    hit = _cached_lookup_by_model_source(provider, model, _SOURCE_LIVE, at_ts)
+    if hit is not None:
+        return hit
+    # Dated manifest family rows outrank the undated rate_card snapshots:
+    # rate_card rows are effective-undated by construction (current rates),
+    # so a dated rate correction must never be shadowed by them.
     family = canonicalize(model, provider)
     if family:
-        return _cached_lookup_by_model_source(provider, family, _SOURCE_MANIFEST, at_ts)
-    return None
+        hit = _cached_lookup_by_model_source(provider, family, _SOURCE_MANIFEST, at_ts)
+        if hit is not None:
+            return hit
+    return _cached_lookup_by_model_source(provider, model, _SOURCE_RATE_CARD, at_ts)

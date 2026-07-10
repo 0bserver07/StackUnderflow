@@ -9,6 +9,13 @@ signature every other module already calls, plus the back-compat helpers
 
 from __future__ import annotations
 
+from functools import lru_cache
+
+from stackunderflow.infra.model_manifest import (
+    canonical_id_groups as _manifest_canonical_id_groups,
+)
+from stackunderflow.infra.model_manifest import canonical_ids as _manifest_canonical_ids
+
 from typing import Any
 
 from .providers import get_pricer
@@ -136,85 +143,62 @@ def format_dollars(amount: float) -> str:
 
 # ── compat shims ─────────────────────────────────────────────────────────────
 
-# NOTE: this list feeds ``RATE_CARD``, whose membership is what the ETL
-# normalizers use to stamp ``cost_source`` (``rate_card`` vs ``unknown``).
-# For Anthropic/GLM, model identity + rates now live in the data manifest
-# (``stackunderflow/data/models.toml``); the Anthropic ids below duplicate the
-# manifest's families and must be kept in sync until the two are unified
-# (planned with the DB-backed registry). Adding a Claude model = a manifest
-# entry AND an id here.
-_CANONICAL_IDS = [
-    # Anthropic — current Fable / Opus / Sonnet / Haiku
-    "claude-fable-5",
-    "claude-opus-4-8", "claude-opus-4-7",
-    "claude-opus-4-6", "claude-sonnet-4-6",
-    "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
-    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
-    "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
-    # Un-dated Anthropic aliases — emitted by adapters that normalize
-    # vendor-shape model ids (e.g. Kiro's ``claude.3.5.sonnet`` →
-    # ``claude-3-5-sonnet``). AnthropicPricer resolves these via the data
-    # manifest's per-family ``match`` tokens (stackunderflow/data/models.toml).
-    "claude-3-5-sonnet",
-    # ZhipuAI GLM models surfaced behind a Claude-shape proxy; the manifest
-    # routes them to dedicated GLM_5 / GLM_51 family rates.
-    "glm-5", "glm-5.1",
-    # OpenAI Codex + base GPT families
-    "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex",
-    "gpt-5.4", "gpt-5", "gpt-5-mini",
-    "gpt-4o", "gpt-4o-mini", "gpt-4.1",
-    # Qwen (Alibaba DashScope) — rates in ``providers/qwen.py``
-    "qwen-max", "qwen-max-longcontext",
-    "qwen-plus", "qwen-turbo",
-    "qwen-coder", "qwen-coder-plus", "qwen3-coder",
-    "qwen-auto",
-    # Gemini (Google AI for Developers) — rates in ``providers/gemini.py``
-    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-    "gemini-1.5-pro", "gemini-1.5-flash",
-    "gemini-3.0-pro", "gemini-3.1-pro",
-    # Preview ids the Gemini CLI emits in the wild today.
-    "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
-    "gemini-auto",
-    # Cursor's own composer line + autoselector defaults — rates in
-    # ``providers/cursor.py``.
-    "composer-1", "composer-2",
-    "cursor-auto", "cursor-fast",
-    # Droid (Factory) / Cline auto-defaults — peg to Sonnet 4.x rates in
-    # their respective pricers when the concrete model isn't known.
-    "droid-auto", "cline-auto",
-]
+# The canonical-id list feeds ``RATE_CARD``, whose membership is what the
+# ETL normalizers use to stamp ``cost_source`` (``rate_card`` vs ``unknown``).
+# It lives in the data manifest (``stackunderflow/data/models.toml``,
+# ``[canonical_ids]``) with every other piece of model identity — adding a
+# model id is a manifest edit, never a change to this module.
+_CANONICAL_IDS = list(_manifest_canonical_ids())
+
+
+@lru_cache(maxsize=1)
+def _exact_id_routing() -> dict[str, str]:
+    """id → pricer key, from ``models.toml [canonical_ids]`` — each group
+    name IS the pricer key (the manifest states this contract)."""
+    return {
+        mid: pricer
+        for pricer, ids in _manifest_canonical_id_groups().items()
+        for mid in ids
+    }
+
+
+@lru_cache(maxsize=1)
+def _hint_routing() -> tuple[tuple[str, str, bool], ...]:
+    """``(hint, pricer_key, is_prefix)`` rules from each pricer's own
+    ``model_id_prefixes`` / ``model_id_substrings`` declarations, sorted
+    longest-hint-first (prefix outranks substring at equal length) so the
+    most specific rule wins regardless of registration order."""
+    from stackunderflow.infra.providers import registered_pricers
+
+    rules: list[tuple[str, str, bool]] = []
+    seen: set[int] = set()
+    for pricer in registered_pricers().values():
+        if id(pricer) in seen:  # aliases share singletons
+            continue
+        seen.add(id(pricer))
+        key = pricer.provider_name
+        for hint in pricer.model_id_prefixes:
+            rules.append((hint, key, True))
+        for hint in pricer.model_id_substrings:
+            rules.append((hint, key, False))
+    rules.sort(key=lambda r: (-len(r[0]), not r[2], r[0], r[1]))
+    return tuple(rules)
 
 
 def _provider_for_model(model: str) -> str:
-    """Best-effort guess for the legacy single-arg helpers below.
+    """Model-id → pricer key. No hand-written ladder:
 
-    Routing rules (case-insensitive on the lowered id):
-
-    * ``qwen-*``    → qwen pricer
-    * ``gemini-*``  → gemini pricer
-    * ``codex-*`` / contains ``gpt`` or ``codex`` → openai pricer
-    * ``composer-*`` / ``cursor-*`` → cursor pricer
-    * ``droid-auto`` → droid pricer
-    * ``cline-auto`` → cline pricer
-    * ``glm-*`` → anthropic pricer (consumed through Anthropic-shape proxy)
-    * ``claude-*``  → anthropic pricer (also the default fallback)
+    1. exact id from ``models.toml [canonical_ids]`` (group = pricer key);
+    2. the pricers' own declared prefix/substring hints, longest first;
+    3. ``anthropic`` — the same conservative fallback as ``get_pricer``.
     """
     lowered = model.lower()
-    if lowered.startswith("qwen") or lowered == "qwen-auto":
-        return "qwen"
-    if lowered.startswith("gemini") or lowered == "gemini-auto":
-        return "gemini"
-    if lowered.startswith("composer-") or lowered.startswith("cursor-"):
-        return "cursor"
-    if lowered == "droid-auto":
-        return "droid"
-    if lowered == "cline-auto":
-        return "cline"
-    if "claude" in lowered or lowered.startswith("glm-"):
-        return "anthropic"
-    if "gpt" in lowered or "codex" in lowered:
-        return "openai"
+    exact = _exact_id_routing().get(lowered)
+    if exact:
+        return exact
+    for hint, key, is_prefix in _hint_routing():
+        if lowered.startswith(hint) if is_prefix else hint in lowered:
+            return key
     return "anthropic"
 
 

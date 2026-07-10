@@ -29,6 +29,9 @@ from .base import ProviderPricer
 
 class AnthropicPricer(ProviderPricer):
     provider_name = "anthropic"
+    provider_aliases = ("claude",)  # Record.provider string that prices here
+    model_id_prefixes = ("glm-",)  # GLM ids price through the Anthropic-shape proxy
+    model_id_substrings = ("claude",)  # catches vendor-prefixed ids too
 
     def canonicalize(self, model_id: str) -> str:
         """Resolve a Claude/GLM model id to its manifest family key.

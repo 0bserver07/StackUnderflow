@@ -68,6 +68,7 @@ _RATES: dict[str, tuple[float, float, float, float]] = {
 
 class GeminiPricer(ProviderPricer):
     provider_name = "gemini"
+    model_id_prefixes = ("gemini",)
 
     def canonicalize(self, model_id: str) -> str:
         """Lower-case and pass through.

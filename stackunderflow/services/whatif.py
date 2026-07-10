@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from stackunderflow.infra.costs import compute_cost
+from stackunderflow.infra.model_catalog import whatif_candidates
 
 __all__ = [
     "CANDIDATES",
@@ -51,23 +52,10 @@ __all__ = [
 #
 # This list names *models*, not rates — it does not duplicate or hardcode any
 # pricing. ``compute_cost`` is the single source of the numbers.
-CANDIDATES: tuple[tuple[str, str, str], ...] = (
-    # Anthropic
-    ("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
-    ("anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"),
-    ("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
-    # OpenAI
-    ("openai", "gpt-5-mini", "GPT-5 mini"),
-    ("openai", "gpt-5", "GPT-5"),
-    ("openai", "gpt-5-codex", "GPT-5 Codex"),
-    # Google Gemini
-    ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash"),
-    ("gemini", "gemini-2.5-pro", "Gemini 2.5 Pro"),
-    # Alibaba Qwen
-    ("qwen", "qwen-coder-plus", "Qwen Coder Plus"),
-    # ZhipuAI GLM (priced via the Anthropic-shape proxy)
-    ("anthropic", "glm-5", "GLM-5"),
-)
+# Loaded from ``infra/model_candidates.json`` — one catalog, data not
+# code; ``reports/prescribe.py`` reads its routing subset from the
+# same file, so the two consumers can no longer drift apart.
+CANDIDATES: tuple[tuple[str, str, str], ...] = whatif_candidates()
 
 
 @dataclass(frozen=True)
