@@ -163,6 +163,19 @@ class CopilotAdapter:
 
     # ── enumeration ───────────────────────────────────────────────────
 
+    def source_roots(self) -> list[Path]:
+        """Roots ``backup create`` copies — the same data
+        ``enumerate()`` reads. Self-declared here (like ``name``),
+        never listed centrally.
+
+        VS Code ``workspaceStorage`` transcripts are deliberately NOT
+        backed up: that tree mixes gigabytes of unrelated workspace
+        state with the chat files, and rsync-ing it whole would bloat
+        every snapshot. The legacy root carries the session-state
+        this adapter owns outright.
+        """
+        return [self._legacy_root]
+
     def enumerate(self) -> Iterator[SessionRef]:
         yield from self._enumerate_legacy()
         yield from self._enumerate_vscode_transcripts()

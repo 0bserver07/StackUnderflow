@@ -44,10 +44,6 @@ Every Record carries ``raw["cost_source"] = "encrypted"`` so the cost
 layer can render an explicit "tokens unavailable — content encrypted"
 state instead of guessing dollars off content length.
 
-Beta, off by default. Enable with::
-
-    STACKUNDERFLOW_BETA_ANTIGRAVITY=1 stackunderflow start
-
 macOS-only paths today. The CLI is multi-platform but the linux/windows
 layouts haven't been verified on real installs.
 """

@@ -99,15 +99,29 @@ def test_curated_table_matches_discovered_adapters_exactly():
     )
 
 
-def test_discovery_finds_the_default_on_adapters():
+def test_capability_table_is_loaded_from_json_data():
+    """The table is data (capabilities.json inside the adapters package),
+    not Python literals: the file must parse, carry no gating keys, cite a
+    source basis per entry, and be exactly what the module loaded."""
+    import json as _json
+
+    path = REPO_ROOT / "stackunderflow" / "adapters" / "capabilities.json"
+    raw = _json.loads(path.read_text(encoding="utf-8"))
+    assert set(raw["adapters"]) == set(sm._CAPABILITIES)
+    for name, entry in raw["adapters"].items():
+        assert "env_var" not in entry, name  # gating is not a concept in data
+        assert entry.get("basis", "").strip(), f"{name} entry cites no source basis"
+
+
+def test_discovery_marks_every_adapter_default_on_and_active():
     discovered = sm.discover_adapters()
     registered = {a.name for a in adapters.registered()}
-    # Everything registered unconditionally must be discoverable and marked on.
-    assert sm._DEFAULT_ON <= set(discovered)
-    assert sm._DEFAULT_ON <= registered
-    for name in sm._DEFAULT_ON:
-        assert discovered[name]["default_on"] is True
-        assert discovered[name]["active"] is True
+    assert discovered, "discovery found nothing"
+    # Every adapter is always on now; the walk and the registry must agree.
+    assert set(discovered) <= registered
+    for name, meta in discovered.items():
+        assert meta["default_on"] is True
+        assert meta["active"] is True, name
 
 
 def test_registered_real_adapters_are_documented():
@@ -119,22 +133,20 @@ def test_registered_real_adapters_are_documented():
     """
     discovered = set(sm.discover_adapters())
     live_real = {a.name for a in adapters.registered()} & discovered
-    assert sm._DEFAULT_ON <= live_real  # the default-on set is always live
+    assert live_real  # the registry is never empty
     for name in live_real:
         entry = sm.adapter_support(name)
         assert entry is not None
-        assert entry["default_on"] or entry["env_var"], name
+        assert entry["default_on"] is True, name
 
 
-def test_opt_in_env_vars_are_real():
-    """Every curated env var actually gates its adapter in adapters/__init__.py."""
+def test_no_adapter_is_gated_behind_an_env_var():
+    """Beta gating was removed — every adapter is default-on, no capability
+    carries an opt-in env var, and the registry references none."""
     init_src = (REPO_ROOT / "stackunderflow" / "adapters" / "__init__.py").read_text()
-    for name, cap in sm._CAPABILITIES.items():
-        env_var = cap["env_var"]
-        default_on = name in sm._DEFAULT_ON
-        assert (env_var is None) == default_on, name
-        if env_var is not None:
-            assert env_var in init_src, f"{env_var} not found in adapters/__init__.py"
+    assert "STACKUNDERFLOW_BETA_" not in init_src
+    for cap in sm._CAPABILITIES.values():
+        assert cap["env_var"] is None
 
 
 # ── public helpers ────────────────────────────────────────────────────────────
@@ -143,6 +155,7 @@ def test_opt_in_env_vars_are_real():
 def test_adapter_support_lookup():
     assert sm.adapter_support("does-not-exist") is None
     claude = sm.adapter_support("claude")
+    assert claude is not None
     assert claude["provider"] == "claude"
     assert claude["status"] == "supported"
     assert claude["opt_in"] is False

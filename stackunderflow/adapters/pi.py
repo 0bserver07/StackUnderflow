@@ -7,8 +7,7 @@ different roots:
 - OMP: ``~/.omp/agent/sessions/``
 
 We implement them as a **single** ``PiAdapter`` that scans both roots —
-the diff between two adapters would be one constant — and the env-flag
-``STACKUNDERFLOW_BETA_PI`` controls discovery for both. ``project_slug``
+the diff between two adapters would be one constant. ``project_slug``
 embeds the source root name (``pi`` or ``omp``) so cross-tool reports
 can still split them apart.
 

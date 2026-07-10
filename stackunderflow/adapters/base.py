@@ -121,19 +121,24 @@ class SourceAdapter(Protocol):
         """Yield records from `ref`, starting at `since_offset` bytes in."""
         ...
 
+
+class WatchableAdapter(SourceAdapter, Protocol):
+    """A :class:`SourceAdapter` that also opts into live filesystem watching.
+
+    ``watch_paths`` is an *optional* capability, not part of the core
+    adapter contract: an adapter that omits it (or returns ``[]``) falls
+    back to periodic ingest. The Wave 2C watcher
+    (``stackunderflow/etl/watcher.py``) discovers it dynamically via
+    ``getattr`` and defaults a missing method to ``[]``, so an adapter
+    need not implement it to be registered and ingested.
+    """
+
     def watch_paths(self) -> list[Path]:
         """Return root paths the Wave 2C ETL watcher should follow.
 
-        Default contract (Wave 2C, ``stackunderflow/etl/watcher.py``):
-        return a list of canonical roots whose changes should trigger
-        an incremental re-ingest. JSONL adapters return their parent
-        directory; vscdb-style adapters return the SQLite file itself
-        (``watchfiles`` fires on byte-level change either way).
-
-        Returning ``[]`` (or omitting the method entirely — the watcher
-        defaults missing methods to ``[]``) means "don't watch this
-        provider; fall back to periodic ingest." This is the chosen
-        path for the dozen beta adapters that haven't been validated
-        for live-watching yet.
+        JSONL adapters return their parent directory; vscdb-style adapters
+        return the SQLite file itself (``watchfiles`` fires on byte-level
+        change either way). Returning ``[]`` means "don't watch this
+        provider; fall back to periodic ingest."
         """
         ...

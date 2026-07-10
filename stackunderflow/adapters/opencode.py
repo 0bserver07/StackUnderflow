@@ -82,6 +82,13 @@ class OpenCodeAdapter:
 
     # ── enumeration ───────────────────────────────────────────────────
 
+    def source_roots(self) -> list[Path]:
+        """Roots ``backup create`` copies — the same data
+        ``enumerate()`` reads. Self-declared here (like ``name``),
+        never listed centrally.
+        """
+        return [self._data_dir]
+
     def enumerate(self) -> Iterator[SessionRef]:
         root = self._data_dir
         if not root.is_dir():

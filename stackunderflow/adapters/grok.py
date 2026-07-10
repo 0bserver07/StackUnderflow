@@ -61,8 +61,7 @@ Defensive sizing: ``chat_history.jsonl`` files larger than
 ``stackunderflow/adapters/_streaming.py``) are **skipped with a logged
 warning** rather than parsed. Smaller files stream line-by-line.
 
-Spec §3 (multi-provider). Beta — off by default; set
-``STACKUNDERFLOW_BETA_GROK=1`` to enable.
+Spec §3 (multi-provider).
 """
 
 from __future__ import annotations

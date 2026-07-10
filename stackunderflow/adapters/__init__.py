@@ -5,46 +5,26 @@ JSONL, Codex's rollout JSONL, etc.) into a stream of normalised `Record`s.
 The ingest layer drives adapters; route handlers and reports only ever see
 store rows.
 
-Default-on adapters (always registered):
+The registry is **self-discovering**: at import time every module in this
+package is walked, and every public class satisfying the
+:class:`SourceAdapter` shape (a non-empty ``name`` plus callable
+``enumerate`` / ``read``) is instantiated and registered. Adding a new agent
+means adding one module file — there is no import list to extend, no opt-in
+flag, and no way to ship an adapter that silently never registers. The
+curated per-adapter fidelity metadata lives next to this file in
+``capabilities.json`` (loaded by ``services/support_matrix.py``), so agent
+names are data, not code.
 
-  - Claude Code (per-project JSONL + legacy ~/.claude/history.jsonl)
-  - Codex (rollout JSONL)
-  - Cursor (vscdb) — promoted out of beta in v0.7.0
-  - Cline (VS Code globalStorage) — promoted out of beta in v0.7.0
-  - OpenClaw (multi-base) — promoted out of beta in v0.9.2
-  - Pi+OMP (shared format) — promoted out of beta in v0.9.2
-  - Hermes (recursive JSONL) — promoted out of beta in v0.9.2
-
-Beta adapters are gated by environment variables (default: off). The 13 below
-remain opt-in pending broader real-world validation:
-
-  STACKUNDERFLOW_BETA_KILOCODE=1       # opt into the KiloCode adapter (Cline parser)
-  STACKUNDERFLOW_BETA_ROOCODE=1        # opt into the Roo Code adapter (Cline parser)
-  STACKUNDERFLOW_BETA_OPENCODE=1       # opt into the OpenCode (SQLite) adapter
-  STACKUNDERFLOW_BETA_CURSOR_AGENT=1   # opt into the Cursor Agent (transcripts + SQLite) adapter
-  STACKUNDERFLOW_BETA_QWEN=1           # opt into the Qwen (jsonl) adapter
-  STACKUNDERFLOW_BETA_GEMINI=1         # opt into the Gemini (jsonl/json) adapter
-  STACKUNDERFLOW_BETA_COPILOT=1        # opt into the GitHub Copilot adapter
-                                       #   (legacy + VS Code transcript JSONL)
-  STACKUNDERFLOW_BETA_CODEIUM=1        # opt into the Codeium adapter (discovery
-                                       #   stub — protobuf decoding deferred)
-  STACKUNDERFLOW_BETA_CONTINUE=1       # opt into the Continue IDE adapter
-                                       #   (defensive SQLite parser)
-  STACKUNDERFLOW_BETA_DROID=1          # opt into the Droid (Factory) adapter
-  STACKUNDERFLOW_BETA_KIRO=1           # opt into the Kiro (kiroagent) adapter
-  STACKUNDERFLOW_BETA_ANTIGRAVITY=1    # opt into the Antigravity (Google IDE+CLI)
-                                       #   adapter. Per-message text and tokens
-                                       #   are encrypted; this adapter surfaces
-                                       #   plaintext metadata only (titles,
-                                       #   workspaces, CLI user prompts).
-  STACKUNDERFLOW_BETA_GROK=1           # opt into the Grok (xAI grok CLI) adapter
-                                       #   (~/.grok/sessions JSONL). No token
-                                       #   usage in the source, so tokens are
-                                       #   estimated from content length and
-                                       #   Records carry cost_source=estimated.
+Every adapter is always on. An adapter whose source directory is absent on a
+given machine simply yields nothing from ``enumerate()``, so registering the
+full set is safe and cheap everywhere. A module that fails to import raises
+immediately — a broken adapter must be loud, not silently absent (silent
+absence is exactly how 13 agents' data went dark under the old beta gating).
 """
 
-import os
+import importlib
+import inspect
+import pkgutil
 
 from .base import Record, SessionRef, SourceAdapter
 
@@ -63,136 +43,43 @@ def registered() -> list[SourceAdapter]:
     return list(_registry)
 
 
-def _beta_enabled(name: str) -> bool:
-    """Return True when the matching ``STACKUNDERFLOW_BETA_<NAME>`` env
-    var is set to a truthy value."""
-    val = os.environ.get(f"STACKUNDERFLOW_BETA_{name.upper()}", "")
-    return val.strip().lower() in ("1", "true", "yes", "on")
+# Package modules that are shared infrastructure, not agent adapters.
+# (Modules whose classes don't satisfy the adapter shape — e.g. the
+# claude_teams discovery helpers or the custom-import machinery — are
+# filtered out by the shape check itself; this set only needs the one
+# module whose classes could be mistaken for adapters.)
+_NON_ADAPTER_MODULES = frozenset({"base"})
 
 
-from .claude import ClaudeAdapter as _ClaudeAdapter  # noqa: E402
-from .cline import ClineAdapter as _ClineAdapter  # noqa: E402
-from .codex import CodexAdapter as _CodexAdapter  # noqa: E402
-from .cursor import CursorAdapter as _CursorAdapter  # noqa: E402
-from .hermes import HermesAdapter as _HermesAdapter  # noqa: E402
-from .openclaw import OpenClawAdapter as _OpenClawAdapter  # noqa: E402
-from .pi import PiAdapter as _PiAdapter  # noqa: E402
+def _discover_and_register() -> None:
+    """Walk this package; instantiate + register every adapter class.
 
-register(_ClaudeAdapter())
-register(_CodexAdapter())
+    Deterministic: modules and class names are visited in sorted order, and
+    the first class to claim a given ``name`` wins (duplicates — e.g. a
+    re-export — are skipped via the ``__module__`` check and the seen-set).
+    """
+    seen: set[str] = set()
+    for mod_info in sorted(pkgutil.iter_modules(__path__), key=lambda m: m.name):
+        if mod_info.name.startswith("_") or mod_info.name in _NON_ADAPTER_MODULES:
+            continue
+        module = importlib.import_module(f"{__name__}.{mod_info.name}")
+        module_ns = vars(module)
+        for cls_name in sorted(module_ns):
+            obj = module_ns[cls_name]
+            if not inspect.isclass(obj) or obj.__module__ != module.__name__:
+                continue
+            if cls_name.startswith("_"):
+                continue
+            name = getattr(obj, "name", None)
+            if not isinstance(name, str) or not name or name in seen:
+                continue
+            if not (
+                callable(getattr(obj, "enumerate", None))
+                and callable(getattr(obj, "read", None))
+            ):
+                continue
+            register(obj())
+            seen.add(name)
 
-# Cursor (vscdb). macOS-only for v1; spec §3.1.
-register(_CursorAdapter())
 
-# Cline (VS Code globalStorage). macOS-only for v1; spec §3.2.
-register(_ClineAdapter())
-
-# OpenClaw (multi-base).
-register(_OpenClawAdapter())
-
-# Pi + OMP.
-register(_PiAdapter())
-
-# Hermes (recursive JSONL).
-register(_HermesAdapter())
-
-# Beta: KiloCode (VS Code globalStorage, Cline parser reuse). Off by
-# default — set STACKUNDERFLOW_BETA_KILOCODE=1 to enable. macOS-only for v1.
-if _beta_enabled("KILOCODE"):
-    from .cline import KiloCodeAdapter as _KiloCodeAdapter  # noqa: E402
-
-    register(_KiloCodeAdapter())
-
-# Beta: Roo Code (VS Code globalStorage, Cline parser reuse). Off by
-# default — set STACKUNDERFLOW_BETA_ROOCODE=1 to enable. macOS-only for v1.
-if _beta_enabled("ROOCODE"):
-    from .cline import RooCodeAdapter as _RooCodeAdapter  # noqa: E402
-
-    register(_RooCodeAdapter())
-
-# Beta: OpenCode (SQLite). Off by default — set
-# STACKUNDERFLOW_BETA_OPENCODE=1 to enable. OS-portable via XDG_DATA_HOME.
-if _beta_enabled("OPENCODE"):
-    from .opencode import OpenCodeAdapter as _OpenCodeAdapter  # noqa: E402
-
-    register(_OpenCodeAdapter())
-
-# Beta: Cursor Agent (text/JSONL transcripts + SQLite metadata). Off by
-# default — set STACKUNDERFLOW_BETA_CURSOR_AGENT=1 to enable. macOS-only for v1.
-if _beta_enabled("CURSOR_AGENT"):
-    from .cursor_agent import CursorAgentAdapter as _CursorAgentAdapter  # noqa: E402
-
-    register(_CursorAgentAdapter())
-
-# Beta: Qwen (JSONL). Off by default — set STACKUNDERFLOW_BETA_QWEN=1
-# to enable. macOS-only for v1.
-if _beta_enabled("QWEN"):
-    from .qwen import QwenAdapter as _QwenAdapter  # noqa: E402
-
-    register(_QwenAdapter())
-
-# Beta: Gemini (JSONL or single JSON). Off by default — set
-# STACKUNDERFLOW_BETA_GEMINI=1 to enable. macOS-only for v1.
-if _beta_enabled("GEMINI"):
-    from .gemini import GeminiAdapter as _GeminiAdapter  # noqa: E402
-
-    register(_GeminiAdapter())
-
-# Beta: Copilot (legacy ~/.copilot + VS Code transcripts). Off by default
-# — set STACKUNDERFLOW_BETA_COPILOT=1 to enable. macOS-only for v1.
-if _beta_enabled("COPILOT"):
-    from .copilot import CopilotAdapter as _CopilotAdapter  # noqa: E402
-
-    register(_CopilotAdapter())
-
-# Beta: Codeium (discovery stub — see module docstring). Off by default
-# — set STACKUNDERFLOW_BETA_CODEIUM=1 to enable. Yields nothing today.
-if _beta_enabled("CODEIUM"):
-    from .codeium import CodeiumAdapter as _CodeiumAdapter  # noqa: E402
-
-    register(_CodeiumAdapter())
-
-# Beta: Continue (defensive SQLite parser). Off by default — set
-# STACKUNDERFLOW_BETA_CONTINUE=1 to enable. Yields nothing on empty
-# state (most installs); local-inventory.md §13.
-if _beta_enabled("CONTINUE"):
-    from .continue_adapter import ContinueAdapter as _ContinueAdapter  # noqa: E402
-
-    register(_ContinueAdapter())
-
-# Beta: Droid (Factory). Off by default — set STACKUNDERFLOW_BETA_DROID=1
-# to enable. Honors $FACTORY_DIR. Session-level token totals are
-# distributed evenly across detected assistant messages.
-if _beta_enabled("DROID"):
-    from .droid import DroidAdapter as _DroidAdapter  # noqa: E402
-
-    register(_DroidAdapter())
-
-# Beta: Kiro (kiroagent). Off by default — set STACKUNDERFLOW_BETA_KIRO=1
-# to enable. macOS-only for v1; tokens are estimated from content
-# length and Records carry ``raw["cost_source"] = "estimated"``.
-if _beta_enabled("KIRO"):
-    from .kiro import KiroAdapter as _KiroAdapter  # noqa: E402
-
-    register(_KiroAdapter())
-
-# Beta: Antigravity (Google IDE + CLI). Off by default — set
-# STACKUNDERFLOW_BETA_ANTIGRAVITY=1 to enable. macOS-only for v1.
-# Per-message text and token data live in encrypted .pb files behind
-# the macOS Keychain "Antigravity Safe Storage" key; only plaintext
-# metadata (titles, workspaces, CLI prompts) is surfaced. See the
-# module docstring for the decryption block details.
-if _beta_enabled("ANTIGRAVITY"):
-    from .antigravity import AntigravityAdapter as _AntigravityAdapter  # noqa: E402
-
-    register(_AntigravityAdapter())
-
-# Beta: Grok (xAI ``grok`` CLI). Off by default — set
-# STACKUNDERFLOW_BETA_GROK=1 to enable. Portable dotfile root
-# (~/.grok/sessions); no token usage in the source, so tokens are
-# estimated from content length and Records carry
-# ``raw["cost_source"] = "estimated"``.
-if _beta_enabled("GROK"):
-    from .grok import GrokAdapter as _GrokAdapter  # noqa: E402
-
-    register(_GrokAdapter())
+_discover_and_register()

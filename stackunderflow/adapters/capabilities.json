@@ -1,0 +1,347 @@
+{
+  "schema": "stackunderflow.adapter-capabilities/1",
+  "_comment": "Curated per-adapter fidelity table. This file is DATA, not code: services/support_matrix.py loads and validates it, tests assert it covers the discovered adapter set exactly, and no agent name is hardcoded in Python for it. Each entry's 'basis' cites where in the adapter/normalizer source the values were read from. 'emits_usage_events': false marks providers whose source can never yield billable events (with the reason in 'notes') — the adapter↔normalizer parity test reads it.",
+  "adapters": {
+    "claude": {
+      "label": "Claude Code",
+      "status": "supported",
+      "resume": {
+        "command": "claude --resume {session_id}",
+        "scope": "session",
+        "verified": "claude --help on a real install, 2026-07-10"
+      },
+      "emits_usage_events": true,
+      "notes": "Anthropic usage reports no reasoning/thinking token split, so reasoning attribution is unavailable by design (never fabricated).",
+      "basis": "normalize/claude.py — message.usage carries no reasoning split",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "codex": {
+      "label": "Codex CLI",
+      "status": "supported",
+      "resume": {
+        "command": "codex resume {session_id}",
+        "scope": "session",
+        "verified": "codex resume --help on a real install, 2026-07-10"
+      },
+      "emits_usage_events": true,
+      "notes": "OpenAI-shape usage; the reasoning token split is attributed.",
+      "basis": "normalize/codex.py:_reasoning_tokens — reasoning split kept",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "exact",
+        "file_touches": "full"
+      }
+    },
+    "cursor": {
+      "label": "Cursor",
+      "status": "supported",
+      "emits_usage_events": true,
+      "notes": "Token counts fall back to a length estimate when the source omits them, and there are no cache-token fields; tool calls are not surfaced as a structured list.",
+      "basis": "cursor.py docstring — explicit tokenCount preferred, else len//4 with cost_source=estimated; Record.tools=() (cursor.py:376)",
+      "fields": {
+        "content_text": "full",
+        "tokens": "partial",
+        "cost": "partial",
+        "tool_calls": "none",
+        "tool_output": "partial",
+        "reasoning": "none",
+        "file_touches": "partial"
+      }
+    },
+    "cursor-agent": {
+      "label": "Cursor Agent",
+      "status": "beta",
+      "resume": {
+        "command": "cursor-agent --resume {session_id}",
+        "scope": "session",
+        "verified": "cursor-agent --help on a real install, 2026-07-10"
+      },
+      "emits_usage_events": true,
+      "notes": "Text transcripts; token counts are estimated from length.",
+      "basis": "cursor_agent.py:27 — tokens estimated len//4, cost_source=estimated",
+      "fields": {
+        "content_text": "full",
+        "tokens": "estimated",
+        "cost": "estimated",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "partial"
+      }
+    },
+    "cline": {
+      "label": "Cline",
+      "status": "supported",
+      "emits_usage_events": true,
+      "notes": "Per-turn token and cost totals are exact, but tool calls and file touches are folded into message text, not attributed structurally.",
+      "basis": "cline.py — ui_messages carry tokensIn/Out/cacheWrites/Reads + explicit cost; Record.tools=() (cline.py:213)",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "kilocode": {
+      "label": "KiloCode",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Shares the Cline parser: exact token/cost totals, but no structured tool-call or file-touch attribution.",
+      "basis": "cline.py — shared parser",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "roocode": {
+      "label": "Roo Code",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Shares the Cline parser: exact token/cost totals, but no structured tool-call or file-touch attribution.",
+      "basis": "cline.py — shared parser",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "openclaw": {
+      "label": "OpenClaw",
+      "status": "supported",
+      "emits_usage_events": true,
+      "notes": "",
+      "basis": "openclaw.py",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Reasoning tokens are folded into the output count, not attributed separately.",
+      "basis": "opencode.py — tokens.input/output (+reasoning folded into output)",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "partial",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "pi": {
+      "label": "Pi / OMP",
+      "status": "supported",
+      "emits_usage_events": true,
+      "notes": "",
+      "basis": "pi.py",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "hermes": {
+      "label": "Hermes",
+      "status": "supported",
+      "emits_usage_events": true,
+      "notes": "",
+      "basis": "hermes.py",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "qwen": {
+      "label": "Qwen Code",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Reasoning (thinking) tokens are folded into the output count, not attributed separately.",
+      "basis": "qwen.py — usageMetadata; thoughtsTokenCount folds into output_tokens",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "partial",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "gemini": {
+      "label": "Gemini",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Reasoning (thoughts) tokens are folded into the output count, not attributed separately.",
+      "basis": "gemini.py — tokens.output + tokens.thoughts folded into output",
+      "fields": {
+        "content_text": "full",
+        "tokens": "exact",
+        "cost": "exact",
+        "tool_calls": "full",
+        "tool_output": "partial",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "copilot": {
+      "label": "Copilot",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Output tokens fall back to an estimate when the source omits them.",
+      "basis": "copilot.py:24 — output tokens, or an estimate when output is missing",
+      "fields": {
+        "content_text": "full",
+        "tokens": "partial",
+        "cost": "partial",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "codeium": {
+      "label": "Codeium",
+      "status": "partial",
+      "emits_usage_events": false,
+      "notes": "Discovery stub — no records are decoded yet, so no usage events can exist by design.",
+      "basis": "codeium.py — enumerate/read yield nothing",
+      "fields": {
+        "content_text": "none",
+        "tokens": "none",
+        "cost": "none",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "continue": {
+      "label": "Continue",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Token counts are estimated; tool calls are not surfaced as a structured list.",
+      "basis": "continue_adapter.py:376 cost_source=estimated; Record.tools=() (390)",
+      "fields": {
+        "content_text": "full",
+        "tokens": "estimated",
+        "cost": "estimated",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "droid": {
+      "label": "Droid",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "Session token totals are distributed across assistant turns; the reasoning split is an estimate.",
+      "basis": "normalize/droid.py:122 reasoning_tokens=thinking; session totals distributed evenly",
+      "fields": {
+        "content_text": "full",
+        "tokens": "estimated",
+        "cost": "estimated",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "estimated",
+        "file_touches": "full"
+      }
+    },
+    "kiro": {
+      "label": "Kiro",
+      "status": "beta",
+      "emits_usage_events": true,
+      "notes": "No token usage in the source; counts are estimated from content length.",
+      "basis": "kiro.py:164 cost_source=estimated",
+      "fields": {
+        "content_text": "full",
+        "tokens": "estimated",
+        "cost": "estimated",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "status": "partial",
+      "emits_usage_events": false,
+      "notes": "Per-message text and tokens are encrypted at rest; only plaintext metadata (titles, workspaces, CLI prompts) is surfaced — no billable events can exist by design.",
+      "basis": "antigravity.py:43 cost_source=encrypted; Record.tools=() (626)",
+      "fields": {
+        "content_text": "partial",
+        "tokens": "none",
+        "cost": "none",
+        "tool_calls": "none",
+        "tool_output": "none",
+        "reasoning": "none",
+        "file_touches": "none"
+      }
+    },
+    "grok": {
+      "label": "Grok",
+      "status": "beta",
+      "resume": {
+        "command": "grok --continue",
+        "scope": "latest",
+        "note": "no id-based resume in the grok CLI; --continue resumes the working directory's most recent session",
+        "verified": "grok --help on a real install, 2026-07-10"
+      },
+      "emits_usage_events": true,
+      "notes": "No token usage in the source; counts are estimated from content length.",
+      "basis": "grok.py:253 cost_source=estimated; normalize/grok.py:87 reasoning 0",
+      "fields": {
+        "content_text": "full",
+        "tokens": "estimated",
+        "cost": "estimated",
+        "tool_calls": "full",
+        "tool_output": "full",
+        "reasoning": "none",
+        "file_touches": "full"
+      }
+    }
+  }
+}

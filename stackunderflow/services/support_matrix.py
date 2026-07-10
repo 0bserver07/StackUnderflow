@@ -19,21 +19,21 @@ does **not** edit them to add any. Instead it works two ways at once:
    and the adapter modules to recover the real provider set, which providers
    ship on by default, and which are live in *this* process. New adapters are
    discovered automatically — nothing here hard-codes "there are 20 of them".
-2. **A curated fidelity table** (``_CAPABILITIES``) keyed by provider carries
-   the per-field flags. Each entry was read straight out of the adapter's own
-   source (module docstring, ``Record`` construction, and the ETL normalizer)
-   — every non-obvious value is annotated with where it came from. A drift
-   test asserts the table covers exactly the introspected provider set, so a
-   new adapter can't ship without an honest row.
+2. **A curated fidelity table** loaded from ``adapters/capabilities.json``
+   — data shipped with the package, not Python literals, so no agent name is
+   hardcoded here. Each entry was read straight out of the adapter's own
+   source; its ``basis`` field cites where. A drift test asserts the table
+   covers exactly the introspected provider set, so a new adapter can't ship
+   without an honest row.
 
 Vocabularies
 ------------
 ``status`` (per adapter):
-  * ``supported`` — ships enabled, full-stream ingest.
-  * ``beta``      — opt-in behind a ``STACKUNDERFLOW_BETA_*`` env var,
-                    functional but pending broad real-world validation.
-  * ``partial``   — captures a deliberately *reduced* dataset even when
-                    enabled (encrypted-at-rest source, or a discovery stub).
+  * ``supported`` — full-stream ingest, broadly validated.
+  * ``beta``      — on by default and functional, but pending broad
+                    real-world validation across installs.
+  * ``partial``   — captures a deliberately *reduced* dataset (encrypted-at-
+                    rest source, or a discovery stub).
 
 ``fidelity`` (per field):
   * ``full``      — captured completely and structurally.
@@ -52,7 +52,9 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import pkgutil
+from importlib import resources
 from typing import Any
 
 SCHEMA = "stackunderflow.support-matrix/1"
@@ -75,15 +77,6 @@ FIDELITY_LEVELS: tuple[str, ...] = ("full", "exact", "estimated", "partial", "no
 # default-on adapters and trails with the reduced-capture ones.
 _STATUS_ORDER = {"supported": 0, "beta": 1, "partial": 2}
 
-# Providers registered unconditionally in ``adapters/__init__.py`` (i.e. not
-# behind a ``STACKUNDERFLOW_BETA_*`` gate). Kept as data here so the builder
-# can label ``default_on`` even when a test process has beta vars set; a test
-# cross-checks this against ``adapters.registered()`` in a clean environment.
-_DEFAULT_ON: frozenset[str] = frozenset(
-    {"claude", "codex", "cursor", "cline", "openclaw", "pi", "hermes"}
-)
-
-
 def _fields(**overrides: str) -> dict[str, str]:
     """Build a full field→fidelity dict, defaulting any unset field to ``none``.
 
@@ -103,293 +96,50 @@ def _fields(**overrides: str) -> dict[str, str]:
 
 # ── the curated capability table ─────────────────────────────────────────────
 #
-# Every value below was read out of the adapter's own source. Where a value
-# is non-obvious the basis is cited (module:line refers to the adapter or its
-# ETL normalizer). ``cost`` fidelity intentionally mirrors ``tokens`` — cost
-# is computed from tokens by the pricer, so it can be no better than the token
-# counts it is derived from.
+# The per-adapter fidelity data lives in ``stackunderflow/adapters/
+# capabilities.json`` — DATA shipped with the package, not Python literals,
+# so adding or changing an agent's profile never touches this module. Each
+# entry's ``basis`` field cites where in the adapter/normalizer source its
+# values were read from. Loading applies the same validation the old in-code
+# literals got: unknown fields/fidelities raise, unset fields default to
+# ``none``.
 
-_CAPABILITIES: dict[str, dict[str, Any]] = {
-    # ── default-on (status: supported) ───────────────────────────────────────
-    "claude": {
-        "label": "Claude Code",
-        "env_var": None,
-        "status": "supported",
-        # normalize/claude.py: Anthropic's message.usage carries no
-        # reasoning/thinking token split, so we do not fabricate one.
-        "notes": (
-            "Anthropic usage reports no reasoning/thinking token split, so "
-            "reasoning attribution is unavailable by design (never fabricated)."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "codex": {
-        "label": "Codex CLI",
-        "env_var": None,
-        "status": "supported",
-        # normalize/codex.py:_reasoning_tokens — OpenAI-shape usage keeps the
-        # reasoning split, so v026 attribution is real here.
-        "notes": "OpenAI-shape usage; the reasoning token split is attributed.",
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="full", reasoning="exact",
-            file_touches="full",
-        ),
-    },
-    "cursor": {
-        "label": "Cursor",
-        "env_var": None,
-        "status": "supported",
-        # cursor.py docstring: explicit tokenCount preferred, else len//4 with
-        # cost_source=estimated; no cache fields; Record.tools=() (tools=376).
-        "notes": (
-            "Token counts fall back to a length estimate when the source omits "
-            "them, and there are no cache-token fields; tool calls are not "
-            "surfaced as a structured list."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="partial", cost="partial",
-            tool_calls="none", tool_output="partial", reasoning="none",
-            file_touches="partial",
-        ),
-    },
-    "cline": {
-        "label": "Cline",
-        "env_var": None,
-        "status": "supported",
-        # cline.py: ui_messages carry tokensIn/Out/cacheWrites/Reads + an
-        # explicit `cost`; Record.tools=() (tools=213) — no structured tools.
-        "notes": (
-            "Per-turn token and cost totals are exact, but tool calls and file "
-            "touches are folded into message text, not attributed structurally."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="none", tool_output="none", reasoning="none",
-            file_touches="none",
-        ),
-    },
-    "openclaw": {
-        "label": "OpenClaw",
-        "env_var": None,
-        "status": "supported",
-        "notes": "",
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "pi": {
-        "label": "Pi / OMP",
-        "env_var": None,
-        "status": "supported",
-        "notes": "",
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "hermes": {
-        "label": "Hermes",
-        "env_var": None,
-        "status": "supported",
-        "notes": "",
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    # ── opt-in, full-stream (status: beta) ───────────────────────────────────
-    "kilocode": {
-        "label": "KiloCode",
-        "env_var": "STACKUNDERFLOW_BETA_KILOCODE",
-        "status": "beta",
-        "notes": (
-            "Shares the Cline parser: exact token/cost totals, but no "
-            "structured tool-call or file-touch attribution."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="none", tool_output="none", reasoning="none",
-            file_touches="none",
-        ),
-    },
-    "roocode": {
-        "label": "Roo Code",
-        "env_var": "STACKUNDERFLOW_BETA_ROOCODE",
-        "status": "beta",
-        "notes": (
-            "Shares the Cline parser: exact token/cost totals, but no "
-            "structured tool-call or file-touch attribution."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="none", tool_output="none", reasoning="none",
-            file_touches="none",
-        ),
-    },
-    "opencode": {
-        "label": "OpenCode",
-        "env_var": "STACKUNDERFLOW_BETA_OPENCODE",
-        "status": "beta",
-        # opencode.py: tokens.input/output(+reasoning folded into output).
-        "notes": (
-            "Reasoning tokens are folded into the output count, not attributed "
-            "separately."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="partial", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "cursor-agent": {
-        "label": "Cursor Agent",
-        "env_var": "STACKUNDERFLOW_BETA_CURSOR_AGENT",
-        "status": "beta",
-        # cursor_agent.py:27 — tokens estimated len//4, cost_source=estimated.
-        "notes": "Text transcripts; token counts are estimated from length.",
-        "fields": _fields(
-            content_text="full", tokens="estimated", cost="estimated",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="partial",
-        ),
-    },
-    "qwen": {
-        "label": "Qwen Code",
-        "env_var": "STACKUNDERFLOW_BETA_QWEN",
-        "status": "beta",
-        # qwen.py: usageMetadata; thoughtsTokenCount folds into output_tokens.
-        "notes": (
-            "Reasoning (thinking) tokens are folded into the output count, not "
-            "attributed separately."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="partial", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "gemini": {
-        "label": "Gemini",
-        "env_var": "STACKUNDERFLOW_BETA_GEMINI",
-        "status": "beta",
-        # gemini.py: tokens.output + tokens.thoughts folded into output.
-        "notes": (
-            "Reasoning (thoughts) tokens are folded into the output count, not "
-            "attributed separately."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="exact", cost="exact",
-            tool_calls="full", tool_output="partial", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "copilot": {
-        "label": "Copilot",
-        "env_var": "STACKUNDERFLOW_BETA_COPILOT",
-        "status": "beta",
-        # copilot.py:24 — output tokens, or an estimate when output is missing.
-        "notes": "Output tokens fall back to an estimate when the source omits them.",
-        "fields": _fields(
-            content_text="full", tokens="partial", cost="partial",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "continue": {
-        "label": "Continue",
-        "env_var": "STACKUNDERFLOW_BETA_CONTINUE",
-        "status": "beta",
-        # continue_adapter.py:376 cost_source=estimated; Record.tools=() (390).
-        "notes": (
-            "Token counts are estimated; tool calls are not surfaced as a "
-            "structured list."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="estimated", cost="estimated",
-            tool_calls="none", tool_output="none", reasoning="none",
-            file_touches="none",
-        ),
-    },
-    "droid": {
-        "label": "Droid",
-        "env_var": "STACKUNDERFLOW_BETA_DROID",
-        "status": "beta",
-        # normalize/droid.py:122 reasoning_tokens=thinking; session totals
-        # distributed evenly across assistant turns (an estimate).
-        "notes": (
-            "Session token totals are distributed across assistant turns; the "
-            "reasoning split is an estimate."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="estimated", cost="estimated",
-            tool_calls="full", tool_output="full", reasoning="estimated",
-            file_touches="full",
-        ),
-    },
-    "grok": {
-        "label": "Grok",
-        "env_var": "STACKUNDERFLOW_BETA_GROK",
-        "status": "beta",
-        # grok.py:253 cost_source=estimated; normalize/grok.py:87 reasoning 0.
-        "notes": (
-            "No token usage in the source; counts are estimated from content "
-            "length."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="estimated", cost="estimated",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    "kiro": {
-        "label": "Kiro",
-        "env_var": "STACKUNDERFLOW_BETA_KIRO",
-        "status": "beta",
-        # kiro.py:164 cost_source=estimated.
-        "notes": (
-            "No token usage in the source; counts are estimated from content "
-            "length."
-        ),
-        "fields": _fields(
-            content_text="full", tokens="estimated", cost="estimated",
-            tool_calls="full", tool_output="full", reasoning="none",
-            file_touches="full",
-        ),
-    },
-    # ── opt-in, reduced capture (status: partial) ────────────────────────────
-    "antigravity": {
-        "label": "Antigravity",
-        "env_var": "STACKUNDERFLOW_BETA_ANTIGRAVITY",
-        "status": "partial",
-        # antigravity.py:43 cost_source=encrypted; Record.tools=() (626).
-        "notes": (
-            "Per-message text and tokens are encrypted at rest; only plaintext "
-            "metadata (titles, workspaces, CLI prompts) is surfaced."
-        ),
-        "fields": _fields(
-            content_text="partial", tokens="none", cost="none",
-            tool_calls="none", tool_output="none", reasoning="none",
-            file_touches="none",
-        ),
-    },
-    "codeium": {
-        "label": "Codeium",
-        "env_var": "STACKUNDERFLOW_BETA_CODEIUM",
-        "status": "partial",
-        # codeium.py: discovery-only stub — enumerate/read yield nothing.
-        "notes": "Discovery stub — no records are decoded yet.",
-        "fields": _fields(),  # everything none
-    },
-}
+
+def _load_capabilities() -> dict[str, dict[str, Any]]:
+    """Load + validate the curated fidelity table from ``capabilities.json``."""
+    raw = json.loads(
+        resources.files("stackunderflow.adapters")
+        .joinpath("capabilities.json")
+        .read_text(encoding="utf-8")
+    )
+    table: dict[str, dict[str, Any]] = {}
+    for name, entry in raw["adapters"].items():
+        status = entry["status"]
+        if status not in STATUSES:  # pragma: no cover - guards table typos
+            raise ValueError(f"unknown status {status!r} for adapter {name!r}")
+        resume = entry.get("resume")
+        if resume is not None:  # pragma: no branch
+            if (
+                not isinstance(resume, dict)
+                or not isinstance(resume.get("command"), str)
+                or resume.get("scope") not in ("session", "latest")
+            ):  # pragma: no cover - guards table typos
+                raise ValueError(f"malformed resume entry for adapter {name!r}")
+        table[name] = {
+            "resume": resume,
+            "label": entry["label"],
+            "status": status,
+            "notes": entry.get("notes", ""),
+            "basis": entry.get("basis", ""),
+            "emits_usage_events": bool(entry.get("emits_usage_events", True)),
+            # Gating is gone; the key survives for envelope back-compat.
+            "env_var": None,
+            "fields": _fields(**entry.get("fields", {})),
+        }
+    return table
+
+
+_CAPABILITIES: dict[str, dict[str, Any]] = _load_capabilities()
 
 
 # ── introspection ────────────────────────────────────────────────────────────
@@ -402,8 +152,8 @@ def discover_adapters() -> dict[str, dict[str, Any]]:
     that satisfies the :class:`SourceAdapter` shape (a non-empty ``name`` plus
     callable ``enumerate`` / ``read``). Returns ``{provider: meta}`` where
     ``meta`` carries the introspected ``module`` / ``class`` and the booleans
-    ``default_on`` (registered unconditionally) and ``active`` (registered in
-    *this* process — i.e. its ``STACKUNDERFLOW_BETA_*`` gate is open).
+    ``default_on`` (always true now — every adapter registers unconditionally)
+    and ``active`` (present in *this* process's adapter registry).
 
     Best-effort: a module that fails to import is skipped rather than raising,
     so the matrix degrades instead of crashing on a broken optional adapter.
@@ -442,7 +192,7 @@ def discover_adapters() -> dict[str, dict[str, Any]]:
                     "provider": name,
                     "module": mod_info.name,
                     "class": obj.__name__,
-                    "default_on": name in _DEFAULT_ON,
+                    "default_on": True,
                     "active": name in active,
                 },
             )
@@ -470,7 +220,7 @@ def field_fidelity(provider: str, field: str) -> str:
 def _adapter_entry(provider: str, meta: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble one adapter row from the curated table + introspected meta."""
     cap = _CAPABILITIES.get(provider)
-    default_on = bool(meta["default_on"]) if meta else (provider in _DEFAULT_ON)
+    default_on = True  # every adapter is always on
     active = bool(meta["active"]) if meta else False
     if cap is None:
         # Undocumented adapter: claim nothing rather than guess. The drift test
@@ -480,12 +230,16 @@ def _adapter_entry(provider: str, meta: dict[str, Any] | None) -> dict[str, Any]
         label = provider
         env_var = None
         notes = "Capability profile not yet curated."
+        basis = ""
+        emits = True
     else:
         fields = cap["fields"]
         status = cap["status"]
         label = cap["label"]
         env_var = cap["env_var"]
         notes = cap["notes"]
+        basis = cap["basis"]
+        emits = cap["emits_usage_events"]
     return {
         "provider": provider,
         "label": label,
@@ -495,6 +249,8 @@ def _adapter_entry(provider: str, meta: dict[str, Any] | None) -> dict[str, Any]
         "env_var": env_var,
         "active": active,
         "notes": notes,
+        "basis": basis,
+        "emits_usage_events": emits,
         "fields": {
             key: {"captured": fidelity != "none", "fidelity": fidelity}
             for key, fidelity in fields.items()
@@ -571,9 +327,8 @@ def render_markdown(matrix: dict[str, Any] | None = None) -> str:
     lines.append("## Notes")
     for a in matrix["adapters"]:
         note = a["notes"]
-        enable = "" if a["default_on"] else f" (enable: `{a['env_var']}=1`)"
-        if note or enable:
-            lines.append(f"- **{a['provider']}** ({a['status']}){enable}: {note}".rstrip())
+        if note:
+            lines.append(f"- **{a['provider']}** ({a['status']}): {note}".rstrip())
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -20,9 +20,8 @@ Reasons:
 
 Reactivate this adapter when an official schema or stable
 reverse-engineered parser is available. Until then ``enumerate()`` and
-``read()`` return nothing — the adapter is registered when the
-``STACKUNDERFLOW_BETA_CODEIUM`` env var is set, but it produces no
-records and never raises.
+``read()`` return nothing — the adapter registers like every other,
+but it produces no records and never raises.
 
 Spec: ``docs/specs/multi-provider/local-inventory.md`` §8.
 """
@@ -42,8 +41,7 @@ _CODEIUM_ROOT = Path.home() / ".codeium"
 class CodeiumAdapter:
     """Stub adapter — no records yielded.
 
-    Registered behind ``STACKUNDERFLOW_BETA_CODEIUM=1`` to keep parity
-    with the other beta adapters' opt-in pattern, but ``enumerate()``
+    Registered by default like every adapter, but ``enumerate()``
     yields nothing and ``read()`` is a no-op. See the module docstring
     for the rationale.
     """
@@ -52,6 +50,13 @@ class CodeiumAdapter:
 
     def __init__(self, root: Path | None = None) -> None:
         self._root = root or _CODEIUM_ROOT
+
+    def source_roots(self) -> list[Path]:
+        """Roots ``backup create`` copies — the same data
+        ``enumerate()`` reads. Self-declared here (like ``name``),
+        never listed centrally.
+        """
+        return [self._root]
 
     def enumerate(self) -> Iterator[SessionRef]:
         """Discovery is not implemented — yield nothing.

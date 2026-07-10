@@ -94,6 +94,13 @@ class CursorAgentAdapter:
 
     # ── enumeration ───────────────────────────────────────────────────
 
+    def source_roots(self) -> list[Path]:
+        """Roots ``backup create`` copies — the same data
+        ``enumerate()`` reads. Self-declared here (like ``name``),
+        never listed centrally.
+        """
+        return [self._projects_root, self._tracking_db]
+
     def enumerate(self) -> Iterator[SessionRef]:
         root = self._projects_root
         if not root.is_dir():

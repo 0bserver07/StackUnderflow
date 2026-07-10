@@ -108,6 +108,13 @@ class GeminiAdapter:
 
     # ── enumeration ───────────────────────────────────────────────────
 
+    def source_roots(self) -> list[Path]:
+        """Roots ``backup create`` copies — the same data
+        ``enumerate()`` reads. Self-declared here (like ``name``),
+        never listed centrally.
+        """
+        return [self._root]
+
     def enumerate(self) -> Iterator[SessionRef]:
         root = self._root
         if not root.is_dir():

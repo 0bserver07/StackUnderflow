@@ -42,6 +42,18 @@ def _claude_home() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".claude"
 
 
+def default_projects_root() -> Path:
+    """Claude Code's projects dir — THE accessor for every consumer.
+
+    Honors ``CLAUDE_CONFIG_DIR`` (via ``_claude_home``). Anything outside
+    this adapter that needs the claude projects path must call this
+    instead of spelling ``~/.claude/projects`` — hardcoded copies ignored
+    the env override and leaked claude paths onto other providers'
+    projects.
+    """
+    return _claude_home() / "projects"
+
+
 class ClaudeAdapter:
     name = "claude"
 
