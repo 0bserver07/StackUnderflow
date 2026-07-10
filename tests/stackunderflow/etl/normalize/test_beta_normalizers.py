@@ -165,6 +165,10 @@ class Scenario:
     adapter_provider: str  # value the adapter writes to Record.provider
     build_adapter: Callable[[Path], Any]
     expected_min_events: int  # lower bound for the happy-path fixture
+    # Exact set of cost_source values this fixture may produce — DATA on
+    # the scenario, so the cost test has no provider-name branching.
+    # None = only the enum-validity check applies.
+    cost_sources: frozenset[str] | None = None
 
 
 def _build_cursor_agent(tmp_path: Path) -> Any:
@@ -411,36 +415,59 @@ def _build_roocode(tmp_path: Path) -> Any:
 # ── scenario registry ──────────────────────────────────────────────────
 
 
+def _build_codex(tmp_path: Path) -> Any:
+    """Codex fixture is DATA on disk (``_fixture_dir('codex')``) — a
+    realistic rollout: session_meta with NO model (real ones carry none),
+    turn_context holding the model, two token_count'd assistant turns.
+    Regression for the model=None stranding; default-on providers get the
+    same fixture→adapter→normalizer guarantee as everything else."""
+    from stackunderflow.adapters.codex import CodexAdapter
+
+    return CodexAdapter(sessions_root=_fixture_dir("codex"))
+
+
 SCENARIOS: dict[str, Scenario] = {
-    "cursor_agent": Scenario(
-        provider_key="cursor_agent",
+    "codex": Scenario(  # default-on; same end-to-end guarantee as the rest
+        provider_key="codex",
+        adapter_provider="codex",
+        build_adapter=_build_codex,
+        expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
+    ),
+    "cursor-agent": Scenario(  # key = the adapter's exact provider string
+        provider_key="cursor-agent",
         adapter_provider="cursor-agent",
         build_adapter=_build_cursor_agent,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_ESTIMATED}),
     ),
     "opencode": Scenario(
         provider_key="opencode",
         adapter_provider="opencode",
         build_adapter=_build_opencode,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "qwen": Scenario(
         provider_key="qwen",
         adapter_provider="qwen",
         build_adapter=_build_qwen,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "gemini": Scenario(
         provider_key="gemini",
         adapter_provider="gemini",
         build_adapter=_build_gemini,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "copilot": Scenario(
         provider_key="copilot",
         adapter_provider="copilot",
         build_adapter=_build_copilot,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN, COST_SOURCE_ESTIMATED}),
     ),
     "codeium": Scenario(
         provider_key="codeium",
@@ -453,12 +480,14 @@ SCENARIOS: dict[str, Scenario] = {
         adapter_provider="continue",
         build_adapter=_build_continue,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "droid": Scenario(
         provider_key="droid",
         adapter_provider="droid",
         build_adapter=_build_droid,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "kiro": Scenario(
         provider_key="kiro",
@@ -466,30 +495,35 @@ SCENARIOS: dict[str, Scenario] = {
         build_adapter=_build_kiro,
         # one Record per execution (whole chat rolled up)
         expected_min_events=1,
+        cost_sources=frozenset({COST_SOURCE_ESTIMATED}),
     ),
     "openclaw": Scenario(
         provider_key="openclaw",
         adapter_provider="openclaw",
         build_adapter=_build_openclaw,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "pi": Scenario(
         provider_key="pi",
         adapter_provider="pi",
         build_adapter=_build_pi,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "kilocode": Scenario(
         provider_key="kilocode",
         adapter_provider="kilocode",
         build_adapter=_build_kilocode,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
     "roocode": Scenario(
         provider_key="roocode",
         adapter_provider="roocode",
         build_adapter=_build_roocode,
         expected_min_events=2,
+        cost_sources=frozenset({COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}),
     ),
 }
 
@@ -600,30 +634,17 @@ def test_beta_normalizer_cost_semantics(
         assert ev["cost_usd"] >= 0.0
         assert ev["cost_source"] in _VALID_COST_SOURCES
 
-    # Provider-specific cost_source expectations (per the catalog spec).
-    cost_sources = {ev["cost_source"] for ev in events}
-    if provider in ("cursor_agent", "kiro"):
-        # Always estimated — these adapters don't surface real token counts.
-        assert cost_sources == {COST_SOURCE_ESTIMATED}, (
-            f"{provider}: expected only 'estimated', got {cost_sources}"
-        )
-    elif provider in (
-        "opencode", "qwen", "gemini", "openclaw", "droid",
-        "pi", "kilocode", "roocode", "continue", "copilot",
-    ):
-        # When the fixture's model id is in the canonical RATE_CARD we
-        # get rate_card; otherwise unknown. Every event must come from
-        # one of the deterministic-pricing buckets — never `estimated`,
-        # since the fixtures all carry real token counts.
-        unexpected = cost_sources - {COST_SOURCE_RATE_CARD, COST_SOURCE_UNKNOWN}
-        # Copilot's input estimation can stamp `estimated` even when
-        # output is explicit — that's a deliberate fallback for the
-        # legacy event format. Allow it.
-        if provider == "copilot":
-            unexpected -= {COST_SOURCE_ESTIMATED}
+    # Per-scenario cost_source expectations — declared as DATA on the
+    # Scenario (no provider-name branching in test logic). Subset check +
+    # the non-empty guard is equivalent to the old exact-set assertions.
+    allowed = SCENARIOS[provider].cost_sources
+    if allowed is not None:
+        assert events, f"{provider}: cost expectations need events"
+        cost_sources = {ev["cost_source"] for ev in events}
+        unexpected = cost_sources - allowed
         assert not unexpected, (
-            f"{provider}: unexpected cost_source(s) "
-            f"{unexpected!r} in {cost_sources!r}"
+            f"{provider}: unexpected cost_source(s) {unexpected!r} "
+            f"in {cost_sources!r} (allowed: {sorted(allowed)})"
         )
 
 

@@ -1,0 +1,8 @@
+{"timestamp": "2026-07-07T10:00:00.000Z", "type": "session_meta", "payload": {"id": "cdx-fixture-0001", "cwd": "/Users/test/dev/sample", "originator": "codex_cli_rs", "cli_version": "0.121.0"}}
+{"timestamp": "2026-07-07T10:00:01.000Z", "type": "turn_context", "payload": {"cwd": "/Users/test/dev/sample", "model": "gpt-5.4"}}
+{"timestamp": "2026-07-07T10:00:02.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "text", "text": "do the thing"}]}}
+{"timestamp": "2026-07-07T10:00:03.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "thing one done"}]}}
+{"timestamp": "2026-07-07T10:00:04.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 1200, "cached_input_tokens": 200, "output_tokens": 300, "reasoning_output_tokens": 50}}}}
+{"timestamp": "2026-07-07T10:00:05.000Z", "type": "turn_context", "payload": {"cwd": "/Users/test/dev/sample", "model": "gpt-5.4"}}
+{"timestamp": "2026-07-07T10:00:06.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "thing two done"}]}}
+{"timestamp": "2026-07-07T10:00:07.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 900, "cached_input_tokens": 100, "output_tokens": 150, "reasoning_output_tokens": 25}}}}
