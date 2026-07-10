@@ -134,6 +134,11 @@ read-only — nothing leaves the machine.
   succeeded, with evidence.
 - `stackunderflow memory sessions` — recent sessions in this project.
 - `stackunderflow memory ask "<question>"` — natural-language query over history.
+- `stackunderflow resume [PATH] --json` — session/resume ids for EVERY coding
+  agent under a path (claude, codex, grok, …), each with its real resume
+  invocation rendered (`claude --resume <id>`, `codex resume <id>`). Use it
+  when the user wants to pick up prior work in some tool; present the command,
+  don't launch interactive CLIs yourself.
 
 ## JSON for programmatic callers
 
