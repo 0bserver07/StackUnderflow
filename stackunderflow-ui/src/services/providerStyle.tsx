@@ -20,6 +20,12 @@
  * (`blue | green | yellow | red | purple | orange | gray`). The intent
  * column is preserved as comments so a future palette expansion can swap
  * them without re-deriving the design choice.
+ *
+ * The map is DESIGN OVERRIDES only, not a registry: any provider not
+ * listed gets a deterministic colour hashed from its name, so a newly
+ * added agent is never invisibly gray because nobody edited this file
+ * (exactly how `cursor-agent` rendered gray for months — the map held a
+ * stale `cursor_agent` key). Gray is reserved for missing/unknown input.
  */
 
 import type { ReactNode } from 'react'
@@ -51,8 +57,8 @@ const PROVIDER_COLORS: Record<string, ProviderColor> = {
   opencode: 'yellow',
   // Continue.dev.
   continue: 'yellow',
-  // Cursor's standalone agent CLI.
-  cursor_agent: 'purple',
+  // Cursor's standalone agent CLI (provider string uses a hyphen).
+  'cursor-agent': 'purple',
   // GitHub Copilot CLI.
   copilot: 'green',
   // Codeium CLI.
@@ -72,9 +78,23 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: 'codex',
 }
 
+// Hash bucket for providers without a design override. Excludes gray so a
+// real provider always reads as a deliberate chip; deterministic so the
+// same agent gets the same colour on every render and every machine.
+const HASH_PALETTE: readonly ProviderColor[] = [
+  'blue', 'green', 'yellow', 'red', 'purple', 'orange',
+]
+
+function hashColor(name: string): ProviderColor {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return HASH_PALETTE[h % HASH_PALETTE.length] ?? 'blue'
+}
+
 export function getProviderColor(provider: string | null | undefined): ProviderColor {
   const raw = (provider ?? '').toLowerCase().trim()
-  return PROVIDER_COLORS[raw] ?? 'gray'
+  if (!raw) return 'gray'
+  return PROVIDER_COLORS[raw] ?? hashColor(raw)
 }
 
 export function getProviderLabel(provider: string | null | undefined): string {
