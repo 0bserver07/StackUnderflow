@@ -446,13 +446,26 @@ def _write_event(*, hook_id: str, event_kind: str, payload: dict, stored_payload
         conn.close()
 
 
-def _resolve_project_id(conn: sqlite3.Connection, cwd: Any) -> int | None:
+# The host whose hooks this module implements. Everything in
+# ``stackunderflow/hooks/`` is Claude Code's hook surface (PreToolUse etc.),
+# so slug collisions across providers resolve in the host's favor — a
+# self-declaration like an adapter's ``name``, passed into the query as a
+# parameter rather than baked into SQL. A future host's hook surface
+# passes its own provider.
+_HOST_PROVIDER = "claude"
+
+
+def _resolve_project_id(
+    conn: sqlite3.Connection, cwd: Any, prefer_provider: str = _HOST_PROVIDER,
+) -> int | None:
     """Map a hook's ``cwd`` to a ``projects.id`` if the store already knows it.
 
     Uses the Claude slug encoding (``/Users/foo/dev/proj`` → ``-Users-foo-dev-proj``,
-    with ``_`` collapsing to ``-`` exactly as the adapter does). Prefers a
-    ``claude`` project — this *is* a Claude Code hook — but falls back to any
-    provider with that slug. ``None`` when the project isn't in the store yet.
+    with ``_`` collapsing to ``-`` exactly as the adapter does). When several
+    providers share the slug, the row belonging to *prefer_provider* — the
+    host this hook fires under — wins; otherwise any provider with that slug,
+    oldest row for determinism. ``None`` when the project isn't in the store
+    yet.
     """
     if not isinstance(cwd, str) or not cwd:
         return None
@@ -461,8 +474,9 @@ def _resolve_project_id(conn: sqlite3.Connection, cwd: Any) -> int | None:
     slug = os.path.abspath(cwd).rstrip(os.sep).replace(os.sep, "-").replace("_", "-")
     try:
         row = conn.execute(
-            "SELECT id FROM projects WHERE slug = ? ORDER BY (provider = 'claude') DESC, id LIMIT 1",
-            (slug,),
+            "SELECT id FROM projects WHERE slug = ?"
+            " ORDER BY (provider = ?) DESC, id LIMIT 1",
+            (slug, prefer_provider),
         ).fetchone()
     except sqlite3.OperationalError:
         return None  # projects table somehow absent — bail quietly

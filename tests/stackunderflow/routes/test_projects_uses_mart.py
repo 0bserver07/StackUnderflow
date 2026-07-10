@@ -158,8 +158,10 @@ async def test_set_project_by_dir_bypasses_fs_if_in_db(tmp_path, monkeypatch):
 
     assert body["status"] == "success"
     assert deps.current_project_path == "test-antigravity-proj"
-    assert deps.current_log_path is not None
-    assert "test-antigravity-proj" in deps.current_log_path
+    # A NULL-path antigravity project must NOT be assigned an invented
+    # ~/.claude/projects/<slug> dir (the old behavior this test pinned):
+    # the claude slug→dir shim belongs to claude only. Unknown = "".
+    assert deps.current_log_path == ""
 
 
 # ── RANK 26 (resolved by v022): mart now materialises the command count ───────

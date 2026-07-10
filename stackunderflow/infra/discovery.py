@@ -42,7 +42,11 @@ class ProjectInfo:
 
 
 def _base_dir() -> Path:
-    return Path.home() / ".claude" / "projects"
+    # Claude-slug discovery by construction — derive the root from the
+    # adapter that owns it (honors CLAUDE_CONFIG_DIR).
+    from stackunderflow.adapters.claude import default_projects_root
+
+    return default_projects_root()
 
 
 # ── path resolution ──────────────────────────────────────────────────────────

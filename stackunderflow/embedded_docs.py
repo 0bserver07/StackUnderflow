@@ -103,15 +103,18 @@ can see and builds the store at `~/.stackunderflow/store.db`.
   topic).
 - `stackunderflow backup create` / `list` / `restore` — snapshot the store.
 - `stackunderflow cfg ls` / `set` / `rm` — inspect and change configuration.
+- `stackunderflow resume [PATH]` — session/resume ids for every coding agent
+  under a path (default cwd), with each agent's real resume command rendered
+  (e.g. `claude --resume <id>`, `codex resume <id>`). `--json` for agents.
 
 Every command supports `--help`. The short alias `stax` runs the same CLI:
 `stax start`, `stax doctor`, `stax docs list`.
 
-## Beta adapters
+## Adapters
 
-Several adapters are opt-in behind `STACKUNDERFLOW_BETA_*` environment variables
-(off by default). The live `support-matrix` topic lists each one and the exact
-variable that turns it on.
+Every supported coding agent's adapter is enabled by default — there are no
+opt-in flags. The live `support-matrix` topic lists each adapter and the
+fidelity of what it captures.
 """
 
 _MEMORY = """

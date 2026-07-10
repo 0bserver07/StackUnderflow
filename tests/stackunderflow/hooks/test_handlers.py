@@ -406,3 +406,38 @@ def test_hook_ids_reexported() -> None:
         "stackunderflow-stop",
         "stackunderflow-pre-compact",
     )
+
+
+# ── slug-collision resolution is host-parameterized, not baked into SQL ─────
+
+
+def test_resolve_project_id_prefers_the_calling_host(tmp_path):
+    import sqlite3
+
+    from stackunderflow.hooks.handlers import _resolve_project_id
+    from stackunderflow.store import db, schema
+
+    store = tmp_path / "s.db"
+    conn = db.connect(store)
+    schema.apply(conn)
+    cwd = "/Users/t/dev/shared_proj"
+    slug = "-Users-t-dev-shared-proj"
+    ids = {}
+    for provider in ("codex", "claude", "grok"):
+        cur = conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen,"
+            " last_modified) VALUES (?, ?, ?, 0.0, 0.0)",
+            (provider, slug, slug),
+        )
+        ids[provider] = int(cur.lastrowid or 0)
+    conn.commit()
+
+    # Default host (this module IS Claude Code's hook surface) → claude row.
+    assert _resolve_project_id(conn, cwd) == ids["claude"]
+    # Another host's hook surface passes its own provider and wins instead.
+    assert _resolve_project_id(conn, cwd, prefer_provider="grok") == ids["grok"]
+    # Host absent from the collision → deterministic oldest row, no error.
+    conn.execute("DELETE FROM projects WHERE id = ?", (ids["claude"],))
+    conn.commit()
+    assert _resolve_project_id(conn, cwd, prefer_provider="claude") == ids["codex"]
+    conn.close()

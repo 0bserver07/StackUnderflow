@@ -108,7 +108,7 @@ async def set_project_by_dir(data: dict[str, str]):
     if project_row:
         # If registered in store, we bypass filesystem and glob checks.
         # It's an active/indexed project whose data is fully loaded in SQLite.
-        log_path = Path(_resolve_log_dir(project_row.path, dir_name))
+        log_path = _resolve_log_dir(project_row.path, dir_name, project_row.provider)
         project_path = project_row.path
         if not project_path:
             if dir_name.startswith("-"):
@@ -116,8 +116,11 @@ async def set_project_by_dir(data: dict[str, str]):
             else:
                 project_path = dir_name
     else:
-        # Build the log path
-        claude_base = Path.home() / ".claude" / "projects"
+        # Build the log path. This branch serves on-disk claude log dirs
+        # that aren't in the store yet — derive the root from its owner.
+        from stackunderflow.adapters.claude import default_projects_root
+
+        claude_base = default_projects_root()
         log_path = (claude_base / dir_name).resolve()
         if not str(log_path).startswith(str(claude_base.resolve()) + os.sep):
             raise HTTPException(status_code=400, detail="Invalid path")
@@ -137,6 +140,8 @@ async def set_project_by_dir(data: dict[str, str]):
             project_path = dir_name
 
     deps.current_project_path = project_path
+    # "" = provider has no on-disk log dir (non-claude, no stored path) —
+    # kept empty, never coerced through Path("") into ".".
     deps.current_log_path = str(log_path)
 
     # Index for search/QA in background (search and QA services use store data)
@@ -345,7 +350,7 @@ def _compute_projects_payload(
         projects = []
         for slug, group in slug_groups.items():
             primary = max(group, key=lambda p: p.last_modified)
-            log_path = _resolve_log_dir(primary.path, slug)
+            log_path = _resolve_log_dir(primary.path, slug, primary.provider)
             projects.append(
                 {
                     "dir_name": slug,
@@ -449,10 +454,21 @@ def _compute_projects_payload(
     }
 
 
-def _resolve_log_dir(path: str | None, slug: str) -> str:
+def _resolve_log_dir(path: str | None, slug: str, provider: str | None) -> str:
+    """Stored path, or claude's legacy slug→dir fallback — claude ONLY.
+
+    The ``<projects-root>/<slug>`` scheme is ClaudeAdapter's; stamping it
+    on a codex/cursor/grok project invents a directory that never existed.
+    A non-claude project with no stored path resolves to ``""`` (unknown),
+    and consumers treat that as "no on-disk dir", never as cwd.
+    """
     if path:
         return path
-    return str(Path.home() / ".claude" / "projects" / slug)
+    if (provider or "claude") in ("claude", "anthropic"):
+        from stackunderflow.adapters.claude import default_projects_root
+
+        return str(default_projects_root() / slug)
+    return ""
 
 
 # ── Campaign #8: worktree fragment detection + roll-up ───────────────────────
@@ -576,6 +592,8 @@ _dir_size_cache: dict[tuple[str, float], float] = {}
 
 
 def _dir_size_mb(log_dir: str) -> float:
+    if not log_dir:
+        return 0.0  # unknown dir (non-claude, no stored path) — never cwd
     p = Path(log_dir)
     try:
         st = p.stat()

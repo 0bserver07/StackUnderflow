@@ -242,9 +242,12 @@ def _candidate_claude_md_paths(project_filter: list[str] | None = None) -> list[
     if home_md.is_file():
         out.append(home_md)
 
-    # Per-project CLAUDE.md: ``~/.claude/projects/<slug>/CLAUDE.md`` is the
-    # convention for some configurations; scan it defensively.
-    projects_dir = Path.home() / ".claude" / "projects"
+    # Per-project CLAUDE.md: ``<projects-root>/<slug>/CLAUDE.md`` is the
+    # convention for some configurations; scan it defensively. Root derives
+    # from the adapter that owns it (honors CLAUDE_CONFIG_DIR).
+    from stackunderflow.adapters.claude import default_projects_root
+
+    projects_dir = default_projects_root()
     if projects_dir.is_dir():
         for child in projects_dir.iterdir():
             if not child.is_dir():

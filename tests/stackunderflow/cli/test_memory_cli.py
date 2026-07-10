@@ -441,6 +441,15 @@ class TestMemorySessions:
 
 class TestMemoryAsk:
     def test_json_envelope_command_and_note(self, tmp_path, monkeypatch):
+        # This test asserts the NO-Ollama fallback contract, so it must not
+        # silently exercise a live local daemon (endpoint resolution always
+        # appends localhost:11434 — see embeddings._resolve_endpoints). Point
+        # every endpoint at a dead port to make the fallback deterministic.
+        from stackunderflow.services import embeddings as _emb
+        dead = "http://127.0.0.1:9"
+        monkeypatch.setattr(_emb, "LOCAL_OLLAMA_URL", dead)
+        monkeypatch.setenv("OLLAMA_URL", dead)
+        monkeypatch.delenv("STACKUNDERFLOW_OLLAMA_URL", raising=False)
         store_db = tmp_path / "store.db"
         _seed_basic(store_db)
         r = _invoke(CliRunner(),

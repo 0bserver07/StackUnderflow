@@ -12,6 +12,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import stackunderflow.deps as deps
@@ -20,6 +21,16 @@ from stackunderflow.store import db, schema
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _no_real_adapters(monkeypatch):
+    """Doctor's delivery section enumerates every registered adapter; these
+    health-check tests must not walk the real home directories (hermeticity —
+    the delivery section has its own tests with fake adapters)."""
+    import stackunderflow.adapters as adapters_pkg
+
+    monkeypatch.setattr(adapters_pkg, "registered", lambda: [])
 
 
 def _healthy_store(path: Path) -> None:
@@ -45,7 +56,8 @@ def test_healthy_store_reports_ok(tmp_path, monkeypatch):
     _healthy_store(store)
     r = _invoke(CliRunner(), ["doctor"], store, monkeypatch)
     assert r.exit_code == 0, r.output
-    assert r.output.strip() == "ok"
+    assert r.output.splitlines()[0] == "ok"
+    assert "delivery (" in r.output  # the scoreboard renders alongside health
 
 
 def test_healthy_store_json(tmp_path, monkeypatch):
@@ -54,11 +66,11 @@ def test_healthy_store_json(tmp_path, monkeypatch):
     r = _invoke(CliRunner(), ["doctor", "--json"], store, monkeypatch)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
-    assert payload == {
-        "ok": True,
-        "findings": [],
-        "store_path": str(store),
-    }
+    assert payload["ok"] is True
+    assert payload["findings"] == []
+    assert payload["store_path"] == str(store)
+    # The delivery scoreboard ships in the same envelope (empty registry here).
+    assert payload["delivery"] == {"ok": True, "providers": [], "gaps": []}
 
 
 # ── failure modes are findings, not crashes ───────────────────────────────────

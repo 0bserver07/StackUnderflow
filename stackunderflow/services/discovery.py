@@ -709,6 +709,101 @@ def find_sessions_in_path(
     return matches
 
 
+def resume_candidates(
+    conn: sqlite3.Connection,
+    path: str | Path,
+    *,
+    limit_per_provider: int = 5,
+) -> dict[str, Any]:
+    """Recent sessions under *path*, grouped per provider, resume-oriented.
+
+    Matching is BIDIRECTIONAL, unlike :func:`find_sessions_in_path`:
+
+    * a project that is an **ancestor** of *path* matches (you're standing
+      inside the project), and
+    * a project that is a **descendant** of *path* matches (you gave a
+      workspace folder like ``…/new_terminal/`` and want every agent's
+      sessions in the projects underneath it).
+
+    Matching happens in SLUG space, not decoded-path space: the store's
+    slug convention folds both ``/`` and ``_`` to ``-`` (``dev_dev`` →
+    ``dev-dev``), so decoding a slug back to a path is lossy and misses
+    real projects. Encoding the query path the same way is lossless, and
+    every adapter shares the convention. Of ancestor matches only the
+    DEEPEST is kept (the project you're standing in) so a home-directory
+    catch-all project can't swamp every query.
+
+    Returns ``{"path": resolved, "providers": {provider: [session, …]}}``
+    where each session dict carries ``session_id`` / ``first_ts`` /
+    ``last_ts`` / ``message_count`` / ``project`` (slug) /
+    ``project_path`` (stored path, or ``None`` when only the slug is
+    known — slug decode is lossy, so we never fabricate one), newest
+    first, capped at *limit_per_provider* per provider. Resume-command
+    rendering is the CLI's job (templates live in
+    ``adapters/capabilities.json``) — this function is pure store query.
+    """
+    _ensure_row_factory(conn)
+    resolved = _resolve_input_path(path)
+    # Fold the query path exactly the way adapters build slugs: every
+    # separator and underscore becomes "-", with a leading "-".
+    query_slug = (
+        "-" + resolved.strip("/\\").replace("\\", "-").replace("/", "-").replace("_", "-")
+    ).rstrip("-")
+
+    project_rows = conn.execute(
+        "SELECT id, provider, slug, path FROM projects"
+    ).fetchall()
+    # id -> (provider, slug, stored_path); ancestors collected separately so
+    # only the deepest survives.
+    matched: dict[int, tuple[str, str, str | None]] = {}
+    ancestors: list[tuple[int, str, str, str | None]] = []
+    for prow in project_rows:
+        slug = (prow["slug"] or "").rstrip("-")
+        if not slug:
+            continue
+        if slug == query_slug or slug.startswith(query_slug + "-"):
+            matched[int(prow["id"])] = (
+                prow["provider"], slug, prow["path"] or None,
+            )
+        elif query_slug.startswith(slug + "-"):
+            ancestors.append(
+                (int(prow["id"]), prow["provider"], slug, prow["path"] or None)
+            )
+    if ancestors:
+        deepest = max(len(a[2]) for a in ancestors)
+        for pid, provider, slug, stored in ancestors:
+            if len(slug) == deepest:
+                matched[pid] = (provider, slug, stored)
+
+    providers: dict[str, list[dict[str, Any]]] = {}
+    if matched:
+        placeholders = ",".join("?" for _ in matched)
+        rows = conn.execute(
+            "SELECT s.project_id, s.session_id, s.first_ts, s.last_ts,"
+            "       s.message_count"
+            "  FROM sessions s"
+            f" WHERE s.project_id IN ({placeholders})"
+            " ORDER BY s.last_ts DESC",
+            list(matched),
+        ).fetchall()
+        for row in rows:
+            provider, slug, stored = matched[int(row["project_id"])]
+            bucket = providers.setdefault(provider, [])
+            if len(bucket) >= max(int(limit_per_provider), 1):
+                continue
+            bucket.append(
+                {
+                    "session_id": row["session_id"],
+                    "first_ts": row["first_ts"],
+                    "last_ts": row["last_ts"],
+                    "message_count": int(row["message_count"] or 0),
+                    "project": slug,
+                    "project_path": stored,
+                }
+            )
+    return {"path": resolved, "providers": providers}
+
+
 # ── tools-json filtering ────────────────────────────────────────────────────
 #
 # Read tool / Edit tool / Write tool calls are persisted in

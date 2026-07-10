@@ -856,17 +856,22 @@ _BACKUP_DIR = _STATE_DIR / "backups"
 
 @cli.group("backup")
 def backup_group():
-    """Back up and restore ~/.claude session data."""
+    """Back up and restore session data from every registered coding agent."""
 
 
 @backup_group.command("create")
 @click.option("--label", default=None, help="Optional label for the backup")
 @click.option("--keep", default=10, type=click.IntRange(min=1), help="Max backups to retain (oldest pruned)")
 def backup_create(label: str | None, keep: int):
-    """Create an incremental backup of all ~/.claude/ data.
+    """Create an incremental backup of every agent's session data.
 
-    Backs up sessions, file history, plans, tasks, todos, settings,
-    shell snapshots, and prompt history. Excludes debug logs and
+    ``~/.claude`` (sessions, file history, plans, tasks, todos, settings,
+    shell snapshots, prompt history) mirrors at the backup root, exactly as
+    before, so existing restores keep working. Every OTHER registered
+    adapter's source roots — self-declared by each adapter via
+    ``source_roots()`` / ``watch_paths()``, never listed here — copy under
+    ``sources/<adapter>/`` with a ``sources/manifest.json`` mapping each
+    subdir back to its original absolute path. Excludes debug logs and
     plugin binaries to save space.
 
     Uses hard links for efficiency — unchanged files cost zero disk.
@@ -927,6 +932,7 @@ def backup_create(label: str | None, keep: int):
             sys.exit(1)
 
         _capture_state(dest)
+        _report_sources(_backup_adapter_sources(dest, previous))
 
         # Summarize
         total_files = sum(1 for _ in dest.rglob("*") if _.is_file())
@@ -940,6 +946,7 @@ def backup_create(label: str | None, keep: int):
         shutil.copytree(_CLAUDE_DIR, dest, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns(*[e.rstrip("/") for e in excludes]))
         _capture_state(dest)
+        _report_sources(_backup_adapter_sources(dest, previous))
         total_files = sum(1 for _ in dest.rglob("*") if _.is_file())
         click.echo(f"  Done: {total_files} files")
     except subprocess.TimeoutExpired:
@@ -950,6 +957,105 @@ def backup_create(label: str | None, keep: int):
         sys.exit(1)
 
     _prune_backups(keep)
+
+
+def _backup_adapter_sources(
+    dest: Path, previous: Path | None,
+) -> list[tuple[str, str, str]]:
+    """Copy every registered adapter's source roots into ``dest/sources/``.
+
+    ``~/.claude`` is already the backup's top level (kept there for restore
+    back-compat), so the claude adapter is skipped here. Each adapter
+    self-declares its roots via ``source_roots()`` (or ``watch_paths()``)
+    — there is no central path list to go stale. A missing method, a
+    missing directory, or one broken adapter skips that adapter only,
+    never the backup. Layout: ``sources/<adapter>/<i>-<root name>/`` plus
+    ``sources/manifest.json`` mapping every subdir back to its original
+    absolute path (restoring a non-claude agent is a manual copy back to
+    the manifest path for now). ``--link-dest`` against the previous
+    backup's matching subdir keeps unchanged files at zero disk.
+    """
+    import json as _json
+    import subprocess
+
+    from stackunderflow.adapters import registered
+
+    copied: list[tuple[str, str, str]] = []  # (adapter, original, subdir)
+    src_base = dest / "sources"
+    for adapter in registered():
+        if adapter.name == "claude":
+            continue
+        fn = getattr(adapter, "source_roots", None) or getattr(
+            adapter, "watch_paths", None
+        )
+        if not callable(fn):
+            continue
+        try:
+            roots = [Path(r) for r in fn()]
+        except Exception:  # noqa: BLE001 - one adapter never kills the backup
+            _log.warning(
+                "backup: %s source_roots() failed; skipped", adapter.name
+            )
+            continue
+        for i, root in enumerate(roots):
+            if not root.exists():
+                continue
+            subdir = f"{i}-{root.name}"
+            target = src_base / adapter.name / subdir
+            target.mkdir(parents=True, exist_ok=True)
+            cmd = ["rsync", "-a"]
+            if previous is not None:
+                prev_root = previous / "sources" / adapter.name / subdir
+                if prev_root.exists():
+                    cmd += ["--link-dest", str(prev_root)]
+            if root.is_dir():
+                cmd += [str(root) + "/", str(target) + "/"]
+            else:
+                cmd += [str(root), str(target) + "/"]
+            try:
+                res = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=600
+                )
+                if res.returncode != 0:
+                    _log.warning(
+                        "backup: rsync failed for %s %s: %s",
+                        adapter.name, root, res.stderr.strip(),
+                    )
+                    continue
+            except FileNotFoundError:
+                import shutil as _shutil
+
+                if root.is_dir():
+                    _shutil.copytree(root, target, dirs_exist_ok=True)
+                else:
+                    _shutil.copy2(root, target / root.name)
+            except subprocess.TimeoutExpired:
+                _log.warning(
+                    "backup: rsync timed out for %s %s", adapter.name, root
+                )
+                continue
+            copied.append(
+                (adapter.name, str(root), f"{adapter.name}/{subdir}")
+            )
+    if copied:
+        manifest: dict[str, dict[str, str]] = {}
+        for name, original, sub in copied:
+            manifest.setdefault(name, {})[sub] = original
+        (src_base / "manifest.json").write_text(
+            _json.dumps(manifest, indent=2, sort_keys=True)
+        )
+    return copied
+
+
+def _report_sources(copied: list[tuple[str, str, str]]) -> None:
+    agents = sorted({c[0] for c in copied})
+    if agents:
+        click.echo(
+            f"  Sources: {len(copied)} root(s) from {len(agents)} other "
+            f"agent(s): {', '.join(agents)}"
+        )
+    else:
+        click.echo("  Sources: no other agents with data on this machine.")
 
 
 # The artifacts that together make a backup restorable. store.db alone is NOT
@@ -1102,7 +1208,11 @@ def backup_restore(name: str, dry_run: bool):
 
     click.echo(f"  Restoring {total_files} files from {source} → {dest}")
     import subprocess
-    cmd = ["rsync", "-a", str(source) + "/", str(dest) + "/"]
+    # ``sources/`` (other agents) and ``stackunderflow-state/`` (db capture)
+    # are backup-internal — restoring them INTO ~/.claude would pollute it.
+    cmd = ["rsync", "-a",
+           "--exclude", "sources/", "--exclude", "stackunderflow-state/",
+           str(source) + "/", str(dest) + "/"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
@@ -1111,7 +1221,10 @@ def backup_restore(name: str, dry_run: bool):
             click.echo(f"  rsync error: {result.stderr.strip()}")
     except FileNotFoundError:
         import shutil
-        shutil.copytree(source, dest, dirs_exist_ok=True)
+        shutil.copytree(
+            source, dest, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("sources", "stackunderflow-state"),
+        )
         click.echo("  Restore complete (via shutil).")
 
 
@@ -2747,8 +2860,17 @@ def _maybe_refresh_store(
               help="Include only these project dir names (repeatable)")
 @click.option("--exclude", "exclude", multiple=True,
               help="Exclude these project dir names (repeatable)")
-@click.option("--provider", type=click.Choice(["all", "claude", "codex", "cursor", "opencode", "pi", "copilot"]),
-              default="all", help="Provider (only 'claude' and 'all' supported today)")
+@click.option("--provider",
+              type=click.Choice(
+                  # Derived from the adapter registry — never a stale
+                  # hand-list. The filter itself is still a Plan C stub.
+                  ["all", *sorted(
+                      a.name for a in __import__(
+                          "stackunderflow.adapters", fromlist=["registered"]
+                      ).registered()
+                  )]
+              ),
+              default="all", help="Provider filter (stub — wired in Plan C)")
 @_ingest_options
 def report_cmd(
     period: str,
@@ -5566,21 +5688,188 @@ def _run_store_health_checks(store_path: Path) -> dict[str, Any]:
     return _result()
 
 
+def _run_delivery_checks(
+    store_path: Path, adapters_override: list[Any] | None = None
+) -> dict[str, Any]:
+    """Per-provider delivery scoreboard: disk → base tables → usage_events.
+
+    This exposes the gap green unit suites can't see: an adapter whose data
+    loads into the base tables (or sits on disk) but never materializes into
+    ``usage_events`` — invisible to every mart, the dashboard, and backup
+    aggregates. That is exactly how codex (model=None), antigravity (no
+    normalizer), and cursor-agent (mis-keyed normalizer) went dark while
+    3,000+ tests stayed green.
+
+    Read-only and crash-free by construction: enumerate failures degrade to
+    ``disk_sessions=None``, missing tables to zeros. Statuses per provider:
+
+    * ``OK``          — usage_events exist.
+    * ``EXEMPT``      — ``capabilities.json`` says the source can't yield
+                        billable events (``emits_usage_events: false``).
+    * ``GAP``         — billable-shaped base rows exist (assistant-role
+                        messages), zero events: data loaded then stranded.
+    * ``NO_BILLABLE`` — base rows loaded and parsed fully, but the source
+                        contains no assistant usage to price (e.g. a
+                        provider tried once with only slash-commands) —
+                        zero events is the CORRECT output, not a gap.
+    * ``DISK_GAP``    — sessions on disk, nothing ingested at all.
+    * ``EMPTY``       — nothing on disk, nothing in the store (tool unused).
+
+    ``ok`` is False iff any GAP or DISK_GAP. *adapters_override* exists for
+    tests (the global registry gets doubles injected mid-suite).
+    """
+    import sqlite3
+
+    if adapters_override is None:
+        import stackunderflow.adapters as _adapters_pkg
+
+        adapter_list = _adapters_pkg.registered()
+    else:
+        adapter_list = adapters_override
+
+    from stackunderflow.services.support_matrix import _CAPABILITIES
+
+    exempt = {
+        name for name, cap in _CAPABILITIES.items()
+        if not cap.get("emits_usage_events", True)
+    }
+
+    # Disk truth: what each adapter can see right now. Never raises.
+    disk: dict[str, int | None] = {}
+    for adapter in adapter_list:
+        try:
+            disk[adapter.name] = sum(1 for _ in adapter.enumerate())
+        except Exception:  # noqa: BLE001 - diagnostic must not crash on one adapter
+            disk[adapter.name] = None
+
+    # Store truth, read-only; a missing/unopenable store reads as all-zero.
+    base: dict[str, tuple[int, int]] = {}
+    events: dict[str, int] = {}
+    marts: dict[str, int] = {}
+    billable: dict[str, int] = {}
+    store_path = Path(store_path)
+    if store_path.exists():
+        try:
+            conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            conn = None
+        if conn is not None:
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA query_only = ON")
+                if _sqlite_object_exists(conn, "sessions") and _sqlite_object_exists(
+                    conn, "projects"
+                ):
+                    for row in conn.execute(
+                        "SELECT p.provider AS provider,"
+                        "       COUNT(DISTINCT s.id) AS sc,"
+                        "       COALESCE(SUM(s.message_count), 0) AS mc"
+                        "  FROM sessions s JOIN projects p ON s.project_id = p.id"
+                        " GROUP BY p.provider"
+                    ).fetchall():
+                        base[row["provider"]] = (int(row["sc"]), int(row["mc"]))
+                if _sqlite_object_exists(conn, "usage_events"):
+                    for row in conn.execute(
+                        "SELECT provider, COUNT(*) AS n FROM usage_events"
+                        " GROUP BY provider"
+                    ).fetchall():
+                        events[row["provider"]] = int(row["n"])
+                # Billable-shaped rows = assistant-role messages. Only these
+                # can ever become usage_events, so only these count toward a
+                # GAP verdict (a user-only trial session is NO_BILLABLE).
+                partitions = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                        " AND name LIKE 'messages_%'"
+                    ).fetchall()
+                ]
+                for part in partitions:
+                    for row in conn.execute(
+                        f"SELECT p.provider AS provider, COUNT(*) AS n"  # noqa: S608 — table name from sqlite_master
+                        f"  FROM {part} m"
+                        "  JOIN sessions s ON m.session_fk = s.id"
+                        "  JOIN projects p ON s.project_id = p.id"
+                        " WHERE m.role = 'assistant'"
+                        " GROUP BY p.provider"
+                    ).fetchall():
+                        billable[row["provider"]] = (
+                            billable.get(row["provider"], 0) + int(row["n"])
+                        )
+                if _sqlite_object_exists(conn, "provider_day_mart"):
+                    for row in conn.execute(
+                        "SELECT provider, COALESCE(SUM(message_count), 0) AS n"
+                        "  FROM provider_day_mart GROUP BY provider"
+                    ).fetchall():
+                        marts[row["provider"]] = int(row["n"])
+            except sqlite3.DatabaseError:
+                pass  # corrupt store is the health check's finding, not ours
+            finally:
+                conn.close()
+
+    providers = sorted(set(disk) | set(base) | set(events))
+    rows: list[dict[str, Any]] = []
+    gaps: list[str] = []
+    for name in providers:
+        disk_sessions = disk.get(name)
+        base_sessions, base_messages = base.get(name, (0, 0))
+        n_events = events.get(name, 0)
+        if name in exempt:
+            status = "EXEMPT"
+        elif n_events > 0:
+            status = "OK"
+        elif billable.get(name, 0) > 0:
+            status = "GAP"
+        elif base_messages > 0:
+            status = "NO_BILLABLE"
+        elif disk_sessions:
+            status = "DISK_GAP"
+        else:
+            status = "EMPTY"
+        if status in ("GAP", "DISK_GAP"):
+            gaps.append(name)
+        rows.append(
+            {
+                "provider": name,
+                "disk_sessions": disk_sessions,
+                "base_sessions": base_sessions,
+                "base_messages": base_messages,
+                "usage_events": n_events,
+                "mart_messages": marts.get(name, 0),
+                "status": status,
+            }
+        )
+    rows.sort(key=lambda r: (-r["base_messages"], r["provider"]))
+    return {"ok": not gaps, "providers": rows, "gaps": gaps}
+
+
 @cli.command("doctor")
 @click.option(
     "--json",
     "as_json",
     is_flag=True,
-    help='Emit {"ok": bool, "findings": [...]} as JSON.',
+    help='Emit {"ok": bool, "findings": [...], "delivery": {...}} as JSON.',
 )
-def doctor_cmd(as_json: bool) -> None:
-    """Read-only health check of the local store.
+@click.option(
+    "--fail-on-gap",
+    is_flag=True,
+    help="Also exit non-zero when any provider's data is stranded "
+    "(GAP/DISK_GAP in the delivery scoreboard). For CI / pre-release gates.",
+)
+def doctor_cmd(as_json: bool, fail_on_gap: bool) -> None:
+    """Read-only health + delivery check of the local store.
 
-    Runs SQLite integrity + foreign-key checks plus watermark/orphan sanity on
-    ``~/.stackunderflow/store.db``, opening it read-only (never migrates or
-    writes). Prints ``ok`` or one finding per line; exits non-zero on findings.
+    Health: SQLite integrity + foreign-key checks plus watermark/orphan
+    sanity, opening the store read-only (never migrates or writes).
+
+    Delivery: the per-provider scoreboard (disk sessions → base messages →
+    usage_events → marts) that catches data loading but never reaching the
+    dashboard. Exit is non-zero on health findings always, and on delivery
+    gaps only with ``--fail-on-gap``.
     """
-    result = _run_store_health_checks(_doctor_store_path())
+    store_path = _doctor_store_path()
+    result = _run_store_health_checks(store_path)
+    delivery = _run_delivery_checks(store_path)
     if as_json:
         click.echo(
             json.dumps(
@@ -5588,16 +5877,40 @@ def doctor_cmd(as_json: bool) -> None:
                     "ok": result["ok"],
                     "findings": result["findings"],
                     "store_path": result["store_path"],
+                    "delivery": delivery,
                 },
                 indent=2,
             )
         )
-    elif result["ok"]:
-        click.echo("ok")
     else:
-        for item in result["findings"]:
-            click.echo(item["message"])
-    if not result["ok"]:
+        if result["ok"]:
+            click.echo("ok")
+        else:
+            for item in result["findings"]:
+                click.echo(item["message"])
+        click.echo("")
+        click.echo(
+            "delivery (disk sessions → base messages → usage events → marts):"
+        )
+        header = (
+            f"  {'provider':<14} {'disk':>6} {'base_msgs':>10} "
+            f"{'events':>8} {'marts':>8}  status"
+        )
+        click.echo(header)
+        for row in delivery["providers"]:
+            disk_cell = "?" if row["disk_sessions"] is None else row["disk_sessions"]
+            click.echo(
+                f"  {row['provider']:<14} {disk_cell!s:>6} "
+                f"{row['base_messages']:>10} {row['usage_events']:>8} "
+                f"{row['mart_messages']:>8}  {row['status']}"
+            )
+        if delivery["gaps"]:
+            click.echo(
+                f"  stranded providers: {', '.join(delivery['gaps'])} — data "
+                "exists but never reaches usage_events (run ingest + "
+                "`etl backfill`, or fix the adapter/normalizer)"
+            )
+    if not result["ok"] or (fail_on_gap and not delivery["ok"]):
         raise SystemExit(1)
 
 
@@ -5607,6 +5920,90 @@ def doctor_cmd(as_json: bool) -> None:
 # serve the pages embedded in ``stackunderflow/embedded_docs.py`` — no network,
 # no repo checkout, no running server. Pages are audience-tagged so an agent can
 # filter to what's written for it.
+
+
+@cli.command("resume")
+@click.argument("path", required=False, default=None)
+@click.option(
+    "--limit-per-provider", "limit_per_provider", default=5,
+    type=click.IntRange(min=1), show_default=True,
+    help="Max sessions listed per coding agent.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the machine envelope.")
+def resume_cmd(path: str | None, limit_per_provider: int, as_json: bool) -> None:
+    """Session/resume ids for every coding agent under PATH (default: cwd).
+
+    Groups recent sessions by provider and renders each agent's real
+    resume invocation (templates are data in ``adapters/capabilities.json``,
+    verified against the actual CLIs — e.g. ``claude --resume <id>``,
+    ``codex resume <id>``). Matching is bidirectional: standing inside a
+    project finds it, and giving a workspace folder lists every project
+    underneath. Read-only; agents whose CLI has no known resume command
+    still list their session ids.
+    """
+    import sqlite3 as _sqlite3
+
+    from stackunderflow.services.discovery import resume_candidates
+    from stackunderflow.services.support_matrix import _CAPABILITIES
+
+    target = path or str(Path.cwd())
+    store = _doctor_store_path()
+    if not store.exists():
+        raise click.ClickException(
+            f"store not found at {store} — run `stackunderflow start` first"
+        )
+    conn = _sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        data = resume_candidates(
+            conn, target, limit_per_provider=limit_per_provider
+        )
+    finally:
+        conn.close()
+
+    payload: dict[str, Any] = {
+        "schema": "stackunderflow.resume/1",
+        "path": data["path"],
+        "providers": [],
+    }
+    for provider in sorted(data["providers"]):
+        sessions = data["providers"][provider]
+        template = (_CAPABILITIES.get(provider) or {}).get("resume")
+        out_sessions = []
+        for sess in sessions:
+            cmd = None
+            if template and template["scope"] == "session":
+                cmd = template["command"].format(session_id=sess["session_id"])
+            out_sessions.append({**sess, "resume_command": cmd})
+        payload["providers"].append(
+            {"provider": provider, "resume": template, "sessions": out_sessions}
+        )
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2))
+        return
+    if not payload["providers"]:
+        click.echo(f"no recorded sessions under {payload['path']}")
+        return
+    click.echo(f"resume candidates under {payload['path']}")
+    click.echo("(run each command from the session's project directory)")
+    for block in payload["providers"]:
+        template = block["resume"]
+        if template is None:
+            hint = "(no resume command known — session ids listed)"
+        elif template["scope"] == "latest":
+            hint = f"latest-only: `{template['command']}` in the project dir"
+        else:
+            hint = f"`{template['command']}`"
+        click.echo(f"\n{block['provider']} — {hint}")
+        for sess in block["sessions"]:
+            when = (sess["last_ts"] or "")[:16].replace("T", " ")
+            cmd = sess["resume_command"] or sess["session_id"]
+            where = sess["project_path"] or sess["project"]
+            click.echo(
+                f"  {when:<16} {sess['message_count']:>5} msgs  {cmd}"
+                f"   ({where})"
+            )
 
 
 @cli.group("docs")

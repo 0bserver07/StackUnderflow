@@ -233,7 +233,12 @@ def build_enriched_dataset(
     if row is None:
         return None, ""
 
-    log_dir = row["path"] or str(Path.home() / ".claude" / "projects" / row["slug"])
+    log_dir = row["path"] or ""
+    if not log_dir and (row["provider"] or "claude") in ("claude", "anthropic"):
+        # Claude's legacy slug→dir shim — its provider only.
+        from stackunderflow.adapters.claude import default_projects_root
+
+        log_dir = str(default_projects_root() / row["slug"])
 
     if isinstance(project_id, list):
         placeholders = ",".join("?" for _ in project_id)
