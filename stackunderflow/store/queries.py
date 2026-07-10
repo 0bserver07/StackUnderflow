@@ -220,7 +220,6 @@ def build_enriched_dataset(
     Returns ``(dataset, log_dir)`` or ``(None, "")`` if the project is missing.
     """
     import json as _json
-    from pathlib import Path
 
     from stackunderflow.stats import classifier, enricher
     from stackunderflow.stats.classifier import RawEntry
