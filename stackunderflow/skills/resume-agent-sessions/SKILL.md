@@ -29,6 +29,10 @@ not session resumption.
 stackunderflow resume <path> --json
 ```
 
+Add `-p/--provider <agent>` (repeatable; unambiguous prefix ok) when the
+user names a specific tool — "resume my **codex** session" →
+`stackunderflow resume <path> -p codex --json`.
+
 `<path>` defaults to cwd. Matching is bidirectional: standing inside a project
 finds it, and a workspace folder (e.g. `~/dev/my_workspace/`) lists every
 project underneath it. Underscore/hyphen path quirks are handled (matching is

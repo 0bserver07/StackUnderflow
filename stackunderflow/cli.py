@@ -5926,12 +5926,22 @@ def doctor_cmd(as_json: bool, fail_on_gap: bool) -> None:
 @cli.command("resume")
 @click.argument("path", required=False, default=None)
 @click.option(
+    "--provider", "-p", "provider_filter", multiple=True,
+    help="Only this agent (repeatable): claude, codex, grok, … "
+    "Case-insensitive; an unambiguous prefix works (e.g. -p cod).",
+)
+@click.option(
     "--limit-per-provider", "limit_per_provider", default=5,
     type=click.IntRange(min=1), show_default=True,
     help="Max sessions listed per coding agent.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the machine envelope.")
-def resume_cmd(path: str | None, limit_per_provider: int, as_json: bool) -> None:
+def resume_cmd(
+    path: str | None,
+    provider_filter: tuple[str, ...],
+    limit_per_provider: int,
+    as_json: bool,
+) -> None:
     """Session/resume ids for every coding agent under PATH (default: cwd).
 
     Groups recent sessions by provider and renders each agent's real
@@ -5962,11 +5972,46 @@ def resume_cmd(path: str | None, limit_per_provider: int, as_json: bool) -> None
     finally:
         conn.close()
 
+    # Optional per-agent narrowing: exact name, else unambiguous prefix,
+    # resolved against the providers actually present under this path.
+    unmatched: list[str] = []
+    if provider_filter:
+        present = sorted(data["providers"])
+        resolved: list[str] = []
+        for want in provider_filter:
+            w = want.lower().strip()
+            if w in data["providers"]:
+                resolved.append(w)
+                continue
+            prefixed = [p for p in present if p.startswith(w)]
+            if len(prefixed) == 1:
+                resolved.append(prefixed[0])
+            elif len(prefixed) > 1:
+                raise click.ClickException(
+                    f"--provider {want!r} is ambiguous here: "
+                    f"{', '.join(prefixed)}"
+                )
+            else:
+                unmatched.append(want)
+        if not resolved:
+            raise click.ClickException(
+                f"no sessions for provider(s) {', '.join(provider_filter)} "
+                f"under {data['path']} — providers with sessions here: "
+                f"{', '.join(present) or '(none)'}"
+            )
+        data["providers"] = {
+            p: data["providers"][p] for p in dict.fromkeys(resolved)
+        }
+
     payload: dict[str, Any] = {
         "schema": "stackunderflow.resume/1",
         "path": data["path"],
         "providers": [],
     }
+    if provider_filter:
+        payload["provider_filter"] = list(provider_filter)
+        if unmatched:
+            payload["unmatched_providers"] = unmatched
     for provider in sorted(data["providers"]):
         sessions = data["providers"][provider]
         template = (_CAPABILITIES.get(provider) or {}).get("resume")
@@ -5987,6 +6032,8 @@ def resume_cmd(path: str | None, limit_per_provider: int, as_json: bool) -> None
         click.echo(f"no recorded sessions under {payload['path']}")
         return
     click.echo(f"resume candidates under {payload['path']}")
+    if unmatched:
+        click.echo(f"(no sessions here for: {', '.join(unmatched)})")
     click.echo("(run each command from the session's project directory)")
     for block in payload["providers"]:
         template = block["resume"]

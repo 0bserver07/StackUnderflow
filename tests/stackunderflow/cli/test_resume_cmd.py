@@ -203,3 +203,54 @@ def test_missing_store_is_a_clean_error(tmp_path, monkeypatch):
     r = _invoke(["resume", "/Users/t/my_ws"], tmp_path / "nope.db", monkeypatch)
     assert r.exit_code != 0
     assert "store not found" in r.output
+
+
+# ── --provider narrowing ─────────────────────────────────────────────────────
+
+
+def test_provider_filter_reduces_to_one_agent(tmp_path, monkeypatch):
+    store = tmp_path / "store.db"
+    _seed(store)
+    payload = _payload(["resume", "/Users/t/my_ws", "-p", "codex"], store, monkeypatch)
+    assert [p["provider"] for p in payload["providers"]] == ["codex"]
+    assert payload["provider_filter"] == ["codex"]
+
+
+def test_provider_filter_is_case_insensitive_and_repeatable(tmp_path, monkeypatch):
+    store = tmp_path / "store.db"
+    _seed(store)
+    payload = _payload(
+        ["resume", "/Users/t/my_ws", "-p", "CODEX", "-p", "grok"],
+        store, monkeypatch,
+    )
+    assert {p["provider"] for p in payload["providers"]} == {"codex", "grok"}
+
+
+def test_provider_filter_accepts_unambiguous_prefix(tmp_path, monkeypatch):
+    store = tmp_path / "store.db"
+    _seed(store)
+    payload = _payload(["resume", "/Users/t/my_ws", "-p", "gr"], store, monkeypatch)
+    assert [p["provider"] for p in payload["providers"]] == ["grok"]
+
+
+def test_provider_filter_unknown_errors_with_available_list(tmp_path, monkeypatch):
+    store = tmp_path / "store.db"
+    _seed(store)
+    r = _invoke(["resume", "/Users/t/my_ws", "-p", "agy"], store, monkeypatch)
+    assert r.exit_code != 0
+    assert "providers with sessions here:" in r.output
+    assert "codex" in r.output
+
+
+def test_provider_filter_partial_match_notes_the_misses(tmp_path, monkeypatch):
+    store = tmp_path / "store.db"
+    _seed(store)
+    payload = _payload(
+        ["resume", "/Users/t/my_ws", "-p", "codex", "-p", "nope"],
+        store, monkeypatch,
+    )
+    assert [p["provider"] for p in payload["providers"]] == ["codex"]
+    assert payload["unmatched_providers"] == ["nope"]
+    r = _invoke(["resume", "/Users/t/my_ws", "-p", "codex", "-p", "nope"],
+                store, monkeypatch)
+    assert "no sessions here for: nope" in r.output
