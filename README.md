@@ -308,7 +308,7 @@ Most dashboard routes read from the marts when populated, falling back to a live
 stackunderflow/
   adapters/         # 20 source-file parsers (all always-on; self-registering)
   etl/              # ETL pipeline (v0.7+)
-    normalize/      #   Normalizer ABC + per-provider transforms (20 registered normalizers — pi and omp register separately; antigravity has none)
+    normalize/      #   Normalizer ABC + per-provider transforms (self-discovering; 20 registry keys — pi/omp share one class via provider_aliases; antigravity has none by design: encrypted source)
     marts/          #   MartBuilder ABC + 8 mart builders
     backfill.py     #   streams messages → events → marts
     watcher.py      #   watchfiles daemon, debounced 200ms
