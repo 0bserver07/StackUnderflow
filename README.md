@@ -26,7 +26,7 @@ StackUnderflow ingests session logs from 20 coding-agent providers into one loca
 *   **Local Agent Memory**: A retrieval layer your coding agents query mid-task — `stax memory decisions/file/worked/ask` — to reuse what worked and stop repeating past failures. Candidates rank by FTS5 + bm25, with an optional hybrid semantic (vector) pass, and come back through a formal, versioned `stackunderflow.memory/1` contract: a JSON-Schema, golden fixtures for every subcommand, and a stdlib validator that runs in CI. It ships as native Claude Code skills and a harness-agnostic CLI any agent can shell out to.
 *   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
-20 providers supported (7 default-on, 13 opt-in beta). Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
+20 providers supported — every adapter enabled by default, no opt-in flags. Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
@@ -148,7 +148,7 @@ Past decisions matching 'cache' (14 session(s))
 ## What it does
 
 ### Multi-provider ingest
-20 coding agents have adapters in the registry. Seven ship default-on:
+20 coding agents have adapters in the registry — all enabled by default (a provider without data on the machine simply contributes nothing). The busiest sources:
 
 | Provider | Source |
 |---|---|
@@ -160,11 +160,7 @@ Past decisions matching 'cache' (14 session(s))
 | Pi + OMP | `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/` |
 | Hermes | `~/.hermes/sessions/` |
 
-Thirteen more (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok) opt in via env var:
-
-```bash
-STACKUNDERFLOW_BETA_GEMINI=1 STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
-```
+Thirteen more are registered the same way — KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, and Grok — and load automatically wherever their source directories exist. There is no opt-in flag; per-adapter fidelity is curated in `stackunderflow/adapters/capabilities.json`.
 
 See [docs/multi-provider.md](docs/multi-provider.md) for the per-provider source paths and the cost-source semantics each one uses (rate-card vs estimated).
 
@@ -310,7 +306,7 @@ Most dashboard routes read from the marts when populated, falling back to a live
 
 ```
 stackunderflow/
-  adapters/         # 20 source-file parsers (7 default-on, 13 beta)
+  adapters/         # 20 source-file parsers (all always-on; self-registering)
   etl/              # ETL pipeline (v0.7+)
     normalize/      #   Normalizer ABC + per-provider transforms (20 registered normalizers — pi and omp register separately; antigravity has none)
     marts/          #   MartBuilder ABC + 8 mart builders
@@ -458,7 +454,7 @@ Everything runs locally. Nothing about your sessions, prompts, or code leaves th
 - `~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`
 - `~/.hermes/sessions/`
 
-The 13 beta adapters add more source roots when their env vars are set. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
+The other adapters add more source roots wherever their source directories exist. Full path list in [docs/multi-provider.md](docs/multi-provider.md).
 
 **What it writes** — `~/.stackunderflow/` only.
 - `store.db` — SQLite, WAL mode, the source of truth

@@ -2398,7 +2398,6 @@ site:
 | `STACKUNDERFLOW_DISABLE_WATCHER` | unset | Truthy = skip spawning the ETL filesystem watcher (same as `start --no-watcher`) |
 | `STACKUNDERFLOW_DISABLE_LOCK` | unset | Truthy = skip the watcher single-instance lock at `~/.stackunderflow/server.lock` (same as `start --no-lock`) |
 | `STACKUNDERFLOW_DISCOVERY_TELEMETRY` | on | Set to `0` / `false` to disable the passive discovery citation-feedback recording |
-| `STACKUNDERFLOW_BETA_<NAME>` | unset | Truthy = enable a beta-flagged provider adapter (e.g. `STACKUNDERFLOW_BETA_GEMINI=1`) |
 | `STACKUNDERFLOW_OLLAMA_URL` / `OLLAMA_URL` | unset | Ollama endpoint tried first for embeddings (`memory ask`, `memory embed`, `--use-embeddings`) and meta-agent chat; local `localhost:11434` is the fallback. `STACKUNDERFLOW_OLLAMA_URL` wins over `OLLAMA_URL` |
 | `STACKUNDERFLOW_OLLAMA_API_KEY` / `OLLAMA_API_KEY` | unset | Bearer token sent to the configured Ollama endpoint (hosted Ollama) |
 | `STACKUNDERFLOW_EMBED_MODEL` | `nomic-embed-text` | Ollama embed model for `memory ask` / `memory embed` / `search-past-decisions --use-embeddings`; the `--embed-model` flag overrides it |

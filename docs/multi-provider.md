@@ -1,6 +1,6 @@
 # Multi-provider support
 
-StackUnderflow ingests session data from more than one coding agent. Twenty adapters are registered: seven ship default-on (Claude Code, Codex, Cursor, Cline, OpenClaw, Pi + OMP, Hermes) and thirteen are opt-in beta (KiloCode, Roo Code, OpenCode, Cursor Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok). The registry in `stackunderflow/adapters/__init__.py` is the source of truth.
+StackUnderflow ingests session data from more than one coding agent. Twenty adapters are registered and every one is on by default. The registry in `stackunderflow/adapters/__init__.py` is **self-discovering**: it walks the package at import time and registers every adapter module, so there is no opt-in flag and no import list to maintain — an adapter whose source directory is absent on a machine simply yields nothing. Curated per-adapter fidelity (the Status column below) lives in `stackunderflow/adapters/capabilities.json`; a `beta` status means *pending broad validation*, not opt-in.
 
 ## Supported providers
 
@@ -13,60 +13,31 @@ StackUnderflow ingests session data from more than one coding agent. Twenty adap
 | OpenClaw | stable | first existing of `~/.openclaw/`, `~/.clawdbot/`, `~/.moltbot/`, `~/.moldbot/` (`agents/`) | on |
 | Pi + OMP | stable | `~/.pi/agent/sessions/` and `~/.omp/agent/sessions/` (one adapter, both roots) | on |
 | Hermes | stable | recursive JSONL under `~/.hermes/sessions/` | on |
-| KiloCode | beta | per-task JSON in `…/kilocode.kilo-code/tasks/` (Cline parser) | off |
-| Roo Code | beta | per-task JSON in `…/rooveterinaryinc.roo-cline/tasks/` (Cline parser) | off |
-| OpenCode | beta | SQLite under `$XDG_DATA_HOME/opencode/` (or `~/.local/share/opencode/`) | off |
-| Cursor Agent | beta | text/JSONL transcripts in `~/.cursor/projects/{p}/agent-transcripts/` (+ `~/.cursor/ai-tracking/ai-code-tracking.db`) | off |
-| Qwen | beta | JSONL in `$QWEN_DATA_DIR/projects/{p}/chats/*.jsonl` (default `~/.qwen/`) | off |
-| Gemini | beta | JSON / JSONL in `~/.gemini/tmp/{p}/chats/session-*.{json,jsonl}` | off |
-| Copilot | beta | `~/.copilot/session-state/{sid}/events.jsonl` + VS Code `workspaceStorage/{h}/GitHub.copilot-chat/transcripts/` | off |
-| Codeium | beta | `~/.codeium/` (discovery stub — protobuf decoding deferred; yields nothing today) | off |
-| Continue | beta | `~/.continue/*.{db,sqlite,sqlite3}` (defensive SQLite parser) | off |
-| Droid | beta | `$FACTORY_DIR` (or `~/.factory/sessions/{projectHash}/`) | off |
-| Kiro | beta | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/*.chat` | off |
-| Antigravity | beta | `~/.gemini/antigravity/` + `antigravity-ide/` summary `.pb` files and `antigravity-cli/history.jsonl` (plaintext metadata only — message text and tokens are encrypted) | off |
-| Grok | beta | JSONL in `~/.grok/sessions/<url-encoded-cwd>/<session>/chat_history.jsonl` (no token usage in the source; tokens estimated from content length) | off |
+| KiloCode | beta | per-task JSON in `…/kilocode.kilo-code/tasks/` (Cline parser) | on |
+| Roo Code | beta | per-task JSON in `…/rooveterinaryinc.roo-cline/tasks/` (Cline parser) | on |
+| OpenCode | beta | SQLite under `$XDG_DATA_HOME/opencode/` (or `~/.local/share/opencode/`) | on |
+| Cursor Agent | beta | text/JSONL transcripts in `~/.cursor/projects/{p}/agent-transcripts/` (+ `~/.cursor/ai-tracking/ai-code-tracking.db`) | on |
+| Qwen | beta | JSONL in `$QWEN_DATA_DIR/projects/{p}/chats/*.jsonl` (default `~/.qwen/`) | on |
+| Gemini | beta | JSON / JSONL in `~/.gemini/tmp/{p}/chats/session-*.{json,jsonl}` | on |
+| Copilot | beta | `~/.copilot/session-state/{sid}/events.jsonl` + VS Code `workspaceStorage/{h}/GitHub.copilot-chat/transcripts/` | on |
+| Codeium | beta | `~/.codeium/` (discovery stub — protobuf decoding deferred; yields nothing today) | on |
+| Continue | beta | `~/.continue/*.{db,sqlite,sqlite3}` (defensive SQLite parser) | on |
+| Droid | beta | `$FACTORY_DIR` (or `~/.factory/sessions/{projectHash}/`) | on |
+| Kiro | beta | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/*.chat` | on |
+| Antigravity | beta | `~/.gemini/antigravity/` + `antigravity-ide/` summary `.pb` files and `antigravity-cli/history.jsonl` (plaintext metadata only — message text and tokens are encrypted) | on |
+| Grok | beta | JSONL in `~/.grok/sessions/<url-encoded-cwd>/<session>/chat_history.jsonl` (no token usage in the source; tokens estimated from content length) | on |
 
-### Cursor + Cline default-on
+### Cursor + Cline coverage
 
-Cursor and Cline shipped as opt-in beta in v0.4.0, behind `STACKUNDERFLOW_BETA_CURSOR=1` / `STACKUNDERFLOW_BETA_CLINE=1`. They were promoted to default-on in v0.6.0: both have test coverage, fingerprint-based caching for the Cursor vscdb (`stackunderflow/infra/cursor_cache.py`), and have run against real local user data across several releases. Existing installs that already exported the beta env vars need no change — the env vars are a no-op for the two promoted adapters.
+Cursor and Cline have the deepest coverage of the non-Claude adapters: both carry test coverage, fingerprint-based caching for the Cursor vscdb (`stackunderflow/infra/cursor_cache.py`), and have run against real local user data across several releases.
 
-## Enabling beta adapters
+## Always-on registration and fidelity
 
-The 13 beta adapters are gated by environment variables in `stackunderflow/adapters/__init__.py`:
+Every adapter is registered automatically — there is nothing to enable. `stackunderflow/adapters/__init__.py` walks the package at import time and registers every module that satisfies the `SourceAdapter` shape (a non-empty `name` plus callable `enumerate` / `read`), so adding a new agent means adding one module file: no opt-in flag, no import list to extend, no way to ship an adapter that silently never registers. An adapter whose source directory is absent on a given machine simply yields nothing from `enumerate()`, so shipping the full set is safe and cheap everywhere; a module that fails to import raises loudly rather than disappearing.
 
-```bash
-STACKUNDERFLOW_BETA_KILOCODE=1 stackunderflow start
-STACKUNDERFLOW_BETA_ROOCODE=1 stackunderflow start
-STACKUNDERFLOW_BETA_OPENCODE=1 stackunderflow start
-STACKUNDERFLOW_BETA_CURSOR_AGENT=1 stackunderflow start
-STACKUNDERFLOW_BETA_QWEN=1 stackunderflow start
-STACKUNDERFLOW_BETA_GEMINI=1 stackunderflow start
-STACKUNDERFLOW_BETA_COPILOT=1 stackunderflow start
-STACKUNDERFLOW_BETA_CODEIUM=1 stackunderflow start
-STACKUNDERFLOW_BETA_CONTINUE=1 stackunderflow start
-STACKUNDERFLOW_BETA_DROID=1 stackunderflow start
-STACKUNDERFLOW_BETA_KIRO=1 stackunderflow start
-STACKUNDERFLOW_BETA_ANTIGRAVITY=1 stackunderflow start
-STACKUNDERFLOW_BETA_GROK=1 stackunderflow start
-```
+Curated per-adapter fidelity lives in `stackunderflow/adapters/capabilities.json` (loaded and validated by `stackunderflow/services/support_matrix.py`). Each entry records a `status` (`supported` / `beta` / `partial`), whether the source can emit billable usage events, and per-field fidelity (`content_text`, `tokens`, `cost`, `tool_calls`, `tool_output`, `reasoning`, `file_touches`). A `beta` status means *pending broad validation* — the adapter is on like every other; the label only flags that its output hasn't been checked against as much real-world data yet.
 
-OpenClaw, Pi + OMP, and Hermes are default-on and need no flag; their old `STACKUNDERFLOW_BETA_OPENCLAW` / `STACKUNDERFLOW_BETA_PI` variables are no-ops.
-
-Combine them in one invocation:
-
-```bash
-STACKUNDERFLOW_BETA_QWEN=1 STACKUNDERFLOW_BETA_GEMINI=1 stackunderflow start
-```
-
-To make the opt-in persistent, export the variables from your shell rc (`~/.zshrc`, `~/.bashrc`):
-
-```bash
-export STACKUNDERFLOW_BETA_QWEN=1
-export STACKUNDERFLOW_BETA_GEMINI=1
-```
-
-The flag parser accepts `1`, `true`, `yes`, `on` (case-insensitive); anything else leaves the adapter unregistered.
+To see what a given machine actually ingests per provider, run `stackunderflow doctor` (alias `stax doctor`). Its delivery scoreboard walks disk sessions → base messages → usage_events → marts and flags any provider that has sessions on disk but nothing loaded; `stackunderflow doctor --fail-on-gap` turns such a gap into a non-zero exit for CI.
 
 ## What Cursor and Cline read
 
@@ -129,7 +100,7 @@ flowchart LR
     ingest --> openclaw[OpenClawAdapter]
     ingest --> pi[PiAdapter]
     ingest --> hermes[HermesAdapter]
-    ingest --> betas[13 opt-in beta adapters]
+    ingest --> betas[13 more adapters — all always-on]
     claude --> store[(SQLite store.db)]
     codex --> store
     cursor --> store
@@ -145,8 +116,8 @@ flowchart LR
 
 **Cursor / Cline show no data.** Check that the source file exists. Cursor: `ls ~/Library/Application\ Support/Cursor/User/globalStorage/state.vscdb`. Cline: `ls ~/Library/Application\ Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`. If either path is missing the adapter exits cleanly without logging an error — the tool is not installed or has not been used on this machine. After confirming the path, re-run `stackunderflow reindex`.
 
-**I enabled a beta adapter but no data shows up.** Same pattern: confirm the on-disk source exists for the adapter you opted into (paths are listed in the table above), then re-run `stackunderflow reindex` with the env var set.
+**A provider I use shows no data.** Same pattern: confirm the on-disk source exists for that provider (paths are listed in the table above), then re-run `stackunderflow reindex`. `stackunderflow doctor` reports, per provider, whether sessions found on disk actually made it into the store.
 
 **My Cursor sessions show $0 (or a `≈` marker).** As of the cursor-pricing fix, cursor records with non-zero token counts always price at a real dollar figure: vendor-prefixed ids (`claude-*`, `gpt-*`, `gemini-*`) delegate to the upstream pricer; `composer-1` prices at Cursor's published rate; `composer-2` and the `cursor-auto` / `cursor-fast` autoselectors use **ESTIMATED** Anthropic Sonnet 4.x rates (see "Cursor pricing" above). A record still showing $0 means its token counts are zero — Cursor v3 stores zero `tokenCount.{inputTokens, outputTokens}` on every bubble, and the adapter's `len(text) // 4` fallback estimate also returns 0 when the bubble's text payload is empty (the v3 bubble shape stores rich JSON with diffs and code chunks instead of a top-level `text` field, so some assistant bubbles legitimately have no estimable text). The `≈` marker on Sessions table rows reflects the estimated-tokens flag; cost _is_ estimated even when the dollar figure is non-zero.
 
-**How do I disable a beta adapter?** Unset the env var (`unset STACKUNDERFLOW_BETA_QWEN`) and restart the server. The adapter is no longer registered and any existing rows in the store stay put — running `stackunderflow reindex` again only refreshes whatever the registered adapters can see. Cursor and Cline can no longer be disabled via env var (they're default-on as of v0.7.0); to skip them, comment out the `register(_CursorAdapter())` / `register(_ClineAdapter())` calls in `stackunderflow/adapters/__init__.py` or run a custom build.
+**How do I skip an adapter I don't want?** There's no runtime toggle — the registry self-discovers every module, so an adapter is disabled by removing or renaming its file in `stackunderflow/adapters/` (or excluding it in a custom build). In practice there's rarely a reason to: an adapter with no source data on your machine yields nothing and costs nothing.

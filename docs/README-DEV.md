@@ -6,7 +6,7 @@ Contributor guide: architecture, local setup, testing, and release.
 
 StackUnderflow is a single-process, local-first app:
 
-- **Python backend**: a FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer into a local SQLite store and exposes a JSON API over it. Seven adapters are enabled by default (Claude Code, Codex, Cursor, Cline, OpenClaw, Pi + OMP, Hermes); the other thirteen ship as opt-in betas.
+- **Python backend**: a FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer into a local SQLite store and exposes a JSON API over it. All twenty adapters are enabled by default — the registry self-discovers adapter modules, so there's no opt-in flag.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. The build output is written to `stackunderflow/static/react/` and served by the backend.
 
 Everything runs on the user's machine; data never leaves the host.

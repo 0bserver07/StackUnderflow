@@ -91,14 +91,14 @@ Side stores OUTSIDE store.db (backup must capture all of them): `search_index.db
 
 ## What StackUnderflow is
 
-An offline, local-first observability + memory toolkit for AI coding agents. It ingests session logs from **20 providers** (7 default-on: Claude Code, Codex, Cursor, Cline, Pi, OpenClaw, Hermes; 13 opt-in beta via `STACKUNDERFLOW_BETA_<NAME>=1`: KiloCode, RooCode, OpenCode, Cursor-Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok) and surfaces cost analytics, session playback with filesystem reconstruction, and a queryable memory both developers and agents use to learn from past sessions. MIT, no external service dependencies, no telemetry.
+An offline, local-first observability + memory toolkit for AI coding agents. It ingests session logs from **20 providers**, all registered and on by default (Claude Code, Codex, Cursor, Cline, Pi, OpenClaw, Hermes, KiloCode, RooCode, OpenCode, Cursor-Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok) — the registry self-discovers adapter modules, so there is no opt-in flag. It surfaces cost analytics, session playback with filesystem reconstruction, and a queryable memory both developers and agents use to learn from past sessions. MIT, no external service dependencies, no telemetry.
 
 Surfaces:
 
 - **REST API** under `/api/*` for the React dashboard (`stackunderflow start` → `127.0.0.1:8081`)
 - **`stackunderflow memory` CLI** — the agent-facing interface (`file` / `decisions` / `worked` / `sessions` / `ask` / `embed`), with a token-bounded `--json` envelope (`stackunderflow.memory/1`). Replaces the retired MCP server.
 - **Opt-in Claude Code hooks** — context injection (`hooks/inject.py`) + lifecycle capture (`captured_events`)
-- **CLI** for ops, reports, ETL, backups, pricing doctor
+- **CLI** for ops, reports, ETL, backups, and health checks (`doctor` — store integrity + per-provider delivery scoreboard; `pricing doctor`)
 - **Python public API** (`import stackunderflow; list_projects(); process(...)`)
 
 Source of truth: `~/.stackunderflow/store.db` (SQLite). Dashboard hot path is read-only against marts; ingest runs in the background.
@@ -109,7 +109,7 @@ Source of truth: `~/.stackunderflow/store.db` (SQLite). Dashboard hot path is re
 
 ```
 Source files (20 providers: ~/.claude/, ~/.codex/, Cursor vscdb, ~/.grok/, ...)
-        │  Adapter (per-provider parser; beta gated by STACKUNDERFLOW_BETA_<NAME>)
+        │  Adapter (per-provider parser; all 20 always-on, self-discovering registry)
         ▼
 RAW LAYER        messages (monthly partitions post-v008), sessions, projects
         │  Normalizer (per-provider; 20 registered)
@@ -130,7 +130,7 @@ Pricing: `data/models.toml` manifest → `infra/model_manifest.py` → the v024 
 
 The watcher (`etl/watcher.py`): fs change → adapter.read() → writer → normalizer → refresh_all_marts(), ~400ms end-to-end. Single-instance lock at `~/.stackunderflow/server.lock` (`etl/lock.py`); a second `start` serves HTTP without the watcher; `--no-lock` / `STACKUNDERFLOW_DISABLE_LOCK=1` skips.
 
-State directory (`~/.stackunderflow/`): `store.db` (sacred), `embeddings.db` (Ollama vectors), `search_index.db` / `qa_pairs.db` / `tags.json` (derived side stores), `cache/` (TieredCache disk side, rebuildable), `server.lock`, `config.json`, `backups/<ts>/` (rsync hardlink snapshots; `backup verify` exists now and `backup create` exits nonzero on rsync failure), `backup.log`.
+State directory (`~/.stackunderflow/`): `store.db` (sacred), `embeddings.db` (Ollama vectors), `search_index.db` / `qa_pairs.db` / `tags.json` (derived side stores), `cache/` (TieredCache disk side, rebuildable), `server.lock`, `config.json`, `backups/<ts>/` (rsync hardlink snapshots — now capturing every adapter's self-declared source roots under `sources/<name>/` with a `manifest.json`, not only `~/.claude`; `backup verify` exists now and `backup create` exits nonzero on rsync failure), `backup.log`.
 
 ---
 
@@ -197,7 +197,7 @@ docs/
 
 Settings resolve env → `~/.stackunderflow/config.json` → default (`settings.py`). Notable knobs:
 
-- `STACKUNDERFLOW_BETA_<NAME>=1` — enable a beta adapter (13 flags; see `adapters/__init__.py`)
+- `STACKUNDERFLOW_BETA_<NAME>` — **retired.** Adapters are no longer flag-gated; all 20 self-register (`adapters/__init__.py`), with per-adapter fidelity in `adapters/capabilities.json`
 - `STACKUNDERFLOW_OLLAMA_URL` / `STACKUNDERFLOW_OLLAMA_API_KEY` — cloud-first Ollama endpoint (+ bearer) for embeddings, meta-agent chat, watcher backfill; falls back to `localhost:11434`
 - `STACKUNDERFLOW_EMBED_MODEL` — Ollama embedding model (default `nomic-embed-text`); the sentence-transformers meaning of this var is retired
 - `STACKUNDERFLOW_DISABLE_WATCHER=1` / `STACKUNDERFLOW_DISABLE_LOCK=1` — headless / multi-instance
@@ -307,7 +307,7 @@ node --test tests/services/*.test.ts      # 168 tests
 - **Releases**: version bump + CHANGELOG + tag + GitHub release together, maintainer-approved, at logical breakpoints — never per-PR
 - **No external-library attribution** in shipped code/docs (clean rewrite)
 - **No backwards-compat shims** — change consumers in the same PR
-- **Beta adapters opt in** via env flag, never default-on without a promotion decision
+- **Adapters are always-on** — the registry self-discovers every module in `adapters/`; no opt-in flag. Per-adapter fidelity (`supported`/`beta`/`partial`, where *beta* = pending broad validation) is in `adapters/capabilities.json`
 - **Frontend tests use `node --test`**, no vitest dep; FE agents commit **source only**, the lead does one `npm run build` (built bundle commits are `build(ui):`)
 - **Idempotent everything in ETL**; the real store is sacred (rule 3)
 - **Parallel-agent pattern** (proven across the June campaigns): worktree-isolated agents on file-disjoint scopes, lead integrates each (copy → verify on main → commit), full suite before pushing anything that touches a mocked route, push → confirm CI green

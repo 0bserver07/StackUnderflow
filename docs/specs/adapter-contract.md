@@ -106,20 +106,23 @@ Returning `[]` opts out of live-watching — the adapter falls back to periodic 
 
 ## Registration
 
-Adapters wire themselves into the registry at package import time:
+Adapters register themselves at package import time. The registry is **self-discovering**: `stackunderflow/adapters/__init__.py` walks the package and registers every class satisfying the `SourceAdapter` shape, so the adapter file needs no `register()` call and `__init__.py` needs no per-adapter import:
 
 ```python
-# in stackunderflow/adapters/__init__.py
+# stackunderflow/adapters/myprovider.py — no registration boilerplate; being a
+# SourceAdapter-shaped class in this package is enough to be discovered.
 
-from .myprovider import MyProviderAdapter as _MyProviderAdapter
-
-if _beta_enabled("MYPROVIDER"):
-    register(_MyProviderAdapter())
+class MyProviderAdapter:
+    name = "myprovider"
+    def enumerate(self): ...
+    def read(self, ref, since_offset=0): ...
 ```
 
-The `_beta_enabled("MYPROVIDER")` gate reads `STACKUNDERFLOW_BETA_MYPROVIDER` from the environment. Default-on adapters (the four shipped today: claude, codex, cursor, cline) skip the gate and register unconditionally. Beta adapters MUST gate — turning them on by default is a release decision, not an implementation decision.
+Every adapter is always on; one whose source directory is absent simply yields nothing. Per-adapter fidelity lives in `stackunderflow/adapters/capabilities.json`, where a `beta` status means *pending broad validation*, not opt-in.
 
-The matching normalizer registers separately in `stackunderflow/etl/normalize/__init__.py`. See [session-schema-v1.md § Per-provider normalizer contracts](session-schema-v1.md#per-provider-normalizer-contracts) for the normalizer half of the contract.
+> **(Superseded: adapters are now always-on, flags removed.)** Earlier revisions gated adapters behind a `_beta_enabled("NAME")` check reading `STACKUNDERFLOW_BETA_NAME`, and treated turning an adapter on as a release decision. That mechanism was removed — adapters self-register unconditionally.
+
+The matching normalizer is discovered the same way from `stackunderflow/etl/normalize/` (keyed on the class `provider_name`, plus optional `provider_aliases`). See [session-schema-v1.md § Per-provider normalizer contracts](session-schema-v1.md#per-provider-normalizer-contracts) for the normalizer half of the contract.
 
 ---
 
@@ -152,7 +155,7 @@ Read these in this order:
 4. **`stackunderflow/adapters/cline.py`** — VS Code globalStorage walking. Also home to `KiloCodeAdapter` and `RooCodeAdapter` — sibling extensions on the same parser base, differing only in filesystem root.
 5. **`stackunderflow/adapters/_streaming.py`** — shared JSONL streaming helper used by several adapters.
 
-The 13 beta adapters under `STACKUNDERFLOW_BETA_*` flags are useful as case studies for unusual source formats (Kiro's missing tokens, Codeium's protobuf stub, Pi+OMP's shared parser).
+The thirteen most recently added adapters are useful as case studies for unusual source formats (Kiro's missing tokens, Codeium's protobuf stub, Pi+OMP's shared parser).
 
 ---
 
@@ -163,11 +166,11 @@ The 13 beta adapters under `STACKUNDERFLOW_BETA_*` flags are useful as case stud
 - [ ] Set `source_kind` correctly; populate `source_hint` if `read()` needs it.
 - [ ] Yield records with the canonical 4-token shape; flatten provider-native shapes inside the adapter.
 - [ ] Implement `watch_paths()` only when you've validated live ingest works for your source format.
-- [ ] Register under a `_beta_enabled("YOURNAME")` gate in `stackunderflow/adapters/__init__.py`.
+- [ ] Nothing to register by hand — dropping the module in `stackunderflow/adapters/` auto-registers it. Add the adapter's fidelity row to `stackunderflow/adapters/capabilities.json`.
 - [ ] Ship a matching `Normalizer` in `stackunderflow/etl/normalize/<name>.py` and register it in `stackunderflow/etl/normalize/__init__.py`. Pick a `cost_source` that honestly describes how cost is derived — see [session-schema-v1.md § cost_source enum](session-schema-v1.md#cost_source-enum).
 - [ ] Update the per-provider table in [session-schema-v1.md](session-schema-v1.md#per-provider-normalizer-contracts) and the README provider count.
 - [ ] Add fixtures + tests under `tests/stackunderflow/adapters/` and `tests/stackunderflow/etl/normalize/`.
-- [ ] Document the source path in `docs/multi-provider.md` and the env var in the `STACKUNDERFLOW_BETA_*` block of `stackunderflow/adapters/__init__.py`.
+- [ ] Document the source path in `docs/multi-provider.md`. (There is no env-var block to update — registration is automatic.)
 
 ---
 

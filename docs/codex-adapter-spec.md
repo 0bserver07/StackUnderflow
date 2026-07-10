@@ -9,7 +9,7 @@
 >
 > For current adapter authoring — the `SourceAdapter` protocol,
 > `SessionRef` / `Record` shapes, `ProviderPricer` extension points,
-> beta-flag wiring, and the resume-aware contract test — see
+> self-discovering registration, and the resume-aware contract test — see
 > [`docs/adapters.md`](adapters.md).
 
 Adds OpenAI Codex (CLI coding agent) as a second data source alongside Claude Code.

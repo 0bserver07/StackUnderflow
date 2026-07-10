@@ -290,7 +290,7 @@ Entropy stays at 8.000 bits/byte after every attempt. The encryption is implemen
 - `history.jsonl` — `{display, timestamp_ms, workspace, conversationId}` per line.
 - vscdb `antigravityUnifiedStateSync.trajectorySummaries` — nested base64 protobuf, IDE-side equivalent of the summaries.
 
-**Adapter status:** Implemented as beta (`STACKUNDERFLOW_BETA_ANTIGRAVITY=1`). Surfaces 9 conversations across 6 workspaces on the sample machine, 90 records total. All records carry `raw["cost_source"] = "encrypted"` and zero tokens — the cost layer should render "tokens unavailable" rather than infer dollars.
+**Adapter status:** Implemented and always-on (fidelity `beta` in `capabilities.json` — pending broad validation, not opt-in). Surfaces 9 conversations across 6 workspaces on the sample machine, 90 records total. All records carry `raw["cost_source"] = "encrypted"` and zero tokens — the cost layer should render "tokens unavailable" rather than infer dollars.
 
 **Value:** MEDIUM — project/workspace coverage and user prompt corpus are accessible; per-message text and token economics are not.
 

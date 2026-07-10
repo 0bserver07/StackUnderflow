@@ -144,21 +144,15 @@ When you do own a rate table outright, follow `AnthropicPricer` or `OpenAIPricer
 
 `supports_per_message_tokens()` returning `False` tells the aggregator to skip per-message cost on records from this provider. Cursor returns `False` because the vscdb only stores estimated counts at the bubble level; the dashboard then relies on session-level totals.
 
-## Beta-flag wiring
+## Registration (self-discovering)
 
-New adapters land behind a beta flag until they have real-world coverage. The pattern is in `stackunderflow/adapters/__init__.py`:
+You don't wire anything by hand. `stackunderflow/adapters/__init__.py` walks the package at import time and registers every public class that satisfies the adapter shape — a non-empty `name` plus callable `enumerate` / `read`. Dropping `stackunderflow/adapters/<name>.py` into the package is the whole registration step:
 
-```python
-def _beta_enabled(name: str) -> bool:
-    val = os.environ.get(f"STACKUNDERFLOW_BETA_{name.upper()}", "")
-    return val.strip().lower() in ("1", "true", "yes", "on")
+- No `register()` call in the adapter file, and no import list in `__init__.py` to extend.
+- No opt-in flag — every adapter is always on. One whose source directory is absent just yields nothing from `enumerate()`.
+- A module that fails to import raises immediately; a broken adapter is loud, never silently absent.
 
-if _beta_enabled("QWEN"):
-    from .qwen import QwenAdapter as _QwenAdapter
-    register(_QwenAdapter())
-```
-
-Default OFF. Users opt in with `STACKUNDERFLOW_BETA_<NAME>=1` (case-insensitive `1`/`true`/`yes`/`on`). The `__init__.py` does the registration; the adapter file itself does not call `register()`.
+Curated per-adapter fidelity (status, whether the source can emit billable events, per-field detail) lives next to the code in `stackunderflow/adapters/capabilities.json`, loaded by `stackunderflow/services/support_matrix.py`. A `beta` status there means *pending broad validation*, not opt-in. The matching normalizer (`stackunderflow/etl/normalize/`) and pricer (`stackunderflow/infra/providers/`) are discovered the same way — keyed on the class `provider_name` (plus `provider_aliases`) — so agent names are data, not code.
 
 ## Tests
 
@@ -204,6 +198,6 @@ Before you push:
 
 - Tests pass: `python -m pytest tests/ -q`.
 - Lint clean: `ruff check stackunderflow/`.
-- Beta flag default OFF in `stackunderflow/adapters/__init__.py`.
+- New adapter auto-registers (self-discovering registry) — confirm it shows up in `registered()` and add its fidelity row to `stackunderflow/adapters/capabilities.json`.
 - CHANGELOG entry under `## [Unreleased] / ### Added`.
-- README provider table updated only if the adapter graduates from beta.
+- README provider count/table reflects the new adapter (there's no beta-graduation step — every adapter ships on).

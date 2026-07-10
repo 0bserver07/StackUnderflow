@@ -5,6 +5,7 @@
 # Dev files
 CLAUDE.md
 docs/specs.md
+docs/agent_feedback/
 start*.sh
 
 .log/
