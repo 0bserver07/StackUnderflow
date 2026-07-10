@@ -161,3 +161,65 @@ def test_clear_helpers_reset_state():
 
     assert normalize_registry.all() == {}
     assert marts_registry.all() == {}
+
+
+# ── normalize registry self-discovery contract ──────────────────────────────
+
+
+def test_normalize_registry_matches_package_walk():
+    """The live registry equals an independent walk of the package: every
+    concrete Normalizer with a provider_name (plus its aliases) is
+    registered — nothing more, nothing less, no hardcoded names here."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import stackunderflow.etl.normalize as norm
+    from stackunderflow.etl.normalize.base import Normalizer
+
+    expected: dict[str, type] = {}
+    for mod_info in pkgutil.iter_modules(norm.__path__):
+        if mod_info.name.startswith("_") or mod_info.name == "base":
+            continue
+        module = importlib.import_module(
+            f"stackunderflow.etl.normalize.{mod_info.name}"
+        )
+        for cls_name, obj in vars(module).items():
+            if (
+                inspect.isclass(obj)
+                and obj.__module__ == module.__name__
+                and not cls_name.startswith("_")
+                and issubclass(obj, Normalizer)
+                and getattr(obj, "provider_name", "")
+            ):
+                expected[obj.provider_name] = obj
+                for alias in getattr(obj, "provider_aliases", ()):
+                    expected[alias] = obj
+
+    live = importlib.reload(norm).all()
+    assert live, "normalize registry must not be empty"
+    assert live == expected
+
+
+def test_every_normalize_module_contributes():
+    """A normalizer file can't sit in the package registering nothing."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import stackunderflow.etl.normalize as norm
+    from stackunderflow.etl.normalize.base import Normalizer
+
+    for mod_info in pkgutil.iter_modules(norm.__path__):
+        if mod_info.name.startswith("_") or mod_info.name == "base":
+            continue
+        module = importlib.import_module(
+            f"stackunderflow.etl.normalize.{mod_info.name}"
+        )
+        assert any(
+            inspect.isclass(obj)
+            and obj.__module__ == module.__name__
+            and issubclass(obj, Normalizer)
+            and getattr(obj, "provider_name", "")
+            for obj in vars(module).values()
+        ), f"normalize/{mod_info.name}.py registers no normalizer"

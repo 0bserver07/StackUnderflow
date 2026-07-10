@@ -28,7 +28,7 @@ _RAW_EXTRAS_FIELDS = ("conversationId", "transcriptType", "toolCalls")
 
 
 class CursorAgentNormalizer(Normalizer):
-    provider_name = "cursor_agent"
+    provider_name = "cursor-agent"  # must equal the adapter's provider string
 
     def normalize(self, msg_row: dict) -> Iterable[dict]:
         role = str(msg_row.get("role") or "")

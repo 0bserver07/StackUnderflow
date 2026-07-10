@@ -46,6 +46,8 @@ _RAW_EXTRAS_FIELDS = ("responseId", "sessionId", "cwd")
 
 class PiNormalizer(Normalizer):
     provider_name = "pi"
+    # Pi/OMP share the parser — one transform, two provider strings.
+    provider_aliases = ("omp",)
 
     def normalize(self, msg_row: dict) -> Iterable[dict]:
         role = str(msg_row.get("role") or "")

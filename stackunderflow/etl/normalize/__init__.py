@@ -1,10 +1,27 @@
 """Normalize layer — per-provider ``messages → usage_events`` transforms.
 
-The registry lives in this module per the Wave 1 spec (`__init__.py`).
-Each provider's module imports from here to call ``register()``.
+The registry is **self-discovering**: every module in this package that
+defines a concrete :class:`Normalizer` subclass with a non-empty
+``provider_name`` registers automatically — the class attribute IS the
+registration key, so there is no import list or name table here to drift
+out of sync with the adapters. (The old hand-written block shipped
+cursor-agent under the wrong key for months, silently stranding every one
+of its rows; the adapter↔normalizer parity test plus this discovery make
+that class of gap structurally impossible.) A class may declare
+``provider_aliases`` to register the same transform under extra provider
+strings (Pi/OMP share one parser). A module that fails to import raises —
+a broken normalizer must be loud, not silently absent.
+
+Discovered classes are re-exported as package attributes, so
+``from stackunderflow.etl.normalize import CodexNormalizer`` keeps
+working, and ``__all__`` is derived from what was discovered.
 """
 
 from __future__ import annotations
+
+import importlib
+import inspect
+import pkgutil
 
 from .base import (
     COST_SOURCE_ESTIMATED,
@@ -49,59 +66,48 @@ def registered_providers() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 
 
-# Default-on providers wire themselves at import time. Importing here
-# (rather than at the top) avoids a circular import: each provider
-# module imports Normalizer from .base, then calls register() above.
-from .claude import ClaudeNormalizer  # noqa: E402
-from .cline import ClineNormalizer  # noqa: E402
-from .codex import CodexNormalizer  # noqa: E402
-from .cursor import CursorNormalizer  # noqa: E402
-
-register("claude", ClaudeNormalizer)
-register("codex", CodexNormalizer)
-register("cursor", CursorNormalizer)
-register("cline", ClineNormalizer)
-
-# Wave 4D — beta provider normalizers. Same import-at-bottom pattern;
-# each module pulls Normalizer from .base, no circular risk. Beta
-# providers stay opt-in via the existing STACKUNDERFLOW_BETA_* flags
-# at the adapter layer — registering here is harmless when those
-# adapters are off because no rows ever land with the matching
-# ``provider`` value.
-from .codeium import CodeiumNormalizer  # noqa: E402
-from .continue_ import ContinueNormalizer  # noqa: E402
-from .copilot import CopilotNormalizer  # noqa: E402
-from .cursor_agent import CursorAgentNormalizer  # noqa: E402
-from .droid import DroidNormalizer  # noqa: E402
-from .gemini import GeminiNormalizer  # noqa: E402
-from .grok import GrokNormalizer  # noqa: E402
-from .hermes import HermesNormalizer  # noqa: E402
-from .kilocode import KiloCodeNormalizer  # noqa: E402
-from .kiro import KiroNormalizer  # noqa: E402
-from .openclaw import OpenClawNormalizer  # noqa: E402
-from .opencode import OpenCodeNormalizer  # noqa: E402
-from .pi import PiNormalizer  # noqa: E402
-from .qwen import QwenNormalizer  # noqa: E402
-from .roocode import RooCodeNormalizer  # noqa: E402
-
-register("codeium", CodeiumNormalizer)
-register("continue", ContinueNormalizer)
-register("copilot", CopilotNormalizer)
-register("cursor_agent", CursorAgentNormalizer)
-register("droid", DroidNormalizer)
-register("gemini", GeminiNormalizer)
-register("grok", GrokNormalizer)
-register("hermes", HermesNormalizer)
-register("kilocode", KiloCodeNormalizer)
-register("kiro", KiroNormalizer)
-register("openclaw", OpenClawNormalizer)
-register("opencode", OpenCodeNormalizer)
-register("pi", PiNormalizer)
-register("omp", PiNormalizer)  # Pi/OMP share parser logic — same class.
-register("qwen", QwenNormalizer)
-register("roocode", RooCodeNormalizer)
+# ── self-discovering registration ───────────────────────────────────
 
 
+def _discover_and_register() -> list[str]:
+    """Walk this package; register every concrete Normalizer found.
+
+    Deterministic (sorted modules, sorted class names). Returns the
+    discovered class names so ``__all__`` can re-export them without a
+    hand-maintained list.
+    """
+    class_names: list[str] = []
+    for mod_info in sorted(pkgutil.iter_modules(__path__), key=lambda m: m.name):
+        if mod_info.name.startswith("_") or mod_info.name == "base":
+            continue
+        module = importlib.import_module(f"{__name__}.{mod_info.name}")
+        module_ns = vars(module)
+        for cls_name in sorted(module_ns):
+            obj = module_ns[cls_name]
+            if (
+                not inspect.isclass(obj)
+                or obj.__module__ != module.__name__
+                or cls_name.startswith("_")
+                or not issubclass(obj, Normalizer)
+            ):
+                continue
+            name = getattr(obj, "provider_name", "")
+            if not isinstance(name, str) or not name:
+                continue
+            register(name, obj)
+            for alias in getattr(obj, "provider_aliases", ()):
+                register(alias, obj)
+            globals()[cls_name] = obj  # package re-export
+            class_names.append(cls_name)
+    return class_names
+
+
+_discover_and_register()
+
+# Static functional API only. Discovered Normalizer classes are bound as
+# package attributes at import time (see ``_discover_and_register``), so
+# ``from stackunderflow.etl.normalize import CodexNormalizer`` works at
+# runtime without a hand-maintained export list here.
 __all__ = [
     "COST_SOURCE_ESTIMATED",
     "COST_SOURCE_LIVE",
@@ -114,23 +120,4 @@ __all__ = [
     "register",
     "registered_providers",
     "_clear",
-    "ClaudeNormalizer",
-    "ClineNormalizer",
-    "CodexNormalizer",
-    "CursorNormalizer",
-    "CodeiumNormalizer",
-    "ContinueNormalizer",
-    "CopilotNormalizer",
-    "CursorAgentNormalizer",
-    "DroidNormalizer",
-    "GeminiNormalizer",
-    "GrokNormalizer",
-    "HermesNormalizer",
-    "KiloCodeNormalizer",
-    "KiroNormalizer",
-    "OpenClawNormalizer",
-    "OpenCodeNormalizer",
-    "PiNormalizer",
-    "QwenNormalizer",
-    "RooCodeNormalizer",
 ]

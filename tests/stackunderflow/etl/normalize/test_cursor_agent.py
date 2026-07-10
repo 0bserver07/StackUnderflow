@@ -11,7 +11,7 @@ from stackunderflow.etl.normalize.base import COST_SOURCE_ESTIMATED
 def _msg_row(**overrides) -> dict:
     base = {
         "id": 600,
-        "provider": "cursor_agent",
+        "provider": "cursor-agent",
         "project_id": 6,
         "session_id": "cursor-agent-sess",
         "timestamp": "2026-04-25T15:00:00+00:00",
@@ -47,7 +47,9 @@ def test_estimate_from_text_length() -> None:
 
 
 def test_provider_name() -> None:
-    assert CursorAgentNormalizer.provider_name == "cursor_agent"
+    # provider_name must equal the adapter's provider string — the old
+    # underscore value silently stranded every cursor-agent row.
+    assert CursorAgentNormalizer.provider_name == "cursor-agent"
 
 
 def test_no_text_yields_zero_events() -> None:
