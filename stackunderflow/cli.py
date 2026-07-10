@@ -170,7 +170,7 @@ def start_cmd(
 
 # ── shipped skills install (see ``docs/skills.md``) ──────────────────────────
 #
-# The three static `SKILL.md` files under ``stackunderflow/skills/`` teach
+# The static `SKILL.md` files under ``stackunderflow/skills/`` teach
 # Claude Code when to call the discovery commands. They're packaged in the
 # wheel (see ``pyproject.toml``'s hatch build config), so the source-of-truth
 # is found via ``importlib.resources`` — that works in both an editable
@@ -182,13 +182,6 @@ def start_cmd(
 # (``stackunderflow skills generate``) is unrelated — that one writes
 # *project-local* artefacts mined from the local store, never the static
 # files here.
-
-_SHIPPED_SKILLS: tuple[str, ...] = (
-    "check-prior-work",
-    "find-related-sessions",
-    "recall-past-decisions",
-)
-
 
 def _shipped_skills_source_dir() -> Path:
     """Resolve the on-disk location of the packaged ``stackunderflow/skills/`` tree.
@@ -211,7 +204,11 @@ def _install_static_skills(
     *,
     force: bool = False,
 ) -> dict[str, list[str]]:
-    """Copy the 3 shipped ``SKILL.md`` files into ``dest_dir/<name>/SKILL.md``.
+    """Copy every shipped ``SKILL.md`` into ``dest_dir/<name>/SKILL.md``.
+
+    The skill set is discovered from the packaged ``skills/`` tree (any
+    directory containing a ``SKILL.md``) — adding a skill is adding a
+    folder, never editing a name list here.
 
     Behaviour matrix:
       * dest missing → copy (``created``)
@@ -238,7 +235,11 @@ def _install_static_skills(
     dest_dir = Path(dest_dir).expanduser()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in _SHIPPED_SKILLS:
+    shipped = sorted(
+        d.name for d in src_dir.iterdir()
+        if d.is_dir() and (d / "SKILL.md").is_file()
+    )
+    for name in shipped:
         src_file = src_dir / name / "SKILL.md"
         dst_file = dest_dir / name / "SKILL.md"
 

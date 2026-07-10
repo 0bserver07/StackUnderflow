@@ -16,7 +16,19 @@ import pytest
 from click.testing import CliRunner
 
 import stackunderflow.cli as cli_module
-from stackunderflow.cli import _SHIPPED_SKILLS, _install_static_skills, cli
+from stackunderflow.cli import (
+    _install_static_skills,
+    _shipped_skills_source_dir,
+    cli,
+)
+
+# Independently re-derived from the packaged tree (the installer discovers
+# skills the same way) — adding a skill folder updates this expectation
+# automatically; no hand-list to drift.
+_SHIPPED_SKILLS: tuple[str, ...] = tuple(sorted(
+    d.name for d in _shipped_skills_source_dir().iterdir()
+    if d.is_dir() and (d / "SKILL.md").is_file()
+))
 
 
 @pytest.fixture

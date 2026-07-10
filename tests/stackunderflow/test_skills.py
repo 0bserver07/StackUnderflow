@@ -27,6 +27,7 @@ EXPECTED_SKILLS = (
     "check-prior-work",
     "find-related-sessions",
     "recall-past-decisions",
+    "resume-agent-sessions",
 )
 
 
