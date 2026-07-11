@@ -42,6 +42,18 @@ def _claude_home() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".claude"
 
 
+def claude_home() -> Path:
+    """Public accessor for Claude Code's config home (see ``_claude_home``).
+
+    Every consumer outside this adapter that needs the *home* (not just the
+    projects root) must call this — a hardcoded ``~/.claude`` silently
+    no-ops for ``CLAUDE_CONFIG_DIR`` users, which is how ``backup create``
+    backed up nothing for exactly the relocated-config installs the rest
+    of the codebase already handled.
+    """
+    return _claude_home()
+
+
 def default_projects_root() -> Path:
     """Claude Code's projects dir — THE accessor for every consumer.
 
@@ -52,6 +64,25 @@ def default_projects_root() -> Path:
     projects.
     """
     return _claude_home() / "projects"
+
+
+def resolve_legacy_log_dir(
+    provider: str | None, stored_path: str | None, slug: str
+) -> str:
+    """Stored path, or claude's legacy slug→dir fallback — claude ONLY.
+
+    THE single home for the fallback policy (three row-resolution sites
+    used to inline it and had to change in lockstep). The
+    ``<projects-root>/<slug>`` scheme is ClaudeAdapter's; stamping it on a
+    codex/cursor/grok project invents a directory that never existed. A
+    non-claude project with no stored path resolves to ``""`` (unknown) —
+    consumers treat that as "no on-disk dir", never as cwd.
+    """
+    if stored_path:
+        return stored_path
+    if (provider or "claude") in ("claude", "anthropic"):
+        return str(default_projects_root() / slug)
+    return ""
 
 
 class ClaudeAdapter:

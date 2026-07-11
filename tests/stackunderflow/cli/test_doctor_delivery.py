@@ -234,3 +234,57 @@ def test_doctor_text_output_renders_scoreboard(tmp_path, monkeypatch):
     assert "delivery (" in r.output
     assert "healthy" in r.output
     assert "OK" in r.output
+
+
+def test_bad_partition_degrades_safely_never_masks(tmp_path, monkeypatch):
+    """One odd messages_% table must not zero the marts or flip a real GAP
+    to NO_BILLABLE: metrics degrade independently, and a failed billable
+    scan biases base-bearing zero-event providers to GAP (flag, never mask),
+    with the envelope carrying billable_scan_error."""
+    store = tmp_path / "store.db"
+    _seed(store, providers={
+        "healthy": {"messages": 3, "events": 3},
+        "stranded": {"messages": 7, "events": 0, "assistant": 7},
+    })
+    conn = db.connect(store)
+    # Poisoned partition created BEFORE the real one is scanned: matches the
+    # LIKE filter but lacks the join columns, so its query raises.
+    conn.execute("CREATE TABLE messages_000bad (whatever TEXT)")
+    conn.execute(
+        "INSERT INTO provider_day_mart (day, provider, cost_usd, "
+        "message_count, session_count, project_count) "
+        "VALUES ('2026-07-01', 'healthy', 1.0, 3, 1, 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = _run_delivery_checks(store, adapters_override=[
+        _FakeAdapter("healthy", 1), _FakeAdapter("stranded", 1),
+    ])
+    # Marts survived the poisoned partition (independent degradation).
+    assert _row(result, "healthy")["mart_messages"] == 3
+    assert _row(result, "healthy")["status"] == "OK"
+    # The real gap is flagged, not masked as NO_BILLABLE.
+    assert _row(result, "stranded")["status"] == "GAP"
+    assert result["ok"] is False
+    assert result.get("billable_scan_error") is True
+
+
+def test_healthy_store_skips_billable_scan(tmp_path, monkeypatch):
+    """When every provider has events (or is exempt/empty), the expensive
+    per-partition scan must not run at all."""
+    store = tmp_path / "store.db"
+    _seed(store, providers={"healthy": {"messages": 3, "events": 3}})
+    conn = db.connect(store)
+    # A poisoned partition that would raise IF scanned — the assertion that
+    # no error flag appears proves the scan was skipped.
+    conn.execute("CREATE TABLE messages_000bad (whatever TEXT)")
+    conn.commit()
+    conn.close()
+
+    result = _run_delivery_checks(
+        store, adapters_override=[_FakeAdapter("healthy", 1)]
+    )
+    assert _row(result, "healthy")["status"] == "OK"
+    assert "billable_scan_error" not in result
+    assert result["ok"] is True

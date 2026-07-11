@@ -56,10 +56,18 @@ class _BrokenAdapter:
 
 
 class _ClaudeLike:
+    """Claude-shaped adapter: primary home (rsynced whole at the backup top
+    level — must be SKIPPED here) plus a variant home (~/.claude-opus
+    style — must be CAPTURED here; before the fix it landed in NO backup
+    path)."""
+
     name = "claude"
 
-    def source_roots(self):  # pragma: no cover - must never be called
-        raise AssertionError("claude is covered at the backup top level")
+    def __init__(self, main_projects: Path, variant_projects: Path):
+        self._roots = [main_projects, variant_projects]
+
+    def source_roots(self):
+        return list(self._roots)
 
 
 def _mk_sources(tmp_path: Path):
@@ -75,10 +83,23 @@ def _mk_sources(tmp_path: Path):
     return codexish, dbfile, watched, missing
 
 
-def _adapters(tmp_path: Path):
+def _claude_homes(tmp_path: Path, monkeypatch):
+    """A fake relocated claude home (via CLAUDE_CONFIG_DIR) + a variant."""
+    main = tmp_path / "claude-home"
+    (main / "projects").mkdir(parents=True)
+    (main / "projects" / "m.jsonl").write_text("{}\n")
+    variant = tmp_path / "claude-opus-home" / "projects"
+    variant.mkdir(parents=True)
+    (variant / "v.jsonl").write_text("{}\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(main))
+    return main, variant
+
+
+def _adapters(tmp_path: Path, monkeypatch):
     codexish, dbfile, watched, missing = _mk_sources(tmp_path)
+    main, variant = _claude_homes(tmp_path, monkeypatch)
     return [
-        _ClaudeLike(),
+        _ClaudeLike(main / "projects", variant),
         _DirAdapter("codexish", codexish),
         _FileRootAdapter("cursorish", dbfile),
         _WatchOnlyAdapter("grokish", watched),
@@ -90,15 +111,21 @@ def _adapters(tmp_path: Path):
 def test_all_present_roots_copied_with_manifest(tmp_path, monkeypatch):
     import stackunderflow.adapters as adapters_pkg
 
-    monkeypatch.setattr(adapters_pkg, "registered", lambda: _adapters(tmp_path))
+    adapters = _adapters(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapters_pkg, "registered", lambda: adapters)
     dest = tmp_path / "backup-1"
     dest.mkdir()
 
     copied = _backup_adapter_sources(dest, previous=None)
 
     names = {c[0] for c in copied}
-    assert names == {"codexish", "cursorish", "grokish"}
-    # claude skipped (top-level), ghost missing, broken degraded — no crash.
+    assert names == {"claude", "codexish", "cursorish", "grokish"}
+    # claude's PRIMARY home is skipped (rsynced whole at the top level),
+    # its VARIANT home is captured; ghost missing, broken degraded.
+    claude_dirs = list((dest / "sources" / "claude").iterdir())
+    assert len(claude_dirs) == 1
+    assert (claude_dirs[0] / "v.jsonl").is_file()
+    assert not any(f.name == "m.jsonl" for f in (dest / "sources").rglob("*"))
     assert (dest / "sources" / "codexish" / "0-codexish-sessions" / "2026" / "a.jsonl").is_file()
     assert (dest / "sources" / "cursorish" / "0-state.vscdb" / "state.vscdb").is_file()
     assert (dest / "sources" / "grokish" / "0-grokish" / "s1.jsonl").is_file()
@@ -110,7 +137,7 @@ def test_all_present_roots_copied_with_manifest(tmp_path, monkeypatch):
     assert manifest["codexish"]["codexish/0-codexish-sessions"].endswith(
         "codexish-sessions"
     )
-    assert set(manifest) == {"codexish", "cursorish", "grokish"}
+    assert set(manifest) == {"claude", "codexish", "cursorish", "grokish"}
 
 
 def test_second_backup_hardlinks_unchanged_files(tmp_path, monkeypatch):
@@ -122,7 +149,7 @@ def test_second_backup_hardlinks_unchanged_files(tmp_path, monkeypatch):
 
         pytest.skip("rsync unavailable; hardlink dedup is rsync-only")
 
-    adapters = _adapters(tmp_path)
+    adapters = _adapters(tmp_path, monkeypatch)
     monkeypatch.setattr(adapters_pkg, "registered", lambda: adapters)
     b1 = tmp_path / "backup-1"
     b1.mkdir()
@@ -139,11 +166,29 @@ def test_second_backup_hardlinks_unchanged_files(tmp_path, monkeypatch):
 def test_no_agents_with_data_writes_no_manifest(tmp_path, monkeypatch):
     import stackunderflow.adapters as adapters_pkg
 
+    main, _variant = _claude_homes(tmp_path, monkeypatch)
     monkeypatch.setattr(
         adapters_pkg, "registered",
-        lambda: [_ClaudeLike(), _DirAdapter("ghost", tmp_path / "nope")],
+        lambda: [
+            # Primary-home-only claude (both roots under the main payload)
+            # plus a missing adapter: nothing to capture.
+            _ClaudeLike(main / "projects", main / "projects"),
+            _DirAdapter("ghost", tmp_path / "nope"),
+        ],
     )
     dest = tmp_path / "backup-1"
     dest.mkdir()
     assert _backup_adapter_sources(dest, previous=None) == []
     assert not (dest / "sources" / "manifest.json").exists()
+
+
+def test_claude_dir_honors_config_dir(tmp_path, monkeypatch):
+    """backup's home resolution follows CLAUDE_CONFIG_DIR — a hardcoded
+    ~/.claude made `backup create` a silent no-op for relocated configs."""
+    from stackunderflow.cli import _claude_dir
+
+    relocated = tmp_path / "relocated-claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(relocated))
+    assert _claude_dir() == relocated
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert _claude_dir() == Path.home() / ".claude"

@@ -235,6 +235,15 @@ def _install_static_skills(
     dest_dir = Path(dest_dir).expanduser()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    if not src_dir.is_dir():
+        # Missing or non-filesystem skills tree (zipapp/partial install):
+        # the pre-discovery code degraded per-skill via is_file(); with
+        # tree discovery the names are unknowable, so degrade with a
+        # tree-level sentinel instead of crashing the command (and the
+        # server start that follows it).
+        result["missing_source"].append("skills/ tree")
+        return result
+
     shipped = sorted(
         d.name for d in src_dir.iterdir()
         if d.is_dir() and (d / "SKILL.md").is_file()
@@ -282,8 +291,8 @@ def _install_static_skills(
     "--install-skills",
     is_flag=True,
     help=(
-        "Copy the 3 shipped Claude Code skills (check-prior-work, "
-        "find-related-sessions, recall-past-decisions) into the skills "
+        "Copy every shipped Claude Code skill (discovered from the "
+        "packaged skills/ tree) into the skills "
         "destination (default ~/.claude/skills/) before starting the "
         "dashboard. Idempotent: byte-identical files are skipped silently."
     ),
@@ -851,7 +860,14 @@ def import_history_cmd(history_source: str, fmt: str):
 
 # ── backup ────────────────────────────────────────────────────────────────────
 
-_CLAUDE_DIR = Path.home() / ".claude"
+def _claude_dir() -> Path:
+    """Claude Code's config home for backup/restore — honors
+    ``CLAUDE_CONFIG_DIR`` (resolved per call so env changes and tests
+    take effect; a module-level constant silently pinned ~/.claude and
+    made ``backup create`` a no-op for relocated configs)."""
+    from stackunderflow.adapters.claude import claude_home
+
+    return claude_home()
 _BACKUP_DIR = _STATE_DIR / "backups"
 
 
@@ -879,8 +895,9 @@ def backup_create(label: str | None, keep: int):
     """
     import subprocess
 
-    if not _CLAUDE_DIR.exists():
-        click.echo("  No ~/.claude/ found — nothing to back up.")
+    claude_dir = _claude_dir()
+    if not claude_dir.exists():
+        click.echo(f"  No {claude_dir}/ found — nothing to back up.")
         return
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -915,7 +932,7 @@ def backup_create(label: str | None, keep: int):
         cmd += ["--exclude", ex]
     if previous:
         cmd += ["--link-dest", str(previous)]
-    cmd += [str(_CLAUDE_DIR) + "/", str(dest) + "/"]
+    cmd += [str(claude_dir) + "/", str(dest) + "/"]
 
     click.echo(f"  Backing up ~/.claude → {dest}")
     click.echo(f"  (excluding: {', '.join(e.rstrip('/') for e in excludes[:4])}...)")
@@ -944,7 +961,7 @@ def backup_create(label: str | None, keep: int):
     except FileNotFoundError:
         import shutil
         click.echo("  rsync not found — falling back to shutil copy")
-        shutil.copytree(_CLAUDE_DIR, dest, dirs_exist_ok=True,
+        shutil.copytree(claude_dir, dest, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns(*[e.rstrip("/") for e in excludes]))
         _capture_state(dest)
         _report_sources(_backup_adapter_sources(dest, previous))
@@ -983,9 +1000,8 @@ def _backup_adapter_sources(
 
     copied: list[tuple[str, str, str]] = []  # (adapter, original, subdir)
     src_base = dest / "sources"
+    main_payload = _claude_dir().resolve()
     for adapter in registered():
-        if adapter.name == "claude":
-            continue
         fn = getattr(adapter, "source_roots", None) or getattr(
             adapter, "watch_paths", None
         )
@@ -1000,6 +1016,14 @@ def _backup_adapter_sources(
             continue
         for i, root in enumerate(roots):
             if not root.exists():
+                continue
+            # The main claude payload is rsynced whole above — skip any
+            # root inside it (no provider-name literal: this naturally
+            # covers claude's primary root while still capturing its
+            # variant homes ~/.claude-{opus,sonnet,…}, which previously
+            # landed in NO backup path).
+            resolved = root.resolve()
+            if resolved == main_payload or main_payload in resolved.parents:
                 continue
             subdir = f"{i}-{root.name}"
             target = src_base / adapter.name / subdir
@@ -1197,7 +1221,7 @@ def backup_restore(name: str, dry_run: bool):
         click.echo(f"  Backup '{name}' not found. Run: stackunderflow backup list")
         return
 
-    dest = _CLAUDE_DIR
+    dest = _claude_dir()
     total_files = sum(1 for _ in source.rglob("*") if _.is_file())
 
     if dry_run:
@@ -5559,6 +5583,28 @@ def _doctor_store_path() -> Path:
     return Path(deps.store_path)
 
 
+def _open_store_readonly(store_path: Path) -> Any:
+    """Open the store read-only (mode=ro + query_only), or ``None``.
+
+    The one home for the idiom — three call sites each hand-rolled it,
+    so a hardening (busy_timeout, immutable) would land in one and skip
+    the others.
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only = ON")
+    except sqlite3.DatabaseError:
+        conn.close()
+        return None
+    return conn
+
+
 def _sqlite_object_exists(conn: Any, name: str) -> bool:
     """True when a table or view named *name* exists (read-only probe)."""
     row = conn.execute(
@@ -5736,75 +5782,122 @@ def _run_delivery_checks(
     }
 
     # Disk truth: what each adapter can see right now. Never raises.
-    disk: dict[str, int | None] = {}
-    for adapter in adapter_list:
+    # The walks are independent and I/O-bound (claude alone touches
+    # thousands of files), so run them in a small pool — wall-time is the
+    # slowest single adapter instead of the sum of all twenty.
+    def _disk_count(adapter: Any) -> tuple[str, int | None]:
         try:
-            disk[adapter.name] = sum(1 for _ in adapter.enumerate())
+            return adapter.name, sum(1 for _ in adapter.enumerate())
         except Exception:  # noqa: BLE001 - diagnostic must not crash on one adapter
-            disk[adapter.name] = None
+            return adapter.name, None
+
+    disk: dict[str, int | None] = {}
+    if adapter_list:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=min(8, len(adapter_list))
+        ) as pool:
+            for name, count in pool.map(_disk_count, adapter_list):
+                disk[name] = count
 
     # Store truth, read-only; a missing/unopenable store reads as all-zero.
+    # Each metric degrades INDEPENDENTLY (its own try/except): one bad read
+    # must not zero the others — a shared handler once let a single odd
+    # partition skip the mart read and misreport a real GAP as NO_BILLABLE.
     base: dict[str, tuple[int, int]] = {}
     events: dict[str, int] = {}
     marts: dict[str, int] = {}
     billable: dict[str, int] = {}
+    billable_scan_error = False
     store_path = Path(store_path)
     if store_path.exists():
-        try:
-            conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
-        except sqlite3.Error:
-            conn = None
+        conn = _open_store_readonly(store_path)
         if conn is not None:
-            conn.row_factory = sqlite3.Row
             try:
-                conn.execute("PRAGMA query_only = ON")
-                if _sqlite_object_exists(conn, "sessions") and _sqlite_object_exists(
-                    conn, "projects"
-                ):
-                    for row in conn.execute(
-                        "SELECT p.provider AS provider,"
-                        "       COUNT(DISTINCT s.id) AS sc,"
-                        "       COALESCE(SUM(s.message_count), 0) AS mc"
-                        "  FROM sessions s JOIN projects p ON s.project_id = p.id"
-                        " GROUP BY p.provider"
-                    ).fetchall():
-                        base[row["provider"]] = (int(row["sc"]), int(row["mc"]))
-                if _sqlite_object_exists(conn, "usage_events"):
-                    for row in conn.execute(
-                        "SELECT provider, COUNT(*) AS n FROM usage_events"
-                        " GROUP BY provider"
-                    ).fetchall():
-                        events[row["provider"]] = int(row["n"])
-                # Billable-shaped rows = assistant-role messages. Only these
-                # can ever become usage_events, so only these count toward a
-                # GAP verdict (a user-only trial session is NO_BILLABLE).
-                partitions = [
-                    r[0]
-                    for r in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                        " AND name LIKE 'messages_%'"
-                    ).fetchall()
-                ]
-                for part in partitions:
-                    for row in conn.execute(
-                        f"SELECT p.provider AS provider, COUNT(*) AS n"  # noqa: S608 — table name from sqlite_master
-                        f"  FROM {part} m"
-                        "  JOIN sessions s ON m.session_fk = s.id"
-                        "  JOIN projects p ON s.project_id = p.id"
-                        " WHERE m.role = 'assistant'"
-                        " GROUP BY p.provider"
-                    ).fetchall():
-                        billable[row["provider"]] = (
-                            billable.get(row["provider"], 0) + int(row["n"])
-                        )
-                if _sqlite_object_exists(conn, "provider_day_mart"):
-                    for row in conn.execute(
-                        "SELECT provider, COALESCE(SUM(message_count), 0) AS n"
-                        "  FROM provider_day_mart GROUP BY provider"
-                    ).fetchall():
-                        marts[row["provider"]] = int(row["n"])
-            except sqlite3.DatabaseError:
-                pass  # corrupt store is the health check's finding, not ours
+                try:
+                    if _sqlite_object_exists(conn, "sessions") and (
+                        _sqlite_object_exists(conn, "projects")
+                    ):
+                        for row in conn.execute(
+                            "SELECT p.provider AS provider,"
+                            "       COUNT(DISTINCT s.id) AS sc,"
+                            "       COALESCE(SUM(s.message_count), 0) AS mc"
+                            "  FROM sessions s"
+                            "  JOIN projects p ON s.project_id = p.id"
+                            " GROUP BY p.provider"
+                        ).fetchall():
+                            base[row["provider"]] = (
+                                int(row["sc"]), int(row["mc"]),
+                            )
+                except sqlite3.DatabaseError:
+                    pass  # base degrades alone
+
+                try:
+                    if _sqlite_object_exists(conn, "usage_events"):
+                        for row in conn.execute(
+                            "SELECT provider, COUNT(*) AS n FROM usage_events"
+                            " GROUP BY provider"
+                        ).fetchall():
+                            events[row["provider"]] = int(row["n"])
+                except sqlite3.DatabaseError:
+                    pass  # events degrade alone
+
+                try:
+                    if _sqlite_object_exists(conn, "provider_day_mart"):
+                        for row in conn.execute(
+                            "SELECT provider,"
+                            "       COALESCE(SUM(message_count), 0) AS n"
+                            "  FROM provider_day_mart GROUP BY provider"
+                        ).fetchall():
+                            marts[row["provider"]] = int(row["n"])
+                except sqlite3.DatabaseError:
+                    pass  # marts degrade alone
+
+                # Billable-shaped rows = assistant-role messages; only these
+                # can become usage_events, so only these separate GAP from
+                # NO_BILLABLE. The scan is expensive (per-partition JOIN on
+                # unindexed role) and its result is only consulted for
+                # providers with ZERO events — so run it on demand, scoped
+                # to exactly those providers.
+                need_billable = {
+                    name
+                    for name in (set(base) | set(disk))
+                    if events.get(name, 0) == 0 and name not in exempt
+                }
+                if need_billable:
+                    placeholders = ",".join("?" for _ in need_billable)
+                    params = sorted(need_billable)
+                    try:
+                        partitions = [
+                            r[0]
+                            for r in conn.execute(
+                                "SELECT name FROM sqlite_master"
+                                " WHERE type='table'"
+                                " AND name LIKE 'messages_%'"
+                            ).fetchall()
+                        ]
+                        for part in partitions:
+                            for row in conn.execute(
+                                f"SELECT p.provider AS provider, COUNT(*) AS n"  # noqa: S608 — table name from sqlite_master
+                                f"  FROM {part} m"
+                                "  JOIN sessions s ON m.session_fk = s.id"
+                                "  JOIN projects p ON s.project_id = p.id"
+                                " WHERE m.role = 'assistant'"
+                                f" AND p.provider IN ({placeholders})"  # noqa: S608
+                                " GROUP BY p.provider",
+                                params,
+                            ).fetchall():
+                                billable[row["provider"]] = (
+                                    billable.get(row["provider"], 0)
+                                    + int(row["n"])
+                                )
+                    except sqlite3.DatabaseError:
+                        # Fail SAFE: when the scan needed for the GAP-vs-
+                        # NO_BILLABLE call errors, flag it and bias toward
+                        # GAP below — a read error must surface a possible
+                        # gap, never mask one.
+                        billable_scan_error = True
             finally:
                 conn.close()
 
@@ -5819,7 +5912,11 @@ def _run_delivery_checks(
             status = "EXEMPT"
         elif n_events > 0:
             status = "OK"
-        elif billable.get(name, 0) > 0:
+        elif billable.get(name, 0) > 0 or (
+            billable_scan_error and base_messages > 0
+        ):
+            # A failed billable scan biases base-bearing providers to GAP —
+            # flag, never mask.
             status = "GAP"
         elif base_messages > 0:
             status = "NO_BILLABLE"
@@ -5841,7 +5938,10 @@ def _run_delivery_checks(
             }
         )
     rows.sort(key=lambda r: (-r["base_messages"], r["provider"]))
-    return {"ok": not gaps, "providers": rows, "gaps": gaps}
+    out: dict[str, Any] = {"ok": not gaps, "providers": rows, "gaps": gaps}
+    if billable_scan_error:
+        out["billable_scan_error"] = True
+    return out
 
 
 @cli.command("doctor")
@@ -5952,8 +6052,6 @@ def resume_cmd(
     underneath. Read-only; agents whose CLI has no known resume command
     still list their session ids.
     """
-    import sqlite3 as _sqlite3
-
     from stackunderflow.services.discovery import resume_candidates
     from stackunderflow.services.support_matrix import _CAPABILITIES
 
@@ -5963,9 +6061,10 @@ def resume_cmd(
         raise click.ClickException(
             f"store not found at {store} — run `stackunderflow start` first"
         )
-    conn = _sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    conn = _open_store_readonly(store)
+    if conn is None:
+        raise click.ClickException(f"store at {store} could not be opened read-only")
     try:
-        conn.execute("PRAGMA query_only = ON")
         data = resume_candidates(
             conn, target, limit_per_provider=limit_per_provider
         )

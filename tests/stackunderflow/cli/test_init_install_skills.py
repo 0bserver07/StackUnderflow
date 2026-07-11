@@ -273,3 +273,19 @@ def test_shipped_skills_source_dir_resolves_to_real_files() -> None:
     for name in _SHIPPED_SKILLS:
         skill_md = src_dir / name / "SKILL.md"
         assert skill_md.is_file(), f"expected {skill_md} to be a real file"
+
+
+def test_missing_skills_tree_degrades_not_crashes(tmp_path, monkeypatch):
+    """A missing/non-filesystem skills tree (zipapp, partial install) must
+    degrade to a missing_source sentinel — the pre-discovery code warned and
+    continued; discovery's unguarded iterdir() crashed the command and the
+    server start behind it."""
+    import stackunderflow.cli as cli_module
+
+    monkeypatch.setattr(
+        cli_module, "_shipped_skills_source_dir",
+        lambda: tmp_path / "no-such-tree",
+    )
+    report = _install_static_skills(tmp_path / "dest")
+    assert report["missing_source"] == ["skills/ tree"]
+    assert report["created"] == []

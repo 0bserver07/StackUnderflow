@@ -235,10 +235,13 @@ def _candidate_claude_md_paths(project_filter: list[str] | None = None) -> list[
     matching directory contains a CLAUDE.md (e.g. a worktree under
     ``~/dev/...`` happens to have it), we surface that.
 
-    We also consider ``~/.claude/CLAUDE.md`` as the user-global file.
+    We also consider the Claude home's ``CLAUDE.md`` (honors
+    ``CLAUDE_CONFIG_DIR``) as the user-global file.
     """
     out: list[Path] = []
-    home_md = Path.home() / ".claude" / "CLAUDE.md"
+    from stackunderflow.adapters.claude import claude_home
+
+    home_md = claude_home() / "CLAUDE.md"
     if home_md.is_file():
         out.append(home_md)
 

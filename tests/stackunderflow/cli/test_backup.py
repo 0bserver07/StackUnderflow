@@ -40,7 +40,9 @@ def claude_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "claude"
     d.mkdir()
     (d / "settings.json").write_text("{}")
-    monkeypatch.setattr(cli_mod, "_CLAUDE_DIR", d)
+    # The old module constant is gone — backup resolves the home per
+    # call via CLAUDE_CONFIG_DIR (the fix this exercises for free).
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(d))
     return d
 
 
