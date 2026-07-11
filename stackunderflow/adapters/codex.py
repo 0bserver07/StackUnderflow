@@ -133,11 +133,20 @@ class CodexAdapter:
         # turn; it can change mid-session via /model). Track the current
         # value and stamp it on every record — a ``None`` model makes the
         # codex normalizer drop the turn as unpriceable, which is exactly
-        # how 1,486 base messages sat at 0 usage_events. On a
-        # ``since_offset`` resume, turn_contexts before the offset are
-        # unseen, so early records may carry ``model=None`` until the next
-        # turn boundary restores it.
+        # how 1,486 base messages sat at 0 usage_events.
         current_model: str | None = None
+        if since_offset > 0:
+            # A resumed read starts PAST the turn's turn_context: the ingest
+            # watermark is always a response_item's offset (turn_context
+            # lines yield no record, so they never advance it). Without a
+            # seed, every boundary-straddling turn would be stamped
+            # model=None and silently dropped by the normalizer — permanent
+            # usage loss on the watcher path. Seed-only prefix scan: parses
+            # just session_meta/turn_context lines, yields nothing, so the
+            # resumed record set is byte-identical to before.
+            current_model = self._model_before_offset(
+                ref.file_path, since_offset,
+            )
 
         # ``iter_jsonl_lines`` enforces the 128 MB defensive cap and
         # streams line-by-line; rollouts above the cap are skipped with
@@ -210,6 +219,43 @@ class CodexAdapter:
         yield from buffer
 
     # ── internals ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _model_before_offset(path: Path, upto: int) -> str | None:
+        """Last model declared by session_meta/turn_context in bytes [0, upto).
+
+        Linear scan of the already-ingested prefix (typical rollouts are a
+        few MB). Re-run per incremental tick, so total cost over a session's
+        life is O(prefix²) in the worst case — negligible at real sizes, and
+        correctness beats a schema-level model watermark. ``json.loads``
+        runs only on lines that can possibly match. Mirrors the in-loop
+        guard: only a non-empty string model updates the seed.
+        """
+        model: str | None = None
+        try:
+            with path.open("rb") as fh:
+                prefix = fh.read(max(int(upto), 0))
+        except OSError:
+            return None
+        for line in prefix.splitlines():
+            if b'"turn_context"' not in line and b'"session_meta"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(event, dict) or event.get("type") not in (
+                "session_meta",
+                "turn_context",
+            ):
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            candidate = payload.get("model")
+            if isinstance(candidate, str) and candidate:
+                model = candidate
+        return model
 
     def _read_session_meta(self, fp: Path) -> dict | None:
         """Return the first-line session_meta event (normalised to the modern

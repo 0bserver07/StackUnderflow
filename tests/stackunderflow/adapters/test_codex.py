@@ -333,6 +333,68 @@ def test_model_switch_mid_session_applies_to_later_records(
     assert by_text["second turn"] == "gpt-5.5"
 
 
+def test_resumed_read_seeds_model_from_prefix(tmp_path: Path) -> None:
+    """A since_offset landing after a turn's turn_context must not strand
+    the rest of the turn: the resumed read seeds current_model from the
+    already-ingested prefix. This is the watcher batch-boundary case — the
+    ingest watermark is always a response_item offset, so it systematically
+    lands past the turn_context; without the seed these records carried
+    model=None and the normalizer silently dropped their usage_events."""
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-seed.jsonl"
+    _write_jsonl(fp, [
+        _session_meta(session_id="seed-uuid"),
+        _turn_context(model="gpt-5.4"),
+        _user_msg("start"),
+        _assistant_msg("first half", ts="2026-04-19T20:00:03.000Z"),
+        _assistant_msg("second half", ts="2026-04-19T20:00:04.000Z"),
+    ])
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    ref = list(adapter.enumerate())[0]
+
+    # Watermark = the first assistant record's seq (its line-start offset),
+    # exactly what the writer persists after a batch ending on that record.
+    raw = ref.file_path.read_bytes()
+    line_ends: list[int] = []
+    pos = 0
+    for chunk in raw.splitlines(keepends=True):
+        pos += len(chunk)
+        line_ends.append(pos)
+    watermark = line_ends[2]  # start of the "first half" assistant line
+
+    resumed = list(adapter.read(ref, since_offset=watermark))
+    assert resumed, "resumed read yielded nothing"
+    # Contract intact: only records strictly past the watermark, none extra.
+    assert all(r.seq > watermark for r in resumed)
+    # The fix: the boundary-straddling turn keeps its model.
+    assert [r.model for r in resumed] == ["gpt-5.4"]
+
+
+def test_resumed_read_seeds_latest_model_after_switch(tmp_path: Path) -> None:
+    """The seed is the LAST pre-offset turn_context — a mid-session /model
+    switch before the watermark wins over the session's first model."""
+    fp = tmp_path / "2026" / "04" / "19" / "rollout-seed2.jsonl"
+    _write_jsonl(fp, [
+        _session_meta(session_id="seed2-uuid"),
+        _turn_context(model="gpt-5.4"),
+        _assistant_msg("old turn", ts="2026-04-19T20:00:02.000Z"),
+        _turn_context(model="gpt-5.5", ts="2026-04-19T20:00:03.000Z"),
+        _assistant_msg("new turn A", ts="2026-04-19T20:00:04.000Z"),
+        _assistant_msg("new turn B", ts="2026-04-19T20:00:05.000Z"),
+    ])
+    adapter = CodexAdapter(sessions_root=tmp_path)
+    ref = list(adapter.enumerate())[0]
+    raw = ref.file_path.read_bytes()
+    line_ends = []
+    pos = 0
+    for chunk in raw.splitlines(keepends=True):
+        pos += len(chunk)
+        line_ends.append(pos)
+    watermark = line_ends[3]  # start of "new turn A" (past the 5.5 switch)
+
+    resumed = list(adapter.read(ref, since_offset=watermark))
+    assert [r.model for r in resumed] == ["gpt-5.5"]
+
+
 def test_records_before_any_turn_context_have_no_model(
     tmp_path: Path,
 ) -> None:
