@@ -81,6 +81,23 @@ def _models() -> list[dict]:
     return valid
 
 
+def clear_manifest_caches() -> None:
+    """Invalidate every manifest-derived cache — THE reset for tests that
+    patch ``models.toml``. Clearing only ``_models`` leaves the canonical-id
+    and per-provider caches stale (they read the manifest independently).
+    Note: ``costs._CANONICAL_IDS``/``RATE_CARD`` are import-time module
+    values a cache clear cannot refresh; ``costs.clear_pricing_caches()``
+    wraps this helper for the routing caches layered on top.
+    """
+    for cached in (_models, canonical_id_groups, canonical_ids,
+                   _for_provider, _by_family):
+        # getattr-guarded: tests monkeypatch _models with a plain function
+        # that has no cache_clear; the reset must still clear the rest.
+        clear = getattr(cached, "cache_clear", None)
+        if clear is not None:
+            clear()
+
+
 @lru_cache(maxsize=1)
 def canonical_id_groups() -> dict[str, tuple[str, ...]]:
     """``[canonical_ids]`` groups, keyed by PRICER KEY (the contract: each
@@ -113,10 +130,12 @@ def canonical_ids() -> tuple[str, ...]:
     return tuple(out)
 
 
+@lru_cache(maxsize=None)
 def _for_provider(provider: str) -> list[dict]:
     return [m for m in _models() if m.get("provider") == provider]
 
 
+@lru_cache(maxsize=None)
 def _by_family(provider: str) -> dict[str, dict]:
     return {m["family"]: m for m in _for_provider(provider)}
 

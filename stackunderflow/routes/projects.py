@@ -455,20 +455,11 @@ def _compute_projects_payload(
 
 
 def _resolve_log_dir(path: str | None, slug: str, provider: str | None) -> str:
-    """Stored path, or claude's legacy slug→dir fallback — claude ONLY.
+    """Delegates to the single policy home — see
+    ``adapters.claude.resolve_legacy_log_dir``."""
+    from stackunderflow.adapters.claude import resolve_legacy_log_dir
 
-    The ``<projects-root>/<slug>`` scheme is ClaudeAdapter's; stamping it
-    on a codex/cursor/grok project invents a directory that never existed.
-    A non-claude project with no stored path resolves to ``""`` (unknown),
-    and consumers treat that as "no on-disk dir", never as cwd.
-    """
-    if path:
-        return path
-    if (provider or "claude") in ("claude", "anthropic"):
-        from stackunderflow.adapters.claude import default_projects_root
-
-        return str(default_projects_root() / slug)
-    return ""
+    return resolve_legacy_log_dir(provider, path, slug)
 
 
 # ── Campaign #8: worktree fragment detection + roll-up ───────────────────────

@@ -294,12 +294,11 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
                 raise HTTPException(status_code=404, detail=f"Project '{slug}' not found in store")
             project_ids = [r.id for r in project_rows]
             provider_map = {r.id: (r.provider or "anthropic") for r in project_rows}
-            log_dir = project_rows[0].path or ""
-            if not log_dir and (project_rows[0].provider or "claude") in ("claude", "anthropic"):
-                # Claude's legacy slug→dir shim — its provider only.
-                from stackunderflow.adapters.claude import default_projects_root
+            from stackunderflow.adapters.claude import resolve_legacy_log_dir
 
-                log_dir = str(default_projects_root() / slug)
+            log_dir = resolve_legacy_log_dir(
+                project_rows[0].provider, project_rows[0].path, slug
+            )
 
             # Resolve the two requested session ids to their integer PKs (+ the
             # provider their project priced under) up front. A missing id 404s

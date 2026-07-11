@@ -68,7 +68,7 @@ def _discover_and_register() -> None:
             obj = module_ns[cls_name]
             if not inspect.isclass(obj) or obj.__module__ != module.__name__:
                 continue
-            if cls_name.startswith("_"):
+            if cls_name.startswith("_") or inspect.isabstract(obj):
                 continue
             name = getattr(obj, "name", None)
             if not isinstance(name, str) or not name or name in seen:

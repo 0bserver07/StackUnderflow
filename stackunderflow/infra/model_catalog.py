@@ -10,19 +10,22 @@ source of every dollar figure.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from importlib import resources
 
 # ``(pricer, model_id, label)`` triples, cheap → premium within a pricer.
 Candidate = tuple[str, str, str]
 
 
-def _load() -> list[dict]:
+@lru_cache(maxsize=1)
+def _load() -> tuple[dict, ...]:
     raw = json.loads(
         resources.files("stackunderflow.infra")
         .joinpath("model_candidates.json")
         .read_text(encoding="utf-8")
     )
-    return list(raw["candidates"])
+    # tuple: lru_cache must not hand out a shared mutable list
+    return tuple(raw["candidates"])
 
 
 def whatif_candidates() -> tuple[Candidate, ...]:

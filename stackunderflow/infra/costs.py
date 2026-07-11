@@ -13,8 +13,9 @@ from functools import lru_cache
 
 from stackunderflow.infra.model_manifest import (
     canonical_id_groups as _manifest_canonical_id_groups,
+    canonical_ids as _manifest_canonical_ids,
+    clear_manifest_caches as _clear_manifest_caches,
 )
-from stackunderflow.infra.model_manifest import canonical_ids as _manifest_canonical_ids
 
 from typing import Any
 
@@ -183,6 +184,17 @@ def _hint_routing() -> tuple[tuple[str, str, bool], ...]:
             rules.append((hint, key, False))
     rules.sort(key=lambda r: (-len(r[0]), not r[2], r[0], r[1]))
     return tuple(rules)
+
+
+def clear_pricing_caches() -> None:
+    """Invalidate manifest + routing caches (tests patching ``models.toml``
+    that also exercise cost routing call this). CAVEAT: ``_CANONICAL_IDS``
+    and ``RATE_CARD`` are built once at import and are NOT refreshed here —
+    a test needing patched RATE_CARD membership must rebind those itself.
+    """
+    _clear_manifest_caches()
+    _exact_id_routing.cache_clear()
+    _hint_routing.cache_clear()
 
 
 def _provider_for_model(model: str) -> str:

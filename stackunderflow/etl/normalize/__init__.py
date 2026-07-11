@@ -12,9 +12,11 @@ that class of gap structurally impossible.) A class may declare
 strings (Pi/OMP share one parser). A module that fails to import raises —
 a broken normalizer must be loud, not silently absent.
 
-Discovered classes are re-exported as package attributes, so
+Discovered classes are re-exported as package attributes at runtime, so
 ``from stackunderflow.etl.normalize import CodexNormalizer`` keeps
-working, and ``__all__`` is derived from what was discovered.
+working. ``__all__`` deliberately lists only the stable functional
+API — import classes from their own modules (or the package attribute)
+rather than via star-import.
 """
 
 from __future__ import annotations
@@ -77,6 +79,7 @@ def _discover_and_register() -> list[str]:
     hand-maintained list.
     """
     class_names: list[str] = []
+    seen: set[str] = set()
     for mod_info in sorted(pkgutil.iter_modules(__path__), key=lambda m: m.name):
         if mod_info.name.startswith("_") or mod_info.name == "base":
             continue
@@ -88,15 +91,26 @@ def _discover_and_register() -> list[str]:
                 not inspect.isclass(obj)
                 or obj.__module__ != module.__name__
                 or cls_name.startswith("_")
+                or inspect.isabstract(obj)
                 or not issubclass(obj, Normalizer)
             ):
                 continue
             name = getattr(obj, "provider_name", "")
             if not isinstance(name, str) or not name:
                 continue
+            # First-wins at DISCOVERY, matching the adapter and pricer
+            # walks — a duplicate provider_name across modules must bind
+            # all three registries to the same (alphabetically first)
+            # module, not silently diverge. register() itself stays
+            # last-wins for the manual/test path (spec + test-locked).
+            if name in seen:
+                continue
             register(name, obj)
+            seen.add(name)
             for alias in getattr(obj, "provider_aliases", ()):
-                register(alias, obj)
+                if alias not in seen:
+                    register(alias, obj)
+                    seen.add(alias)
             globals()[cls_name] = obj  # package re-export
             class_names.append(cls_name)
     return class_names

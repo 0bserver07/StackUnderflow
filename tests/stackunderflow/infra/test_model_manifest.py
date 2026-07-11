@@ -19,6 +19,20 @@ _DATED = [
 ]
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fresh_manifest_caches():
+    """The manifest accessors are lru_cached; tests that monkeypatch
+    ``_models`` (a plain function, uncached) would otherwise be served a
+    PREVIOUS test's cached derivations — clear before and after every
+    test so patches always take effect and never leak."""
+    model_manifest.clear_manifest_caches()
+    yield
+    model_manifest.clear_manifest_caches()
+
+
 def test_select_price_current_prefers_open_ended_row():
     # No at_ts → the open-ended (current) row, not the expired one.
     assert model_manifest._select_price(_DATED, None)["input"] == 5.0
@@ -94,7 +108,7 @@ def test_models_drops_malformed_entry_with_warning(monkeypatch, caplog):
     bad = {"family": "BAD", "provider": "anthropic", "match": ["bad"],
            "price": [{"input": 1.0}]}  # missing output/cache fields
     monkeypatch.setattr(model_manifest.tomllib, "load", lambda fh: {"model": [good, bad]})
-    model_manifest._models.cache_clear()
+    model_manifest.clear_manifest_caches()
     try:
         with caplog.at_level(logging.WARNING):
             models = model_manifest._models()
@@ -103,4 +117,4 @@ def test_models_drops_malformed_entry_with_warning(monkeypatch, caplog):
         # Looking up the dropped family must NOT raise — resolves to fallback.
         assert model_manifest.rates_for("BAD", "anthropic") is not None
     finally:
-        model_manifest._models.cache_clear()  # restore the real manifest
+        model_manifest.clear_manifest_caches()  # restore the real manifest
