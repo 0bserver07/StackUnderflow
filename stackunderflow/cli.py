@@ -983,6 +983,62 @@ def _replicate_backup(dest: Path, to_url: str, previous: Path | None) -> bool:
     return True
 
 
+# ── rsync exit-code tolerance ─────────────────────────────────────────────────
+#
+# The trees we mirror are LIVE: a running agent rotates shell snapshots,
+# rewrites todo files and appends session JSONL while rsync is walking them.
+# rsync reports that race as exit 24 ("some files vanished before they could be
+# transferred") or, when a per-file error joins it, exit 23 ("partial transfer
+# due to error"). Neither means the generation is unusable — every file that
+# still existed was copied, and it still hard-links the next generation.
+# Treating them as fatal (delete the destination, exit 1) meant a machine that
+# is actually being used could never finish a backup, which is precisely when
+# backups matter. Anything else non-zero is still a real failure.
+_RSYNC_VANISHED = 24
+_RSYNC_PARTIAL = 23
+
+
+def _rsync_reported(stderr: str, limit: int = 6) -> str:
+    """Condense rsync's per-file complaints, dropping its summary line.
+
+    rsync's last stderr line is always the generic ``rsync error: ...`` recap;
+    the useful part is the per-path lines above it (``file has vanished:``,
+    ``link_stat ... failed``). Capped so one pathological run can't dump
+    thousands of lines into a backup log.
+    """
+    lines = [
+        ln.strip() for ln in (stderr or "").splitlines()
+        if ln.strip() and not ln.strip().startswith("rsync error:")
+    ]
+    if not lines:
+        return ""
+    shown = "; ".join(lines[:limit])
+    if len(lines) > limit:
+        shown += f"; (+{len(lines) - limit} more)"
+    return shown
+
+
+def _rsync_outcome(returncode: int, stderr: str, *, what: str) -> tuple[bool, str]:
+    """``(ok, message)`` for an rsync exit code.
+
+    Exit 0 is silent success; 24 is success-with-note; 23 is
+    success-with-warning naming what rsync said it could not transfer; every
+    other non-zero code is a failure and the message is the raw stderr.
+    """
+    if returncode == 0:
+        return True, ""
+    detail = _rsync_reported(stderr)
+    if returncode == _RSYNC_VANISHED:
+        msg = (f"  Note: source files vanished mid-copy while backing up {what} (rsync 24) — "
+               "normal on a live tree; everything still present was copied.")
+        return True, f"{msg}\n    {detail}" if detail else msg
+    if returncode == _RSYNC_PARTIAL:
+        msg = (f"  Warning: partial transfer backing up {what} (rsync 23) — "
+               "kept what copied; rsync reported:")
+        return True, f"{msg}\n    {detail or '(no detail on stderr)'}"
+    return False, (stderr or "").strip()
+
+
 @backup_group.command("create")
 @click.option("--label", default=None, help="Optional label for the backup")
 @click.option("--keep", default=10, type=click.IntRange(min=1), help="Max backups to retain (oldest pruned)")
@@ -1002,7 +1058,10 @@ def backup_create(label: str | None, keep: int, to_url: str | None):
     subdir back to its original absolute path. Excludes debug logs and
     plugin binaries to save space.
 
-    Uses hard links for efficiency — unchanged files cost zero disk.
+    Uses hard links for efficiency — unchanged files cost zero disk. Files
+    that vanish or partly copy because an agent is writing to the tree right
+    now (rsync 24 / 23) are reported, not fatal — a live machine must still be
+    able to finish a backup.
     """
     import subprocess
 
@@ -1061,16 +1120,24 @@ def backup_create(label: str | None, keep: int, to_url: str | None):
     click.echo(f"  (excluding: {', '.join(e.rstrip('/') for e in excludes[:4])}...)")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            err = result.stderr.strip()
-            click.echo(f"  rsync error: {err}")
+        ok, message = _rsync_outcome(
+            result.returncode, result.stderr, what=str(claude_dir),
+        )
+        if not ok:
+            click.echo(f"  rsync error: {message}")
             _log.error(
                 "backup create failed: rsync exited %s: %s",
-                result.returncode, err,
+                result.returncode, message,
             )
             import shutil as _shutil
             _shutil.rmtree(dest, ignore_errors=True)
             sys.exit(1)
+        if message:
+            click.echo(message)
+            _log.warning(
+                "backup create: rsync exited %s (tolerated): %s",
+                result.returncode, _rsync_reported(result.stderr),
+            )
 
         _capture_state(dest)
         _report_sources(_backup_adapter_sources(dest, previous))
@@ -1169,12 +1236,25 @@ def _backup_adapter_sources(
                 res = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=600
                 )
-                if res.returncode != 0:
+                # Same live-tree tolerance as the main mirror: a vanished or
+                # partly-copied adapter root still belongs in the backup (and
+                # in the manifest), it just gets a note.
+                ok, message = _rsync_outcome(
+                    res.returncode, res.stderr, what=f"{adapter.name} {root}",
+                )
+                if not ok:
                     _log.warning(
                         "backup: rsync failed for %s %s: %s",
-                        adapter.name, root, res.stderr.strip(),
+                        adapter.name, root, message,
                     )
                     continue
+                if message:
+                    click.echo(message)
+                    _log.warning(
+                        "backup: rsync exited %s (tolerated) for %s %s: %s",
+                        res.returncode, adapter.name, root,
+                        _rsync_reported(res.stderr),
+                    )
             except FileNotFoundError:
                 import shutil as _shutil
 

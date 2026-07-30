@@ -12,7 +12,10 @@ backup-internal dirs back into ~/.claude.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from stackunderflow.cli import _backup_adapter_sources
 
@@ -180,6 +183,84 @@ def test_no_agents_with_data_writes_no_manifest(tmp_path, monkeypatch):
     dest.mkdir()
     assert _backup_adapter_sources(dest, previous=None) == []
     assert not (dest / "sources" / "manifest.json").exists()
+
+
+# ── live-tree rsync exit codes on the per-adapter pass ──────────────────────
+#
+# The other agents' roots are just as live as ~/.claude (cursor rewrites its
+# vscdb, gemini rotates tmp files). The adapter pass has to forgive the same
+# codes the main mirror does — and, crucially, still record the adapter in the
+# manifest: a root that copied 99% is in the backup, and a manifest that omits
+# it makes it unrestorable.
+
+_FAKE_RSYNC = """#!/bin/sh
+for arg in "$@"; do dst="$arg"; done
+mkdir -p "$dst"
+: > "$dst/partial.jsonl"
+echo 'file has vanished: "/h/.codex/sessions/live.jsonl"' >&2
+echo "rsync error: stub exit ${FAKE_RSYNC_EXIT:-0} at main.c(1338) [sender=3.1.3]" >&2
+exit ${FAKE_RSYNC_EXIT:-0}
+"""
+
+
+@pytest.fixture
+def fake_rsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    stub = bindir / "rsync"
+    stub.write_text(_FAKE_RSYNC)
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return lambda code: monkeypatch.setenv("FAKE_RSYNC_EXIT", str(code))
+
+
+def _one_adapter(tmp_path, monkeypatch):
+    """A single present adapter root, with claude's home pointed elsewhere."""
+    import stackunderflow.adapters as adapters_pkg
+
+    root = tmp_path / "codexish-sessions"
+    root.mkdir()
+    (root / "a.jsonl").write_text("{}\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere-claude"))
+    monkeypatch.setattr(
+        adapters_pkg, "registered", lambda: [_DirAdapter("codexish", root)]
+    )
+    dest = tmp_path / "backup-1"
+    dest.mkdir()
+    return dest
+
+
+@pytest.mark.parametrize(
+    ("code", "phrase"), [(24, "rsync 24"), (23, "rsync 23")],
+)
+def test_adapter_source_tolerates_live_tree_exit(
+    tmp_path, monkeypatch, capsys, fake_rsync, code, phrase
+):
+    dest = _one_adapter(tmp_path, monkeypatch)
+    fake_rsync(code)
+
+    copied = _backup_adapter_sources(dest, previous=None)
+
+    assert [c[0] for c in copied] == ["codexish"]
+    manifest = json.loads((dest / "sources" / "manifest.json").read_text())
+    assert manifest["codexish"]["codexish/0-codexish-sessions"].endswith(
+        "codexish-sessions"
+    )
+    out = capsys.readouterr().out
+    assert phrase in out
+    assert "live.jsonl" in out  # what rsync said it could not transfer
+    assert "at main.c(1338)" not in out  # …minus its useless recap line
+
+
+def test_adapter_source_still_skipped_on_real_rsync_error(
+    tmp_path, monkeypatch, capsys, fake_rsync
+):
+    dest = _one_adapter(tmp_path, monkeypatch)
+    fake_rsync(12)  # protocol error — not the live-tree race
+
+    assert _backup_adapter_sources(dest, previous=None) == []
+    assert not (dest / "sources" / "manifest.json").exists()
+    assert "rsync 12" not in capsys.readouterr().out
 
 
 def test_claude_dir_honors_config_dir(tmp_path, monkeypatch):
