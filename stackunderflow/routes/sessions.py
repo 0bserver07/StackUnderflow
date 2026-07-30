@@ -36,6 +36,61 @@ def _duration_minutes(first: str | None, last: str | None) -> float | None:
         return None
 
 
+def _is_base64_media(d: dict, parent_key: str | None) -> bool:
+    """Does ``d`` hold an inline base64 media payload under its ``data`` key?
+
+    Two shapes qualify: the block declares ``type == "base64"`` itself (the
+    canonical Claude/Anthropic image block), or it hangs off a ``source`` key
+    and carries an ``image/*`` media type (defensive — an adapter that omits
+    the ``type`` discriminator).
+    """
+    if d.get("type") == "base64":
+        return True
+    if parent_key == "source":
+        mt = d.get("media_type")
+        return isinstance(mt, str) and mt.startswith("image/")
+    return False
+
+
+def _media_stub(d: dict, n: int) -> str:
+    """``<elided: image/png base64, 1519180 bytes>`` — media type + real size."""
+    mt = d.get("media_type")
+    label = f"{mt} " if isinstance(mt, str) and mt else ""
+    return f"<elided: {label}base64, {n} bytes>"
+
+
+def _elide_base64_media(node):
+    """Replace inline base64 media payloads with a size stub, in place.
+
+    Transcripts embed screenshots as ``{"type": "image", "source": {"type":
+    "base64", "media_type": "image/png", "data": "<~1.5MB string>"}}`` — and
+    the same block is duplicated under ``toolUseResult``. On screenshot-heavy
+    sessions those strings are ~94% of the JSON (one real session: 110MiB of
+    117MiB). The Sessions tab renders text / tool_use / tool_result-text only
+    and never reads ``source.data``, so shipping the bytes is pure waste.
+
+    Sibling keys (``type``, ``media_type``) are left intact so the block keeps
+    its shape and the stub still says what was dropped and how big it was.
+    Nothing else in the record is touched. Single iterative pass over the
+    already-parsed object — no copy, no recursion limit.
+    """
+    stack: list[tuple[object, str | None]] = [(node, None)]
+    while stack:
+        cur, parent_key = stack.pop()
+        if isinstance(cur, dict):
+            data = cur.get("data")
+            if isinstance(data, str) and data and _is_base64_media(cur, parent_key):
+                cur["data"] = _media_stub(cur, len(data))
+            for key, val in cur.items():
+                if isinstance(val, (dict, list)):
+                    stack.append((val, key))
+        elif isinstance(cur, list):
+            for val in cur:
+                if isinstance(val, (dict, list)):
+                    stack.append((val, parent_key))
+    return node
+
+
 def _session_fk_subquery(project_ids: list[int]) -> str:
     """``session_fk IN (SELECT id FROM sessions WHERE project_id IN (?, ?...))``.
 
@@ -404,6 +459,8 @@ async def get_jsonl_content(file: str, project: str | None = None):
                 raw = json.loads(msg.raw_json)
             except (json.JSONDecodeError, TypeError):
                 raw = {"error": "parse error", "line_number": i + 1}
+            if not raw_media:
+                _elide_base64_media(raw)
             lines.append(raw)
             if i == 0:
                 cwd = raw.get("cwd", "")
