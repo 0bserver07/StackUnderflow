@@ -919,10 +919,78 @@ def backup_group():
     """Back up and restore session data from every registered coding agent."""
 
 
+def _replicate_backup(dest: Path, to_url: str, previous: Path | None) -> bool:
+    """Copy a finished backup directory to an ``ssh://`` host. Returns success.
+
+    This is *replication*, not sync: one direction, whole artifacts, no merge —
+    the remote ends up with a copy of this machine's backup. Contrast
+    ``stackunderflow sync``, which moves encrypted aggregate shards between
+    peers and never carries raw session data.
+
+    Mirrors the local design by passing ``--link-dest`` at the *remote* previous
+    generation, so unchanged files cost no extra disk there either. Unlike the
+    sync transport, nothing here is encrypted at rest — ssh protects it in
+    transit and the remote holds plaintext, same as any other backup target.
+    """
+    import shlex
+    import subprocess
+
+    from stackunderflow.sync.ssh_store import parse_ssh_url
+
+    try:
+        target = parse_ssh_url(to_url)
+    except ValueError as exc:
+        click.echo(f"  Invalid --to destination: {exc}")
+        return False
+
+    ssh_cmd = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    if target.port is not None:
+        ssh_cmd += f" -p {target.port}"
+
+    remote_dir = f"{target.root}/{dest.name}"
+    click.echo(f"  Replicating → {target.host}:{remote_dir}")
+
+    mk = subprocess.run(  # noqa: S603 - argv built here, no shell
+        [*target.ssh_argv(), f"mkdir -p {shlex.quote(target.root)}"],
+        capture_output=True, timeout=60, check=False,
+    )
+    if mk.returncode != 0:
+        click.echo(f"  Could not create remote dir: {mk.stderr.decode(errors='replace').strip()}")
+        return False
+
+    cmd = ["rsync", "-a", "-e", ssh_cmd]
+    if previous is not None:
+        # Interpreted on the remote side, so it points at the previous
+        # generation already sitting there — not at the local one.
+        cmd.append(f"--link-dest={target.root}/{previous.name}")
+    cmd += [f"{dest}/", f"{target.host}:{remote_dir}/"]
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=3600, check=False)  # noqa: S603
+    except FileNotFoundError:
+        click.echo("  rsync not found — cannot replicate (local backup is intact).")
+        return False
+    except subprocess.TimeoutExpired:
+        click.echo("  Replication timed out (>1h). Local backup is intact.")
+        return False
+
+    if res.returncode != 0:
+        click.echo(f"  Replication failed: {res.stderr.decode(errors='replace').strip()[:300]}")
+        click.echo("  The local backup is intact — re-run to retry.")
+        return False
+
+    click.echo(f"  Replicated to {target.host}:{remote_dir}")
+    return True
+
+
 @backup_group.command("create")
 @click.option("--label", default=None, help="Optional label for the backup")
 @click.option("--keep", default=10, type=click.IntRange(min=1), help="Max backups to retain (oldest pruned)")
-def backup_create(label: str | None, keep: int):
+@click.option("--to", "to_url", default=None,
+              help="Also replicate the finished backup to ssh://[user@]host[:port]/abs/path. "
+                   "One-way whole-artifact copy — for peer sync of aggregates use "
+                   "`stackunderflow sync` instead.")
+def backup_create(label: str | None, keep: int, to_url: str | None):
     """Create an incremental backup of every agent's session data.
 
     ``~/.claude`` (sessions, file history, plans, tasks, todos, settings,
@@ -937,6 +1005,18 @@ def backup_create(label: str | None, keep: int):
     Uses hard links for efficiency — unchanged files cost zero disk.
     """
     import subprocess
+
+    # Validate the replication target BEFORE doing any work: a typo should not
+    # cost a full local backup first (the copy can take minutes on a big
+    # ~/.claude). Same reasoning as the destination check in `sync init`.
+    if to_url:
+        from stackunderflow.sync.ssh_store import parse_ssh_url
+
+        try:
+            parse_ssh_url(to_url)
+        except ValueError as exc:
+            click.echo(f"  Invalid --to destination: {exc}")
+            sys.exit(1)
 
     claude_dir = _claude_dir()
     if not claude_dir.exists():
@@ -1018,6 +1098,11 @@ def backup_create(label: str | None, keep: int):
         sys.exit(1)
 
     _prune_backups(keep)
+
+    # Replication is last and non-fatal to the local backup: a network failure
+    # must never invalidate a backup that already succeeded on disk.
+    if to_url and not _replicate_backup(dest, to_url, previous):
+        sys.exit(1)
 
 
 def _backup_adapter_sources(
