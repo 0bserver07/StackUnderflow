@@ -11,10 +11,12 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
+from stackunderflow.settings import app_dir
+
 logger = logging.getLogger(__name__)
 
 # Location of the search index database
-SEARCH_DB_PATH = Path.home() / ".stackunderflow" / "search_index.db"
+SEARCH_DB_PATH = app_dir() / "search_index.db"
 
 # A single word character (unicode-aware) — the presence of one is what
 # distinguishes a real search from empty / punctuation-only input.

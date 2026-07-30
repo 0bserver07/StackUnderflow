@@ -49,11 +49,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
+from stackunderflow.settings import app_dir
 
 _log = logging.getLogger(__name__)
 
 # Default lock file path. Tests inject a tmp_path-rooted alternative.
-DEFAULT_LOCK_PATH: Path = Path.home() / ".stackunderflow" / "server.lock"
+DEFAULT_LOCK_PATH: Path = app_dir() / "server.lock"
 
 # Read once via a module-level alias so Pyright doesn't narrow
 # ``sys.platform`` to a Literal and flag the cross-platform branches as

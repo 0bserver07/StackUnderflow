@@ -359,9 +359,10 @@ def _lock_disabled() -> bool:
 def _maybe_clean_cold_cache() -> None:
     """Remove the old JSON cache once the store is populated."""
     import shutil
-    from pathlib import Path
 
-    cold = Path.home() / ".stackunderflow" / "cache"
+    from stackunderflow.settings import app_dir
+
+    cold = app_dir() / "cache"
     if cold.exists():
         shutil.rmtree(cold, ignore_errors=True)
 

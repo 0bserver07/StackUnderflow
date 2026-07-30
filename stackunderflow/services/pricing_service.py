@@ -7,10 +7,10 @@ import logging
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from ..infra.costs import RATE_CARD as DEFAULT_CLAUDE_PRICING
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class PricingService:
     STALE_THRESHOLD = timedelta(days=7)
 
     def __init__(self):
-        self.cache_dir = Path.home() / ".stackunderflow" / "cache"
+        self.cache_dir = app_dir() / "cache"
         self.pricing_cache_file = self.cache_dir / "pricing.json"
         self.litellm_url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
         self.cache_duration = timedelta(hours=24)
@@ -121,7 +121,7 @@ class PricingService:
           when there is no cache / no parseable timestamp).
         * ``model_count`` — number of overlay model entries (0 when absent).
         """
-        cache_file = Path.home() / ".stackunderflow" / "cache" / "pricing.json"
+        cache_file = app_dir() / "cache" / "pricing.json"
         empty = {
             "source": "none",
             "timestamp": None,
@@ -211,7 +211,7 @@ class PricingService:
         """
         import sqlite3
 
-        store_path = Path.home() / ".stackunderflow" / "store.db"
+        store_path = app_dir() / "store.db"
         if not store_path.exists() or not isinstance(pricing_data, dict):
             return
         million = 1_000_000.0

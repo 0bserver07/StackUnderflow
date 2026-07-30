@@ -16,7 +16,26 @@ import re
 from pathlib import Path
 from typing import Any
 
-_APP_DIR = Path.home() / ".stackunderflow"
+APP_DIR_ENV = "STACKUNDERFLOW_HOME"
+
+
+def app_dir() -> Path:
+    """The data directory holding the store, indexes, and config.
+
+    ``$STACKUNDERFLOW_HOME`` when set, else ``~/.stackunderflow``. Every module
+    that needs a data path derives it from here, so pointing the whole app at a
+    different dataset — a store copied from another machine, or a backup's
+    ``stackunderflow-state/`` — is one environment variable.
+
+    Read at import by the module-level constants below. The env var is
+    therefore the authoritative mechanism; ``start --data-dir`` sets it and
+    re-execs rather than mutating already-bound constants.
+    """
+    raw = os.environ.get(APP_DIR_ENV)
+    return Path(raw).expanduser() if raw else Path.home() / ".stackunderflow"
+
+
+_APP_DIR = app_dir()
 _CFG_FILE = _APP_DIR / "config.json"
 
 _ISO_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
@@ -240,5 +259,6 @@ def _load() -> dict[str, Any]:
 
 
 def _save(data: dict[str, Any]) -> None:
-    _APP_DIR.mkdir(exist_ok=True)
+    # parents=True: a custom --data-dir may sit several levels deep.
+    _APP_DIR.mkdir(parents=True, exist_ok=True)
     _CFG_FILE.write_text(json.dumps(data, indent=2))

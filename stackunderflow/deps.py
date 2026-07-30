@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from stackunderflow.settings import Settings
+from stackunderflow.settings import Settings, app_dir
 
 if TYPE_CHECKING:
     from stackunderflow.etl.lock import LockHandle
@@ -31,8 +30,10 @@ config = Settings()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Path to the unified session store (created on first use).
-store_path = Path.home() / ".stackunderflow" / "store.db"
+# Path to the unified session store (created on first use). Derived from
+# ``settings.app_dir()`` so ``$STACKUNDERFLOW_HOME`` / ``--data-dir`` re-points
+# it; tests monkeypatch this attribute directly.
+store_path = app_dir() / "store.db"
 
 # ── mutable project state ────────────────────────────────────────────────────
 

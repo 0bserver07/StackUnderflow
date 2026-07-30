@@ -47,6 +47,7 @@ from pathlib import Path
 import httpx
 
 from stackunderflow.infra import egress
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 # ~/.stackunderflow). Kept in its own file so a schema change or a full
 # re-embed never touches the FTS index, and so deleting it to force a
 # rebuild is a one-liner.
-EMBEDDINGS_DB_PATH = Path.home() / ".stackunderflow" / "embeddings.db"
+EMBEDDINGS_DB_PATH = app_dir() / "embeddings.db"
 
 # A small, fast, CPU-friendly embedding model. ``nomic-embed-text`` is
 # 768-dim and ships in Ollama's library; any model the local Ollama has

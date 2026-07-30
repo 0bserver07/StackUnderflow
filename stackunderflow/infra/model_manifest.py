@@ -23,6 +23,7 @@ import time
 import tomllib
 from functools import lru_cache
 from pathlib import Path
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,7 @@ _SOURCE_PRECEDENCE = {_SOURCE_LIVE: 0, _SOURCE_RATE_CARD: 1, _SOURCE_MANIFEST: 2
 # Default store location — same convention as ``services/pricing_service`` and
 # ``deps.store_path``. Kept here (not imported from ``deps``) to avoid an
 # infra→app import cycle.
-_STORE_PATH = Path.home() / ".stackunderflow" / "store.db"
+_STORE_PATH = app_dir() / "store.db"
 
 
 def manifest_price_book_rows() -> list[dict]:

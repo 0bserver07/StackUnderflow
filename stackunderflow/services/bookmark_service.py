@@ -8,7 +8,8 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class BookmarkService:
     """Service for managing bookmarks stored in a local JSON file."""
 
     def __init__(self):
-        self.storage_dir = Path.home() / ".stackunderflow"
+        self.storage_dir = app_dir()
         self.bookmarks_file = self.storage_dir / "bookmarks.json"
 
         # Ensure storage directory exists

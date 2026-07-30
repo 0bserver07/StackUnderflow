@@ -36,6 +36,7 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ class CurrencyError(Exception):
 # ── cache I/O ────────────────────────────────────────────────────────────────
 
 def _cache_path() -> Path:
-    return Path.home() / ".stackunderflow" / "cache" / "exchange-rate.json"
+    return app_dir() / "cache" / "exchange-rate.json"
 
 
 def _read_cache() -> dict[str, Any] | None:

@@ -15,11 +15,12 @@ import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
 # Location of the Q&A database
-QA_DB_PATH = Path.home() / ".stackunderflow" / "qa_pairs.db"
+QA_DB_PATH = app_dir() / "qa_pairs.db"
 
 # Keywords that indicate a question
 QUESTION_KEYWORDS = [

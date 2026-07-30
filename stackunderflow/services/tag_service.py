@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from stackunderflow.services import task_classifier
+from stackunderflow.settings import app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,7 @@ class TagService:
     """Service for auto-detecting and managing session tags."""
 
     def __init__(self):
-        self.storage_dir = Path.home() / ".stackunderflow"
+        self.storage_dir = app_dir()
         self.tags_file = self.storage_dir / "tags.json"
 
         # Ensure storage directory exists

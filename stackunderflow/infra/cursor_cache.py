@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from stackunderflow.adapters.base import Record
+from stackunderflow.settings import app_dir
 
 _log = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ ParsedRecord = dict[str, Any]
 
 def _default_cache_path() -> Path:
     """Return the on-disk cache file path."""
-    return Path.home() / ".stackunderflow" / "cache" / "cursor-results.json"
+    return app_dir() / "cache" / "cursor-results.json"
 
 
 def fingerprint(db_path: Path) -> tuple[str, float, int]:

@@ -45,6 +45,7 @@ from stackunderflow.services.skill_synth import (
     DEFAULT_WINDOW,
     SkillCandidate,
 )
+from stackunderflow.settings import app_dir
 
 __all__ = [
     "Recommendation",
@@ -265,7 +266,7 @@ def default_cache_path() -> Path:
     Lives under ``~/.stackunderflow/cache/`` alongside the cursor cache —
     the spec calls out this exact location.
     """
-    return Path.home() / ".stackunderflow" / "cache" / "skill_recommendations.json"
+    return app_dir() / "cache" / "skill_recommendations.json"
 
 
 def _cache_key(*, project: str | None, threshold: int, window_days: int) -> str:
