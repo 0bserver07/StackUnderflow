@@ -6,6 +6,7 @@
 CLAUDE.md
 docs/specs.md
 docs/agent_feedback/
+docs/private/
 start*.sh
 
 .log/
