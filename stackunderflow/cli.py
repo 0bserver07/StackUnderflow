@@ -955,7 +955,13 @@ def _replicate_backup(dest: Path, to_url: str, previous: Path | None) -> bool:
         capture_output=True, timeout=60, check=False,
     )
     if mk.returncode != 0:
+        # Unreachable host / wrong port / no key all land here, and it is the
+        # FIRST thing that touches the network — so this is the branch users
+        # actually hit. It must say what the rsync branch below says: exit 1
+        # means "the copy did not reach the remote", never "you have no
+        # backup". Without this line an ssh refusal reads like total failure.
         click.echo(f"  Could not create remote dir: {mk.stderr.decode(errors='replace').strip()}")
+        click.echo("  The local backup is intact — re-run to retry.")
         return False
 
     cmd = ["rsync", "-a", "-e", ssh_cmd]
