@@ -116,24 +116,6 @@ def _filtered_project_ids(conn, log_path: str, provider_filter: set[str] | None)
     return [r.id for r in rows if (r.provider or "").lower() in provider_filter]
 
 
-def _reindex_services(log_path: str, messages: list[dict]) -> None:
-    project_dir = Path(log_path).name
-    for svc, name in [
-        (deps.search_service, "search"),
-        (deps.qa_service, "qa"),
-        (deps.tag_service, "tags"),
-    ]:
-        if svc is None:
-            continue
-        try:
-            if name == "tags":
-                svc.index_project(messages)
-            else:
-                svc.index_project(project_dir, messages)
-        except Exception as e:
-            deps.logger.debug(f"{name} index update failed: {e}")
-
-
 # ── routes ────────────────────────────────────────────────────────────────────
 
 # ── /api/stats payload trimming ───────────────────────────────────────────────
@@ -1070,7 +1052,7 @@ def _refresh_current_project_impl(log_path: str) -> JSONResponse:
         conn.close()
 
     slug = Path(log_path).name
-    new_msgs = counts.get(slug, 0)
+    new_msgs = sum(counts.values())
 
     if new_msgs:
         invalidate_dashboard_cache(slug)
@@ -1088,18 +1070,6 @@ def _refresh_current_project_impl(log_path: str) -> JSONResponse:
             invalidate_optimize_cache()
         except ImportError:
             pass  # optimize route not registered (test environments)
-        conn2 = db.connect(deps.store_path)
-        try:
-            row = queries.get_project(conn2, slug=slug)
-            if row is not None:
-                messages = queries.get_project_messages(conn2, project_id=row.id)
-                deps.is_reindexing = True
-                try:
-                    _reindex_services(log_path, messages)
-                finally:
-                    deps.is_reindexing = False
-        finally:
-            conn2.close()
 
     ms = int((time.time() - t0) * 1000)
     return JSONResponse(
