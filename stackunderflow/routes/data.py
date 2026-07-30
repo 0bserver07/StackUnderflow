@@ -914,50 +914,153 @@ async def get_messages(
     return page_payload
 
 
+def _summary_by_model_and_tokens(conn, project_ids: list[int]) -> tuple[dict, int]:
+    """``(by_model, total_tokens)`` from ONE scoped GROUP BY over ``messages``.
+
+    Replaces the ``get_project_messages`` pass for these two blocks on the
+    mart-backed path. Same scoping idiom as ``count_project_messages``: drive
+    off ``session_fk IN (SELECT id FROM sessions WHERE project_id IN (…))``
+    rather than joining ``sessions``, because against the partitioned
+    ``messages`` VIEW a join makes the planner materialise the whole view.
+
+    Parity with ``api.messages.get_messages_summary``: a row with no model
+    is keyed ``"N/A"``, because that is the ``Record.model`` default the
+    stats enricher stamps and therefore the key the legacy pass produced;
+    ``total_tokens`` is ``input + output``, cache tokens excluded there too.
+
+    One known, bounded divergence: Claude Code's ``"<synthetic>"`` model
+    sentinel is stripped to NULL by the ingest adapter, so those rows land
+    in ``"N/A"`` here while the legacy pass — which re-parsed ``raw_json``
+    — gave them their own bucket. Recovering it would mean re-parsing
+    ``raw_json``, i.e. the exact cost this path exists to avoid, and every
+    other consumer in the tree already treats ``<synthetic>`` as "no model".
+    Measured at 16 of 31,893 rows (0.05%) on the largest local project.
+
+    These stay on ``messages`` rather than ``daily_mart`` on purpose:
+    ``daily_mart`` counts only billable events, so sourcing them from it
+    would silently change what the two blocks mean.
+    """
+    if not project_ids:
+        return {}, 0
+    placeholders = ",".join("?" for _ in project_ids)
+    rows = conn.execute(
+        f"SELECT COALESCE(NULLIF(m.model, ''), 'N/A') AS model, COUNT(*) AS n, "
+        f"       SUM(COALESCE(m.input_tokens, 0) + COALESCE(m.output_tokens, 0)) AS tok "
+        f"FROM messages m "
+        f"WHERE m.session_fk IN "
+        f"(SELECT id FROM sessions WHERE project_id IN ({placeholders})) "
+        f"GROUP BY 1",
+        tuple(project_ids),
+    ).fetchall()
+    by_model: dict = {}
+    total_tokens = 0
+    for r in rows:
+        by_model[r["model"]] = int(r["n"] or 0)
+        total_tokens += int(r["tok"] or 0)
+    return by_model, total_tokens
+
+
+def _messages_summary_from_marts(conn, project_ids: list[int]) -> dict:
+    """Build the ``/api/messages/summary`` body without the pipeline.
+
+    ``total`` is the summed ``project_mart.total_records`` — the count of
+    every stored record, which is what ``len(messages)`` meant on the legacy
+    path. It is NOT ``total_messages``: that column counts BILLABLE EVENTS,
+    so the old code returned a total that contradicted its own ``by_type``.
+
+    ``by_type`` is the ``{user, assistant}`` pair summed from
+    ``total_user_messages`` / ``total_assistant_messages``. Those two
+    partition the record set, so ``sum(by_type) == total`` holds. The
+    ``total_tool_use_messages`` / ``total_tool_result_messages`` columns are
+    deliberately NOT surfaced here — in the legacy classifier they are
+    overlapping flags rather than a partition, so adding them would break
+    that invariant.
+
+    Every column read is additive, so a multi-provider slug (one project row
+    per provider) merges by summing across its ids.
+    """
+    total = users = assistants = sessions = 0
+    for pid in project_ids:
+        row = mart_queries.get_project_mart_row(conn, project_id=pid)
+        if not row:
+            continue
+        total += int(row.get("total_records") or 0)
+        users += int(row.get("total_user_messages") or 0)
+        assistants += int(row.get("total_assistant_messages") or 0)
+        sessions += int(row.get("total_sessions") or 0)
+
+    by_type: dict[str, int] = {}
+    if users:
+        by_type["user"] = users
+    if assistants:
+        by_type["assistant"] = assistants
+
+    by_model, total_tokens = _summary_by_model_and_tokens(conn, project_ids)
+    return {
+        "total": total,
+        "by_type": by_type,
+        "by_model": by_model,
+        "total_tokens": total_tokens,
+        "total_sessions": sessions,
+    }
+
+
 @router.get("/api/messages/summary")
-async def get_messages_summary_endpoint():
+def get_messages_summary_endpoint():
     """Get summary statistics about messages without loading all data.
 
-    Wave 4A — when ``project_mart`` carries a row for the active
-    project, the top-level ``total`` (and bonus ``total_sessions``)
-    come from a single mart read. The detail blocks (``by_type``,
-    ``by_model``, ``total_tokens``) still need the full message list
-    because those columns aren't materialised into any mart yet, so
-    we fall back to the legacy ``get_project_messages`` pass for the
-    breakdown — and unconditionally when the mart is empty.
+    When EVERY project row for the slug is materialised in ``project_mart``
+    the whole body is served from the store directly — summed mart columns
+    for ``total`` / ``by_type`` / ``total_sessions`` plus one scoped
+    ``GROUP BY model`` for ``by_model`` / ``total_tokens``. The legacy
+    ``get_project_messages`` pass (which runs the full pipeline — including
+    an ``aggregator.summarise`` whose result this route then discards, ~5s
+    and several hundred MB on a 50K-message project) runs only when the gate
+    fails, i.e. when some provider's project row hasn't been materialised yet.
+
+    Multi-provider slugs take the fast path too: every column involved is
+    additive across the slug's per-provider rows.
+
+    The gate is the same contract ``/api/dashboard-data`` uses
+    (``mart_has_project_row`` for all ids), and the response keeps its
+    shape: ``{total, by_type, by_model, total_tokens}`` (empty →
+    ``{"total": 0, "by_type": {}, "by_model": {}, "total_tokens": 0}``),
+    plus ``total_sessions`` on the mart path.
     """
     log_path = _require_project()
     conn = db.connect(deps.store_path)
     try:
         project_ids = _get_project_ids(conn, log_path)
-        mart_totals = (
-            mart_queries.project_mart_messages_summary_totals(conn, project_id=project_ids[0])
-            if len(project_ids) == 1
-            else None
-        )
+        if project_ids and all(
+            mart_queries.mart_has_project_row(conn, project_id=pid) for pid in project_ids
+        ):
+            return _messages_summary_from_marts(conn, project_ids)
         messages = queries.get_project_messages(conn, project_id=project_ids)
     finally:
         conn.close()
-    summary = get_messages_summary(messages)
-    if mart_totals is not None:
-        # Mart row wins on the top-level total — it's the project's
-        # lifetime message count from ``project_mart``, identical in
-        # value but cheaper than counting the materialised messages
-        # list. The breakdown blocks (``by_type`` / ``by_model``) still
-        # come from the messages pass because those dimensions aren't
-        # in any mart today.
-        summary["total"] = mart_totals["total"]
-        summary["total_sessions"] = mart_totals["total_sessions"]
-    return summary
+    return get_messages_summary(messages)
 
 
-@router.post("/api/refresh")
-async def refresh_data(request: dict):
-    """Refresh project data — runs an incremental ingest pass then returns status."""
-    if not deps.current_log_path:
-        return await refresh_all_projects(request)
+def _refresh_current_project_impl(log_path: str) -> JSONResponse:
+    """Blocking body of ``/api/refresh`` for the selected project.
 
-    log_path = deps.current_log_path
+    Split out of the ``async`` handler so it can be dispatched with
+    ``run_in_threadpool``: ``run_ingest`` walks every adapter's files and
+    writes to sqlite, which would otherwise pin the event loop for the whole
+    pass.
+
+    ``run_ingest`` returns PROVIDER-keyed counts, so the old
+    ``counts.get(slug, 0)`` was structurally always 0 — ``files_changed`` and
+    ``message_count`` reported "no changes" no matter what was ingested. We
+    sum the values, the same reading ``refresh_all_projects`` uses.
+
+    Reindexing is NOT redone here: ``run_ingest`` already refreshes the
+    search / tag / Q&A indexes for every touched slug via
+    ``auto_reindex_touched``, which also honours the
+    ``auto_reindex_on_ingest`` setting. The block that used to live here
+    re-ran ``SearchService.index_project`` on the same slug key, deleting and
+    rewriting the index ingest had just written — and ignoring that setting.
+    """
     t0 = time.time()
     conn = db.connect(deps.store_path)
     try:
