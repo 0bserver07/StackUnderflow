@@ -21,7 +21,7 @@ from stackunderflow.api.messages import (
 )
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
-from stackunderflow.routes.cost import COST_KEYS, _convert_in_place
+from stackunderflow.routes.cost import COST_KEYS, _convert_in_place, _project_stats_cached
 from stackunderflow.stats.aggregator import cache_cost_saved_base_units
 from stackunderflow.store import db, mart_queries, queries, schema
 
@@ -226,7 +226,22 @@ async def get_stats(
     conn = db.connect(deps.store_path)
     try:
         project_ids = _get_project_ids(conn, log_path)
-        _, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=timezone_offset)
+        # RANK 11, closing the last gap: /api/cost-data and
+        # /api/tool-distribution already share the memoized sweep, but this
+        # endpoint still recomputed the full collector pipeline (~4s on big
+        # projects) on EVERY call — the dashboard's slowest request had no
+        # warm path at all. The memo's ingest signature (max last_ts +
+        # summed message_count over the project's sessions) moves the moment
+        # ingest writes, so a warm hit can never serve pre-ingest numbers.
+        # The deep copy the memo returns keeps the in-place trims below
+        # (daily cap, heavy-block strip, currency, include filter) from
+        # poisoning the shared entry.
+        stats = _project_stats_cached(
+            conn,
+            project_ids=project_ids,
+            slug=Path(log_path).name,
+            tz_offset=timezone_offset,
+        )
     finally:
         conn.close()
     deps.logger.debug(f"stats [store] {(time.time() - t0) * 1000:.1f}ms")

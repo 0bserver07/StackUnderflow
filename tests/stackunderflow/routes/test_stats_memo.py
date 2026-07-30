@@ -135,3 +135,41 @@ async def test_memo_busts_when_sessions_signature_changes(tmp_path, monkeypatch)
 
     await get_cost_data()
     assert calls["n"] == 2  # signature moved → recomputed
+
+
+@pytest.mark.asyncio
+async def test_api_stats_shares_the_memoized_sweep(tmp_path, monkeypatch):
+    """``/api/stats`` was the last consumer still recomputing the pipeline on
+    EVERY call — ~4s per request on big projects with zero warm benefit while
+    ``/api/cost-data`` sat at 84ms warm. It now rides the same memo entry, and
+    its in-place trims (heavy-block strip, currency, include filter) must act
+    on the returned copy, never the shared entry."""
+    store_db = tmp_path / "store.db"
+    slug = "-memo-stats"
+    _seed_project(store_db, slug)
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
+
+    calls = {"n": 0}
+
+    def counting_stats(conn, *, project_id, tz_offset=0):  # noqa: ARG001
+        calls["n"] += 1
+        return [], _fake_stats()
+
+    monkeypatch.setattr("stackunderflow.routes.cost.queries.get_project_stats", counting_stats)
+
+    from stackunderflow.routes.data import get_stats
+
+    first = await get_stats()
+    second = await get_stats()
+    assert calls["n"] == 1  # warm /api/stats call came from the memo
+    # details=False strips the heavy nested lists on the returned copy …
+    assert first["user_interactions"]["tool_count_distribution"] == {}
+    assert second["user_interactions"]["tool_count_distribution"] == {}
+
+    # … but the SHARED entry must stay intact: tool-distribution reads the
+    # same memo afterwards and must still see the full distribution, without
+    # a recompute. A stripped shared entry here is the poisoning bug.
+    td = await get_tool_distribution()
+    assert calls["n"] == 1
+    assert td == {"tool_count_distribution": {"0": 1, "3": 2}}
