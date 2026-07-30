@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
@@ -21,7 +23,12 @@ from stackunderflow.api.messages import (
 )
 from stackunderflow.infra.currency import active_currency_payload
 from stackunderflow.ingest import run_ingest
-from stackunderflow.routes.cost import COST_KEYS, _convert_in_place, _project_stats_cached
+from stackunderflow.routes.cost import (
+    COST_KEYS,
+    _convert_in_place,
+    _invalidate_stats_cache,
+    _project_stats_cached,
+)
 from stackunderflow.stats.aggregator import cache_cost_saved_base_units
 from stackunderflow.store import db, mart_queries, queries, schema
 
@@ -35,8 +42,15 @@ router = APIRouter()
 # pulled from the sessions table — both move whenever ingest writes new data,
 # so a stale entry can never survive a refresh. /api/refresh calls
 # ``invalidate_dashboard_cache()`` defensively for the project it just touched.
-_DASHBOARD_CACHE: dict[tuple[str, int], tuple[tuple[str | None, int], dict]] = {}
+#
+# Bounded (COST-5b, same defect class as ``routes.cost._STATS_CACHE``): payloads
+# are multi-MB and every (slug, tz_offset) pair minted a permanent entry, so an
+# unbounded dict grew without limit across a long-running server. LRU-capped at
+# ``_DASHBOARD_CACHE_MAX`` under the existing lock; the key shape, the signature
+# contract and ``invalidate_dashboard_cache`` are unchanged.
+_DASHBOARD_CACHE: OrderedDict[tuple[str, int], tuple[tuple[str | None, int], dict]] = OrderedDict()
 _DASHBOARD_CACHE_LOCK = threading.Lock()
+_DASHBOARD_CACHE_MAX = 8
 
 
 def _dashboard_signature(conn, project_ids: list[int]) -> tuple[str | None, int]:
@@ -236,11 +250,16 @@ async def get_stats(
         # The deep copy the memo returns keeps the in-place trims below
         # (daily cap, heavy-block strip, currency, include filter) from
         # poisoning the shared entry.
+        # COST-2: ``keys=None`` (full deep copy) is deliberate and load-bearing
+        # here — this endpoint returns every top-level block and mutates most of
+        # them in place below (daily cap, heavy-block strip, currency). Narrowing
+        # the copy the way /api/cost-data does would drop blocks from the body.
         stats = _project_stats_cached(
             conn,
             project_ids=project_ids,
             slug=Path(log_path).name,
             tz_offset=timezone_offset,
+            keys=None,
         )
     finally:
         conn.close()
@@ -328,6 +347,8 @@ async def get_dashboard_data(
 
         with _DASHBOARD_CACHE_LOCK:
             cached = _DASHBOARD_CACHE.get(cache_key)
+            if cached is not None and cached[0] == sig:
+                _DASHBOARD_CACHE.move_to_end(cache_key)  # LRU recency bump
         if cached is not None and cached[0] == sig:
             payload = dict(cached[1])
             payload["is_reindexing"] = deps.is_reindexing
@@ -424,6 +445,9 @@ async def get_dashboard_data(
         # Cache the USD-denominated payload — currency conversion happens
         # on every request so a config change doesn't require a cache flush.
         _DASHBOARD_CACHE[cache_key] = (sig, payload)
+        _DASHBOARD_CACHE.move_to_end(cache_key)
+        while len(_DASHBOARD_CACHE) > _DASHBOARD_CACHE_MAX:
+            _DASHBOARD_CACHE.popitem(last=False)  # evict least-recently-used
     payload = dict(payload)
     payload["statistics"] = _apply_currency_to_stats(payload["statistics"])
     payload["currency"] = active_currency_payload()
@@ -945,6 +969,10 @@ async def refresh_data(request: dict):
 
     if new_msgs:
         invalidate_dashboard_cache(slug)
+        # The project-stats memo self-invalidates on its sessions signature the
+        # same way, but drop it here too — same defensive posture, same scope
+        # (this slug only; other projects' entries are untouched by this ingest).
+        _invalidate_stats_cache(slug)
         # Optimize cache is keyed on store mtime so it'd self-invalidate
         # on the next read, but a fresh ingest is a good time to drop it
         # eagerly — keeps the next /api/optimize from racing the mtime
@@ -995,6 +1023,7 @@ async def refresh_all_projects(request: dict):
     total_new = sum(counts.values())
     if total_new:
         invalidate_dashboard_cache()
+        _invalidate_stats_cache()  # every slug may have moved — full clear
         try:
             from stackunderflow.routes.optimize import invalidate_optimize_cache
 

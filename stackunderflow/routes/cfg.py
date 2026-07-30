@@ -17,11 +17,14 @@ which would need double-encoding to round-trip a path component.
 
 All writes go through ``Settings().persist`` so validators run and the
 config file on disk stays the single source of truth. Writes that change
-how data is *aggregated* (model aliases) invalidate the dashboard cache so
-the next ``/api/dashboard-data`` fetch reflects the new grouping. A
-currency change does **not** flush the cache: cached payloads are stored
-in USD and the active currency is re-applied per response, so switching
-currency is a cheap rescale rather than a full re-aggregation (#31).
+how data is *aggregated* (model aliases) invalidate BOTH aggregation caches
+— the dashboard payload memo and the project-stats memo behind
+``/api/cost-data`` / ``/api/stats`` / ``/api/tool-distribution`` — so the
+next fetch on either surface reflects the new grouping. A currency change
+does **not** flush either: cached payloads are stored in USD and the active
+currency is re-applied per response, so switching currency is a cheap
+rescale rather than a full re-aggregation (#31). It does drop the currency
+memo, which caches the resolved code itself.
 """
 
 from __future__ import annotations
@@ -31,8 +34,10 @@ from fastapi.responses import JSONResponse
 
 from stackunderflow.infra.currency import (
     active_currency_payload,
+    clear_currency_memo,
     list_supported,
 )
+from stackunderflow.routes.cost import _invalidate_stats_cache
 from stackunderflow.routes.data import invalidate_dashboard_cache
 from stackunderflow.settings import Settings
 
@@ -124,6 +129,11 @@ async def set_model_alias(data: dict) -> JSONResponse:
     aliases[src.strip()] = dst.strip()
     s.persist("model_aliases", aliases)
     invalidate_dashboard_cache()
+    # The stats memo aggregates per-model too, and its sessions signature does
+    # NOT move on a config edit — without this the Cost tab kept serving
+    # pre-alias grouping until the next ingest while the dashboard already
+    # showed the new one. Full clear: an alias is global, not per-slug.
+    _invalidate_stats_cache()
     return JSONResponse({"aliases": aliases})
 
 
@@ -144,4 +154,5 @@ async def delete_model_alias(src: str = _FROM_Q) -> JSONResponse:
     aliases.pop(src)
     s.persist("model_aliases", aliases)
     invalidate_dashboard_cache()
+    _invalidate_stats_cache()  # same blast radius as the set path above
     return JSONResponse({"aliases": aliases})

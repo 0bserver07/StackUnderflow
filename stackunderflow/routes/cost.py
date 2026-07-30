@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import copy
 import threading
+from collections import OrderedDict
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 
 import stackunderflow.deps as deps
 from stackunderflow.infra.currency import active_currency_payload
@@ -164,10 +166,44 @@ def _project_ids_for(conn, path: str) -> list[int]:
 # sessions signature (max ``last_ts``, summed ``message_count``). The signature
 # moves the instant ingest writes new rows, so a stale entry can't outlive a
 # refresh — the same self-invalidation contract data.py's ``_DASHBOARD_CACHE``
-# relies on. (Pricing-config edits don't bump the signature; those are rare and
-# self-heal on the next ingest — matching the dashboard cache's blast radius.)
-_STATS_CACHE: dict[tuple[str, str, int, tuple[int, ...]], tuple[tuple[str | None, int], dict]] = {}
+# relies on.
+#
+# Config edits that change how data is AGGREGATED (model aliases) don't move the
+# sessions signature, so they invalidate this memo explicitly:
+# ``_invalidate_stats_cache()`` is called from the same four sites that call
+# ``routes.data.invalidate_dashboard_cache`` (``routes/cfg.py`` alias set/delete
+# and the two ``/api/refresh`` paths). Before that wiring the invalidator had no
+# production caller at all: editing an alias dropped the dashboard cache while
+# this memo kept serving pre-alias aggregation until the next ingest.
+#
+# Bounded (COST-5b): entries are 5.5-19 MB each, so an unbounded dict was a slow
+# memory leak — every (slug, tz_offset, id-tuple) combination minted a new one
+# and nothing ever evicted. LRU-capped at ``_STATS_CACHE_MAX`` under the lock.
+_STATS_CACHE: OrderedDict[tuple[str, str, int, tuple[int, ...]], tuple[tuple[str | None, int], dict]] = OrderedDict()
 _STATS_CACHE_LOCK = threading.Lock()
+_STATS_CACHE_MAX = 8
+
+# ``timezone_offset`` arrives as an unvalidated client integer. It is minutes
+# EAST of UTC (the frontend sends ``-new Date().getTimezoneOffset()``), so the
+# only meaningful range is UTC-12:00 … UTC+14:00. Unclamped, a caller could mint
+# an unbounded number of distinct cache keys — each holding a multi-MB stats
+# dict — just by incrementing the query param.
+_TZ_OFFSET_MIN = -720
+_TZ_OFFSET_MAX = 840
+
+
+def _clamp_tz_offset(tz_offset: Any) -> int:
+    """Clamp a client-supplied timezone offset to a real-world UTC offset.
+
+    Minutes EAST of UTC, ``[-720, 840]``. Non-integer input degrades to ``0``
+    (UTC) rather than raising — this sits on a read path whose worst case
+    should be "buckets by UTC day", not a 500.
+    """
+    try:
+        value = int(tz_offset)
+    except (TypeError, ValueError):
+        return 0
+    return max(_TZ_OFFSET_MIN, min(_TZ_OFFSET_MAX, value))
 
 
 def _stats_signature(conn, project_ids: list[int]) -> tuple[str | None, int]:
@@ -199,14 +235,60 @@ def _invalidate_stats_cache(slug: str | None = None) -> None:
                 del _STATS_CACHE[key]
 
 
-def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset: int) -> dict:
+def _copy_stats_subset(stats: dict, keys: tuple[str, ...] | None) -> dict:
+    """Deep-copy ``stats`` (``keys=None``) or just the requested top-level keys.
+
+    COST-2. Four invariants, each of which is a cache-poisoning bug if broken:
+
+    1. **Always a new outer dict.** ``/api/cost-data`` rebinds
+       ``stats["tool_costs"]``, sets ``stats["_tool_costs_windowed"]`` and then
+       pops it; handing back the cached object would leak the marker into the
+       shared entry.
+    2. **Every requested subtree is deep-copied.** The mart overlay mutates
+       ``token_composition`` in place and ``_convert_in_place`` rewrites every
+       cost leaf under a non-USD currency.
+    3. **Unrequested keys are OMITTED, never aliased in.** ``routes/data.py``'s
+       ``_strip_heavy_blocks`` mutates nested structures; an uncopied reference
+       would permanently strip the shared entry for every later reader.
+    4. Missing keys are skipped, not defaulted — callers already fill their own
+       shape-stable defaults.
+    """
+    if not isinstance(stats, dict):
+        return copy.deepcopy(stats)
+    if keys is None:
+        return copy.deepcopy(stats)
+    return {key: copy.deepcopy(stats[key]) for key in keys if key in stats}
+
+
+def _project_stats_cached(
+    conn,
+    *,
+    project_ids: list[int],
+    slug: str,
+    tz_offset: int,
+    keys: tuple[str, ...] | None = None,
+) -> dict:
     """Memoized ``queries.get_project_stats`` → stats dict (USD, pre-overlay).
 
-    Returns a deep copy so the caller may mutate freely (mart overlay,
-    currency conversion) without poisoning the shared cache entry. On a
-    signature mismatch (new ingest) or cold cache the full pipeline runs and
-    the result is cached for the next reader.
+    Returns a copy so the caller may mutate freely (mart overlay, currency
+    conversion) without poisoning the shared cache entry. On a signature
+    mismatch (new ingest) or cold cache the full pipeline runs and the result
+    is cached for the next reader.
+
+    ``keys`` (COST-2) narrows what gets copied out. Measured on a
+    49K-message project (5.5 MB entry, 18 top-level keys), a warm hit's
+    ``copy.deepcopy`` of the whole dict is 82 ms — while ``/api/cost-data``
+    reads only ``COST_KEYS`` (6 ms) and ``/api/tool-distribution`` only
+    ``user_interactions`` (18 ms). The CACHED
+    entry always holds the full stats dict regardless, so the three consumers
+    still share one pipeline run; ``keys`` only bounds the per-call copy. Pass
+    ``None`` to get every key (``/api/stats``, which needs all of them).
+
+    ``tz_offset`` is clamped here (COST-5b) — one funnel for all three
+    consumers, so it lands clamped in BOTH the cache key and the
+    ``get_project_stats`` call.
     """
+    tz_offset = _clamp_tz_offset(tz_offset)
     sig = _stats_signature(conn, project_ids)
     # The id tuple is part of the key so a provider-narrowed subset (#33 —
     # /api/tool-distribution filtering a multi-provider slug) never collides
@@ -214,12 +296,22 @@ def _project_stats_cached(conn, *, project_ids: list[int], slug: str, tz_offset:
     cache_key = (str(deps.store_path), slug, tz_offset, tuple(sorted(project_ids)))
     with _STATS_CACHE_LOCK:
         cached = _STATS_CACHE.get(cache_key)
+        if cached is not None and cached[0] == sig:
+            _STATS_CACHE.move_to_end(cache_key)  # LRU recency bump
     if cached is not None and cached[0] == sig:
-        return copy.deepcopy(cached[1])
+        # Copy OUTSIDE the lock: the deep copy is the expensive part and no
+        # writer ever mutates a cached entry, so holding the lock through it
+        # would serialise every reader behind one 81 ms copy for no safety
+        # gain. A concurrent eviction can't free the entry out from under us —
+        # ``cached`` holds a reference.
+        return _copy_stats_subset(cached[1], keys)
     _, stats = queries.get_project_stats(conn, project_id=project_ids, tz_offset=tz_offset)
     with _STATS_CACHE_LOCK:
         _STATS_CACHE[cache_key] = (sig, stats)
-    return copy.deepcopy(stats)
+        _STATS_CACHE.move_to_end(cache_key)
+        while len(_STATS_CACHE) > _STATS_CACHE_MAX:
+            _STATS_CACHE.popitem(last=False)  # evict least-recently-used
+    return _copy_stats_subset(stats, keys)
 
 
 # ``?range=`` values the route accepts. ``all`` (and absent) mean "no window";
@@ -281,7 +373,17 @@ async def get_cost_data(
         project_ids = _project_ids_for(conn, path)
         # RANK 11: memoize the heavy pipeline so repeat Overview/Cost loads
         # (and the sibling /api/tool-distribution call) skip the recompute.
-        stats = _project_stats_cached(conn, project_ids=project_ids, slug=slug, tz_offset=timezone_offset)
+        # COST-2: this route reads exactly ``COST_KEYS`` — the response body is
+        # built from them and ``_overlay_mart_rollups`` touches only
+        # ``token_composition`` and ``tool_costs``, both members. Narrowing the
+        # copy turns an ~81 ms warm hit into ~8 ms.
+        stats = _project_stats_cached(
+            conn,
+            project_ids=project_ids,
+            slug=slug,
+            tz_offset=timezone_offset,
+            keys=COST_KEYS,
+        )
         # Wave 3A: when the project is materialised, overlay the
         # token_composition.daily/totals blocks with daily_mart-derived
         # values. Per-session / per-command / per-tool detail blocks

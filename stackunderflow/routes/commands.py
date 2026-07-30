@@ -304,7 +304,17 @@ async def get_tool_distribution(
         # Overview tab doesn't recompute the full pipeline a third time. The
         # memo key includes the (possibly provider-narrowed) id tuple, so a
         # filtered sweep never collides with the all-provider entry.
-        stats = _project_stats_cached(conn, project_ids=project_ids, slug=slug, tz_offset=timezone_offset)
+        # COST-2: this route reads ONLY ``user_interactions`` (the distribution
+        # map, plus ``command_details`` on the model-filtered branch below), so
+        # it copies just that subtree out of the shared entry instead of the
+        # whole 5.5-19 MB dict.
+        stats = _project_stats_cached(
+            conn,
+            project_ids=project_ids,
+            slug=slug,
+            tz_offset=timezone_offset,
+            keys=("user_interactions",),
+        )
     finally:
         conn.close()
 
