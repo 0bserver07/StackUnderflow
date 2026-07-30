@@ -248,13 +248,11 @@ def ingest_file(
         # Convert the messages we just inserted into ``usage_events``
         # rows in the same transaction. Idempotent via the
         # ``uniq_events_msg`` UNIQUE index; no-op when the provider has
-        # no normalizer registered.
-        events_inserted = 0
+        # no normalizer registered. The return value is not a gate on
+        # anything — see the mart refresh below.
         if new_message_ids:
             try:
-                events_inserted = _normalize_new_messages(
-                    conn, ref.provider, new_message_ids,
-                )
+                _normalize_new_messages(conn, ref.provider, new_message_ids)
             except Exception as exc:  # noqa: BLE001 — never fail ingest because of normalize
                 _log.warning(
                     "ingest.writer: normalize failed for %s (%s): %s — "
@@ -273,7 +271,17 @@ def ingest_file(
     # against fully-committed events. Each mart is watermarked +
     # idempotent on its own — if marts can't refresh (registry empty,
     # SQL error), we log and move on; the next pass will catch up.
-    if events_inserted:
+    #
+    # Gated on records having been INSERTED, not on ``events_inserted``.
+    # A messages-only ingest — a provider whose normalizer drops rows
+    # (codex ``model=None``) or has none at all (antigravity) — inserts
+    # zero usage events, and the old gate meant the CLI/API ingest path
+    # then seeded no marts whatsoever for it. Message inserts matter on
+    # their own: the dims pass and the coverage seed both read
+    # ``messages``. (The watcher path already refreshed ungated, so only
+    # the CLI/API hole is being closed here.) Steady-state cost is one
+    # indexed anti-join per mart, which is the seed's documented design.
+    if count_added:
         try:
             from stackunderflow.etl.watermark import refresh_all_marts
             refresh_all_marts(conn)

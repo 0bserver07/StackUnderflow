@@ -176,6 +176,56 @@ def test_zero_record_pass_still_bumps_a_known_project(conn, tmp_path: Path) -> N
     assert rows[0]["last_modified"] == 9.0
 
 
+# ── mart refresh is gated on records, not on usage events ────────────────────
+#
+# The gate used to be ``if events_inserted:``. A messages-only ingest — a
+# provider whose normalizer drops the row (codex ``model=None``) or has no
+# normalizer at all (antigravity) — inserts zero usage events, so the CLI/API
+# ingest path seeded NO marts for it, ever. The dims pass and the coverage seed
+# both read ``messages``, so message inserts are reason enough to refresh.
+# (The watcher path already refreshed ungated; this closes the CLI/API hole.)
+
+
+def _spy_refresh(monkeypatch) -> list[int]:
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "stackunderflow.etl.watermark.refresh_all_marts",
+        lambda conn: calls.append(1),
+    )
+    return calls
+
+
+def test_records_with_zero_usage_events_still_refresh_marts(
+    conn, tmp_path: Path, monkeypatch,
+) -> None:
+    """The stub provider has no normalizer, so this pass inserts 0 events."""
+    calls = _spy_refresh(monkeypatch)
+    ingest_file(conn, _StubAdapter([_rec(0), _rec(1)]), _ref(tmp_path))
+
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 0
+    assert calls, "messages-only ingest never refreshed the marts"
+
+
+def test_zero_record_file_does_not_refresh_marts(
+    conn, tmp_path: Path, monkeypatch,
+) -> None:
+    calls = _spy_refresh(monkeypatch)
+    ingest_file(conn, _StubAdapter([]), _ref(tmp_path))
+    assert calls == []
+
+
+def test_duplicate_only_pass_does_not_refresh_marts(
+    conn, tmp_path: Path, monkeypatch,
+) -> None:
+    """Nothing was written, so there is nothing for the marts to pick up."""
+    ref = _ref(tmp_path)
+    ingest_file(conn, _StubAdapter([_rec(0)]), ref)
+    calls = _spy_refresh(monkeypatch)
+    ingest_file(conn, _StubAdapter([_rec(0)]), ref)  # same seq → INSERT OR IGNORE
+    assert calls == []
+
+
 def test_ingest_file_rollback_on_failure(conn, tmp_path: Path) -> None:
     class _BoomAdapter:
         name = "stub"
