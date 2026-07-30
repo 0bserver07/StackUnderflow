@@ -194,20 +194,134 @@ async def test_compare_does_not_run_full_project_pipeline(seeded, monkeypatch):
     from stackunderflow.stats import aggregator
 
     seen: dict = {}
-    real = aggregator.summarise
+    real = aggregator.summarise_session_costs
 
-    def _spy(ds, log_dir, **kwargs):
+    def _spy(ds, **kwargs):
         seen["records"] = len(ds.records)
         seen["sessions"] = {r.session_id for r in ds.records}
-        return real(ds, log_dir, **kwargs)
+        return real(ds, **kwargs)
 
-    monkeypatch.setattr(aggregator, "summarise", _spy)
+    monkeypatch.setattr(aggregator, "summarise_session_costs", _spy)
 
     resp = await compare_sessions(a="sess-a", b="sess-b")
     assert resp.status_code == 200
     # a has 2 messages, b has 5 → exactly 7 records aggregated; c's 100 untouched.
     assert seen["records"] == 7
     assert seen["sessions"] == {"sess-a", "sess-b"}
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_only_the_session_cost_collector(seeded, monkeypatch):
+    """Compare reads one section of ``summarise`` — so it must not call
+    ``summarise`` at all, and must not compute any other section.
+
+    ``aggregator.summarise`` used to run 12 collectors + overview/daily/hourly/
+    trends here and throw 17 of the 18 sections away.
+    """
+    from stackunderflow.stats import aggregator
+
+    def _boom(*a, **k):
+        raise AssertionError("aggregator.summarise (all 18 sections) must not be called")
+
+    monkeypatch.setattr(aggregator, "summarise", _boom)
+
+    # A collector compare has no use for: if it is constructed, work leaked.
+    monkeypatch.setattr(aggregator, "_CommandCostCollector", _boom)
+    monkeypatch.setattr(aggregator, "_ToolCostCollector", _boom)
+    monkeypatch.setattr(aggregator, "_ErrorCostCollector", _boom)
+
+    resp = await compare_sessions(a="sess-a", b="sess-b")
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body["a"]["session_id"] == "sess-a"
+
+
+@pytest.mark.asyncio
+async def test_session_cost_rows_match_full_summarise(seeded):
+    """Parity oracle: the narrowed path returns exactly the rows the full
+    ``summarise`` sweep would have put in ``session_costs``."""
+    import stackunderflow.deps as deps
+    from stackunderflow.routes.sessions import _session_costs_for_sessions
+    from stackunderflow.stats import aggregator, classifier, enricher
+    from stackunderflow.stats.classifier import RawEntry
+
+    slug = seeded
+    conn = db.connect(deps.store_path)
+    try:
+        project_rows = queries.get_projects_by_slug(conn, slug=slug)
+        pids = [r.id for r in project_rows]
+        ph = ",".join("?" for _ in pids)
+        sess_rows = conn.execute(
+            f"SELECT id, session_id, project_id FROM sessions "
+            f"WHERE project_id IN ({ph}) AND session_id IN (?, ?)",
+            (*pids, "sess-a", "sess-b"),
+        ).fetchall()
+        provider_map = {r.id: (r.provider or "anthropic") for r in project_rows}
+        got = _session_costs_for_sessions(conn, sess_rows, provider_map, "/fake/-cmp")
+
+        # Rebuild the same dataset and run the FULL sweep as the oracle.
+        fk_to_sid = {r["id"]: r["session_id"] for r in sess_rows}
+        fk_ph = ",".join("?" for _ in fk_to_sid)
+        rows = conn.execute(
+            f"SELECT session_fk, raw_json, timestamp FROM messages "
+            f"WHERE session_fk IN ({fk_ph}) ORDER BY timestamp",
+            list(fk_to_sid),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    entries = []
+    for r in rows:
+        sid = fk_to_sid[r["session_fk"]]
+        payload = json.loads(r["raw_json"])
+        if r["timestamp"]:
+            payload["timestamp"] = r["timestamp"]
+        entries.append(RawEntry(payload=payload, session_id=sid, origin=sid, provider="anthropic"))
+    ds = enricher.build(classifier.tag(entries), "/fake/-cmp")
+    expected = aggregator.summarise(ds, "/fake/-cmp")["session_costs"]
+
+    assert got == expected
+    assert {s["session_id"] for s in got} == {"sess-a", "sess-b"}
+
+
+@pytest.mark.asyncio
+async def test_compare_carries_every_field_the_ui_renders(seeded):
+    """SessionCompareView reads a fixed field set off a/b/diff — lock it, with
+    the arithmetic, so a narrowing of the aggregator path can't silently drop
+    a row from the comparison table."""
+    resp = await compare_sessions(a="sess-a", b="sess-b")
+    body = json.loads(resp.body)
+    a, b, diff = body["a"], body["b"], body["diff"]
+
+    # ── per-side scalars (pickValue) ────────────────────────────────────────
+    for side in (a, b):
+        for key in ("session_id", "cost", "commands", "messages", "errors", "duration_s"):
+            assert key in side, f"missing {key}"
+        for tok in ("input", "output", "cache_read", "cache_creation"):
+            assert tok in side["tokens"], f"missing tokens.{tok}"
+
+    assert a["session_id"] == "sess-a"
+    assert a["messages"] == 2 and a["commands"] == 1 and a["errors"] == 0
+    assert a["duration_s"] == pytest.approx(60.0)
+    assert a["tokens"] == {"input": 1000, "output": 500, "cache_creation": 0, "cache_read": 0}
+
+    assert b["session_id"] == "sess-b"
+    assert b["messages"] == 5 and b["commands"] == 2 and b["errors"] == 1
+    assert b["duration_s"] == pytest.approx(480.0)
+    assert b["tokens"] == {"input": 4000, "output": 1700, "cache_creation": 0, "cache_read": 200}
+
+    # ── diff arithmetic (pickDiff) — b minus a, every key ───────────────────
+    assert diff["commands"] == b["commands"] - a["commands"] == 1
+    assert diff["errors"] == b["errors"] - a["errors"] == 1
+    assert diff["duration_s"] == pytest.approx(b["duration_s"] - a["duration_s"])
+    assert diff["cost"] == pytest.approx(b["cost"] - a["cost"])
+    for tok in ("input", "output", "cache_read", "cache_creation"):
+        assert diff["tokens"][tok] == b["tokens"][tok] - a["tokens"][tok]
+
+    # Cost is real, not a zeroed placeholder from a swallowed collector error.
+    assert a["cost"] > 0 and b["cost"] > a["cost"]
+    # The response envelope the UI destructures.
+    assert set(body) == {"a", "b", "diff", "currency"}
 
 
 @pytest.mark.asyncio

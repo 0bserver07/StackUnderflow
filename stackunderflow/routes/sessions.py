@@ -153,10 +153,21 @@ def _session_costs_for_sessions(conn, sess_rows, provider_map, log_dir) -> list[
 
     Reconstructs pipeline ``RawEntry`` objects from just these sessions'
     ``raw_json`` (driven off ``session_fk`` so the partitioned ``messages``
-    view stays on its per-partition index), then runs the standard classify →
-    enrich → aggregate chain. Returns the ``session_costs`` list — one entry
-    per session, identical to what the whole-project pipeline produces for
-    those sessions, at a fraction of the work.
+    view stays on its per-partition index), then runs classify → enrich →
+    ``aggregator.summarise_session_costs``. Returns the ``session_costs``
+    list — one entry per session, identical to what the whole-project pipeline
+    produces for those sessions, at a fraction of the work.
+
+    Two deliberate narrowings vs. the full pipeline:
+
+    * only the session-cost collector runs — compare consumes no other section
+      of ``summarise``, so computing the rest is pure waste;
+    * the fetch is unordered. ``enricher.build`` sorts by timestamp itself when
+      it groups interactions, and the collector is keyed by ``session_id``, so
+      the SQL ``ORDER BY timestamp`` only paid for a sort nobody read.
+
+    ``classifier.tag`` → ``enricher.build`` stay: the collector's ``commands``
+    tally comes from ``ds.interactions``, which only the enricher produces.
     """
     import json as _json
 
@@ -172,7 +183,7 @@ def _session_costs_for_sessions(conn, sess_rows, provider_map, log_dir) -> list[
     fk_ph = ",".join("?" for _ in fks)
     rows = conn.execute(
         f"SELECT session_fk, raw_json, timestamp FROM messages "
-        f"WHERE session_fk IN ({fk_ph}) ORDER BY timestamp",
+        f"WHERE session_fk IN ({fk_ph})",
         fks,
     ).fetchall()
 
@@ -198,8 +209,7 @@ def _session_costs_for_sessions(conn, sess_rows, provider_map, log_dir) -> list[
         return []
     tagged = classifier.tag(raw_entries)
     dataset = enricher.build(tagged, log_dir)
-    stats = aggregator.summarise(dataset, log_dir)
-    return stats.get("session_costs", []) or []
+    return aggregator.summarise_session_costs(dataset) or []
 
 
 @router.get("/api/jsonl-files")
@@ -414,8 +424,20 @@ async def compare_sessions(a: str, b: str, log_path: str | None = None):
 
 
 @router.get("/api/jsonl-content")
-async def get_jsonl_content(file: str, project: str | None = None):
-    """Get content of a specific JSONL file"""
+async def get_jsonl_content(file: str, project: str | None = None, raw_media: bool = False):
+    """Get content of a specific JSONL file.
+
+    Args:
+        file: ``<session_id>.jsonl`` — only the stem is used.
+        project: Project slug to scope to. Falls back to ``deps.current_log_path``.
+        raw_media: Large-payload escape hatch. By default inline base64 media
+            (screenshots, PDFs) is replaced with a
+            ``<elided: image/png base64, N bytes>`` stub — the Sessions tab
+            never reads ``source.data``, and on screenshot-heavy sessions those
+            strings are ~94% of the response. Pass ``raw_media=1`` for a
+            consumer that genuinely needs the bytes; expect a response two
+            orders of magnitude larger.
+    """
     log_path = deps.current_log_path
 
     if project:

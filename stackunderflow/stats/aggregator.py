@@ -99,6 +99,24 @@ def summarise(
     }
 
 
+def summarise_session_costs(ds: EnrichedDataset) -> list[dict]:
+    """Just the ``session_costs`` section — the ``/api/sessions/compare`` entry.
+
+    Compare reads exactly one of ``summarise``'s eighteen sections. Reaching it
+    through the full sweep means feeding nine other record collectors, three
+    interaction collectors, and building overview / daily / hourly / trends —
+    all of it discarded. This runs ONLY ``_SessionCostCollector``, over the
+    same records and interactions and with the same provider resolution and
+    ``_safe`` fallback ``summarise`` uses, so the rows it returns are identical
+    to ``summarise(ds, ...)["session_costs"]``.
+    """
+    provider = ds.records[0].provider if ds.records else "anthropic"
+    sess_cost_c = _SessionCostCollector(provider=provider)
+    for rec in ds.records:
+        sess_cost_c.ingest(rec)
+    return _safe(lambda: sess_cost_c.result(ds.interactions), [])
+
+
 def _safe(fn, fallback):
     """Invoke ``fn()`` and swallow any exception — collectors must never break
     the whole dashboard payload if a single section fails."""
