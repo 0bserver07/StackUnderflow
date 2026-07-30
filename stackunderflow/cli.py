@@ -4709,6 +4709,27 @@ def _render_etl_status_text(payload: dict) -> None:
             )
     else:
         click.echo("                 (no marts registered)")
+
+    # Coverage block. Mart lag can't see this: a project with no mart row
+    # isn't behind, it's absent — and absent from every mart-backed read.
+    coverage = payload.get("coverage") or {}
+    total_projects = int(coverage.get("projects", 0))
+    if total_projects:
+        with_mart = int(coverage.get("projects_with_mart", 0))
+        without = int(coverage.get("projects_without_mart", 0))
+        click.echo(
+            f"                 project coverage: {with_mart:,}/{total_projects:,}"
+        )
+        if without:
+            sample = coverage.get("projects_without_mart_sample") or []
+            sample_str = ", ".join(str(i) for i in sample)
+            if len(sample) < without:
+                sample_str += ", …"
+            click.secho(
+                f"                 {without:,} project(s) have NO mart row"
+                + (f" (ids: {sample_str})" if sample_str else ""),
+                fg="yellow",
+            )
     click.echo("")
 
     # Watcher block.

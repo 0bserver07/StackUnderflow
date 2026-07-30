@@ -85,6 +85,17 @@ def _seed_with_events(store_db: Path, n_events: int = 3) -> int:
     return last_eid
 
 
+def _cover_all_projects(store_db: Path) -> None:
+    """Give every project a ``project_mart`` row — the healthy coverage state."""
+    conn = db.connect(store_db)
+    conn.execute(
+        "INSERT INTO project_mart (project_id, provider, slug, display_name) "
+        "SELECT id, provider, slug, display_name FROM projects"
+    )
+    conn.commit()
+    conn.close()
+
+
 def _invoke(runner, args, store_db, monkeypatch):
     monkeypatch.setattr(deps, "store_path", store_db)
     monkeypatch.setattr(deps, "watcher_handle", None, raising=False)
@@ -119,6 +130,31 @@ class TestTextFormat:
         assert "claude=3" in r.output
         assert "rate_card=3" in r.output
 
+    def test_uncovered_projects_are_named(self, tmp_path, monkeypatch):
+        """A project with no ``project_mart`` row must be reported, not omitted.
+
+        ``_seed_with_events`` creates one project and never builds the mart,
+        which is exactly the gap mart lag can't see (the watermarks are
+        pinned at the max event id, so lag reads 0).
+        """
+        store_db = tmp_path / "store.db"
+        _seed_with_events(store_db, n_events=1)
+        runner = CliRunner()
+        r = _invoke(runner, ["etl", "status"], store_db, monkeypatch)
+        assert r.exit_code == 0, r.output
+        assert "project coverage: 0/1" in r.output
+        assert "1 project(s) have NO mart row" in r.output
+
+    def test_full_coverage_reports_no_gap(self, tmp_path, monkeypatch):
+        store_db = tmp_path / "store.db"
+        _seed_with_events(store_db, n_events=1)
+        _cover_all_projects(store_db)
+        runner = CliRunner()
+        r = _invoke(runner, ["etl", "status"], store_db, monkeypatch)
+        assert r.exit_code == 0, r.output
+        assert "project coverage: 1/1" in r.output
+        assert "NO mart row" not in r.output
+
     def test_default_format_is_text(self, tmp_path, monkeypatch):
         """No --format flag should produce the human-readable output, not JSON."""
         store_db = tmp_path / "store.db"
@@ -143,7 +179,7 @@ class TestJsonFormat:
         assert r.exit_code == 0, r.output
         body = json.loads(r.output)
         assert set(body.keys()) == {
-            "watcher", "marts", "events", "lag_seconds", "health",
+            "watcher", "marts", "events", "coverage", "lag_seconds", "health",
             "current_job", "last_job",
         }
         assert body["events"]["total"] == 2
@@ -152,6 +188,12 @@ class TestJsonFormat:
             "daily", "session", "project", "provider_day", "model_day",
         }
         assert body["health"] == "live"
+        # The seeded store never builds the mart, so its one project shows
+        # up in the coverage gap by id.
+        assert body["coverage"]["projects"] == 1
+        assert body["coverage"]["projects_with_mart"] == 0
+        assert body["coverage"]["projects_without_mart"] == 1
+        assert len(body["coverage"]["projects_without_mart_sample"]) == 1
         # Watcher graceful degrade — CLI never has a live handle.
         assert body["watcher"]["running"] == "unknown"
 

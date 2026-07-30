@@ -40,6 +40,9 @@ The shape returned is:
         "events": {"total": int, "max_id": int,
                     "by_provider": {provider: count},
                     "by_cost_source": {source: count}},
+        "coverage": {"projects": int, "projects_with_mart": int,
+                      "projects_without_mart": int,
+                      "projects_without_mart_sample": [project_id, ...]},
         "lag_seconds": int,           # spec-misnomer: actually "lag_events"
         "health": "live"|"syncing"|"stale"|"error",
         "current_job": {"job_id": str, "started_at": str,
@@ -49,6 +52,16 @@ The shape returned is:
                       "status": "complete"|"failed",
                       "error": str | None} | None,
     }
+
+The ``coverage`` block answers a question mart lag cannot: how many
+``projects`` rows have **no** ``project_mart`` row at all. Lag only
+compares watermarks, so a project that never produced a ``usage_event``
+is not "behind" — it is absent, and every mart-backed read path
+silently omits it. That gap ran at 91 of 334 projects unnoticed because
+nothing counted it. ``projects_without_mart`` is that count;
+``projects_without_mart_sample`` carries up to
+:data:`COVERAGE_SAMPLE_LIMIT` ids so the operator can go look at one
+without a second query. Healthy is zero.
 
 The ``lag_seconds`` field is the worst-case difference between the
 ``max(usage_events.id)`` and the laggiest mart watermark. Spec calls it
@@ -109,6 +122,12 @@ KNOWN_MART_NAMES: tuple[str, ...] = (
     "model_day",
 )
 
+# How many uncovered project ids to carry in the coverage block. The
+# count is the signal; the sample just saves the operator a query. Capped
+# so the payload stays a fixed size on a store where every project is
+# uncovered (a fresh install before the first mart refresh).
+COVERAGE_SAMPLE_LIMIT = 20
+
 # Map mart name → mart table. Each mart publishes its row count from the
 # matching table; lookups are PK lookups so the per-mart cost is O(1).
 _MART_TABLES: dict[str, str] = {
@@ -142,6 +161,7 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
     """
     events = _events_summary(conn)
     marts = _marts_summary(conn)
+    coverage = _coverage_summary(conn)
     watcher = _watcher_state()
     lag = _compute_lag(events["max_id"], marts)
     health = _compute_health(
@@ -169,6 +189,7 @@ def assemble_status(conn: sqlite3.Connection) -> dict[str, Any]:
         "watcher": watcher,
         "marts": marts,
         "events": events,
+        "coverage": coverage,
         "lag_seconds": lag,
         "health": health,
         "current_job": current,
@@ -274,6 +295,77 @@ def _marts_summary(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
             "last_refresh_ts": ts,
         }
     return out
+
+
+# ── coverage ──────────────────────────────────────────────────────────────────
+
+
+def _coverage_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Return ``{projects, projects_with_mart, projects_without_mart, ...sample}``.
+
+    A ``projects`` row with no ``project_mart`` row is invisible to every
+    mart-backed read path — and invisible to ``lag_seconds``, which only
+    compares watermarks. This is the counter that makes that gap
+    observable; healthy is ``projects_without_mart == 0``.
+
+    Two cheap statements: one anti-join aggregate over ``projects`` (a few
+    hundred rows, joined on the mart's INTEGER PRIMARY KEY) and one capped
+    id sample. Both stay well inside the assembler's <50ms budget.
+
+    Returns zeros when either table is missing (a pre-Wave-1 store), same
+    graceful-degrade contract as the events and marts blocks.
+    """
+    empty = {
+        "projects": 0,
+        "projects_with_mart": 0,
+        "projects_without_mart": 0,
+        "projects_without_mart_sample": [],
+    }
+    if not _table_exists(conn, "projects"):
+        return empty
+    if not _table_exists(conn, "project_mart"):
+        # No mart table at all: every project is uncovered.
+        rows = conn.execute(
+            "SELECT id FROM projects ORDER BY id LIMIT ?",
+            (COVERAGE_SAMPLE_LIMIT,),
+        ).fetchall()
+        total_row = conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()
+        total = int(total_row["n"]) if hasattr(total_row, "keys") else int(total_row[0])
+        return {
+            "projects": total,
+            "projects_with_mart": 0,
+            "projects_without_mart": total,
+            "projects_without_mart_sample": [
+                int(r["id"] if hasattr(r, "keys") else r[0]) for r in rows
+            ],
+        }
+
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, COUNT(m.project_id) AS covered "
+        "FROM projects p LEFT JOIN project_mart m ON m.project_id = p.id"
+    ).fetchone()
+    total = int(row["total"]) if hasattr(row, "keys") else int(row[0])
+    covered = int(row["covered"]) if hasattr(row, "keys") else int(row[1])
+    missing = max(0, total - covered)
+
+    sample: list[int] = []
+    if missing:
+        sample = [
+            int(r["id"] if hasattr(r, "keys") else r[0])
+            for r in conn.execute(
+                "SELECT p.id AS id FROM projects p "
+                "LEFT JOIN project_mart m ON m.project_id = p.id "
+                "WHERE m.project_id IS NULL ORDER BY p.id LIMIT ?",
+                (COVERAGE_SAMPLE_LIMIT,),
+            ).fetchall()
+        ]
+
+    return {
+        "projects": total,
+        "projects_with_mart": covered,
+        "projects_without_mart": missing,
+        "projects_without_mart_sample": sample,
+    }
 
 
 # ── watcher ───────────────────────────────────────────────────────────────────
@@ -467,6 +559,7 @@ def _seconds_since(iso_ts: str) -> int | None:
 
 __all__ = [
     "assemble_status",
+    "COVERAGE_SAMPLE_LIMIT",
     "KNOWN_MART_NAMES",
     "STALE_LAG_THRESHOLD_EVENTS",
     "SYNCING_RECENT_SECONDS",

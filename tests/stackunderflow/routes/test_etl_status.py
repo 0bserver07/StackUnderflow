@@ -152,7 +152,7 @@ class TestResponseShape:
 
         # Top-level keys
         assert set(body.keys()) == {
-            "watcher", "marts", "events", "lag_seconds", "health",
+            "watcher", "marts", "events", "coverage", "lag_seconds", "health",
             "current_job", "last_job",
         }
         # Idle store: no backfill in flight, none recently completed.
@@ -175,6 +175,15 @@ class TestResponseShape:
             assert mart["watermark"] == 0
             assert mart["row_count"] == 0
             assert mart["last_refresh_ts"] is None
+
+        # Coverage subshape — zero projects, so no gap to report.
+        assert set(body["coverage"].keys()) == {
+            "projects", "projects_with_mart", "projects_without_mart",
+            "projects_without_mart_sample",
+        }
+        assert body["coverage"]["projects"] == 0
+        assert body["coverage"]["projects_without_mart"] == 0
+        assert body["coverage"]["projects_without_mart_sample"] == []
 
         # Events subshape
         assert set(body["events"].keys()) == {
@@ -248,6 +257,14 @@ class TestResponseShape:
         for mart_name, mart in body["marts"].items():
             assert mart["watermark"] == max_id, mart_name
             assert mart["row_count"] == 1, mart_name
+
+        # Two projects, one project_mart row: exactly the shape that used to
+        # go dark. Watermarks are caught up, so lag can't see it — coverage
+        # names the missing project outright.
+        assert body["coverage"]["projects"] == 2
+        assert body["coverage"]["projects_with_mart"] == 1
+        assert body["coverage"]["projects_without_mart"] == 1
+        assert body["coverage"]["projects_without_mart_sample"] == [pid_x]
 
         # All caught up → live, zero lag.
         assert body["lag_seconds"] == 0
