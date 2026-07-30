@@ -188,6 +188,59 @@ Pipeline discoveries (listed, not fixed — future candidates):
   caches — 618–1012ms p99 cold vs <50ms warm, reproduced on pre-change HEAD.
   Environment floor on this box, like the git-2.25.1 worktree pair.
 
+## 4d. P2 route sweep — finder results (2026-07-30, skeptic verification in flight)
+
+Five Opus finders (data/cost/projects/sessions/live), all evidence measured on
+the real store. One skeptic per module re-verifying before any fix. Headlines:
+
+**Correctness (worst):**
+- PROJ-7: the P0.4 mart seed REGRESSED accuracy — 91 zero-filled rows suppress
+  the lite fallback; 79/303 list rows render "N sessions, no dates, 0 commands"
+  over 5,660 real messages. Read-side page-scoped MIN/MAX(sessions) recovers
+  54/91 at 0.02ms; real fix needs a coverage test stronger than "row exists".
+- DATA-2: /api/refresh reindexes twice; 2nd pass keys on an ARBITRARY provider
+  row (67 msgs) and search_service DELETEs-then-replaces the correct 50K-msg
+  index. Search breaks for multi-provider slugs on every refresh.
+- DATA-6: mart-refresh (and thus the seed) fires only `if events_inserted` —
+  a messages-only ingest never seeds; dashboard gate is all-or-nothing per slug
+  (one uncovered provider row → 6.6s pipeline for the whole slug).
+- PROJ-6(3): /api/project-by-dir picks arbitrary provider row (no ORDER BY) —
+  wrong current_log_path possible for 20/306 dupe slugs.
+- LIVE-2: live-latency id>=MIN bound collapses on out-of-order ingest (mart day
+  2026-01-06 → whole-table window). Session-scoped rewrite verified identical.
+
+**Big perf:**
+- DATA-1: /api/messages/summary = 5.9s + 800MB for 4 scalars (incl. a fully
+  DISCARDED aggregator.summarise); CI budget blind (1K-row fixture by design).
+- COST-2: /api/interaction rebuilds whole project per click (2.8s/208MB); 97ms
+  session-scoped build verified parity; frontend rows carry session_id.
+- COST-3: Cost-tab by-provider/by-model rescan raw messages (0.28-2.9s) while
+  daily_mart answers in 0.08-0.33ms (project_id-keyed, indexed, seeded).
+- COST-1: memo key split by tz_offset that UI callers never align → non-UTC
+  users pay the 5.85s sweep twice per project.
+- LIVE-1: the "fixed" correlated subquery moved into a CTE re-evaluated ~16×
+  (267ms of each 302ms poll); MATERIALIZED or hoisted-bind → 37ms.
+- SESS-1: /api/jsonl-content unbounded — 117MB body / 881MB RSS; UI slices 30.
+- SESS-2: /api/jsonl-files recomputes per-session aggregates (150ms) that
+  session_mart holds at 2.2ms (89.5% coverage).
+- DATA-3/COST-4: warm memo hits deepcopy 7-25MB to serve 0.1-0.5MB (85-170ms).
+- DATA-5/LIVE-3: heavy handlers are async-def on the event loop — one cold
+  stats call (6.6s) stalls every request incl. SSE (measured 529ms jitter).
+
+**Structural/latent:** PROJ-3 (uncovered_ids store-wide, docstring false; 2.4s
+detonation reproduced), PROJ-10 (tripwire coupled to PROJ-3), PROJ-1/2 (50% of
+/api/projects is redundant Path.home()+globs; 12.18→6.15ms measured), PROJ-4/5
+(full-mart reads for 3-row/filtered answers), PROJ-8 (unbounded recent-projects),
+DATA-4/COST-5 (unbounded memos, 20-25MB/entry, client-mintable tz keys),
+DATA-7 (daily_mart read twice), DATA-8 (page sort O(project), latent),
+SESS-3 (18 collectors for 1 field + ORDER BY timestamp temp-b-trees),
+SESS-4 (projects.slug unindexed — migration candidate), SESS-5 (shape
+inconsistency + dead sort), LIVE-4 (no ts index on message_tool_mart —
+migration; must survive mart rebuild), LIVE-5 (SSE drains 114MB backlog into a
+100-slot client ring), LIVE-6 (32K rows for 6-row response), LIVE-7 (polled
+path skips the existing burn cache), LIVE-8 (per-poll migration discovery),
+COST-6 (near-dead 12s global fallback), COST-7 (dormant blocking FX fetch).
+
 ## 5. In flight / uncommitted
 
 - `docs/specs/agent-remotes.md` — untracked; federation proposal dropped by
