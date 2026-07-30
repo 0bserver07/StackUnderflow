@@ -188,6 +188,31 @@ Pipeline discoveries (listed, not fixed — future candidates):
   caches — 618–1012ms p99 cold vs <50ms warm, reproduced on pre-change HEAD.
   Environment floor on this box, like the git-2.25.1 worktree pair.
 
+## 4e. P2 wave 1 — LANDED (2026-07-30 ~02:00, commits 24109d0..24be808)
+
+Ten commits, every fix adversarially verified before implementation, all
+measured on the real store post-landing (fresh instance, wave HEAD):
+
+| endpoint | before | after |
+|---|---|---|
+| `/api/live/stats` (30s poll/tab) | 302–341ms, blocks the loop | **9.7–10.9ms**, threadpooled |
+| `/api/jsonl-content` worst session | 117.23MiB / 881MB RSS | **7.10MiB** (16.5×) |
+| `/api/sessions/compare` | 516ms | **253ms**, rows identical |
+| `/api/cost-data` warm | ~84–104ms | **28–40ms** (keys= copy) |
+| `/api/tool-distribution` warm | ~99ms | **22–33ms** |
+| `/api/projects?include_stats` | 14ms-but-wrong | **30–45ms and truthful** (54 legacy projects' dates+commands restored) |
+
+Plus: stats-memo invalidation actually wired (model-alias edits no longer
+serve stale aggregates), both memos LRU-bounded + tz clamped, currency
+negative-caching (no more 10s loop stalls on a dead network), v030 indexes
+(survive mart rebuilds), SSE catches up in one cycle with resumable ids.
+Refuted-and-not-fixed + deferred-by-design lists live in §4d below and the
+session task list. IN FLIGHT: DATA batch (summary totals 87%-wrong fix,
+dead refresh block removal, async sweep, writer refresh gate). QUEUED:
+COST-B (EnrichedDataset memo + gated by-model), PROJ Wave-2 (page-scoped
+uncovered_ids + tripwire), classifier/dims ETL fix (evidence now includes
+57/243 events-backed rows with zeroed commands), then P3/P4.
+
 ## 4d. P2 route sweep — finder results (2026-07-30, skeptic verification in flight)
 
 Five Opus finders (data/cost/projects/sessions/live), all evidence measured on
