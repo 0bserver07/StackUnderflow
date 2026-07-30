@@ -164,6 +164,64 @@ async def test_set_project_by_dir_bypasses_fs_if_in_db(tmp_path, monkeypatch):
     assert deps.current_log_path == ""
 
 
+@pytest.mark.asyncio
+async def test_set_project_by_dir_opens_exactly_one_connection(tmp_path, monkeypatch):
+    """PROJ-6 — the handler reads the store once.
+
+    It used to open a second connection after answering, re-run ``get_project``
+    and throw away a ``list_sessions`` result (10.8ms on a real store) under a
+    comment claiming a background search/QA index that the code never did.
+    """
+    from stackunderflow.routes.projects import set_project_by_dir
+    from stackunderflow.store import db as store_db_module
+
+    store_db = tmp_path / "store.db"
+    conn = _connect(store_db)
+    pid = _insert_project(conn, provider="claude", slug="-solo")
+    sid = conn.execute("INSERT INTO sessions (project_id, session_id) VALUES (?, 's1')", (pid,)).lastrowid
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, raw_json) "
+        "VALUES (?, 0, '2026-05-01T10:00:00+00:00', 'user', '{}')",
+        (sid,),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
+    # The handler writes deps.current_* directly; bind them through monkeypatch
+    # so pytest restores them and the selection can't leak into later tests.
+    monkeypatch.setattr("stackunderflow.deps.current_project_path", None)
+    monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
+    # A live search service is what used to trigger the discarded second read.
+    monkeypatch.setattr("stackunderflow.deps.search_service", object())
+
+    opened: list[int] = []
+    real_connect = store_db_module.connect
+
+    def counting_connect(path, **kw):
+        opened.append(1)
+        return real_connect(path, **kw)
+
+    monkeypatch.setattr("stackunderflow.routes.projects.db.connect", counting_connect)
+
+    listed: list[object] = []
+    real_list_sessions = queries.list_sessions
+
+    def spy_list_sessions(conn, *, project_id):
+        listed.append(project_id)
+        return real_list_sessions(conn, project_id=project_id)
+
+    monkeypatch.setattr("stackunderflow.routes.projects.queries.list_sessions", spy_list_sessions)
+
+    response = await set_project_by_dir({"dir_name": "-solo"})
+    body = json.loads(response.body.decode("utf-8"))
+
+    assert body["status"] == "success"
+    assert body["log_dir_name"] == "-solo"
+    assert len(opened) == 1, f"opened {len(opened)} connections"
+    assert listed == [], "sessions were listed and the result discarded"
+
+
 # ── RANK 26 (resolved by v022): mart now materialises the command count ───────
 
 

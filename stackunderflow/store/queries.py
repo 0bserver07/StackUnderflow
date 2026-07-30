@@ -31,11 +31,26 @@ def _id_chunks(project_ids: Iterable[int]) -> list[tuple[int, ...]]:
     ]
 
 
-def list_projects(conn: sqlite3.Connection) -> list[ProjectRow]:
-    rows = conn.execute(
+def list_projects(
+    conn: sqlite3.Connection, *, limit: int | None = None
+) -> list[ProjectRow]:
+    """Every project row, newest ``last_modified`` first.
+
+    ``limit`` bounds the read in SQL. Because the ``ORDER BY`` is already
+    applied, ``limit=N`` returns exactly what ``list_projects(conn)[:N]``
+    would — the same rows in the same order — without building the discarded
+    tail. ``None`` (the default) keeps the full list for callers that fold,
+    filter or paginate over every slug.
+    """
+    sql = (
         "SELECT id, provider, slug, path, display_name, first_seen, last_modified "
         "FROM projects ORDER BY last_modified DESC"
-    ).fetchall()
+    )
+    params: tuple[int, ...] = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (int(limit),)
+    rows = conn.execute(sql, params).fetchall()
     return [ProjectRow(**dict(r)) for r in rows]
 
 

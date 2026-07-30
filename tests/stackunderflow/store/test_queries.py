@@ -45,6 +45,43 @@ def test_list_projects_returns_one(conn) -> None:
     assert out[0].slug == "-a"
 
 
+def test_list_projects_limit_bounds_the_read_and_keeps_the_order(conn) -> None:
+    """``limit=N`` == ``list_projects(conn)[:N]`` — same rows, same order.
+
+    The ``ORDER BY last_modified DESC`` is applied before the ``LIMIT``, so
+    bounding in SQL is payload-identical to slicing in Python; callers that
+    only ever show the newest N (``/api/recent-projects``) can stop building
+    the discarded tail.
+    """
+    for i in range(5):
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES ('claude', ?, ?, 0.0, ?)",
+            (f"-p{i}", f"-p{i}", float(i)),
+        )
+    full = queries.list_projects(conn)
+    assert [p.slug for p in full] == ["-p4", "-p3", "-p2", "-p1", "-p0"]
+
+    bounded = queries.list_projects(conn, limit=3)
+    assert [p.slug for p in bounded] == [p.slug for p in full[:3]]
+
+
+def test_list_projects_limit_none_is_unbounded(conn) -> None:
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified) "
+            "VALUES ('claude', ?, ?, 0.0, ?)",
+            (f"-p{i}", f"-p{i}", float(i)),
+        )
+    assert len(queries.list_projects(conn, limit=None)) == 3
+    assert len(queries.list_projects(conn)) == 3
+
+
+def test_list_projects_limit_larger_than_the_table_is_fine(conn) -> None:
+    _seed_project(conn, slug="-only")
+    assert [p.slug for p in queries.list_projects(conn, limit=50)] == ["-only"]
+
+
 def test_get_project_by_slug(conn) -> None:
     _seed_project(conn, slug="-a")
     p = queries.get_project(conn, slug="-a")

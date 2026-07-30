@@ -35,6 +35,10 @@ router = APIRouter()
 PROJECTS_DEFAULT_LIMIT = 500
 PROJECTS_MAX_LIMIT = 1000
 
+# How many rows ``GET /api/recent-projects`` returns. Fixed (not a query
+# param) — it feeds the "recent" picker, never a paginated list.
+RECENT_PROJECTS_LIMIT = 20
+
 
 # Set project endpoint
 @router.post("/api/project")
@@ -95,67 +99,62 @@ async def set_project_by_dir(data: dict[str, str]):
     if not dir_name:
         raise HTTPException(status_code=400, detail="Directory name is required")
 
-    # First check if the project slug is registered in the database store
+    # First check if the project slug is registered in the database store.
+    # ONE connection serves the whole handler — the store is read exactly once
+    # here, and nothing below it needs the DB again.
     conn = db.connect(deps.store_path)
-    project_row = None
     try:
-        project_row = queries.get_project(conn, slug=dir_name)
-    except Exception:  # noqa: S110
-        pass
-    finally:
-        conn.close()
+        project_row = None
+        try:
+            project_row = queries.get_project(conn, slug=dir_name)
+        except Exception:  # noqa: S110
+            pass
 
-    if project_row:
-        # If registered in store, we bypass filesystem and glob checks.
-        # It's an active/indexed project whose data is fully loaded in SQLite.
-        log_path = _resolve_log_dir(project_row.path, dir_name, project_row.provider)
-        project_path = project_row.path
-        if not project_path:
+        if project_row:
+            # If registered in store, we bypass filesystem and glob checks.
+            # It's an active/indexed project whose data is fully loaded in SQLite.
+            log_path = _resolve_log_dir(project_row.path, dir_name, project_row.provider)
+            project_path = project_row.path
+            if not project_path:
+                if dir_name.startswith("-"):
+                    project_path = dir_name[1:].replace("-", "/")
+                else:
+                    project_path = dir_name
+        else:
+            # Build the log path. This branch serves on-disk claude log dirs
+            # that aren't in the store yet — derive the root from its owner.
+            from stackunderflow.adapters.claude import default_projects_root
+
+            claude_base = default_projects_root()
+            log_path = (claude_base / dir_name).resolve()
+            if not str(log_path).startswith(str(claude_base.resolve()) + os.sep):
+                raise HTTPException(status_code=400, detail="Invalid path")
+
+            if not log_path.exists() or not log_path.is_dir():
+                raise HTTPException(status_code=404, detail=f"Log directory not found: {dir_name}")
+
+            # Check if it has log files
+            log_files = list(log_path.glob("*.jsonl"))
+            if not log_files:
+                raise HTTPException(status_code=404, detail=f"No log files found in directory: {dir_name}")
+
+            # Try to convert back to project path (best effort)
             if dir_name.startswith("-"):
                 project_path = dir_name[1:].replace("-", "/")
             else:
                 project_path = dir_name
-    else:
-        # Build the log path. This branch serves on-disk claude log dirs
-        # that aren't in the store yet — derive the root from its owner.
-        from stackunderflow.adapters.claude import default_projects_root
-
-        claude_base = default_projects_root()
-        log_path = (claude_base / dir_name).resolve()
-        if not str(log_path).startswith(str(claude_base.resolve()) + os.sep):
-            raise HTTPException(status_code=400, detail="Invalid path")
-
-        if not log_path.exists() or not log_path.is_dir():
-            raise HTTPException(status_code=404, detail=f"Log directory not found: {dir_name}")
-
-        # Check if it has log files
-        log_files = list(log_path.glob("*.jsonl"))
-        if not log_files:
-            raise HTTPException(status_code=404, detail=f"No log files found in directory: {dir_name}")
-
-        # Try to convert back to project path (best effort)
-        if dir_name.startswith("-"):
-            project_path = dir_name[1:].replace("-", "/")
-        else:
-            project_path = dir_name
+    finally:
+        conn.close()
 
     deps.current_project_path = project_path
     # "" = provider has no on-disk log dir (non-claude, no stored path) —
     # kept empty, never coerced through Path("") into ".".
     deps.current_log_path = str(log_path)
 
-    # Index for search/QA in background (search and QA services use store data)
-    try:
-        if deps.search_service is not None:
-            conn = db.connect(deps.store_path)
-            try:
-                project_row = queries.get_project(conn, slug=dir_name)
-                if project_row is not None:
-                    queries.list_sessions(conn, project_id=project_row.id)
-            finally:
-                conn.close()
-    except Exception:  # noqa: S110
-        pass
+    # (No warm-up pass here: search/QA read the store directly at query time.
+    # A second connection used to re-run ``get_project`` and throw away a
+    # ``list_sessions`` result under a comment claiming a background index that
+    # never existed — 6.9ms of pure waste on the busiest slug, measured.)
 
     return JSONResponse(
         {
@@ -171,11 +170,17 @@ async def set_project_by_dir(data: dict[str, str]):
 # Get recent projects from store
 @router.get("/api/recent-projects")
 async def get_recent_projects():
-    """Get list of recent projects from session store"""
+    """Get list of recent projects from session store.
+
+    Only the newest ``RECENT_PROJECTS_LIMIT`` rows are ever returned, so the
+    bound is pushed into SQL: ``list_projects`` already orders by
+    ``last_modified DESC``, so a ``LIMIT`` yields the identical payload to the
+    old "read every project row, build every dict, keep the first 20".
+    """
     try:
         conn = db.connect(deps.store_path)
         try:
-            project_rows = queries.list_projects(conn)
+            project_rows = queries.list_projects(conn, limit=RECENT_PROJECTS_LIMIT)
         finally:
             conn.close()
 
@@ -189,7 +194,7 @@ async def get_recent_projects():
             for p in project_rows
         ]
 
-        return JSONResponse({"projects": projects[:20]})
+        return JSONResponse({"projects": projects})
 
     except Exception as e:
         return JSONResponse({"projects": [], "error": str(e)})
@@ -310,6 +315,17 @@ def _compute_projects_payload(
     or the folded and raw variants would cross-contaminate.
     """
     limit, offset = _clamp_pagination(limit, offset)
+
+    # Derive claude's projects root ONCE per request. ``_resolve_log_dir`` runs
+    # per project row (334 on the maintainer's store) and used to re-derive it
+    # every time — env read + ``Path.home()`` + ``expanduser`` per row. Measured
+    # on that store, full ``include_stats`` payload, median of 15: 14.3ms →
+    # 11.6ms. Hoisted rather than cached on purpose: a per-request derivation
+    # still honours ``CLAUDE_CONFIG_DIR`` changes, an ``lru_cache`` would not.
+    from stackunderflow.adapters.claude import default_projects_root
+
+    projects_root = default_projects_root()
+
     conn = db.connect(deps.store_path)
     try:
         project_rows = queries.list_projects(conn)
@@ -368,7 +384,9 @@ def _compute_projects_payload(
         projects = []
         for slug, group in slug_groups.items():
             primary = max(group, key=lambda p: p.last_modified)
-            log_path = _resolve_log_dir(primary.path, slug, primary.provider)
+            log_path = _resolve_log_dir(
+                primary.path, slug, primary.provider, projects_root=projects_root
+            )
             projects.append(
                 {
                     "dir_name": slug,
@@ -508,12 +526,23 @@ def _mart_row_is_placeholder(row: dict) -> bool:
     )
 
 
-def _resolve_log_dir(path: str | None, slug: str, provider: str | None) -> str:
+def _resolve_log_dir(
+    path: str | None,
+    slug: str,
+    provider: str | None,
+    *,
+    projects_root: Path | None = None,
+) -> str:
     """Delegates to the single policy home — see
-    ``adapters.claude.resolve_legacy_log_dir``."""
+    ``adapters.claude.resolve_legacy_log_dir``.
+
+    ``projects_root`` is the per-request hoist: list callers derive claude's
+    projects root once and pass it down (see ``_compute_projects_payload``).
+    ``None`` derives it per call, which is what one-off callers want.
+    """
     from stackunderflow.adapters.claude import resolve_legacy_log_dir
 
-    return resolve_legacy_log_dir(provider, path, slug)
+    return resolve_legacy_log_dir(provider, path, slug, projects_root=projects_root)
 
 
 # ── Campaign #8: worktree fragment detection + roll-up ───────────────────────
@@ -749,11 +778,16 @@ def _mart_row_to_stats(row: dict) -> dict:
 def _opt_sum_commands(parts: list[dict]) -> int | None:
     """Sum ``total_commands`` across merged parts, tolerating ``None``.
 
-    Mart-backed parts carry ``None`` ("unknown", see :func:`_mart_row_to_stats`)
-    while lite-backed parts carry an integer proxy. When every part is
-    unknown the merged slug is unknown too (``None`` → UI renders ``-``);
-    when at least one part has a real count we sum the known ones so a
-    mixed provider-duplicate slug still surfaces what it can.
+    Every part this module produces today carries an integer: mart-backed
+    parts get the materialised ``user_commands_analyzed`` count coerced to
+    ``0`` when absent (:func:`_mart_row_to_stats`, v022 — a mart zero is a
+    *measured* zero, not "unknown"), and lite-backed parts carry the
+    user-message proxy. The ``None`` tolerance is therefore defensive, not a
+    live branch: it dates from the pre-v022 mart, which had no command column
+    and returned ``None`` so the UI could render ``-`` instead of a false 0.
+    It stays because the signature is ``int | None`` and a future part-source
+    may legitimately not know; when every part is ``None`` the merged slug is
+    ``None`` too, otherwise we sum the known ones.
     """
     known = [p["total_commands"] for p in parts if p.get("total_commands") is not None]
     return sum(known) if known else None

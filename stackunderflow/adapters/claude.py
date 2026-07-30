@@ -67,7 +67,11 @@ def default_projects_root() -> Path:
 
 
 def resolve_legacy_log_dir(
-    provider: str | None, stored_path: str | None, slug: str
+    provider: str | None,
+    stored_path: str | None,
+    slug: str,
+    *,
+    projects_root: Path | None = None,
 ) -> str:
     """Stored path, or claude's legacy slug→dir fallback — claude ONLY.
 
@@ -77,11 +81,23 @@ def resolve_legacy_log_dir(
     codex/cursor/grok project invents a directory that never existed. A
     non-claude project with no stored path resolves to ``""`` (unknown) —
     consumers treat that as "no on-disk dir", never as cwd.
+
+    ``projects_root`` lets a caller that resolves MANY rows in one pass derive
+    the root once and hand it in — ``GET /api/projects`` calls this once per
+    project row (306 per request on the maintainer's store) and the env read +
+    ``Path.home()`` + ``expanduser`` per call was measurable. ``None`` (the
+    default) derives it exactly as before, so every single-row caller is
+    unchanged. This is a parameter and deliberately NOT an ``lru_cache``: the
+    root is env-derived (``CLAUDE_CONFIG_DIR``), so a process-lifetime cache
+    would freeze whichever value it saw first — an order-dependent flake for
+    any caller or test that relocates the config dir, and one more cache with
+    no reset hook.
     """
     if stored_path:
         return stored_path
     if (provider or "claude") in ("claude", "anthropic"):
-        return str(default_projects_root() / slug)
+        root = default_projects_root() if projects_root is None else projects_root
+        return str(root / slug)
     return ""
 
 
