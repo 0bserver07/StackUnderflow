@@ -9,6 +9,30 @@ REPLACE`` on the ``project_id`` PRIMARY KEY does the swap atomically.
 ``provider``, ``slug``, ``display_name`` come from the ``projects``
 table, joined in by id.
 
+Coverage seed
+=============
+The aggregate above is driven ``FROM usage_events`` — a project with
+zero billable events can never win a row from it, so it stayed
+invisible to every mart-backed read path. That is not a rare corner: a
+Claude ``legacy-`` history pseudo-session (user turns only, no token
+accounting), a provider whose adapter deliberately emits no usage
+events, and a normalizer that guards a row away all produce real
+projects with real messages and no events at all.
+
+So after the events pass we seed a zero-cost row for every project that
+still has none (:func:`_seed_uncovered_projects`). Totals fall to their
+column ``DEFAULT`` (0 / NULL timestamps) — truthfully zero, not
+missing — and the message dims below are then filled from the raw
+``messages`` exactly as they are for an events-backed project, so a
+history-only project still reports its user-message and command counts.
+
+The seed feeds ``affected`` **only** the ids it actually inserted. An
+already-covered project must never re-enter ``affected``, or every
+watcher cycle would re-run the full ``messages`` scan of
+:func:`_refresh_message_dims` for all 300-odd projects; on steady state
+(nothing newly seeded) the seed contributes nothing and costs one
+indexed anti-join.
+
 Message-type + command dims
 ===========================
 ``usage_events`` is assistant-only (the normalizers skip non-billable
@@ -72,9 +96,34 @@ class ProjectMartBuilder(MartBuilder):
 
     def refresh(self, conn: sqlite3.Connection, since_event_id: int) -> int:
         max_id = _max_event_id(conn)
-        if max_id <= since_event_id:
-            return since_event_id
+        # ``affected`` drives the second (message-dims) pass. Only ids whose
+        # mart row this call actually (re)wrote may enter it.
+        affected: list[int] = []
+        if max_id > since_event_id:
+            affected = self._refresh_from_events(conn, since_event_id, max_id)
 
+        # Coverage seed — event-less projects get a zero-cost row. Runs even
+        # when no new events arrived so a project that will never produce an
+        # event (history-only, or a provider that emits none) can't stay
+        # invisible until the next unrelated event happens to land.
+        affected.extend(_seed_uncovered_projects(conn))
+
+        # Second pass: materialise the message-type + command dims from the
+        # raw ``messages`` (the INSERT above reset them to DEFAULT 0).
+        _refresh_message_dims(conn, affected)
+
+        return max(max_id, since_event_id)
+
+    @staticmethod
+    def _refresh_from_events(
+        conn: sqlite3.Connection, since_event_id: int, max_id: int
+    ) -> list[int]:
+        """Recompute the mart rows of every project with events in the window.
+
+        Returns the affected project ids — the ones whose row was just
+        replaced (and whose dim columns therefore fell back to DEFAULT and
+        need the second pass).
+        """
         affected = [
             int(r[0])
             for r in conn.execute(
@@ -119,16 +168,48 @@ class ProjectMartBuilder(MartBuilder):
             """,
             (since_event_id, max_id),
         )
-
-        # Second pass: materialise the message-type + command dims from the
-        # raw ``messages`` (the INSERT above reset them to DEFAULT 0).
-        _refresh_message_dims(conn, affected)
-
-        return max_id
+        return affected
 
     def rebuild_from_scratch(self, conn: sqlite3.Connection) -> None:
+        # DELETE then a from-zero refresh, which runs the coverage seed too —
+        # so a rebuild lands the same project set as the incremental path.
         conn.execute("DELETE FROM project_mart")
         self.refresh(conn, since_event_id=0)
+
+
+def _seed_uncovered_projects(conn: sqlite3.Connection) -> list[int]:
+    """Give every project with no ``project_mart`` row a zero-cost one.
+
+    Returns **only** the ids this call inserted, so the caller can add
+    exactly those to its ``affected`` set. Already-covered projects are
+    excluded by construction: the ids come from an anti-join computed
+    *before* the INSERT, so a steady-state call returns ``[]`` and never
+    re-enters a project into the message-dims pass.
+
+    The anti-join is a PK-driven scan of ``projects`` (hundreds of rows);
+    when it finds nothing we skip the write entirely, so the steady-state
+    cost of coverage is one cheap SELECT per refresh.
+    """
+    missing = [
+        int(r[0])
+        for r in conn.execute(
+            "SELECT p.id FROM projects p "
+            "LEFT JOIN project_mart m ON m.project_id = p.id "
+            "WHERE m.project_id IS NULL"
+        ).fetchall()
+    ]
+    if not missing:
+        return []
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO project_mart (
+            project_id, provider, slug, display_name
+        )
+        SELECT p.id, p.provider, p.slug, p.display_name
+        FROM projects p
+        """
+    )
+    return missing
 
 
 def _max_event_id(conn: sqlite3.Connection) -> int:
@@ -147,9 +228,10 @@ def _refresh_message_dims(
     Scans every ``messages`` row of each project (joined via ``sessions``,
     ordered by timestamp so the interaction grouping matches the pipeline)
     and classifies it with the same functions ``get_project_stats`` runs,
-    then UPDATEs the materialised counts onto the project's mart row. A
-    project with no mart row (no billable events) is silently skipped — the
-    UPDATE matches nothing.
+    then UPDATEs the materialised counts onto the project's mart row.
+    Callers only pass ids they just wrote a row for (the events pass or the
+    coverage seed), so the UPDATE always matches; an id that somehow has no
+    row is a silent no-op rather than an error.
 
     Two derivations share the single ``messages`` fetch:
 
