@@ -26,7 +26,7 @@ from pathlib import Path
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-CURRENT_VERSION = 29
+CURRENT_VERSION = 30
 
 
 def apply(conn: sqlite3.Connection) -> None:
@@ -129,6 +129,10 @@ _ADD_COLUMN_GUARDS: dict[int, tuple[str, str]] = {
     # partial-application path — tables present, ``user_version`` behind — bump
     # the version without re-executing the body.
     29: ("sync_cursors", "remote_device_uuid"),
+    # v030 is index-only (``CREATE INDEX IF NOT EXISTS`` ×2) — inherently
+    # idempotent, no column to probe, nothing to recover from. Deliberately
+    # NOT listed here: a guard would need a table/column pair that says
+    # nothing about whether the indexes exist.
 }
 
 
