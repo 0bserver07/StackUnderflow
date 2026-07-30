@@ -326,12 +326,21 @@ def _compute_projects_payload(
         mart_rows: dict[int, dict] = {}
         if include_stats:
             for row in mart_queries.list_project_mart(conn):
+                # Placeholder seeds are deliberately NOT recorded: "absent from
+                # ``mart_rows``" is exactly what *uncovered* means downstream
+                # (the bulk-helper scope below AND ``_stats_for_ids``), so
+                # skipping them here is what routes those projects to the
+                # fallback that can actually answer for them.
+                if _mart_row_is_placeholder(row):
+                    continue
                 mart_rows[int(row["project_id"])] = row
 
-        # Project ids whose mart row is missing fall back to the
-        # bulk SQL helpers — keeps the response shape stable while
-        # an in-flight ETL backfill is still working through the
-        # store.
+        # Project ids whose mart row is missing — or present but an empty
+        # coverage seed (see ``_mart_row_is_placeholder``) — fall back to the
+        # bulk SQL helpers. Keeps the response shape stable while an in-flight
+        # ETL backfill is still working through the store, and keeps the dates
+        # / command count / cost of a seeded-but-message-bearing project on the
+        # payload instead of blanking them behind an all-zero row.
         #
         # The helpers MUST be scoped to ``uncovered_ids``. Unscoped they
         # GROUP BY over every message row in the store, so a single
@@ -463,6 +472,42 @@ def _compute_projects_payload(
     }
 
 
+def _mart_row_is_placeholder(row: dict) -> bool:
+    """Is this ``project_mart`` row an empty coverage seed over real messages?
+
+    ``ProjectMartBuilder`` seeds a row for every event-less project so no slug
+    can stay invisible; that INSERT writes only the identity columns, so every
+    total — ``total_messages``, ``total_cost_usd``, ``first_ts`` / ``last_ts``
+    — keeps its ``DEFAULT``. Its second pass then fills the *message*-derived
+    dims (``total_records`` among them) straight off the ``messages`` table.
+    So a seeded project that DOES have message rows lands with
+    ``total_records > 0`` while the event-derived ``total_messages`` stays 0.
+
+    That pair is the tell, and it is exact: ``{total_records == 0}`` is the
+    same set as ``{no session timestamps}`` and the same set as ``{absent from
+    bulk_project_lite_stats}``. So ``total_records > 0 AND total_messages ==
+    0`` selects precisely the seeded rows whose dates / command count / cost
+    the bulk SQL fallback can still recover (54 of 334 projects on the
+    maintainer's store) and never a genuinely empty one (the other 37, which
+    have no messages at all and are correctly served as zeros by the mart).
+
+    Before the mart seeded full coverage, these projects fell out of
+    ``mart_rows`` by simple absence and took the fallback; the seed made them
+    "covered" by an all-zero row and silently blanked their list cards.
+
+    Cost of routing them back to the fallback, measured on that store (54 ids,
+    5,660 messages between them): ``bulk_project_lite_stats`` 10.2ms +
+    ``bulk_project_cost`` 2.7ms, so the full ``include_stats`` payload goes
+    14.3ms → 26.1ms. That is the price of correct dates and command counts
+    until the ETL prices those projects for real; both helpers stay scoped to
+    this id set, so it does not scale with the rest of the store.
+    """
+    return (
+        int(row.get("total_records", 0) or 0) > 0
+        and int(row.get("total_messages", 0) or 0) == 0
+    )
+
+
 def _resolve_log_dir(path: str | None, slug: str, provider: str | None) -> str:
     """Delegates to the single policy home — see
     ``adapters.claude.resolve_legacy_log_dir``."""
@@ -574,6 +619,11 @@ def _fragment_costs_usd(
     need = {pid for frag in fragments for pid in frag["_ids"]}
     if not mart_loaded and need:
         for row in mart_queries.list_project_mart(conn):
+            # Same coverage rule as the include_stats pass: an empty coverage
+            # seed reports 0.0 for a fragment whose messages did cost money, so
+            # it must not shadow the (scoped) bulk-cost fallback below.
+            if _mart_row_is_placeholder(row):
+                continue
             mart_rows.setdefault(int(row["project_id"]), row)
     uncovered = {pid for pid in need if pid not in mart_rows}
     if uncovered and not cost_by_pid:
