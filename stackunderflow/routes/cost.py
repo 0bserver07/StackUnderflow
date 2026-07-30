@@ -183,6 +183,39 @@ _STATS_CACHE: OrderedDict[tuple[str, str, int, tuple[int, ...]], tuple[tuple[str
 _STATS_CACHE_LOCK = threading.Lock()
 _STATS_CACHE_MAX = 8
 
+# ── enriched-dataset memo (COST-B concern 1) ─────────────────────────────────
+#
+# ``/api/interaction/{id}`` rebuilt the WHOLE project's ``EnrichedDataset`` on
+# every click. Measured on the 49K-message slug (4 provider ids): 2,538 ms and
+# ~740 MB transient per request, paid again on every click AND on every
+# guaranteed-miss id — while the work the response actually needs is a linear
+# scan over ``dataset.interactions`` (0.11-0.20 ms across 1,680 interactions)
+# plus one ``_serialise_interaction``. Warm, the whole handler now measures
+# 0.078 ms for a hit and 0.095 ms for a full-scan miss.
+#
+# Session-scoping the rebuild was considered and REFUTED: 32.6% of interactions
+# span sessions, 40.4% of attached records can come from a foreign session, and
+# the navigation channel drops session ids anyway — a session-scoped build would
+# return truncated interactions, not a faster correct one. Memoizing the whole
+# dataset is the fix that keeps the answer identical.
+#
+# Same self-invalidation contract as ``_STATS_CACHE``: entries are validated on
+# every hit against ``_stats_signature`` (max ``last_ts`` + summed
+# ``message_count`` over the project's sessions), so a stale dataset cannot
+# outlive an ingest, and ``_invalidate_stats_cache`` drops these too (alias
+# edits / the two ``/api/refresh`` paths) — see that function.
+#
+# Bounded at 2 entries, deliberately smaller than ``_STATS_CACHE_MAX``: an entry
+# is not a JSON-ish dict but a live object graph (every ``Record`` dataclass for
+# every message in the project, with content strings). MEASURED resident cost:
+# +739 MB for the 49K-message slug, and 1,134 MB RSS with two entries held (the
+# second being a 43K-message project). That is the ceiling a desktop process can
+# carry, so 2 it is. The dashboard only ever has one project open — the second
+# slot exists to survive a switch-and-back, not to serve a working set.
+_DATASET_CACHE: OrderedDict[tuple[str, str, tuple[int, ...]], tuple[tuple[str | None, int], Any]] = OrderedDict()
+_DATASET_CACHE_LOCK = threading.Lock()
+_DATASET_CACHE_MAX = 2
+
 # ``timezone_offset`` arrives as an unvalidated client integer. It is minutes
 # EAST of UTC (the frontend sends ``-new Date().getTimezoneOffset()``), so the
 # only meaningful range is UTC-12:00 … UTC+14:00. Unclamped, a caller could mint
@@ -225,14 +258,32 @@ def _stats_signature(conn, project_ids: list[int]) -> tuple[str | None, int]:
 
 
 def _invalidate_stats_cache(slug: str | None = None) -> None:
-    """Drop memoized stats. ``slug=None`` clears every entry."""
+    """Drop memoized stats AND enriched datasets. ``slug=None`` clears all.
+
+    Both memos hang off the same aggregation inputs, so they invalidate
+    together at the same four production sites (``routes/cfg.py`` alias
+    set/delete, the two ``/api/refresh`` paths). Keeping one entry point means
+    a new invalidation site can never wire up half the caches — the exact bug
+    that left ``_invalidate_stats_cache`` with no production caller at all
+    before the memo was wired in.
+
+    Slug is at index 1 of both cache keys, so the scoped clear is the same
+    predicate for each.
+    """
     with _STATS_CACHE_LOCK:
         if slug is None:
             _STATS_CACHE.clear()
-            return
-        for key in list(_STATS_CACHE):
-            if key[1] == slug:
-                del _STATS_CACHE[key]
+        else:
+            for key in list(_STATS_CACHE):
+                if key[1] == slug:
+                    del _STATS_CACHE[key]
+    with _DATASET_CACHE_LOCK:
+        if slug is None:
+            _DATASET_CACHE.clear()
+        else:
+            for key in list(_DATASET_CACHE):
+                if key[1] == slug:
+                    del _DATASET_CACHE[key]
 
 
 def _copy_stats_subset(stats: dict, keys: tuple[str, ...] | None) -> dict:
@@ -934,18 +985,164 @@ def _build_by_model_rows_from_messages(
     return sorted(per_key.values(), key=lambda b: b["day"])
 
 
+# ── by-model daily_mart fast path (COST-B concern 2) ─────────────────────────
+#
+# The project-scoped by-model rollup re-prices every assistant message in the
+# project on every request (52 / 115 / 550 ms for today / month / all-time,
+# measured on a 43K-message project). ``daily_mart`` already stores a
+# (day, project_id, provider, model, speed) rollup carrying ``cost_usd`` and
+# ``message_count``, and reading it back is 0.17-0.63 ms — 5.1 / 6.3 / 5.7 ms
+# end to end once the eligibility gate below is paid, i.e. 10x / 18x / 96x. On
+# an INELIGIBLE project the gate is pure overhead, +5.7 ms on a 60-715 ms
+# request, which is the price of never serving a wrong number.
+#
+# Substituting the mart is only sound under BOTH gates below, because the two
+# paths do not compute cost the same way:
+#
+#   * ``daily_mart.cost_usd`` is what the NORMALIZER stored, and the normalizer
+#     writes 0.0 for any event whose ``cost_source`` is not a real rate-card
+#     match (``unknown``), while this route's raw path re-prices those same
+#     messages through ``compute_cost``'s default-family fallback and invents a
+#     number. Measured on real projects: -65.4% over a week window and -0.7%
+#     over a month window on a slug with 183 non-rate_card events, with
+#     individual (day, model) cells going from $9.26 raw to $0.00 mart. So: any
+#     non-rate_card event under ANY of the slug's project ids → raw path.
+#
+#   * ``daily_mart`` is keyed on a UTC ``day``, but ``parse_period`` returns
+#     instants. Truncating them to 10 chars is lossless ONLY for the periods
+#     whose bounds already sit on day boundaries — ``today`` (00:00:00 →
+#     23:59:59), ``month`` (1st 00:00 → last 23:59:59) and ``all`` (unbounded).
+#     ``week`` is a rolling ``now - 7d`` instant, so day-truncation pulls in the
+#     whole of the boundary day: +8-29% depending on the time of day. ``week``
+#     therefore never takes this path.
+#
+# A third gate is structural rather than numeric: an un-materialised store has
+# an EMPTY ``usage_events``, which passes the "no non-rate_card events" test
+# vacuously and would serve an empty chart for a project full of messages.
+# ``mart_has_project_row`` on every id is the materialisation proof.
+#
+# Two residual differences survive both gates and are NOT corrected here (they
+# are properties of the mart, not of this route): ``daily_mart.cost_usd`` is
+# frozen at normalization time, so a later rate-card edit in the code makes the
+# two paths disagree for old days (measured +$0.06 on $7,088 all-time — one
+# model's output rate moved $20/M → $15/M); and normalizers drop zero-token
+# assistant rows, which the raw path still counts, so ``message_count`` can run
+# slightly low (-52 of 26,229, -0.20%, on the same project).
+_BY_MODEL_MART_PERIODS: frozenset[str] = frozenset({"today", "month", "all"})
+
+
+def _by_model_mart_eligible(conn, project_ids: list[int]) -> bool:
+    """True iff the mart may stand in for the raw rollup for these projects.
+
+    Two checks, cheapest first:
+
+    1. Every id is materialised (``project_mart`` row present) — otherwise the
+       mart's silence means "not built yet", not "no spend".
+    2. Zero ``usage_events`` rows with ``cost_source != 'rate_card'``. One
+       ``LIMIT 1`` probe over ``idx_events_project``; it short-circuits on the
+       first offending row, so a dirty project pays almost nothing and a clean
+       one pays a single index walk (4.1-8.7 ms measured, against the 102-548 ms
+       raw rollup it replaces).
+    """
+    if not project_ids:
+        return False
+    if not all(mart_queries.mart_has_project_row(conn, project_id=pid) for pid in project_ids):
+        return False
+    placeholders = ",".join("?" for _ in project_ids)
+    row = conn.execute(
+        "SELECT 1 FROM usage_events "  # noqa: S608 — placeholders are bound
+        f"WHERE project_id IN ({placeholders}) AND cost_source != 'rate_card' LIMIT 1",
+        tuple(project_ids),
+    ).fetchone()
+    return row is None
+
+
+def _build_by_model_rows_from_mart(
+    conn,
+    *,
+    project_ids: list[int],
+    day_from: str | None,
+    day_to: str | None,
+) -> list[dict[str, Any]]:
+    """Per-(day, model) rollup read out of ``daily_mart``.
+
+    Emits the identical row shape ``_build_by_model_rows_from_messages``
+    returns — ``{day, model, cost_usd, message_count}``, one row per
+    (day, model), summed across provider and speed, ordered by day — so the
+    route's response assembly is unchanged.
+
+    Rows with no model are dropped to mirror the raw path, which only counts
+    assistant messages carrying a real model id (``daily_mart`` stores ``''``
+    for events a normalizer emitted without one).
+    """
+    per_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for pid in project_ids:
+        for r in mart_queries.daily_for_project(
+            conn, project_id=pid, day_from=day_from, day_to=day_to
+        ):
+            model = r.get("model") or ""
+            if not model or model == "N/A":
+                continue
+            day = r.get("day") or ""
+            bucket = per_key.setdefault(
+                (day, model),
+                {"day": day, "model": model, "cost_usd": 0.0, "message_count": 0},
+            )
+            bucket["cost_usd"] += float(r.get("cost_usd") or 0.0)
+            bucket["message_count"] += int(r.get("message_count") or 0)
+    return sorted(per_key.values(), key=lambda b: b["day"])
+
+
+def _enriched_dataset_cached(conn, *, project_ids: list[int], slug: str):
+    """Memoized ``queries.build_enriched_dataset`` → the ``EnrichedDataset``.
+
+    Returns the SHARED object, not a copy — copying it would cost more than
+    rebuilding it (see ``_DATASET_CACHE``'s size note). Every caller must treat
+    the result as read-only; ``get_interaction`` does (it only compares
+    ``interaction_id`` and hands each matched dataclass to
+    ``_serialise_interaction``, which builds a fresh dict and copies the two
+    mutable fields it reads with ``list()`` / ``dict()``). Anything that ever
+    needs to MUTATE must copy the serialized output, never this graph.
+
+    Validated per hit against ``_stats_signature``: a mismatch (ingest wrote
+    rows) rebuilds rather than serving a dataset that is missing the messages
+    the user just came to look at.
+    """
+    sig = _stats_signature(conn, project_ids)
+    # Same key shape as ``_STATS_CACHE`` minus ``tz_offset`` — an
+    # ``EnrichedDataset`` is raw records, with no day-bucketing to skew.
+    cache_key = (str(deps.store_path), slug, tuple(sorted(project_ids)))
+    with _DATASET_CACHE_LOCK:
+        cached = _DATASET_CACHE.get(cache_key)
+        if cached is not None and cached[0] == sig:
+            _DATASET_CACHE.move_to_end(cache_key)  # LRU recency bump
+            return cached[1]
+    dataset, _ = queries.build_enriched_dataset(conn, project_id=project_ids)
+    with _DATASET_CACHE_LOCK:
+        _DATASET_CACHE[cache_key] = (sig, dataset)
+        _DATASET_CACHE.move_to_end(cache_key)
+        while len(_DATASET_CACHE) > _DATASET_CACHE_MAX:
+            _DATASET_CACHE.popitem(last=False)  # evict least-recently-used
+    return dataset
+
+
 @router.get("/api/interaction/{interaction_id}")
 async def get_interaction(interaction_id: str, log_path: str | None = None):
     """Return one enriched Interaction (command + responses + tool_results).
 
     Looks up the interaction in the ``EnrichedDataset`` for the project at
     ``log_path``. Returns 404 if no interaction matches the given id.
+
+    The dataset is memoized (``_enriched_dataset_cached``) because rebuilding it
+    is ~2.5s / ~740 MB on a large project and the per-click work is a 0.2 ms
+    scan — including for ids that will never match, which used to pay the full
+    rebuild before 404ing.
     """
     path = _resolve_log_path(log_path)
     conn = db.connect(deps.store_path)
     try:
         project_ids = _project_ids_for(conn, path)
-        dataset, _ = queries.build_enriched_dataset(conn, project_id=project_ids)
+        dataset = _enriched_dataset_cached(conn, project_ids=project_ids, slug=Path(path).name)
     finally:
         conn.close()
 
@@ -1051,12 +1248,29 @@ async def get_cost_by_model(log_path: str | None = None, period: str = "month"):
     try:
         if path:
             project_ids = _project_ids_for(conn, path)
-            rows = _build_by_model_rows_from_messages(
-                conn,
-                scope=scope,
-                compute_cost=compute_cost,
-                project_ids=project_ids,
-            )
+            # COST-B: read the pre-aggregated daily_mart instead of re-pricing
+            # every message, but ONLY where the substitution is exact — see
+            # ``_BY_MODEL_MART_PERIODS`` / ``_by_model_mart_eligible`` above for
+            # the two gates and the divergence each one prevents. Anything the
+            # gates reject falls through to the unchanged raw rollup.
+            rows = None
+            if period in _BY_MODEL_MART_PERIODS and _by_model_mart_eligible(conn, project_ids):
+                # ``parse_period``'s instants are day-aligned for these periods,
+                # so the 10-char slice is lossless (same slicing the
+                # by-provider route does).
+                rows = _build_by_model_rows_from_mart(
+                    conn,
+                    project_ids=project_ids,
+                    day_from=scope.since[:10] if scope.since else None,
+                    day_to=scope.until[:10] if scope.until else None,
+                )
+            if rows is None:
+                rows = _build_by_model_rows_from_messages(
+                    conn,
+                    scope=scope,
+                    compute_cost=compute_cost,
+                    project_ids=project_ids,
+                )
         else:
             rows = mart_queries.model_day_series(conn, since_iso=scope.since, until_iso=scope.until)
     finally:
