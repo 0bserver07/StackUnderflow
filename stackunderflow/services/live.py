@@ -346,6 +346,29 @@ def _percentile(sorted_values: list[float], p: float) -> float:
     return float(sorted_values[rank])
 
 
+# Ceiling on how many session ids we bind into one ``IN (…)`` list.
+# SQLite's ``SQLITE_MAX_VARIABLE_NUMBER`` is 999 on pre-3.32 builds (32766
+# after), and this repo supports back to 3.30 — 900 leaves headroom for the
+# other bound parameters. Same value, same reasoning as
+# ``store.queries._MAX_IN_PARAMS``. A window with more distinct sessions than
+# this falls back to the in-SQL session subquery (see ``_latency_samples``).
+_MAX_BOUND_SESSIONS = 900
+
+# The LEAD() body, shared by both scoping variants. ``{scope}`` is spliced
+# with an *uncorrelated* session predicate — either a bound placeholder list
+# or a subquery over the mart — so it is evaluated once, not per partition arm.
+_LATENCY_LEAD_SQL = (
+    "SELECT id, "
+    "       timestamp AS msg_ts, "
+    "       LEAD(timestamp) OVER ("
+    "           PARTITION BY session_fk ORDER BY seq"
+    "       ) AS next_ts "
+    "  FROM messages "
+    " WHERE session_fk IN ({scope}) "
+    "   AND id >= ?"
+)
+
+
 def _latency_samples(
     conn: sqlite3.Connection,
     *,
@@ -363,44 +386,93 @@ def _latency_samples(
     if not _table_exists(conn, "message_tool_mart"):
         return {}
     cutoff = _now_utc() - timedelta(hours=window_hours)
-    # The LEAD() window resolves each row's next-in-session timestamp,
-    # but ``messages`` is a UNION-ALL view over monthly partitions, so an
-    # *unbounded* CTE materializes the window across every partition —
-    # ~333K rows scanned on every /api/live/stats poll (~5s; the audit
-    # hot spot). We bound it instead: ``win`` is the small set of
-    # in-window mart rows, and the window only spans messages with
-    # ``id >= MIN(in-window source id)``. A message's next-in-session row
-    # always has a higher id (seq increases with insertion order), so the
-    # bound never drops a needed neighbour, yet it lets SQLite skip every
-    # partition below the cutoff via each ``idx_messages_<part>_session_seq``.
-    # MIN over an empty ``win`` is NULL, so ``id >= NULL`` matches nothing
-    # and the result is an empty set — the cold-window fast path.
-    rows = conn.execute(
-        "WITH win AS ("
-        "    SELECT message_id, tool_name "
-        "      FROM message_tool_mart "
-        "     WHERE ts >= ?"
-        "), "
-        "next_ts AS ("
-        "    SELECT id, "
-        "           timestamp AS msg_ts, "
-        "           LEAD(timestamp) OVER ("
-        "               PARTITION BY session_fk ORDER BY seq"
-        "           ) AS next_ts "
-        "      FROM messages "
-        "     WHERE id >= (SELECT MIN(message_id) FROM win)"
-        ") "
-        "SELECT w.tool_name, n.msg_ts AS ts1, n.next_ts AS ts2 "
-        "  FROM win w "
-        "  JOIN next_ts n ON n.id = w.message_id",
+
+    # ── two statements, not one ──────────────────────────────────────────
+    #
+    # ``messages`` is a UNION-ALL view over monthly partitions, so the LEAD()
+    # window has to be bounded or it materializes every partition. The
+    # previous single-statement shape bounded it with
+    # ``id >= (SELECT MIN(message_id) FROM win)`` — a *scalar subquery inside
+    # the view*, which SQLite re-evaluates once per UNION-ALL arm: one mart
+    # scan per monthly partition (17 on the store measured below), and that
+    # re-evaluation was the bulk of the poll. Worse, the comment that
+    # justified it was wrong twice over:
+    #
+    #   * It claimed the floor let SQLite "skip partitions". It does not —
+    #     ``EXPLAIN QUERY PLAN`` shows ``SCAN messages_<ym>`` on every arm, not
+    #     ``SEARCH``. An ``id >=`` predicate on a UNION-ALL view is a row
+    #     filter applied after the scan; there is no partition-pruning.
+    #   * It leaned on "a message's next-in-session row always has a higher
+    #     id". That invariant does *not* hold in ``messages`` generally —
+    #     ids come from ``_messages_id_seq`` in *ingest* order, and a session
+    #     resumed after a later session was ingested interleaves them. It
+    #     happens to hold for the mart rows we join back to only because the
+    #     builder walks ``usage_events`` in id order.
+    #
+    # What the new shape guarantees instead:
+    #
+    #   * Identity by *partition-locality*: LEAD is computed per
+    #     ``session_fk`` partition, so restricting ``messages`` to exactly the
+    #     sessions that own an in-window mart row cannot change any surviving
+    #     row's neighbour — the dropped rows were in other partitions.
+    #   * The ``id >= min_id`` floor is now a *bound literal* computed in
+    #     Python from the same ``win`` rows, so it is evaluated once instead
+    #     of per arm, and it keeps the identical row set the old floor did.
+    #   * The session predicate is the ``session_fk IN (SELECT id FROM
+    #     sessions …)`` list-subquery idiom ``store.queries`` documents: it
+    #     pushes a ``session_fk`` constraint *into* each partition arm, which
+    #     then seeks its ``(session_fk, seq)`` index instead of scanning.
+    #
+    # Measured on a 252K-message / 61.5K-mart-row / 16-partition store, 24h
+    # window, median of 5: 115ms → 9.1ms with the v030
+    # ``idx_message_tool_mart_ts`` index, 132ms → 13ms without it. Same store,
+    # ``EXPLAIN QUERY PLAN``: the old shape emitted 17 ``SCAN messages_<ym>``
+    # nodes and 17 scalar-subquery nodes (one set per UNION-ALL arm); the new
+    # one emits 17 ``SEARCH`` and no subquery node. Row sets verified
+    # byte-identical on 24h / 30d / 400d windows.
+    win = conn.execute(
+        "SELECT message_id, tool_name, session_id FROM message_tool_mart WHERE ts >= ?",
         (cutoff.isoformat(),),
     ).fetchall()
+    if not win:
+        # Cold-window fast path — no in-window tool calls, so no floor and
+        # nothing to scope by. Skip the LEAD statement entirely.
+        return {}
+
+    min_id = min(int(r[0]) for r in win)
+    session_ids = sorted({r[2] for r in win if r[2]})
+    if not session_ids:
+        return {}
+
+    if len(session_ids) <= _MAX_BOUND_SESSIONS:
+        placeholders = ",".join("?" for _ in session_ids)
+        scope = f"SELECT id FROM sessions WHERE session_id IN ({placeholders})"  # noqa: S608 — '?' list, values bound
+        params: tuple[Any, ...] = (*session_ids, min_id)
+    else:
+        # Pathological window (more distinct sessions than we can bind).
+        # Keep the session filter in SQL as an uncorrelated subquery over the
+        # mart — still evaluated once, still a hoisted floor.
+        scope = (
+            "SELECT id FROM sessions WHERE session_id IN "
+            "(SELECT session_id FROM message_tool_mart WHERE ts >= ?)"
+        )
+        params = (cutoff.isoformat(), min_id)
+
+    next_ts = {
+        int(r[0]): (r[1], r[2])
+        for r in conn.execute(_LATENCY_LEAD_SQL.format(scope=scope), params).fetchall()  # noqa: S608 — bound placeholders
+    }
 
     out: dict[str, list[float]] = {}
-    for r in rows:
-        name = r[0] or ""
-        ts1 = _iso_to_dt(r[1])
-        ts2 = _iso_to_dt(r[2])
+    for message_id, tool_name, _session_id in win:
+        # Inner-join semantics: a mart row whose source message is gone
+        # contributes nothing, exactly as the old SQL JOIN did.
+        pair = next_ts.get(int(message_id))
+        if pair is None:
+            continue
+        name = tool_name or ""
+        ts1 = _iso_to_dt(pair[0])
+        ts2 = _iso_to_dt(pair[1])
         if not name or ts1 is None or ts2 is None:
             continue
         delta = (ts2 - ts1).total_seconds()

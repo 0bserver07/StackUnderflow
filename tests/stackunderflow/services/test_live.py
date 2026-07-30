@@ -413,6 +413,28 @@ _OLD_UNBOUNDED_LATENCY_SQL = (
 )
 
 
+def _reference_latency_samples(conn: sqlite3.Connection, cutoff: str) -> dict[str, list[float]]:
+    """Ground truth for ``live._latency_samples``: the *unscoped, unbounded*
+    LEAD over the whole ``messages`` view, post-processed identically.
+
+    Deliberately naive — no session filter, no id floor — so it cannot share
+    a bug with the implementation under test. Any divergence is a real
+    identity break in the bounded query.
+    """
+    rows = conn.execute(_OLD_UNBOUNDED_LATENCY_SQL, (cutoff,)).fetchall()
+    out: dict[str, list[float]] = {}
+    for name, ts1, ts2 in rows:
+        d1 = live._iso_to_dt(ts1)
+        d2 = live._iso_to_dt(ts2)
+        if not name or d1 is None or d2 is None:
+            continue
+        delta = (d2 - d1).total_seconds()
+        if delta < 0:
+            continue
+        out.setdefault(name, []).append(delta)
+    return out
+
+
 def _seed_history_then_window(conn, *, now, n_old):
     """Seed *n_old* out-of-window messages in an older monthly partition,
     then one in-window source+next pair carrying a single Read tool call.
@@ -460,22 +482,53 @@ class TestLatencyBounded:
         assert out[0]["samples"] == 1  # only the in-window call, not the 500
         assert out[0]["p50"] == pytest.approx(3.0)
 
-    def test_query_floors_message_window_by_in_window_id(self, conn, monkeypatch):
-        """The latency query bounds the LEAD to ``id >= MIN(in-window source
-        id)`` rather than scanning the unbounded ``messages`` view."""
+    def test_query_shape_is_two_statements_bound_floor_session_scoped(self, conn, monkeypatch):
+        """The latency path is two statements: a plain in-window mart fetch,
+        then a LEAD scoped to that window's sessions with a *bound* id floor.
+
+        Pinned properties, not raw SQL text:
+
+        * exactly one LEAD statement runs (no per-partition re-evaluation);
+        * it carries no ``MIN(message_id)`` scalar subquery — the old shape
+          re-ran that once per UNION-ALL arm;
+        * the floor is a literal bound from Python, and it equals the true
+          minimum in-window ``message_id``;
+        * the messages scan is scoped to the window's sessions.
+        """
         now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
         monkeypatch.setattr(live, "_now_utc", lambda: now)
         _seed_history_then_window(conn, now=now, n_old=10)
+        min_id = conn.execute(
+            "SELECT MIN(message_id) FROM message_tool_mart WHERE ts >= ?",
+            ((now - timedelta(hours=24)).isoformat(),),
+        ).fetchone()[0]
 
         with _TraceCounter(conn, "LEAD(timestamp)") as tc:
             live.tool_latency_percentiles(conn)
+
         lead_sql = [s for s in tc.statements if "LEAD(timestamp)" in s]
-        assert lead_sql, "latency LEAD query did not run"
-        assert "id >= (SELECT MIN(message_id)" in lead_sql[0]
+        assert len(lead_sql) == 1, f"expected exactly one LEAD statement, got {len(lead_sql)}"
+        # No scalar MIN inside the view — that was re-run once per UNION-ALL arm.
+        assert "MIN(message_id)" not in lead_sql[0]
+        # ``set_trace_callback`` reports the *expanded* SQL, so a bound floor
+        # shows up as a literal — which lets us pin the value, not just the shape.
+        assert f"id >= {min_id}" in lead_sql[0], lead_sql[0]
+        # …and the messages scan is scoped to the in-window sessions.
+        assert "session_fk IN" in lead_sql[0]
+
+        # Statement 1: the plain in-window mart fetch that feeds both bounds.
+        win_sql = [s for s in tc.statements if "FROM message_tool_mart" in s and "LEAD(" not in s]
+        assert win_sql, "in-window mart fetch did not run"
 
     def test_does_less_work_than_unbounded_scan(self, conn, monkeypatch):
         """With substantial history present, the bounded query executes far
-        fewer SQLite VM steps than the old whole-view LEAD scan."""
+        fewer SQLite VM steps than the old whole-view LEAD scan.
+
+        The baseline is unchanged (``_OLD_UNBOUNDED_LATENCY_SQL``, the
+        pre-fix single statement); only the numerator moved — it now covers
+        *both* statements of the two-statement shape, since ``_vm_ops`` wraps
+        the whole ``tool_latency_percentiles`` call.
+        """
         now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
         monkeypatch.setattr(live, "_now_utc", lambda: now)
         _seed_history_then_window(conn, now=now, n_old=400)
@@ -487,6 +540,89 @@ class TestLatencyBounded:
             lambda: conn.execute(_OLD_UNBOUNDED_LATENCY_SQL, (cutoff,)).fetchall(),
         )
         assert new_ops * 2 < old_ops, (new_ops, old_ops)
+
+    def test_matches_unscoped_reference_on_pathological_window(self, conn, monkeypatch):
+        """Identity regression: session scoping + the bound floor must return
+        the *same* samples an unscoped reference query does.
+
+        The fixture is the shape that breaks naive bounds:
+
+        * multiple sessions inside the window (so the ``session_fk IN (…)``
+          list has to cover more than one partition);
+        * an out-of-window message sitting *between* two in-window ones in a
+          window session (so a per-session "contiguous range" assumption
+          would drop a neighbour);
+        * a low-id mart row whose source message predates every other
+          in-window message (so the floor is dragged down to old history).
+        """
+        now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
+        monkeypatch.setattr(live, "_now_utc", lambda: now)
+        writer._ensure_partition(conn, "messages_202604")
+        writer._ensure_partition(conn, "messages_202605")
+        pid = _project(conn)
+
+        # ── session A: a low-id (April) source message whose mart row is
+        # stamped *in-window*, dragging the floor back into old history.
+        sfk_a = _session(conn, project_id=pid, sid="sA")
+        old_t1 = datetime(2026, 4, 5, tzinfo=UTC)
+        m_low = _message(conn, session_fk=sfk_a, timestamp=old_t1.isoformat())
+        _message(conn, session_fk=sfk_a, timestamp=(old_t1 + timedelta(seconds=7)).isoformat())
+        _tool_call(
+            conn,
+            message_id=m_low,
+            project_id=pid,
+            session_id="sA",
+            ts=(now - timedelta(hours=1)).isoformat(),  # in-window mart ts, old source id
+            tool_name="Bash",
+        )
+
+        # ── session B: in-window pair, then an OUT-of-window message, then a
+        # second in-window pair. The middle row must still be reachable as a
+        # LEAD neighbour.
+        sfk_b = _session(conn, project_id=pid, sid="sB")
+        b1 = now - timedelta(minutes=40)
+        m_b1 = _message(conn, session_fk=sfk_b, timestamp=b1.isoformat())
+        _message(conn, session_fk=sfk_b, timestamp=(b1 + timedelta(seconds=2)).isoformat())
+        # Out-of-window by mart ts (no mart row) but inside the session's
+        # id range — the LEAD partition must still see it.
+        m_gap = _message(conn, session_fk=sfk_b, timestamp=(b1 + timedelta(seconds=9)).isoformat())
+        _tool_call(
+            conn,
+            message_id=m_b1,
+            project_id=pid,
+            session_id="sB",
+            ts=b1.isoformat(),
+            tool_name="Read",
+        )
+        # A mart row on the gap message: its neighbour is the *next* message.
+        _message(conn, session_fk=sfk_b, timestamp=(b1 + timedelta(seconds=14)).isoformat())
+        _tool_call(
+            conn,
+            message_id=m_gap,
+            project_id=pid,
+            session_id="sB",
+            ts=(b1 + timedelta(seconds=9)).isoformat(),
+            tool_name="Read",
+            call_index=1,
+        )
+
+        # ── session C: a third session with its own in-window sample, plus a
+        # trailing session with NO in-window mart rows (must be excluded).
+        sfk_c = _session(conn, project_id=pid, sid="sC")
+        c1 = now - timedelta(minutes=5)
+        m_c1 = _message(conn, session_fk=sfk_c, timestamp=c1.isoformat())
+        _message(conn, session_fk=sfk_c, timestamp=(c1 + timedelta(seconds=11)).isoformat())
+        _tool_call(conn, message_id=m_c1, project_id=pid, session_id="sC", ts=c1.isoformat(), tool_name="Edit")
+        sfk_d = _session(conn, project_id=pid, sid="sD")
+        for i in range(5):
+            _message(conn, session_fk=sfk_d, timestamp=(now - timedelta(minutes=3 - i)).isoformat())
+
+        got = live._latency_samples(conn, window_hours=24)
+        cutoff = (now - timedelta(hours=24)).isoformat()
+        want = _reference_latency_samples(conn, cutoff)
+        assert got == want, (got, want)
+        # Sanity: the fixture actually exercises >1 session and >1 tool.
+        assert sorted(got) == ["Bash", "Edit", "Read"]
 
 
 # ── rolling_burn — RANK 28 (idx_events_day path + caching) ──────────────
