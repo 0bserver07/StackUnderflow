@@ -188,6 +188,44 @@ Pipeline discoveries (listed, not fixed — future candidates):
   caches — 618–1012ms p99 cold vs <50ms warm, reproduced on pre-change HEAD.
   Environment floor on this box, like the git-2.25.1 worktree pair.
 
+## 4f. CAMPAIGN COMPLETE — P0→P4 all landed (2026-07-30 ~03:30)
+
+39 commits on `feat/relocatable-data-dir-and-ssh-sync`, nothing pushed.
+Final additions past §4e: page-scoped project stats (27.6→10.8ms; the
+off-page/+215ms and 1,330ms-detonation pathologies dead, payload
+byte-identical ×7 shapes), the interaction dataset memo (2.65s→78µs warm,
+LRU cap 2, ~1.1GB ceiling documented), gated by-model mart path
+(10-96×, three-part gate, golden fixture runs real ETL), backup rsync
+24/23 tolerance (real-binary proven; adapters no longer silently
+unrestorable), **`backup create --to ssh://` proven end-to-end for the
+first time** (digest-identical across the wire; remote hardlinks proven
+at inode level — gen2 cost 200KB vs 9.8MB; unreachable-target contract
+fixed + verified), sync ssh:// proven from this side (idempotent push,
+fabricated-peer pull round-trip), the CLI timing table (floor 0.159s; six
+>1s commands profiled: doctor=integrity_check is honest; worktrees list
+fixed −20% via single-json_extract CTE; the rest documented), and the
+messages/summary + refresh + async-sweep + writer-gate batch (§ D1-D5).
+
+**Needs the maintainer (deliberately NOT done):**
+- Hooks env: `.claude/settings.json` hooks run the global stackunderflow
+  with no STACKUNDERFLOW_HOME — recreated `~/.stackunderflow` twice now
+  (22:04, 02:44). Repoint at the venv + env, or accept the stub.
+- memory/risk/find-* CLI queries full-scan 383K rows on leading-wildcard
+  LIKE while FTS sits unused — the ctx-teardown prediction, confirmed by
+  profile. Candidate flagship item for the intelligence-layer campaign.
+- `memory decisions` cwd-scopes to 0 results on this box (history under
+  the Mac-era slug) while the unscoped variant finds 14 — UX trap.
+- Deferred API changes: messages/summary by_model/tokens from daily_mart;
+  session_mart user-counts (usage_events is assistant-only by design);
+  DATA-8 pagination schema migration; UTC timestamp guard; tz-sign
+  frontend bug (ProjectDashboard sends inverted offsets); benchmark-show
+  N+1 + deterministic-CI pin; covering index (project_id, cost_source).
+- 12 pre-existing codex ghost project rows + 37 empty seeds: purge or keep.
+- p4-scratch evidence at `/media/…/jul26/p4-scratch/` (49MB): timing logs,
+  profiles, replication/hardlink/exit-code evidence. Review then delete.
+- The cron loop (b176c341) was cancelled on completion — P0→P4 exhausted;
+  every remaining item needs a human decision. Re-arm with /loop if wanted.
+
 ## 4e. P2 wave 1 — LANDED (2026-07-30 ~02:00, commits 24109d0..24be808)
 
 Ten commits, every fix adversarially verified before implementation, all
