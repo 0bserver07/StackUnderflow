@@ -1037,10 +1037,25 @@ export interface EtlCompletedJob {
   error?: string | null
 }
 
+// Mart coverage — how many store projects have a `project_mart` row at all.
+// `projects_without_mart` > 0 means the dashboard is serving some projects
+// from the slower bulk-SQL fallback (or, for seeded-but-empty rows, from
+// nothing), so it's the number that says whether a backfill is still owed.
+// `projects_without_mart_sample` carries a handful of project ids for
+// diagnostics. Optional: emitted by /api/etl/status since the coverage block
+// landed, absent on older server builds.
+export interface EtlCoverageStatus {
+  projects: number
+  projects_with_mart: number
+  projects_without_mart: number
+  projects_without_mart_sample: number[]
+}
+
 export interface EtlStatusResponse {
   watcher: EtlWatcherStatus
   marts: Record<string, EtlMartStatus>
   events: EtlEventsStatus
+  coverage?: EtlCoverageStatus
   lag_seconds: number
   health: EtlHealth
   current_job: EtlBackfillJob | null

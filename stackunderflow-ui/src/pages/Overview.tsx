@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconRefresh, IconArrowUp, IconArrowDown, IconSearch } from '@tabler/icons-react'
-import { getProjects, refreshData, getGlobalStats, getCommandsDaily } from '../services/api'
+import { getProjects, getAllProjects, refreshData, getGlobalStats, getCommandsDaily } from '../services/api'
 import { formatProjectName, getNameMode, setNameMode as persistNameMode } from '../services/nameMode'
 import type { NameMode } from '../services/nameMode'
 import type { Project } from '../types/api'
@@ -38,6 +38,15 @@ const DATE_PRESETS: { key: DateRange; label: string }[] = [
 // stores get a "Load more" affordance below the table that appends the next
 // page. Kept under the backend's hard max so a page request is never clamped.
 const PROJECTS_PAGE_SIZE = 100
+
+// Keep only the projects whose last activity is at/after `cutoff`. Shared by
+// the KPI count (which measures the loaded set) and the table's row list
+// (which measures whichever pool is in scope — see `searchPool`).
+function withinRange(list: Project[], cutoff: Date | null): Project[] {
+  if (!cutoff) return list
+  const cutoffTs = cutoff.getTime() / 1000
+  return list.filter(p => p.last_modified >= cutoffTs)
+}
 
 function daysAgo(n: number): Date {
   const d = new Date()
@@ -143,6 +152,26 @@ export default function Overview() {
     },
   })
 
+  // The filter box has to consider EVERY project, not just the pages the
+  // table happens to have loaded. Paging keeps first paint bounded (audit
+  // #12), but the query below used to run against the loaded slice alone: on
+  // a 303-project store, typing a name that sorts onto page 2+ emptied the
+  // table with nothing saying that 200 projects were never searched — silent,
+  // and indistinguishable from "you have no such project".
+  //
+  // So the moment a filter is typed we pull the complete list once (~40ms for
+  // the full include_stats payload on that store; `getAllProjects` walks pages
+  // past the server's 1000-row clamp) and search that. React Query caches it
+  // under its own key, so it costs one request per session, not per keystroke,
+  // and unfiltered browsing keeps the Load-more flow untouched.
+  const searchActive = debouncedSearch.trim().length > 0
+  const { data: searchIndex } = useQuery({
+    queryKey: ['projects', true, 'all'],
+    queryFn: () => getAllProjects(true),
+    enabled: searchActive,
+    staleTime: 60_000,
+  })
+
   // #50: globalStats now tracks its own loading/error. Previously its state was
   // ignored, so a slow stats fetch flashed 0-value KPI cards and a failed fetch
   // fell through to the "No projects found" empty state (projects === []).
@@ -185,6 +214,16 @@ export default function Overview() {
     [projectsPages],
   )
   const totalCount = projectsPages?.pages[0]?.total_count ?? projects.length
+
+  // Rows the table draws from: the loaded pages while browsing, the complete
+  // set while a filter is typed. Falls back to the loaded pages for the one
+  // render before the index lands, so typing never blanks the table.
+  const searchPool = searchActive ? (searchIndex?.projects ?? projects) : projects
+  // True while the complete list is still in flight: the rows on screen come
+  // from the loaded pages only, so the result set is provisional. The UI says
+  // so rather than presenting a partial search as a finished one.
+  const searchPending = searchActive && searchIndex == null
+  const searchedCount = searchActive ? (searchIndex?.projects.length ?? projects.length) : projects.length
 
   // Global stats
   const gStats = globalStats as Record<string, unknown> | undefined
@@ -244,12 +283,8 @@ export default function Overview() {
     return data
   }, [allDailyCosts, cutoff, selectedModel])
 
-  // Filter projects by date range
-  const dateFilteredProjects = useMemo(() => {
-    if (!cutoff) return projects
-    const cutoffTs = cutoff.getTime() / 1000
-    return projects.filter(p => p.last_modified >= cutoffTs)
-  }, [projects, cutoff])
+  // Filter the LOADED projects by date range — this feeds the KPI cards.
+  const dateFilteredProjects = useMemo(() => withinRange(projects, cutoff), [projects, cutoff])
 
   // Cache token totals from the global stats (not available per-day)
   const totalCacheRead = (gStats?.total_cache_read_tokens as number) ?? 0
@@ -290,17 +325,25 @@ export default function Overview() {
       totalCost: cost,
       totalCommands: cmds,
       commandsWindowed: cmdsWindowed,
-      projectCount: dateFilteredProjects.length,
+      // The row list is paged, so `dateFilteredProjects` can only ever count
+      // what's loaded. With no cutoff every project is in scope and the server
+      // already reported the true folded count — use it, rather than saying
+      // "100 projects analyzed" on a 303-project store while the Cached card
+      // right next to it reads "0/303".
+      projectCount: cutoff ? dateFilteredProjects.length : totalCount,
     }
-  }, [dailyTokens, dailyCosts, dateFilteredProjects, dateRange, totalCacheRead, totalCacheWrite, commandDaily, cutoff])
+  }, [dailyTokens, dailyCosts, dateFilteredProjects, dateRange, totalCacheRead, totalCacheWrite, commandDaily, cutoff, totalCount])
 
-  // Search & sort on date-filtered projects (#12: memoized so the full
-  // client-side filter+sort only re-runs when its inputs change, not on every
-  // render; search is debounced).
+  // Search & sort the in-scope pool — the loaded pages while browsing, every
+  // project once a filter is typed (#12: memoized so the client-side
+  // filter+sort only re-runs when its inputs change, not on every render;
+  // search is debounced).
   const filtered = useMemo(() => {
-    let result = dateFilteredProjects
-    if (debouncedSearch) {
-      const q = debouncedSearch.toLowerCase()
+    let result = withinRange(searchPool, cutoff)
+    // Trimmed, so a whitespace-only box matches everything (as `searchActive`
+    // already assumes) instead of filtering on a literal space.
+    const q = debouncedSearch.trim().toLowerCase()
+    if (q) {
       result = result.filter(p => p.display_name.toLowerCase().includes(q) || p.dir_name.toLowerCase().includes(q))
     }
     result = [...result].sort((a, b) => {
@@ -319,7 +362,7 @@ export default function Overview() {
       return 0
     })
     return result
-  }, [dateFilteredProjects, debouncedSearch, sortField, sortDir])
+  }, [searchPool, cutoff, debouncedSearch, sortField, sortDir])
 
   // Pagination — memoized so unrelated re-renders (hover, etc.) don't re-slice.
   // #12: this is full-list client-side paging over the ~276-project payload;
@@ -543,6 +586,14 @@ export default function Overview() {
       <p className="text-xs text-gray-500">
         Per-project values below are lifetime totals; the date range filters which projects appear (by last activity)
         {modelFilterLabel ? <> · the <span className="font-medium">{modelFilterLabel}</span> model filter applies to cost only</> : null}.
+        {/* The filter runs over every project, not just the loaded pages — say
+            which, so a partial (still-loading) result set is never mistaken
+            for a finished search. */}
+        {searchActive && (
+          searchPending
+            ? <> · searching all {totalCount} projects…</>
+            : <> · filter searched all {searchedCount} projects</>
+        )}
       </p>
 
       {/* Projects Table */}
@@ -572,6 +623,22 @@ export default function Overview() {
               </tr>
             </thead>
             <tbody>
+              {/* An empty result set used to render as an empty table — no
+                  row, no message, nothing to distinguish "no match" from "the
+                  page hasn't loaded". Name the reason instead. */}
+              {paged.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-500">
+                    {searchPending
+                      ? <>Searching all {totalCount} projects…</>
+                      : searchActive
+                        ? <>No projects match “{debouncedSearch.trim()}”{dateRange !== 'all' ? <> in the last {dateRange.replace('d', ' days')}</> : null}.</>
+                        : dateRange !== 'all'
+                          ? <>No projects active in the last {dateRange.replace('d', ' days')}.</>
+                          : <>No projects to show.</>}
+                  </td>
+                </tr>
+              )}
               {paged.map((p: Project, idx: number) => {
                 const totalTok = (p.stats?.total_input_tokens ?? 0) + (p.stats?.total_output_tokens ?? 0)
                 return (
@@ -626,8 +693,10 @@ export default function Overview() {
       {/* Audit #12: server-side "Load more" — appends the next page of projects
           to the loaded set. Absent once everything is loaded, so stores with
           <= one page never see it (UX identical). The client-side Prev/Next
-          below pages through whatever is currently loaded. */}
-      {hasNextPage && (
+          below pages through whatever is currently loaded. Hidden while a
+          filter is typed: those rows already come from the complete project
+          set, so "100 of 303 loaded" would misdescribe what's on screen. */}
+      {hasNextPage && !searchActive && (
         <div className="flex items-center justify-center gap-3 text-sm text-gray-600 dark:text-gray-400">
           <span>{projects.length} of {totalCount} projects loaded</span>
           <button

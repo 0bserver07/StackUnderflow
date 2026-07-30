@@ -88,6 +88,12 @@ export interface ProjectsPageQuery {
   offset?: number
 }
 
+// Mirrors `PROJECTS_MAX_LIMIT` in stackunderflow/routes/projects.py — the
+// server silently clamps any larger `limit` to this, so asking for more would
+// hand back a truncated list that still looks complete. `getAllProjects`
+// pages at this size instead of pretending one request always suffices.
+export const PROJECTS_MAX_LIMIT = 1000
+
 export async function getProjects(
   includeStats = false,
   filters?: FilterParams,
@@ -98,6 +104,49 @@ export async function getProjects(
   if (typeof page?.offset === 'number') params.set('offset', String(page.offset))
   buildFilterParams(params, filters)
   return fetchJson(`${BASE}/projects?${params}`)
+}
+
+/**
+ * Every project row, walking `limit`/`offset` pages until the server stops
+ * reporting `has_more`.
+ *
+ * `getProjects` returns ONE server page — the right shape for a table that
+ * loads more on demand, the wrong shape for anything that has to be
+ * *complete*. Overview's filter box learned that the hard way: it matched
+ * against the pages already loaded, so on a 303-project store a query for a
+ * project sorted onto page 2+ produced an empty table with nothing saying
+ * that 200 projects were never looked at. Callers that must consider the
+ * whole set use this instead.
+ *
+ * One request covers a store of up to `PROJECTS_MAX_LIMIT`; the loop exists so
+ * larger stores stay correct instead of silently truncating at the clamp. The
+ * walk advances by its own offset counter (never the echoed one) and stops on
+ * an empty page, so a server that ignores `offset` can't spin it.
+ */
+export async function getAllProjects(
+  includeStats = false,
+  filters?: FilterParams,
+  pageSize: number = PROJECTS_MAX_LIMIT,
+): Promise<ProjectsResponse> {
+  const limit = Math.max(1, Math.min(Math.floor(pageSize), PROJECTS_MAX_LIMIT))
+  const first = await getProjects(includeStats, filters, { limit, offset: 0 })
+  const projects = [...first.projects]
+  let page = first
+  let offset = limit
+  while (page.has_more && page.projects.length > 0 && projects.length < page.total_count) {
+    page = await getProjects(includeStats, filters, { limit, offset })
+    offset += limit
+    if (page.projects.length === 0) break
+    projects.push(...page.projects)
+  }
+  return {
+    ...first,
+    projects,
+    total_count: page.total_count,
+    offset: 0,
+    limit: projects.length,
+    has_more: false,
+  }
 }
 
 // ---------------------------------------------------------------------------

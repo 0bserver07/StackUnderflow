@@ -336,7 +336,13 @@ const SessionCard = memo(function SessionCard({
               title={file.model}
             >{fmtModel(file.model)}</span>
           )}
-          <span className="text-gray-600 dark:text-gray-400">{fmtBytes(file.size)}</span>
+          {/* Sessions are served from the store, which carries no on-disk byte
+              count — the route sends `size: 0` for every row. Rendering "0 B"
+              states a fact we don't have, so the stat only appears when a real
+              size is present. */}
+          {file.size > 0 && (
+            <span className="text-gray-600 dark:text-gray-400">{fmtBytes(file.size)}</span>
+          )}
         </div>
 
         {/* Dates row */}
@@ -811,6 +817,12 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
   // below — so the windowing hook always runs (Rules of Hooks); `data` may be
   // absent mid-load, hence the EMPTY_FILES fallback.
   const allFiles = filesQuery.data?.files ?? EMPTY_FILES
+  // /api/jsonl-files serves sessions from the store, which has no on-disk byte
+  // count — every row comes back `size: 0`. A "Size" sort over all-zeros is a
+  // no-op button that looks like it reordered nothing, so it's only offered
+  // when the payload actually carries sizes (and the per-row "0 B" stat below
+  // is likewise suppressed rather than reported as fact).
+  const hasFileSizes = useMemo(() => allFiles.some((f) => (f.size ?? 0) > 0), [allFiles])
   const visibleFiles = useMemo(() => {
     // Model filter is client-side — the backend route doesn't accept ?model=
     // and adding it would require joining messages → sessions in SQL. The list
@@ -935,7 +947,7 @@ export default function SessionsTab({ projectName, sessionEfficiency }: Sessions
             Compare
           </button>
           <div className="flex items-center gap-1">
-            {(['modified', 'created', 'size'] as const).map(s => (
+            {(['modified', 'created', 'size'] as const).filter(s => s !== 'size' || hasFileSizes).map(s => (
               <button
                 key={s}
                 onClick={() => setSortBy(s)}
