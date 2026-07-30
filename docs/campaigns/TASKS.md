@@ -137,5 +137,15 @@ regression.
   git 2.25.1. Currently 4135 passed / 2 failed / 13 skipped.
 - History there is filed under the **old** `jan26` slug; pass
   `--project '-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow'` to reach it.
-- Project `.claude/settings.json` carries macOS-absolute hook paths — hooks will
-  not fire on Linux until repointed.
+- Project `.claude/settings.json` hooks run bare `stackunderflow hooks run …` —
+  measured 2026-07-29: they DO fire on this box (the earlier "won't fire on
+  Linux" note was wrong), resolving to a **global** install at
+  `~/.local/bin/stackunderflow` (0.9.2-dev.003) with no `STACKUNDERFLOW_HOME`.
+  The SessionStart hook therefore recreated `~/.stackunderflow/store.db`
+  (22:04:29) even though the server runs `--data-dir`. Until the hooks are
+  repointed at the venv binary with `STACKUNDERFLOW_HOME=<dataset>` exported,
+  the "`$HOME/.stackunderflow` must not exist" invariant cannot hold here.
+- The untracked root-level `TASKS.md` (byte-identical duplicate of this file)
+  present at session start on 2026-07-29 vanished from disk ~22:20 the same
+  evening; no session command deleted it and no test references it. Content
+  preserved here. Deleter unidentified — flagged to the maintainer.
