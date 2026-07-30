@@ -96,6 +96,39 @@ def test_appended_file_reads_only_tail(conn, tmp_path: Path) -> None:
     assert captured_offset["v"] == 80
 
 
+def test_zero_record_file_leaves_no_project_and_is_not_re_read(
+    conn, tmp_path: Path
+) -> None:
+    """A file the adapter can name but reads nothing out of mints no rows.
+
+    This is the ghost-project shape: a rollout whose metadata carries no
+    working directory gets a synthetic slug, and if the file then yields no
+    records the project row used to be permanent — the ingest_log marks even
+    a zero-record file processed, so this pass never comes back. Both halves
+    matter: no rows, and still no re-read.
+    """
+    fp = tmp_path / "ghost.jsonl"
+    fp.write_bytes(b"x" * 100)
+    ref = SessionRef(
+        "stub", "stub-0000-ghost", "s1", fp, file_mtime=1.0, file_size=100,
+    )
+
+    call_count = {"n": 0}
+
+    class _CountingAdapter(_StubAdapter):
+        def read(self, ref, *, since_offset=0):
+            call_count["n"] += 1
+            yield from super().read(ref, since_offset=since_offset)
+
+    adapter = _CountingAdapter([ref], {})  # nothing to yield for s1
+    run_ingest(conn, [adapter])
+    run_ingest(conn, [adapter])
+
+    assert call_count["n"] == 1  # skip-unchanged still holds
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
 def test_truncated_file_full_reparse(conn, tmp_path: Path) -> None:
     fp = tmp_path / "a.jsonl"
     fp.write_bytes(b"x" * 200)

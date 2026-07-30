@@ -1,5 +1,18 @@
 """Transactional writer: one file → one transaction → one ingest_log row.
 
+Rows follow records, not refs
+-----------------------------
+``ingest_file`` creates the ``projects`` / ``sessions`` rows on the first
+record the adapter yields, never before. Enumerating a file is not
+evidence that it holds a conversation: adapters name a project from
+whatever metadata the source hands them (a Codex rollout with no ``cwd``
+falls back to a synthetic ``codex-<uuid>`` slug), and a file that then
+reads out empty used to leave that project + session behind forever —
+the ingest_log row below marks even a zero-record file processed, and the
+enumerate pass skips unchanged files, so nothing ever came back to clean
+up. Deferring the upsert keeps the skip-unchanged fast path intact while
+making "no records" mean "no rows".
+
 Wave 4B adds a per-record **normalize + insert** hook so newly-ingested
 messages auto-create ``usage_events`` rows in the same transaction
 that wrote the ``messages`` rows. The hook reuses the registered
@@ -102,11 +115,25 @@ def ingest_file(
     For ``"database"`` the row stores ``last_rowid = max(record.seq)``
     seen in this batch — the next pass resumes from that rowid keyed on
     ``(file_path, session_id)``.
+
+    The project + session rows are created **lazily**, on the first
+    record the adapter actually yields (see the loop below). A file that
+    yields nothing writes no project and no session — but its ingest_log
+    row is still stamped, so the zero-record file is never re-read while
+    it stays unchanged.
     """
     conn.execute("BEGIN")
     try:
-        project_id = _upsert_project(conn, ref)
-        session_fk = _upsert_session(conn, project_id, ref)
+        # Deferred until the first yielded record. Upserting up-front
+        # minted a project + session for every file the adapter could
+        # *name*, including ones it then read nothing out of — and since
+        # the ingest_log row below marks such a file fully processed and
+        # the enumerate pass skips it forever after, those rows were
+        # permanent: path-less, message-less ghost projects that showed
+        # up in every project listing. A ``SessionRef`` is a claim that a
+        # file exists; a ``Record`` is evidence there is something in it,
+        # and only evidence creates rows.
+        session_fk: int | None = None
 
         max_ts: str | None = None
         # max_seq carries the highest record.seq we observed in this batch.
@@ -120,6 +147,13 @@ def ingest_file(
         # whole table.
         new_message_ids: list[int] = []
         for record in adapter.read(ref, since_offset=since_offset):
+            if session_fk is None:
+                # First record of this file: now we know there is something
+                # to attach. Both upserts are idempotent, so a resumed read
+                # of an already-known file just re-finds the existing rows.
+                session_fk = _upsert_session(
+                    conn, _upsert_project(conn, ref), ref,
+                )
             changes, msg_id = _insert_message(conn, session_fk, record)
             if changes:
                 count_added += 1
@@ -129,6 +163,18 @@ def ingest_file(
                     max_ts = record.timestamp
                 if record.seq > max_seq:
                     max_seq = record.seq
+
+        if session_fk is None:
+            # Zero records: create nothing. An ALREADY-KNOWN project still
+            # gets its ``last_modified`` bumped — the file did change on
+            # disk, and "last active" ordering shouldn't regress just
+            # because this pass read nothing out of it. A pure UPDATE
+            # matches no row for an unknown project, so no ghost appears.
+            conn.execute(
+                "UPDATE projects SET last_modified = MAX(last_modified, ?) "
+                "WHERE provider = ? AND slug = ?",
+                (ref.file_mtime, ref.provider, ref.project_slug),
+            )
 
         if count_added:
             conn.execute(

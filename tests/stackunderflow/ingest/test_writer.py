@@ -93,6 +93,89 @@ def test_ingest_file_is_idempotent_on_seq(conn, tmp_path: Path) -> None:
     assert count == 1  # INSERT OR IGNORE
 
 
+# ── zero-record files must not mint ghost projects ───────────────────────────
+#
+# The project/session upsert used to run before the first record was read, so
+# any file the adapter could merely *name* got a project row. A file that then
+# read out empty left that row behind permanently: the ingest_log write below
+# marks even a zero-record file processed, and the enumerate pass skips
+# unchanged files forever after. The result was path-less, message-less
+# projects in every listing.
+
+
+def test_zero_record_file_creates_no_project_or_session(conn, tmp_path: Path) -> None:
+    ref = _ref(tmp_path)
+    ingest_file(conn, _StubAdapter([]), ref)
+
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+
+
+def test_zero_record_file_is_still_marked_processed(conn, tmp_path: Path) -> None:
+    """Skip-unchanged stays intact — we just don't invent rows for it."""
+    ref = _ref(tmp_path, mtime=3.0, size=64)
+    ingest_file(conn, _StubAdapter([]), ref)
+
+    row = conn.execute(
+        "SELECT mtime, size, processed_offset FROM ingest_log "
+        "WHERE file_path = ? AND session_id IS NULL",
+        (str(ref.file_path),),
+    ).fetchone()
+    assert row is not None
+    assert row["mtime"] == 3.0
+    assert row["size"] == 64
+    # Whole file consumed → the next pass won't re-scan it.
+    assert row["processed_offset"] == 64
+
+
+def test_file_that_later_yields_records_creates_rows_then(conn, tmp_path: Path) -> None:
+    """A deferred upsert must still fire on a resumed read that finds records."""
+    fp = tmp_path / "x.jsonl"
+    fp.write_bytes(b"x" * 10)
+    ref_v1 = SessionRef("stub", "-a", "s1", fp, 1.0, 10)
+    ingest_file(conn, _StubAdapter([]), ref_v1)
+    assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+
+    # The file grows and now holds real records. ``run_ingest`` resumes from
+    # the stored offset; mirror that here.
+    resume = conn.execute(
+        "SELECT processed_offset FROM ingest_log "
+        "WHERE file_path = ? AND session_id IS NULL",
+        (str(fp),),
+    ).fetchone()["processed_offset"]
+    assert resume == 10
+
+    fp.write_bytes(b"x" * 40)
+    ref_v2 = SessionRef("stub", "-a", "s1", fp, 2.0, 40)
+    ingest_file(
+        conn, _StubAdapter([_rec(20), _rec(30)]), ref_v2, since_offset=resume,
+    )
+
+    assert [r["slug"] for r in conn.execute("SELECT slug FROM projects")] == ["-a"]
+    assert [
+        r["session_id"] for r in conn.execute("SELECT session_id FROM sessions")
+    ] == ["s1"]
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    # The session counters were applied to the row created mid-loop.
+    srow = conn.execute("SELECT message_count FROM sessions").fetchone()
+    assert srow["message_count"] == 2
+
+
+def test_zero_record_pass_still_bumps_a_known_project(conn, tmp_path: Path) -> None:
+    """Not creating rows must not stall "last active" for a real project."""
+    ref_v1 = _ref(tmp_path, mtime=1.0, size=10)
+    ingest_file(conn, _StubAdapter([_rec(0)]), ref_v1)
+
+    # Same project, a later pass that reads nothing new out of the file.
+    ref_v2 = SessionRef("stub", "-a", "s1", ref_v1.file_path, 9.0, 10)
+    ingest_file(conn, _StubAdapter([]), ref_v2)
+
+    rows = conn.execute("SELECT slug, last_modified FROM projects").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["last_modified"] == 9.0
+
+
 def test_ingest_file_rollback_on_failure(conn, tmp_path: Path) -> None:
     class _BoomAdapter:
         name = "stub"
