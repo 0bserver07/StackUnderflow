@@ -116,6 +116,45 @@ regression.
 
 ---
 
+## 4b. P0 wedge — mart-gap root cause (measured 2026-07-29, read-only)
+
+Live: 334 projects, 243 mart rows, 91 uncovered. Marts are NOT lagging
+(watermark == max event id). Coverage ⟺ has-usage_events, perfectly:
+
+- **62** claude `legacy-` history pseudo-sessions — `adapters/claude.py:129-206`
+  yields user-role-only records from `history.jsonl`; structurally unbillable
+  but 37 carry real prompt text (5,244 user messages total).
+- **13** antigravity — deliberately exempt (`capabilities.json
+  emits_usage_events:false`), no normalizer; all 412 messages role=user.
+- **12** codex ghost projects — **silent data loss**: rollouts with no `cwd`
+  get `codex-<uuid>` slugs, `ingest/writer.py:108` upserts project/session
+  BEFORE reading records, `:177` marks zero-record files fully processed,
+  `ingest/__init__.py:53` never revisits. 60–130KB files → 0 messages, forever.
+- **4** normalizer-guard drops (`etl/normalize/claude.py:44,48,59-70` silent
+  bare returns — synthetic model / zero tokens).
+
+Fix direction (in progress): seed `project_mart` from the `projects` table
+(zero-rows for unbillable projects) in `etl/marts/project.py` refresh +
+rebuild, guarding `affected` so the seed never re-runs dims for covered rows;
+surface `projects_without_mart` in `etl/status.py`; writer upserts only after
+the first yielded record. NOTE: `etl backfill --force` is UNSAFE with a live
+server (no lock fencing; deletes all events+marts); safe entrypoints are
+no-force CLI backfill or `POST /api/etl/backfill` (single-job slot).
+
+Pipeline discoveries (listed, not fixed — future candidates):
+- `messages` is a UNION ALL view over 16 partition tables; scoped predicates
+  are NOT pushed down (scoped bulk helper still 0.86s vs 0.95s unscoped, vs
+  mart read at 0.001s). Scoping alone cannot reach the <500ms fallback target.
+- `_refresh_message_dims` re-runs classifier+enricher+command analysis over
+  EVERY message of each affected project on every ingested file.
+- `marts/project.py:87` INSERT OR REPLACE writes 13/25 columns then restores
+  dims in a second statement outside the ingest transaction — real window
+  where dashboards read zeroed dims.
+- `watermark.refresh_all_marts` has no per-mart try/except; one failure aborts
+  the rest and the caller logs at DEBUG.
+- 12 ghost projects still count toward `total_count` in `/api/projects`;
+  purging existing ghost rows is a maintainer decision (fix only stops new ones).
+
 ## 5. In flight / uncommitted
 
 - `docs/specs/brand-and-site.md` — untracked
