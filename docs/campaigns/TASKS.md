@@ -104,6 +104,7 @@ Against the real store: 348,452 messages / 3,396 sessions / 305 projects /
 | `/api/cost-data` | 4.23s | **0.084s** | cache works — 50× |
 | `/api/stats` | 4.31s | **4.03s** | **no warm benefit** |
 | `/api/stats?days=30` | 4.05s | 4.17s | capping days doesn't help |
+| `/api/projects?include_stats=true` | **0.042–0.059s** | — | was >180s HANG; fixed `8a83ccb` (scoped fallback, list-subquery shape), measured on a fresh instance, HTTP 200, all 303 rows with stats |
 
 **Finding worth a task: `/api/stats` costs ~4s on every single call and does not
 cache**, while `/api/cost-data` drops to 84ms warm. On the biggest project this is
@@ -155,8 +156,32 @@ Pipeline discoveries (listed, not fixed — future candidates):
 - 12 ghost projects still count toward `total_count` in `/api/projects`;
   purging existing ghost rows is a maintainer decision (fix only stops new ones).
 
+## 4c. Cost-integrity findings from the wedge fix (2026-07-29, recorded not fixed)
+
+- **`daily_mart` and `bulk_project_cost` disagree on unknown models**:
+  `claude-opus-5` (411 msgs) / `claude-sonnet-5` (41) sit at $0 in the mart
+  (`cost_source='unknown'`) while the bulk path prices the same rows at the
+  Anthropic manifest fallback — a project's cost changes with mart coverage.
+  Same for `grok-*`. Needs one policy, probably the mart's honest-$0.
+- **No `grok` pricer exists** — `get_pricer("grok")` silently returns the
+  Anthropic pricer (reads $0 today only because the grok normalizer emits
+  zero tokens).
+- `build_enriched_dataset` (`queries.py`) and `get_project_messages_page`
+  still hardcode `provider or "anthropic"` into `Record`s — pipeline-path
+  vendor-vs-tool confusion, untouched by `8a83ccb`.
+- The 91 uncovered projects contain **zero priced messages** (scoped
+  provider×model cross-tab returns 0 rows) — the old full scan bought
+  literally nothing.
+- tmos-hq: the two hook latency-budget tests
+  (`test_handlers.py::TestLatencyBudget`) are bimodal under IO load / cold
+  caches — 618–1012ms p99 cold vs <50ms warm, reproduced on pre-change HEAD.
+  Environment floor on this box, like the git-2.25.1 worktree pair.
+
 ## 5. In flight / uncommitted
 
+- `docs/specs/agent-remotes.md` — untracked; federation proposal dropped by
+  the Mac agent 2026-07-29 (query/observe/message other machines' stores in
+  place). Provider-general delivery-tier addendum discussed, not yet written.
 - `docs/specs/brand-and-site.md` — untracked
 - `docs/specs/agent-egress-audit.md` — untracked, predates the brand work (unread)
 - `docs/private/brand-site-research.md` — gitignored by design
