@@ -33,11 +33,11 @@ from stackunderflow.reports.render import (
 from stackunderflow.reports.scope import parse_period
 
 from . import __version__
-from .settings import Settings
+from .settings import APP_DIR_ENV, Settings, app_dir
 
 _log = logging.getLogger(__name__)
 
-_STATE_DIR = Path.home() / ".stackunderflow"
+_STATE_DIR = app_dir()
 
 
 # ── server lifecycle ─────────────────────────────────────────────────────────
@@ -88,6 +88,36 @@ def cli():
     """StackUnderflow — a local-first knowledge base for your AI coding sessions."""
 
 
+def _reexec_with_data_dir(data_dir: Path) -> None:
+    """Re-launch this process with ``$STACKUNDERFLOW_HOME`` pointed at *data_dir*.
+
+    The data paths (``settings._APP_DIR``, ``deps.store_path``, ``_STATE_DIR``,
+    ``_BACKUP_DIR``) are bound at import, so by the time a command body runs it
+    is too late to redirect them by assignment — half the app would keep the old
+    home. Re-exec instead, so the env var stays the one authoritative mechanism
+    and every path resolves consistently from the first import.
+
+    Returns normally (without re-execing) when the environment already points at
+    *data_dir*, which is what stops the exec from looping.
+    """
+    resolved = data_dir.expanduser().resolve()
+    if not resolved.is_dir():
+        raise click.BadParameter(f"not a directory: {resolved}", param_hint="--data-dir")
+    if os.environ.get(APP_DIR_ENV) == str(resolved):
+        return
+    os.environ[APP_DIR_ENV] = str(resolved)
+    try:
+        # No shell, and no untrusted input: we re-exec this same entry point
+        # with this same argv. --data-dir itself was already validated above.
+        os.execvp(sys.argv[0], sys.argv)  # noqa: S606
+    except OSError as exc:  # pragma: no cover - exec failure is environmental
+        raise click.ClickException(
+            f"could not re-exec to apply --data-dir ({exc}). "
+            f"Run with the environment variable instead: "
+            f"{APP_DIR_ENV}={resolved} stackunderflow start"
+        ) from exc
+
+
 @cli.command("start")
 @click.option("-p", "--port", type=int, default=None, help="Server port")
 @click.option("-H", "--host", type=str, default=None, help="Bind address")
@@ -107,6 +137,16 @@ def cli():
         "against the same store will race on ingest+marts."
     ),
 )
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Serve a dataset from somewhere other than ~/.stackunderflow — a store "
+        "copied off another machine, or a backup's stackunderflow-state/ "
+        "directory. Same as setting STACKUNDERFLOW_HOME."
+    ),
+)
 def start_cmd(
     port: int | None,
     host: str | None,
@@ -114,8 +154,11 @@ def start_cmd(
     fresh: bool,
     no_watcher: bool,
     no_lock: bool,
+    data_dir: Path | None,
 ):
     """Launch the StackUnderflow dashboard."""
+    if data_dir is not None:
+        _reexec_with_data_dir(data_dir)
     if no_watcher:
         # Survives the env into the FastAPI lifespan; the server reads
         # this in ``_watcher_disabled()``. Setting at process scope (not
