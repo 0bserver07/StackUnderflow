@@ -305,8 +305,37 @@ def _compute_projects_payload(
     paginates and applies the active-currency conversion. Returns the JSON
     payload dict the route ships verbatim.
 
-    Ordering matters: the worktree fold runs BEFORE the sort + page slice so
-    ``total_count`` / ``has_more`` count folded rows, never phantom fragments.
+    Ordering is load-bearing, and it is exactly this:
+
+    1. ``list_projects`` + the provider filter — the listing universe.
+    2. ``bulk_session_counts`` — one GROUP BY over ``sessions`` (never
+       ``messages``), cheap store-wide, feeds every row's ``file_count``.
+    3. Assemble one row per slug, **including** ``total_size_mb``. Sizes are
+       eager on purpose: ``sort_by=size`` orders on them and the sort runs
+       before the slice, so deferring them to the page would sort on data
+       that doesn't exist yet.
+    4. Worktree fold (campaign #8). Fragment costs resolve scoped to the
+       folded fragments' ids alone.
+    5. Sort. 6. ``total_count`` (post-fold, pre-slice) then the page slice.
+    7. Mart + bulk-helper loads, scoped to the ids **on the page**.
+    8. ``_stats_for_ids`` over the page.
+
+    Steps 1–6 must precede 7 because the page isn't known until the fold and
+    the sort have run; 7 must precede 8 because that's what it feeds. The
+    payoff is the invariant the old ordering only *claimed*: every read whose
+    cost scales with project count is bounded by the page (or by the folded
+    fragments), never by the store.
+
+    Measured on the maintainer's 334-project / 383K-message store, read-only,
+    ``include_stats=true&limit=20``, median of 15: 27.1ms → 12.0ms. The
+    pathology it removes is bigger than that delta: the mart read and the
+    uncovered set were computed over ALL project rows *before* the slice, so
+    a single mart-uncovered 41K-message project that never appeared in the
+    response still cost +215ms on every page (page 1 with it hidden from the
+    mart: 27.2 → 241.8ms; the same probe under this ordering: 10.8 →
+    10.6ms). And narrowing only the mart read, without also moving the
+    uncovered computation after the slice, is worse than either: the whole
+    store then reads as uncovered — 1,317ms, reproduced.
 
     Caching note: this payload is computed per-request — nothing memoises it
     server-side today (the only cache in this module, ``_dir_size_cache``, is
@@ -328,52 +357,30 @@ def _compute_projects_payload(
 
     conn = db.connect(deps.store_path)
     try:
+        # ── (1) the listing universe ─────────────────────────────────────────
         project_rows = queries.list_projects(conn)
         if provider_filter is not None:
             project_rows = [p for p in project_rows if (p.provider or "").lower() in provider_filter]
 
-        # Wave 3A: prefer ``project_mart`` for the stats payload —
-        # one indexed scan over the materialised totals beats the
-        # bulk-aggregate pass (PR #65) which still touches every
-        # message row. The bulk helpers stay as the fallback so
-        # stores that haven't run the ETL pipeline keep working.
+        # ── (2) session counts ───────────────────────────────────────────────
+        # One GROUP BY over ``sessions``, not ``messages`` — it stays cheap at
+        # store scope, and it must be store-wide anyway: the rows it feeds
+        # include the fragments step 4 folds away.
         session_counts = queries.bulk_session_counts(conn)
 
+        # Wave 3A: ``project_mart`` is the stats source — one indexed read of
+        # the materialised totals beats the bulk-aggregate pass (PR #65),
+        # which still touches every message row. The bulk helpers stay as the
+        # fallback so stores that haven't run the ETL pipeline keep working.
+        # Both loads are DEFERRED to step 7, where the page is known; these
+        # three dicts stay empty until then. ``mart_rows`` is shared mutable
+        # state: step 4 may partially populate it (fragment ids) before step 7
+        # adds the page's rows.
         mart_rows: dict[int, dict] = {}
-        if include_stats:
-            for row in mart_queries.list_project_mart(conn):
-                # Placeholder seeds are deliberately NOT recorded: "absent from
-                # ``mart_rows``" is exactly what *uncovered* means downstream
-                # (the bulk-helper scope below AND ``_stats_for_ids``), so
-                # skipping them here is what routes those projects to the
-                # fallback that can actually answer for them.
-                if _mart_row_is_placeholder(row):
-                    continue
-                mart_rows[int(row["project_id"])] = row
+        lite_stats: dict[int, dict] = {}
+        cost_by_pid: dict[int, float] = {}
 
-        # Project ids whose mart row is missing — or present but an empty
-        # coverage seed (see ``_mart_row_is_placeholder``) — fall back to the
-        # bulk SQL helpers. Keeps the response shape stable while an in-flight
-        # ETL backfill is still working through the store, and keeps the dates
-        # / command count / cost of a seeded-but-message-bearing project on the
-        # payload instead of blanking them behind an all-zero row.
-        #
-        # The helpers MUST be scoped to ``uncovered_ids``. Unscoped they
-        # GROUP BY over every message row in the store, so a single
-        # mart-less project (91 of 334 on a real 382K-message store, most
-        # of them carrying no messages at all) turned every
-        # ``include_stats`` request into a full scan of all 16 ``messages``
-        # partitions and hung the endpoint past 180s. Scoped, each
-        # partition seeks its ``(session_fk, seq)`` index instead —
-        # 1141ms → 10ms measured on that store.
-        uncovered_ids = {p.id for p in project_rows if p.id not in mart_rows}
-        if include_stats and uncovered_ids:
-            lite_stats = queries.bulk_project_lite_stats(conn, project_ids=uncovered_ids)
-            cost_by_pid = queries.bulk_project_cost(conn, project_ids=uncovered_ids)
-        else:
-            lite_stats = {}
-            cost_by_pid = {}
-
+        # ── (3) assemble one row per slug ────────────────────────────────────
         # Schema has UNIQUE(provider, slug) — same project used through
         # multiple providers (e.g. claude + codex) yields multiple rows.
         # Merge them so the user-facing list has one entry per slug.
@@ -405,11 +412,15 @@ def _compute_projects_payload(
                 }
             )
 
-        # Campaign #8 — worktree attribution roll-up. Sessions run inside git
-        # worktrees log under phantom sibling slugs; fold them into their
-        # parent row (default) or annotate them (?include_worktrees=1). This
-        # runs BEFORE the sort + page slice below so total_count / has_more
-        # stay truthful about the folded list.
+        # ── (4) worktree attribution roll-up (campaign #8) ───────────────────
+        # Sessions run inside git worktrees log under phantom sibling slugs;
+        # fold them into their parent row (default) or annotate them
+        # (?include_worktrees=1). This runs BEFORE the sort + page slice below
+        # so total_count / has_more stay truthful about the folded list —
+        # which also means fragment costs are resolved for every folded
+        # fragment, not just the ones whose parent lands on this page. Their
+        # scope is the fragment id set, so the cost is proportional to how
+        # many worktrees the store has, never to its message count.
         worktree_parent_by_slug = _worktree_parents_from_store(conn)
         if include_worktrees:
             _annotate_worktree_fragments(projects, worktree_parent_by_slug)
@@ -421,7 +432,6 @@ def _compute_projects_payload(
                     folded,
                     mart_rows=mart_rows,
                     cost_by_pid=cost_by_pid,
-                    mart_loaded=include_stats,
                 )
                 parent_by_slug = {p["dir_name"]: p for p in projects}
                 for parent_slug, fragments in folded.items():
@@ -430,6 +440,7 @@ def _compute_projects_payload(
                     parent["worktree_sessions"] = sum(f["file_count"] for f in fragments)
                     parent["worktree_cost"] = sum(fragment_cost_usd[f["dir_name"]] for f in fragments)
 
+        # ── (5) sort ─────────────────────────────────────────────────────────
         if sort_by == "last_modified":
             projects.sort(key=lambda x: x["last_modified"], reverse=True)
         elif sort_by == "first_seen":
@@ -439,13 +450,72 @@ def _compute_projects_payload(
         elif sort_by == "name":
             projects.sort(key=lambda x: x["display_name"])
 
+        # ── (6) total_count, then the page slice ─────────────────────────────
         # ``total_count`` is the full slug count *before* the page slice so the
-        # frontend can size its pager. The per-project ``_stats_for_ids`` pass
-        # below runs only over the page slice — that's what keeps the mart
-        # fast-path bounded (we never resolve stats for projects off-page).
+        # frontend can size its pager.
         total_count = len(projects)
         projects = projects[offset : offset + limit]
 
+        # ── (7) stats sources, scoped to the PAGE ────────────────────────────
+        # Everything from here on reads only the ids that survived the slice.
+        # That is the invariant the pre-slice ordering used to claim and break:
+        # a mart-uncovered project far down the list made every request pay its
+        # bulk-helper cost (+215ms for one 41K-message slug that never reached
+        # the response), and narrowing the mart read *without* moving this
+        # computation after the slice made it worse, not better — the whole
+        # store then read as uncovered (1,317ms; 2.1–2.4s when first found).
+        #
+        # ``mart_rows`` may already hold fragment rows from step 4. Those ids
+        # are disjoint from the page's (folded fragments are gone from the
+        # list), so the set difference below is unaffected by them — but the
+        # ``setdefault`` keeps the first row seen either way.
+        if include_stats:
+            # An offset past the end is a legitimate request whose page has no
+            # ids at all. Nothing special-cases it here — every helper below
+            # treats an empty scope as "no rows", never as "all rows" (see
+            # ``list_project_mart`` / ``_scoped_rows``), so the empty page
+            # costs one ``sqlite_master`` probe and stops.
+            page_ids = {pid for proj in projects for pid in proj["_ids"]}
+            for row in mart_queries.list_project_mart(
+                conn, provider_filter=provider_filter, project_ids=sorted(page_ids)
+            ):
+                # Placeholder seeds are deliberately NOT recorded: "absent from
+                # ``mart_rows``" is exactly what *uncovered* means downstream
+                # (the bulk-helper scope below AND ``_stats_for_ids``), so
+                # skipping them here is what routes those projects to the
+                # fallback that can actually answer for them. Page-scoping
+                # makes that fallback page-proportional too — the 54 seeded
+                # rows on the maintainer's store no longer all pay per request.
+                if _mart_row_is_placeholder(row):
+                    continue
+                mart_rows.setdefault(int(row["project_id"]), row)
+
+            # Page ids whose mart row is missing — or present but an empty
+            # coverage seed (see ``_mart_row_is_placeholder``) — fall back to
+            # the bulk SQL helpers. Keeps the response shape stable while an
+            # in-flight ETL backfill is still working through the store, and
+            # keeps the dates / command count / cost of a seeded-but-
+            # message-bearing project on the payload instead of blanking them
+            # behind an all-zero row.
+            #
+            # Computed AFTER the mart read above, against ``mart_rows`` — not
+            # from a pre-slice pass — so it names exactly the page ids the
+            # mart could not answer for.
+            #
+            # The helpers MUST be scoped to ``uncovered_ids``. Unscoped they
+            # GROUP BY over every message row in the store, so a single
+            # mart-less project (91 of 334 on a real 382K-message store, most
+            # of them carrying no messages at all) turned every
+            # ``include_stats`` request into a full scan of all 16 ``messages``
+            # partitions and hung the endpoint past 180s. Scoped, each
+            # partition seeks its ``(session_fk, seq)`` index instead —
+            # 1141ms → 10ms measured on that store.
+            uncovered_ids = page_ids - mart_rows.keys()
+            if uncovered_ids:
+                lite_stats = queries.bulk_project_lite_stats(conn, project_ids=uncovered_ids)
+                cost_by_pid = queries.bulk_project_cost(conn, project_ids=uncovered_ids)
+
+        # ── (8) per-project stats over the page ──────────────────────────────
         if include_stats:
             for proj in projects:
                 proj["stats"] = _stats_for_ids(
@@ -629,15 +699,29 @@ def _fragment_costs_usd(
     *,
     mart_rows: dict[int, dict],
     cost_by_pid: dict[int, float],
-    mart_loaded: bool,
 ) -> dict[str, float]:
     """USD cost per fragment row for the parent roll-up — mart-first.
 
-    Reuses ``mart_rows`` / ``cost_by_pid`` when the include_stats pass
-    already loaded them; otherwise loads lazily — ``project_mart`` first
-    (one indexed scan), then the bulk messages fallback only for fragment
-    ids the mart doesn't cover (pre-ETL stores). Fragments with no cost
-    data anywhere roll up as 0.0.
+    Reuses whatever ``mart_rows`` / ``cost_by_pid`` already hold and fills
+    only the gaps: ``project_mart`` first (one indexed read, scoped to the
+    fragment ids it is still missing), then the bulk messages fallback for
+    the fragment ids the mart doesn't cover (pre-ETL stores). Fragments with
+    no cost data anywhere roll up as 0.0. Rows loaded here are written back
+    into the caller's ``mart_rows`` (``setdefault``, so an entry the caller
+    already had always wins) — that dict is shared mutable state, and the
+    page pass that runs next both reads and extends it.
+
+    Both fills key off *coverage*, never off a "did someone else load this
+    already?" flag — that flag was the tripwire. Under the page-scoped
+    ordering the caller's dicts are partial by construction: a
+    ``not mart_loaded`` gate would skip the mart read whenever
+    ``include_stats`` was on (leaving every fragment mart-less), and a
+    ``not cost_by_pid`` gate would skip the cost read whenever the dict held
+    even one unrelated id — off-page fragments would then roll up a silent
+    0.0 into ``worktree_cost`` and get FX-converted like a real number.
+    For the same reason the cost fill MERGES; rebinding
+    ``cost_by_pid = bulk_project_cost(...)`` would drop the entries the
+    caller already had.
 
     The lazy fallback is scoped to exactly those uncovered fragment ids.
     Unscoped it re-priced every message in the store to answer a worktree
@@ -646,17 +730,30 @@ def _fragment_costs_usd(
     """
     fragments = [frag for group in folded.values() for frag in group]
     need = {pid for frag in fragments for pid in frag["_ids"]}
-    if not mart_loaded and need:
-        for row in mart_queries.list_project_mart(conn):
+    missing_mart = need - mart_rows.keys()
+    if missing_mart:
+        for row in mart_queries.list_project_mart(conn, project_ids=sorted(missing_mart)):
             # Same coverage rule as the include_stats pass: an empty coverage
             # seed reports 0.0 for a fragment whose messages did cost money, so
             # it must not shadow the (scoped) bulk-cost fallback below.
             if _mart_row_is_placeholder(row):
                 continue
             mart_rows.setdefault(int(row["project_id"]), row)
-    uncovered = {pid for pid in need if pid not in mart_rows}
-    if uncovered and not cost_by_pid:
-        cost_by_pid = queries.bulk_project_cost(conn, project_ids=uncovered)
+    uncovered = need - mart_rows.keys()
+    # Accepted residual — do NOT "optimise" this into a memo. A fragment with
+    # no priced messages never appears in ``bulk_project_cost``'s result, so it
+    # stays in ``missing`` and is asked about again on the next request.
+    # "Absent from ``cost_by_pid``" therefore does NOT mean "not yet asked",
+    # and narrowing ``missing`` on that assumption would be wrong. Skipping the
+    # re-ask needs a separate "already asked" sentinel set; until one exists,
+    # the query is cheap (scoped to those ids) and the repetition is the price
+    # of never rolling up a fabricated 0.0.
+    missing = uncovered - cost_by_pid.keys()
+    if missing:
+        cost_by_pid = {
+            **cost_by_pid,
+            **queries.bulk_project_cost(conn, project_ids=sorted(missing)),
+        }
     costs: dict[str, float] = {}
     for frag in fragments:
         total = 0.0

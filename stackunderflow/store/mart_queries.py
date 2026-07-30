@@ -60,12 +60,30 @@ def list_project_mart(
     conn: sqlite3.Connection,
     *,
     provider_filter: set[str] | None = None,
+    project_ids: Sequence[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return every row from ``project_mart``, optionally narrowed by provider.
+    """Return ``project_mart`` rows, optionally narrowed by provider and/or id.
 
-    One indexed scan over a small table (one row per project). The
-    provider filter is applied in SQL because ``project_mart`` is wide
-    enough that pushing it down beats iterating in Python.
+    One indexed scan over a small table (one row per project). Both filters
+    are applied in SQL — ``project_mart`` is wide enough that pushing them
+    down beats iterating in Python — and they AND together when both are
+    given.
+
+    ``project_ids`` scopes the read to those projects. ``None`` means "every
+    project"; an **empty** sequence means "no projects" and returns ``[]``
+    without touching the DB — it is never silently promoted to "all". That
+    is the same trap ``queries._scoped_rows`` documents, and it is live, not
+    theoretical: the caller that needs the scope (``GET /api/projects``)
+    derives it from a page slice, and an offset past the end of the list is
+    a legitimate request whose page is empty. It relies on this contract
+    instead of branching, so promoting empty to all would hand exactly that
+    request the whole mart.
+
+    Bound-parameter budget: the id list becomes one ``?`` each. The largest
+    caller-side scope is a project page (``PROJECTS_MAX_LIMIT`` slugs, plus
+    provider-duplicates), which stays far under SQLite's 32766-variable
+    ceiling, so this does not chunk — same shape as
+    :func:`command_day_series` / :func:`command_count_in_window`.
     """
     if not _table_exists(conn, "project_mart"):
         return []
@@ -83,10 +101,20 @@ def list_project_mart(
         "FROM project_mart"
     )
     params: list[Any] = []
+    clauses: list[str] = []
     if provider_filter:
         placeholders = ",".join(["?"] * len(provider_filter))
-        sql += f" WHERE LOWER(provider) IN ({placeholders})"
+        clauses.append(f"LOWER(provider) IN ({placeholders})")
         params.extend(p.lower() for p in provider_filter)
+    if project_ids is not None:
+        pids = [int(p) for p in project_ids]
+        if not pids:
+            return []
+        placeholders = ",".join("?" * len(pids))
+        clauses.append(f"project_id IN ({placeholders})")
+        params.extend(pids)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)  # noqa: S608 — placeholders are bound
     rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
