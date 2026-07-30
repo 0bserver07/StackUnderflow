@@ -273,7 +273,9 @@ async def get_stats(
         if not details:
             _strip_heavy_blocks(stats)
 
-    currency = active_currency_payload()
+    # COST-7: off the event loop — resolution can touch config.json, the FX
+    # cache file, and (on a lapsed 24h cache) a blocking urlopen.
+    currency = await run_in_threadpool(active_currency_payload)
     if currency["rate_from_usd"] != 1.0:
         _convert_in_place(stats, currency["rate_from_usd"])
     if isinstance(stats, dict):

@@ -423,7 +423,9 @@ async def get_cost_data(
             val = {} if key in {"tool_costs", "token_composition", "outliers", "error_cost", "trends"} else []
         payload[key] = val
 
-    currency = active_currency_payload()
+    # COST-7: currency resolution can hit disk (config.json, the FX cache) and,
+    # on a lapsed 24h cache, a blocking urlopen — off the event loop it goes.
+    currency = await run_in_threadpool(active_currency_payload)
     if currency["rate_from_usd"] != 1.0:
         for key in COST_KEYS:
             _convert_in_place(payload[key], currency["rate_from_usd"])
@@ -736,7 +738,7 @@ async def get_cost_by_provider(
     finally:
         conn.close()
 
-    currency = active_currency_payload()
+    currency = await run_in_threadpool(active_currency_payload)  # COST-7
     rate = currency["rate_from_usd"]
     if rate != 1.0:
         for r in out_rows:
@@ -1060,7 +1062,7 @@ async def get_cost_by_model(log_path: str | None = None, period: str = "month"):
     finally:
         conn.close()
 
-    currency = active_currency_payload()
+    currency = await run_in_threadpool(active_currency_payload)  # COST-7
     rate = currency["rate_from_usd"]
 
     models: dict[str, dict[str, Any]] = {}

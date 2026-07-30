@@ -365,3 +365,135 @@ def test_list_supported_includes_cached_codes(isolated_cache):
     assert "EUR" in supported
     assert "GBP" in supported
     assert "JPY" in supported
+
+
+# ── COST-7: the per-request I/O is memoized away ─────────────────────────────
+
+
+def test_resolve_rate_memo_serves_repeat_calls_without_touching_disk(isolated_cache, monkeypatch):
+    """Every cost-bearing API response resolves the active currency. Uncached
+    that was a JSON read of the FX cache file per request; the memo makes the
+    2nd..Nth call pure memory.
+
+    Enforced by booby-trapping ``_read_cache`` after the first call — a second
+    disk read raises instead of silently costing a syscall."""
+    _write_cache(isolated_cache, datetime.now(UTC), {"GBP": 0.79})
+
+    reads = {"n": 0}
+    real_read = currency._read_cache
+
+    def exploding_read():
+        reads["n"] += 1
+        if reads["n"] > 1:
+            raise AssertionError("memo miss — resolve_rate re-read the cache file")
+        return real_read()
+
+    monkeypatch.setattr(currency, "_read_cache", exploding_read)
+
+    first = currency.resolve_rate("GBP")
+    for _ in range(20):
+        assert currency.resolve_rate("GBP") == first
+    assert reads["n"] == 1
+    assert first == (0.79, None)
+
+
+def test_clear_currency_memo_forces_a_fresh_resolution(isolated_cache):
+    """The reset hook is the repo's resettable-cache contract — without it a
+    settings change would be masked for the whole TTL."""
+    _write_cache(isolated_cache, datetime.now(UTC), {"GBP": 0.79})
+    assert currency.resolve_rate("GBP")[0] == 0.79
+
+    _write_cache(isolated_cache, datetime.now(UTC), {"GBP": 0.65})
+    assert currency.resolve_rate("GBP")[0] == 0.79, "still inside the TTL"
+
+    currency.clear_currency_memo()
+    assert currency.resolve_rate("GBP")[0] == 0.65
+
+
+def test_active_currency_payload_is_memoized_and_returns_fresh_dicts(isolated_cache, monkeypatch):
+    """The payload memo is what spares the USD short-circuit its ``Settings()``
+    config.json read. Callers must still each get their own dict — the payload
+    is stamped into response bodies."""
+    monkeypatch.setenv("STACKUNDERFLOW_CURRENCY", "USD")
+
+    loads = {"n": 0}
+    real_load = currency.format_in_currency
+
+    def counting_format(usd, target=None):
+        loads["n"] += 1
+        return real_load(usd, target)
+
+    monkeypatch.setattr(currency, "format_in_currency", counting_format)
+
+    a = currency.active_currency_payload()
+    b = currency.active_currency_payload()
+    assert loads["n"] == 1
+    assert a == b
+    assert a is not b, "each caller needs its own dict — the memo must not be aliased"
+
+    a["code"] = "MUTATED"
+    assert currency.active_currency_payload()["code"] == "USD"
+
+
+def test_failed_fetch_is_negative_cached_and_not_retried(isolated_cache, monkeypatch):
+    """A failed fetch used to persist NOTHING, so an unreachable Frankfurter
+    cost every single request a fresh 10s ``urlopen`` timeout. One failure now
+    parks the next attempt for the negative-cache window."""
+    calls = {"n": 0}
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        raise OSError("network down")
+
+    monkeypatch.setattr(currency.urllib.request, "urlopen", boom)
+
+    # No cache on disk → the chain reaches the live fetch, fails, and lands on
+    # the snapshot. The fallback semantics are unchanged.
+    rate, warning = currency.resolve_rate("GBP")
+    assert rate == currency.RATES_SNAPSHOT["GBP"]
+    assert warning is not None
+    assert calls["n"] == 1
+
+    # A different code re-walks the chain (only successes are memoized per
+    # code), but the fetch itself must NOT be retried.
+    for code in ("EUR", "CHF", "JPY", "GBP"):
+        currency._RATE_MEMO.pop(code, None)
+        currency.resolve_rate(code)
+    assert calls["n"] == 1, "negative cache must suppress the retry storm"
+
+    # The block is time-boxed, not permanent: expiring it lets a fetch through.
+    currency._FETCH_BLOCKED_UNTIL = 0.0
+    currency._RATE_MEMO.pop("GBP", None)
+    currency.resolve_rate("GBP")
+    assert calls["n"] == 2
+
+
+def test_successful_fetch_clears_the_negative_cache(isolated_cache, monkeypatch):
+    """A recovered upstream must not stay blocked for the rest of the window."""
+    currency._note_fetch_failure()
+    assert currency._FETCH_BLOCKED_UNTIL > 0
+
+    monkeypatch.setattr(currency, "_FETCH_BLOCKED_UNTIL", 0.0)
+    with patch.object(
+        currency.urllib.request,
+        "urlopen",
+        side_effect=lambda *a, **kw: _FakeResponse({"rates": {"GBP": 0.79}}),
+    ):
+        assert currency._fetch_from_frankfurter() == {"GBP": 0.79}
+    assert currency._FETCH_BLOCKED_UNTIL == 0.0
+
+
+class _FakeResponse:
+    """Minimal context-manager stand-in for ``urlopen``'s return value."""
+
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")

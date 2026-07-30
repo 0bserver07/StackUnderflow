@@ -8,6 +8,7 @@ Resolution chain at runtime (see ``get_rate``):
 
   1. ``Settings().currency`` picks the active ISO code (default ``USD``).
   2. ``get_rate(target)``:
+       0. in-process memo (≤60s)        → use it, zero I/O (COST-7)
        a. cache fresh (≤24h)            → use it, no warning
        b. live fetch from Frankfurter   → use it, write cache, no warning
        c. cache stale (>24h, ≤30d)      → use it + warning "rate is N days old"
@@ -17,6 +18,12 @@ Resolution chain at runtime (see ``get_rate``):
 
 The cache file shape is:
   ``{"fetched_at": "<ISO-UTC>", "rates": {"EUR": 0.93, "GBP": 0.79, ...}}``
+
+Step 0 and the negative fetch cache are the COST-7 fix: this module sits on
+every cost-bearing API response, and uncached it charged each one a config.json
+read, an FX-cache read, and — once the 24h cache lapsed with Frankfurter
+unreachable — a fresh blocking 10s ``urlopen``, forever, because a failed fetch
+persisted nothing. See ``clear_currency_memo`` for the reset hook.
 
 The hardcoded ``RATES_SNAPSHOT`` is the last line of defence so non-USD
 users never silently see USD numbers labelled with their currency symbol.
@@ -31,6 +38,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -58,6 +67,51 @@ _MIN_VALID_RATE = 0.0001
 _MAX_VALID_RATE = 1_000_000.0
 
 _ISO_CODE_RE = re.compile(r"^[A-Z]{3}$")
+
+# ── in-process memo (COST-7) ─────────────────────────────────────────────────
+#
+# Currency resolution sits on EVERY cost-bearing API response. Uncached it cost,
+# per request: a ``Settings()`` construction that re-reads ``config.json`` from
+# disk (even on the USD short-circuit), a ``_read_cache()`` JSON read of the FX
+# cache file for non-USD, and — once the 24h cache lapsed — a blocking
+# ``urlopen`` with a 10s timeout. Nothing was written on a FAILED fetch, so an
+# unreachable Frankfurter meant every single request paid the full 10s again.
+#
+# Three memos fix that, all ~60s TTL on a monotonic clock:
+#   * ``_RATE_MEMO``    — code → (expires_at, rate, warning). The resolved
+#                         "asof" triple; a hit does zero disk I/O.
+#   * ``_PAYLOAD_MEMO`` — the whole ``active_currency_payload`` dict, so the
+#                         USD path skips the ``Settings()`` read too.
+#   * ``_FETCH_BLOCKED_UNTIL`` — negative cache. A failed fetch parks the next
+#                         attempt for ``_FETCH_NEGATIVE_TTL_S``; the resolution
+#                         chain below it (stale cache → snapshot) is unchanged,
+#                         so behaviour is identical minus the repeated stall.
+#
+# The TTL is short on purpose: FX rates are refreshed daily, so 60s of staleness
+# is invisible, while any write that changes the ACTIVE code (POST
+# /api/cfg/currency) calls ``clear_currency_memo()`` rather than waiting it out.
+_MEMO_TTL_S = 60.0
+_FETCH_NEGATIVE_TTL_S = 900.0  # 15 min
+
+_RATE_MEMO: dict[str, tuple[float, float, str | None]] = {}
+_PAYLOAD_MEMO: tuple[float, dict[str, Any]] | None = None
+_FETCH_BLOCKED_UNTIL: float = 0.0
+_MEMO_LOCK = threading.Lock()
+
+
+def clear_currency_memo() -> None:
+    """Drop every in-process currency memo (rates, payload, negative cache).
+
+    Per the repo's resettable-cache policy (cf. ``infra.costs.clear_pricing_caches``,
+    ``infra.model_manifest.clear_manifest_caches``). Called by the currency-write
+    route so a settings change is visible immediately, and by tests that patch the
+    cache file or the network layer between assertions.
+    """
+    global _PAYLOAD_MEMO, _FETCH_BLOCKED_UNTIL
+    with _MEMO_LOCK:
+        _RATE_MEMO.clear()
+        _PAYLOAD_MEMO = None
+        _FETCH_BLOCKED_UNTIL = 0.0
 
 
 # Top ~30 currency symbols. Anything else falls back to the ISO code.
@@ -219,23 +273,49 @@ def _is_fresh(fetched_at: str | None) -> bool:
 
 # ── network ──────────────────────────────────────────────────────────────────
 
+def _note_fetch_failure() -> None:
+    """Park the next live fetch for ``_FETCH_NEGATIVE_TTL_S`` (COST-7).
+
+    Without this a hard-down Frankfurter cost every request a fresh 10s
+    ``urlopen`` timeout: the failure path wrote nothing, so there was no record
+    that the last attempt had just failed.
+    """
+    global _FETCH_BLOCKED_UNTIL
+    with _MEMO_LOCK:
+        _FETCH_BLOCKED_UNTIL = time.monotonic() + _FETCH_NEGATIVE_TTL_S
+
+
 def _fetch_from_frankfurter() -> dict[str, float] | None:
     """Pull the full USD-base rate table from Frankfurter.
 
     Returns the validated rates dict on success, ``None`` on any failure
     (network, parse, schema). Callers fall through to the cache / snapshot
     chain in ``get_rate``.
+
+    COST-7: a failure arms a negative cache — subsequent calls short-circuit to
+    ``None`` for ``_FETCH_NEGATIVE_TTL_S`` instead of re-paying the 10s timeout.
+    The caller's fallback chain is untouched, so a blocked fetch degrades
+    exactly like a failed one (stale cache → snapshot). A success clears it.
     """
+    global _FETCH_BLOCKED_UNTIL
+    with _MEMO_LOCK:
+        blocked = time.monotonic() < _FETCH_BLOCKED_UNTIL
+    if blocked:
+        logger.debug("currency: skipping fetch — a recent attempt failed (negative cache)")
+        return None
+
     try:
         with urllib.request.urlopen(_FRANKFURTER_URL, timeout=_FETCH_TIMEOUT_S) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError) as e:
         logger.warning("currency: failed to fetch rates from %s: %s", _FRANKFURTER_URL, e)
+        _note_fetch_failure()
         return None
 
     raw = data.get("rates")
     if not isinstance(raw, dict):
         logger.warning("currency: malformed Frankfurter response (no 'rates' field)")
+        _note_fetch_failure()
         return None
 
     rates: dict[str, float] = {}
@@ -245,7 +325,12 @@ def _fetch_from_frankfurter() -> dict[str, float] | None:
         if not _is_valid_rate(val):
             continue
         rates[code] = float(val)
-    return rates or None
+    if not rates:
+        _note_fetch_failure()
+        return None
+    with _MEMO_LOCK:
+        _FETCH_BLOCKED_UNTIL = 0.0
+    return rates
 
 
 def _is_valid_rate(value: Any) -> bool:
@@ -268,6 +353,11 @@ def resolve_rate(target_currency: str) -> tuple[float, str | None]:
     live fetch + fresh cache; the UI uses it to render a banner.
 
     Raises ``CurrencyError`` when every fallback fails (unknown code).
+
+    COST-7: successful resolutions are memoized per code for ``_MEMO_TTL_S``, so
+    a burst of API requests resolves once and the rest do zero disk I/O. Only
+    successes are memoized — a raising code re-walks the chain, where the
+    negative fetch cache (not a per-code memo) is what keeps it cheap.
     """
     code = (target_currency or "USD").upper()
     if code == "USD":
@@ -275,6 +365,23 @@ def resolve_rate(target_currency: str) -> tuple[float, str | None]:
     if not _ISO_CODE_RE.match(code):
         raise CurrencyError(f"invalid currency code: {target_currency!r}")
 
+    with _MEMO_LOCK:
+        hit = _RATE_MEMO.get(code)
+        if hit is not None and time.monotonic() < hit[0]:
+            return hit[1], hit[2]
+
+    rate, warning = _resolve_rate_uncached(code)
+    with _MEMO_LOCK:
+        _RATE_MEMO[code] = (time.monotonic() + _MEMO_TTL_S, rate, warning)
+    return rate, warning
+
+
+def _resolve_rate_uncached(code: str) -> tuple[float, str | None]:
+    """The resolution chain itself — ``code`` is already upper-cased + validated.
+
+    Split out of ``resolve_rate`` so the memo wraps it without duplicating the
+    fallback logic. Every step below is byte-for-byte the pre-memo behaviour.
+    """
     cached = _read_cache()
 
     # (a) cache fresh — best case, no warning.
@@ -419,9 +526,24 @@ def active_currency_payload() -> dict[str, Any]:
 
     ``warning`` is ``None`` on the happy path and a human-readable string
     when a fallback was used. The UI surfaces it as a banner.
+
+    COST-7: memoized for ``_MEMO_TTL_S``. This is the hottest currency call in
+    the app — it runs on every cost-bearing response — and it read
+    ``config.json`` off disk through ``Settings()`` on EVERY request, including
+    the USD short-circuit that needs no rate at all. Callers get a fresh dict
+    each time so nobody can mutate the memo. ``clear_currency_memo()`` drops it;
+    the currency-write route calls that so a change is never masked by the TTL.
     """
+    global _PAYLOAD_MEMO
+    with _MEMO_LOCK:
+        memo = _PAYLOAD_MEMO
+        if memo is not None and time.monotonic() < memo[0]:
+            return dict(memo[1])
+
     payload = format_in_currency(0.0)
     payload.pop("amount", None)
+    with _MEMO_LOCK:
+        _PAYLOAD_MEMO = (time.monotonic() + _MEMO_TTL_S, dict(payload))
     return payload
 
 
@@ -430,6 +552,7 @@ __all__ = [
     "RATES_SNAPSHOT",
     "RATES_SNAPSHOT_DATE",
     "active_currency_payload",
+    "clear_currency_memo",
     "convert_usd",
     "format_in_currency",
     "get_rate",

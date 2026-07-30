@@ -92,6 +92,11 @@ async def set_currency(data: dict) -> JSONResponse:
         Settings().persist("currency", code.strip())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    # COST-7: ``active_currency_payload`` is memoized in-process for ~60s so the
+    # hot read paths do no disk I/O. That memo caches the OLD code, so the write
+    # path has to drop it — otherwise this very response (and every request for
+    # the next minute) would report the currency the user just replaced.
+    clear_currency_memo()
     # Deliberately NOT invalidating the dashboard cache here (#31). Cached
     # payloads are stored USD-denominated and every response re-applies the
     # active currency (routes/data._apply_currency_to_stats), so a currency

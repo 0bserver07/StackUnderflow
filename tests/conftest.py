@@ -16,6 +16,7 @@ import pytest
 
 from stackunderflow.etl import marts as _marts
 from stackunderflow.etl import normalize as _normalize
+from stackunderflow.infra import currency as _currency
 
 # Snapshot the import-time ETL registries ONCE, before any test runs. The mart
 # and normalize registries are populated purely as import side-effects (no
@@ -46,6 +47,21 @@ def _restore_etl_registries():
     _marts._REGISTRY.update(_MART_DEFAULTS)
     _normalize._REGISTRY.clear()
     _normalize._REGISTRY.update(_NORMALIZE_DEFAULTS)
+
+
+@pytest.fixture(autouse=True)
+def _reset_currency_memo():
+    """Keep the process-global currency memo from leaking between tests.
+
+    ``infra.currency`` memoizes the resolved rate + the active-currency payload
+    for ~60s (COST-7) so hot API paths do no per-request disk I/O. Under pytest
+    a whole module runs well inside that window, so without this a test that
+    seeds a GBP rate cache would hand its answer to the next test's snapshot
+    assertion. Cleared on both sides so neither direction can pollute.
+    """
+    _currency.clear_currency_memo()
+    yield
+    _currency.clear_currency_memo()
 
 
 def set_home_env(monkeypatch, home: Path | str) -> None:
