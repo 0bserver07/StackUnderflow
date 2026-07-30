@@ -1405,29 +1405,6 @@ def _push_day_window(
     return sql, params
 
 
-# ── messages-summary helpers ────────────────────────────────────────────────
-
-
-def project_mart_messages_summary_totals(
-    conn: sqlite3.Connection, *, project_id: int
-) -> dict[str, int] | None:
-    """Return ``{total, total_sessions}`` from ``project_mart`` for one project.
-
-    Feeds ``/api/messages/summary``'s top-level ``total`` field straight
-    from the mart row. Returns ``None`` when no row exists so the caller
-    can decide whether to fall back to a full ``get_project_messages``
-    pass — the only safe answer when the ETL pipeline hasn't materialised
-    the project yet.
-    """
-    row = get_project_mart_row(conn, project_id=project_id)
-    if row is None:
-        return None
-    return {
-        "total": int(row.get("total_messages", 0) or 0),
-        "total_sessions": int(row.get("total_sessions", 0) or 0),
-    }
-
-
 def tool_mart_distinct_tool_names_in_window(
     conn: sqlite3.Connection,
     *,
