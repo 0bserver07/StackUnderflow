@@ -197,21 +197,83 @@ def clear_pricing_caches() -> None:
     _hint_routing.cache_clear()
 
 
-def _provider_for_model(model: str) -> str:
-    """Model-id → pricer key. No hand-written ladder:
+def vendor_for_model(model: str) -> str | None:
+    """Pricer key the model id itself *claims*, or ``None`` for no match.
+
+    Same routing as :func:`_provider_for_model` minus the conservative
+    ``anthropic`` default:
 
     1. exact id from ``models.toml [canonical_ids]`` (group = pricer key);
     2. the pricers' own declared prefix/substring hints, longest first;
-    3. ``anthropic`` — the same conservative fallback as ``get_pricer``.
+    3. ``None`` — "no pricer claims this id".
+
+    The ``None`` is the point. ``_provider_for_model`` answers "who should I
+    ask?" and any answer beats raising; callers deciding whether to *override*
+    a recorded provider need "did anything actually match?", because
+    ``deepseek-v4-flash-free`` matching nothing must not be mistaken for
+    ``deepseek-v4-flash-free`` being an Anthropic model.
     """
-    lowered = model.lower()
+    lowered = (model or "").strip().lower()
+    if not lowered:
+        return None
     exact = _exact_id_routing().get(lowered)
     if exact:
         return exact
     for hint, key, is_prefix in _hint_routing():
         if lowered.startswith(hint) if is_prefix else hint in lowered:
             return key
-    return "anthropic"
+    return None
+
+
+def _provider_for_model(model: str) -> str:
+    """Model-id → pricer key, defaulting to ``anthropic``.
+
+    Thin wrapper over :func:`vendor_for_model`; the fallback matches
+    ``get_pricer``'s so an unrouted id still prices rather than raising.
+    """
+    return vendor_for_model(model) or "anthropic"
+
+
+def resolve_pricing_provider(provider: str | None, model: str) -> str:
+    """Pricer key for a *stored* ``(provider, model)`` pair.
+
+    ``projects.provider`` records which TOOL wrote the transcript (``claude``,
+    ``codex``, ``pi``, ``opencode``, …), not whose rate card applies. Most
+    shells delegate per model id, but the terminal single-vendor pricers do
+    not: ``AnthropicPricer`` resolves any unknown id to its manifest fallback
+    family and ``OpenAIPricer`` to ``GPT_5_CODEX``, so a foreign model priced
+    through them is silently billed at the wrong card — e.g. a ``pi`` project
+    logging ``claude-opus-4-7`` billed at $1.25/$10 instead of $5/$25.
+
+    The model id is the ground truth about which rate card applies, so a
+    *definite* model→vendor match wins. Three deliberate exceptions keep the
+    override from doing harm:
+
+    * no definite match (``vendor_for_model`` → ``None``) — the recorded
+      provider stands, so an unrecognised id keeps its shell's verdict
+      (including a shell's honest ``None`` → $0) instead of being re-routed
+      into Anthropic's fallback and invented into existence;
+    * the vendor pricer can't price the id but the shell can — never trade a
+      real number for "I don't know" (Cursor's dated Gemini previews);
+    * both agree on the rate — the shell already delegates correctly, so the
+      recorded provider is kept and behaviour is bit-for-bit unchanged.
+    """
+    vendor = vendor_for_model(model)
+    if vendor is None:
+        return provider or "anthropic"
+    if not provider:
+        return vendor
+    shell = get_pricer(provider)
+    upstream = get_pricer(vendor)
+    if shell is upstream:
+        return provider
+    upstream_rates = upstream.rates_for(upstream.canonicalize(model))
+    if upstream_rates is None:
+        return provider
+    shell_rates = shell.rates_for(shell.canonicalize(model))
+    if shell_rates == upstream_rates:
+        return provider
+    return vendor
 
 
 _overlay_cache: dict[str, tuple[float, float, float, float]] | None = None
@@ -397,4 +459,6 @@ __all__ = [
     "get_model_pricing",
     "is_rate_card_model",
     "resolve_model_alias",
+    "resolve_pricing_provider",
+    "vendor_for_model",
 ]

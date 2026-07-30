@@ -738,3 +738,145 @@ def test_get_project_messages_page_model_filter_aligns_with_count(conn) -> None:
     assert len(page) == total
     assert all(m["model"] == "claude-opus-4-6" for m in page)
     assert [m["timestamp"] for m in page] == sorted(m["timestamp"] for m in page)
+
+
+# ── P0.1: the bulk project helpers must be scopeable to an explicit id set ────
+#
+# Unscoped, both GROUP BY over every message row in the store. The project-list
+# route only ever needs the handful of projects ``project_mart`` hasn't covered
+# yet, so a full scan there is pure waste — on a real 382K-message store it was
+# the difference between a fast response and a >180s hang.
+
+
+def _seed_priced_project(conn: sqlite3.Connection, slug: str, *, model: str = "claude-opus-4-6") -> int:
+    """One project + one session + one billable assistant message."""
+    pid = _seed_project(conn, slug=slug)
+    sid = _seed_session(conn, pid, f"s{slug}")
+    conn.execute(
+        "INSERT INTO messages (session_fk, seq, timestamp, role, model, "
+        " input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, raw_json) "
+        "VALUES (?, 0, '2026-05-01T00:00:00Z', 'assistant', ?, 1000, 500, 0, 0, '{}')",
+        (sid, model),
+    )
+    conn.commit()
+    return pid
+
+
+def test_bulk_project_lite_stats_returns_only_requested_ids(conn) -> None:
+    a = _seed_priced_project(conn, "-a")
+    b = _seed_priced_project(conn, "-b")
+    _seed_priced_project(conn, "-c")
+    assert set(queries.bulk_project_lite_stats(conn, project_ids={a, b})) == {a, b}
+
+
+def test_bulk_project_cost_returns_only_requested_ids(conn) -> None:
+    a = _seed_priced_project(conn, "-a")
+    _seed_priced_project(conn, "-b")
+    c = _seed_priced_project(conn, "-c")
+    assert set(queries.bulk_project_cost(conn, project_ids=[c, a])) == {a, c}
+
+
+def test_scoped_values_match_the_unscoped_ones(conn) -> None:
+    """Scoping changes which rows come back, never what they say."""
+    a = _seed_priced_project(conn, "-a")
+    _seed_priced_project(conn, "-b")
+    assert queries.bulk_project_lite_stats(conn, project_ids={a}) == {
+        a: queries.bulk_project_lite_stats(conn)[a]
+    }
+    assert queries.bulk_project_cost(conn, project_ids={a}) == {
+        a: queries.bulk_project_cost(conn)[a]
+    }
+
+
+def test_none_still_means_every_project(conn) -> None:
+    """Back-compat: non-route callers may omit the filter and get a full scan."""
+    a = _seed_priced_project(conn, "-a")
+    b = _seed_priced_project(conn, "-b")
+    assert set(queries.bulk_project_lite_stats(conn)) == {a, b}
+    assert set(queries.bulk_project_cost(conn)) == {a, b}
+
+
+def test_empty_id_set_means_no_projects_and_runs_no_sql(conn) -> None:
+    """The dangerous confusion: empty must NEVER be promoted to "all"."""
+    _seed_priced_project(conn, "-a")
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        assert queries.bulk_project_lite_stats(conn, project_ids=[]) == {}
+        assert queries.bulk_project_cost(conn, project_ids=set()) == {}
+    finally:
+        conn.set_trace_callback(None)
+    assert seen == [], f"empty id set still hit the database: {seen}"
+
+
+def test_id_list_is_chunked_under_the_sqlite_variable_limit(conn, monkeypatch) -> None:
+    """More ids than fit in one ``IN (…)`` still return every requested row."""
+    monkeypatch.setattr(queries, "_MAX_IN_PARAMS", 2)
+    pids = [_seed_priced_project(conn, f"-p{i}") for i in range(5)]
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        lite = queries.bulk_project_lite_stats(conn, project_ids=pids)
+        cost = queries.bulk_project_cost(conn, project_ids=pids)
+    finally:
+        conn.set_trace_callback(None)
+    assert set(lite) == set(pids)
+    assert set(cost) == set(pids)
+    # 5 ids at 2 per chunk = 3 statements per helper, and none over the cap.
+    assert len(statements) == 6, statements
+    assert all(s.count("?") <= 2 for s in statements), statements
+
+
+def test_duplicate_ids_do_not_double_count_cost(conn) -> None:
+    """``bulk_project_cost`` accumulates per row; a repeated id must not be
+    priced twice just because the caller passed a list with duplicates."""
+    a = _seed_priced_project(conn, "-a")
+    once = queries.bulk_project_cost(conn, project_ids=[a])
+    twice = queries.bulk_project_cost(conn, project_ids=[a, a, a])
+    assert twice == once
+
+
+class _PlanCapturingConn:
+    """``conn`` proxy that records ``EXPLAIN QUERY PLAN`` for each SELECT.
+
+    ``sqlite3.Connection.execute`` is read-only, so it can't be monkeypatched
+    in place.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, plans: list[str]) -> None:
+        self._conn = conn
+        self._plans = plans
+
+    def execute(self, sql: str, params=()):
+        if sql.lstrip().upper().startswith("SELECT"):
+            self._plans.extend(
+                r[3] for r in self._conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+            )
+        return self._conn.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_scoped_helpers_seek_the_partition_indexes(conn) -> None:
+    """The scope must reach the ``messages`` partitions, not just filter after.
+
+    ``messages`` is a UNION ALL VIEW over per-month partitions. A predicate on
+    the joined ``sessions`` row (``s.project_id IN (…)``) can't be pushed into
+    it — the planner materialises every partition as a co-routine and filters
+    afterwards, so "scoped" costs the same as unscoped (912ms vs 1009ms
+    measured on a 382K-message store). Driving off ``m.session_fk`` via a LIST
+    SUBQUERY lets each partition seek ``(session_fk, seq)`` instead: 9ms.
+
+    This asserts the plan, not the SQL text, so any rewrite that keeps the
+    property passes and any rewrite that loses it fails.
+    """
+    pid = _seed_priced_project(conn, "-a")
+    plans: list[str] = []
+    proxy = _PlanCapturingConn(conn, plans)
+    queries.bulk_project_lite_stats(proxy, project_ids=[pid])
+    queries.bulk_project_cost(proxy, project_ids=[pid])
+    assert plans, "no query plan captured"
+    scans = [p for p in plans if p.startswith("SCAN messages_")]
+    assert not scans, f"scoped query still full-scans partitions: {scans}"
+    assert any("session_seq" in p for p in plans), plans

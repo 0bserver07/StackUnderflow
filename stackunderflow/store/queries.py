@@ -8,8 +8,27 @@ later, it can add an @lru_cache without changing any call site.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 
 from .types import MessageRow, ProjectRow, SessionRow
+
+# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 on older builds (32766 on
+# 3.32+). Chunking an ``IN (…)`` list at 900 stays under the pessimistic limit
+# with room for the handful of other bound parameters a statement may carry.
+_MAX_IN_PARAMS = 900
+
+
+def _id_chunks(project_ids: Iterable[int]) -> list[tuple[int, ...]]:
+    """Split an id set into ``IN (…)``-sized chunks, de-duplicated and sorted.
+
+    Sorted so the emitted SQL text is stable for a given id set (statement
+    cache friendliness, reproducible EXPLAIN output in perf work).
+    """
+    unique = sorted({int(pid) for pid in project_ids})
+    return [
+        tuple(unique[i : i + _MAX_IN_PARAMS])
+        for i in range(0, len(unique), _MAX_IN_PARAMS)
+    ]
 
 
 def list_projects(conn: sqlite3.Connection) -> list[ProjectRow]:
@@ -30,7 +49,11 @@ def bulk_session_counts(conn: sqlite3.Connection) -> dict[int, int]:
     return {int(r[0]): int(r[1]) for r in rows}
 
 
-def bulk_project_lite_stats(conn: sqlite3.Connection) -> dict[int, dict]:
+def bulk_project_lite_stats(
+    conn: sqlite3.Connection,
+    *,
+    project_ids: Iterable[int] | None = None,
+) -> dict[int, dict]:
     """Return ``{project_id: {tokens, cost-driving counts, dates}}`` in one query.
 
     Lite stats fill the project-list cards on the dashboard without
@@ -40,8 +63,23 @@ def bulk_project_lite_stats(conn: sqlite3.Connection) -> dict[int, dict]:
     compact_summary_count, etc.) default to 0/None so the UI shape stays
     backwards-compatible — those are only meaningful in the per-project
     detail view, which still runs the full aggregator on demand.
+
+    ``project_ids`` scopes the scan to those projects. **Route callers MUST
+    pass it.** Unscoped, this GROUP BY touches every message row in the
+    store: on a 382K-message store one uncovered project (its mart row not
+    built yet) made ``GET /api/projects?include_stats=true`` scan all of them
+    and hang past 180s. Scoped, each ``messages`` partition seeks its
+    ``(session_fk, seq)`` index instead — 1009ms → 9ms on that store (see
+    :func:`_scoped_rows` for why the scope is shaped the way it is).
+
+    ``None`` means "every project" and is kept only for back-compat with
+    non-route callers (tests, ad-hoc store analysis) — it is a full scan by
+    definition, so nothing on a request path may use it. An **empty**
+    iterable means "no projects" and returns ``{}`` without touching the DB;
+    it is never silently promoted to "all".
     """
-    rows = conn.execute(
+    where = "WHERE (m.model IS NULL OR m.model != '<synthetic>')"
+    sql = (
         "SELECT s.project_id, "
         "       SUM(m.input_tokens), SUM(m.output_tokens), "
         "       SUM(m.cache_read_tokens), SUM(m.cache_create_tokens), "
@@ -50,42 +88,56 @@ def bulk_project_lite_stats(conn: sqlite3.Connection) -> dict[int, dict]:
         "       COUNT(*) AS total_msgs "
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
-        "WHERE m.model IS NULL OR m.model != '<synthetic>' "
+        "{where} "
         "GROUP BY s.project_id"
-    ).fetchall()
+    )
+
     out: dict[int, dict] = {}
-    for r in rows:
-        pid = int(r[0])
-        out[pid] = {
-            "total_input_tokens": int(r[1] or 0),
-            "total_output_tokens": int(r[2] or 0),
-            "total_cache_read": int(r[3] or 0),
-            "total_cache_write": int(r[4] or 0),
-            "first_message_date": r[5],
-            "last_message_date": r[6],
-            "total_commands": int(r[7] or 0),
-            "total_messages": int(r[8] or 0),
-            # Filled by route layer using the cost helpers + currency
-            "total_cost": 0.0,
-            # Aggregator-only fields default to 0/None for the list view
-            "avg_tokens_per_command": 0,
-            "avg_steps_per_command": 0,
-            "compact_summary_count": 0,
-        }
+    for rows in _scoped_rows(conn, sql, where, project_ids):
+        for r in rows:
+            pid = int(r[0])
+            out[pid] = {
+                "total_input_tokens": int(r[1] or 0),
+                "total_output_tokens": int(r[2] or 0),
+                "total_cache_read": int(r[3] or 0),
+                "total_cache_write": int(r[4] or 0),
+                "first_message_date": r[5],
+                "last_message_date": r[6],
+                "total_commands": int(r[7] or 0),
+                "total_messages": int(r[8] or 0),
+                # Filled by route layer using the cost helpers + currency
+                "total_cost": 0.0,
+                # Aggregator-only fields default to 0/None for the list view
+                "avg_tokens_per_command": 0,
+                "avg_steps_per_command": 0,
+                "compact_summary_count": 0,
+            }
     return out
 
 
-def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
+def bulk_project_cost(
+    conn: sqlite3.Connection,
+    *,
+    project_ids: Iterable[int] | None = None,
+) -> dict[int, float]:
     """Return ``{project_id: total_cost_usd}`` keyed by aggregated tokens
     × ``compute_cost`` per (model, speed) bucket.
 
     One pass: gather per-(project_id, model, speed) totals, fold to USD
     using the current rate card. Replaces the per-project aggregator
     pipeline for the project-list view's cost field.
-    """
-    from stackunderflow.infra.costs import compute_cost
 
-    rows = conn.execute(
+    ``project_ids`` scopes the scan — same contract, and the same reason, as
+    :func:`bulk_project_lite_stats`: route callers MUST pass it, ``None``
+    (full scan) survives only for non-route callers, and an empty iterable
+    means "no projects", not "all".
+    """
+    from stackunderflow.infra.costs import compute_cost, resolve_pricing_provider
+
+    where = (
+        "WHERE m.model IS NOT NULL AND m.model != '' AND m.model != '<synthetic>'"
+    )
+    sql = (
         "SELECT s.project_id, "
         "       p.provider, "
         "       COALESCE(m.model, ''), "
@@ -95,29 +147,74 @@ def bulk_project_cost(conn: sqlite3.Connection) -> dict[int, float]:
         "FROM messages m "
         "JOIN sessions s ON s.id = m.session_fk "
         "JOIN projects p ON p.id = s.project_id "
-        "WHERE m.model IS NOT NULL AND m.model != '' AND m.model != '<synthetic>' "
+        "{where} "
         "GROUP BY s.project_id, p.provider, m.model, m.speed"
-    ).fetchall()
+    )
+
     cost_by_pid: dict[int, float] = {}
-    for r in rows:
-        pid = int(r[0])
-        # Price against the project's ACTUAL provider. Defaulting to anthropic
-        # (the old behaviour) mispriced every non-Anthropic model — e.g. a GPT
-        # model fell back to Sonnet rates. get_pricer() maps store provider
-        # strings (claude/codex/cursor/...) to the right pricer.
-        provider = r[1] or "anthropic"
-        model = r[2] or ""
-        speed = r[3] or "standard"
-        tokens = {
-            "input": int(r[4] or 0),
-            "output": int(r[5] or 0),
-            "cache_read": int(r[6] or 0),
-            "cache_creation": int(r[7] or 0),
-        }
-        breakdown = compute_cost(tokens, model, provider=provider, speed=speed) if model else None
-        usd = float(breakdown["total_cost"]) if breakdown else 0.0
-        cost_by_pid[pid] = cost_by_pid.get(pid, 0.0) + usd
+    for rows in _scoped_rows(conn, sql, where, project_ids):
+        for r in rows:
+            pid = int(r[0])
+            model = r[2] or ""
+            # ``projects.provider`` is the TOOL that wrote the transcript, not
+            # the vendor whose rate card applies — a ``pi`` project logging
+            # ``claude-opus-4-7`` used to bill through OpenAIPricer's
+            # GPT_5_CODEX fallback. ``resolve_pricing_provider`` lets a
+            # definite model→vendor match win while leaving correctly
+            # delegating shells (cursor, cline, copilot, …) untouched.
+            provider = resolve_pricing_provider(r[1], model)
+            speed = r[3] or "standard"
+            tokens = {
+                "input": int(r[4] or 0),
+                "output": int(r[5] or 0),
+                "cache_read": int(r[6] or 0),
+                "cache_creation": int(r[7] or 0),
+            }
+            breakdown = (
+                compute_cost(tokens, model, provider=provider, speed=speed) if model else None
+            )
+            usd = float(breakdown["total_cost"]) if breakdown else 0.0
+            cost_by_pid[pid] = cost_by_pid.get(pid, 0.0) + usd
     return cost_by_pid
+
+
+def _scoped_rows(
+    conn: sqlite3.Connection,
+    sql: str,
+    where: str,
+    project_ids: Iterable[int] | None,
+) -> list[list]:
+    """Run ``sql`` once per id chunk, yielding each chunk's rows.
+
+    ``sql`` carries a single ``{where}`` placeholder; this splices in ``where``
+    plus the project scope per chunk. With ``project_ids=None`` the statement
+    runs once, unfiltered. An empty id set runs nothing — the caller gets no
+    rows, never all of them.
+
+    The scope is expressed as ``m.session_fk IN (SELECT id FROM sessions WHERE
+    project_id IN (…))``, NOT as ``s.project_id IN (…)`` on the join — the same
+    LIST SUBQUERY idiom ``count_project_messages`` and
+    ``get_project_messages_page`` already use, and for the same reason. A
+    predicate on the joined ``sessions`` row can't reach the partitioned
+    ``messages`` VIEW, so the planner materialises all 16 partitions as a
+    co-routine (``SCAN messages_202501`` … ) and filters afterwards; the
+    subquery pushes a ``session_fk`` constraint into each arm, which then
+    seeks its ``(session_fk, seq)`` index. Measured on the 382K-message store,
+    91 uncovered ids: 912ms (join predicate) vs 9ms (list subquery). The two
+    forms are logically identical — ``sessions.id`` is the PK the join matches
+    on — so this is purely a planner concern.
+    """
+    if project_ids is None:
+        return [conn.execute(sql.format(where=where)).fetchall()]
+    out: list[list] = []
+    for chunk in _id_chunks(project_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        scoped = (
+            f"{where} AND m.session_fk IN "
+            f"(SELECT id FROM sessions WHERE project_id IN ({placeholders}))"
+        )
+        out.append(conn.execute(sql.format(where=scoped), chunk).fetchall())
+    return out
 
 
 def get_project(conn: sqlite3.Connection, *, slug: str) -> ProjectRow | None:
@@ -581,7 +678,7 @@ def _global_stats_raw_scan(conn: sqlite3.Connection) -> dict:
     ``messages`` view (~11s on a 200K-message store) — which is exactly why
     :func:`get_global_stats` prefers the mart path when it can.
     """
-    from stackunderflow.infra.costs import compute_cost
+    from stackunderflow.infra.costs import compute_cost, resolve_pricing_provider
 
     row = conn.execute(
         "SELECT MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts, "
@@ -628,7 +725,10 @@ def _global_stats_raw_scan(conn: sqlite3.Connection) -> dict:
     models: dict[str, dict] = {}
     for r in per_day_model:
         day, model, speed = r["day"], r["model"], r["speed"]
-        provider = r["provider"] or "anthropic"
+        # Same vendor-vs-tool resolution ``bulk_project_cost`` applies, so the
+        # Overview total and the project-list total can't disagree about a
+        # cross-vendor row (e.g. a ``pi`` project logging a Claude model).
+        provider = resolve_pricing_provider(r["provider"], model)
         tokens = {
             "input": r["inp"] or 0,
             "output": r["out"] or 0,

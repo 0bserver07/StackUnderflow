@@ -332,10 +332,19 @@ def _compute_projects_payload(
         # bulk SQL helpers — keeps the response shape stable while
         # an in-flight ETL backfill is still working through the
         # store.
+        #
+        # The helpers MUST be scoped to ``uncovered_ids``. Unscoped they
+        # GROUP BY over every message row in the store, so a single
+        # mart-less project (91 of 334 on a real 382K-message store, most
+        # of them carrying no messages at all) turned every
+        # ``include_stats`` request into a full scan of all 16 ``messages``
+        # partitions and hung the endpoint past 180s. Scoped, each
+        # partition seeks its ``(session_fk, seq)`` index instead —
+        # 1141ms → 10ms measured on that store.
         uncovered_ids = {p.id for p in project_rows if p.id not in mart_rows}
         if include_stats and uncovered_ids:
-            lite_stats = queries.bulk_project_lite_stats(conn)
-            cost_by_pid = queries.bulk_project_cost(conn)
+            lite_stats = queries.bulk_project_lite_stats(conn, project_ids=uncovered_ids)
+            cost_by_pid = queries.bulk_project_cost(conn, project_ids=uncovered_ids)
         else:
             lite_stats = {}
             cost_by_pid = {}
@@ -555,14 +564,20 @@ def _fragment_costs_usd(
     (one indexed scan), then the bulk messages fallback only for fragment
     ids the mart doesn't cover (pre-ETL stores). Fragments with no cost
     data anywhere roll up as 0.0.
+
+    The lazy fallback is scoped to exactly those uncovered fragment ids.
+    Unscoped it re-priced every message in the store to answer a worktree
+    roll-up — the same full scan that made ``include_stats`` hang, but on
+    the ``include_stats=false`` path too.
     """
     fragments = [frag for group in folded.values() for frag in group]
     need = {pid for frag in fragments for pid in frag["_ids"]}
     if not mart_loaded and need:
         for row in mart_queries.list_project_mart(conn):
             mart_rows.setdefault(int(row["project_id"]), row)
-    if any(pid not in mart_rows for pid in need) and not cost_by_pid:
-        cost_by_pid = queries.bulk_project_cost(conn)
+    uncovered = {pid for pid in need if pid not in mart_rows}
+    if uncovered and not cost_by_pid:
+        cost_by_pid = queries.bulk_project_cost(conn, project_ids=uncovered)
     costs: dict[str, float] = {}
     for frag in fragments:
         total = 0.0

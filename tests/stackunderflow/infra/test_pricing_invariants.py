@@ -35,7 +35,13 @@ import pytest
 from stackunderflow.etl.marts.daily import DailyMartBuilder
 from stackunderflow.etl.marts.model_day import ModelDayMartBuilder
 from stackunderflow.etl.normalize.claude import ClaudeNormalizer
-from stackunderflow.infra.costs import estimate_cost, is_rate_card_model
+from stackunderflow.infra.costs import (
+    _provider_for_model,
+    estimate_cost,
+    is_rate_card_model,
+    resolve_pricing_provider,
+    vendor_for_model,
+)
 from stackunderflow.routes.pricing import assemble_pricing_health
 from stackunderflow.services.pricing_service import PricingService
 from stackunderflow.store import db, schema
@@ -407,3 +413,52 @@ class TestIntrospectionHelpers:
         status = PricingService.read_cache_status()
         assert status["is_stale"] is True
         assert status["age_days"] is not None and status["age_days"] > 7
+
+
+# ── (d) the adapter provider is not the rate card ────────────────────────────
+#
+# ``projects.provider`` records WHICH TOOL wrote the transcript, not whose
+# rate card applies. ``resolve_pricing_provider`` lets a definite model→vendor
+# match override it, with three guards that stop the override doing harm.
+
+
+@pytest.mark.parametrize(
+    ("stored", "model", "expected", "why"),
+    [
+        # Terminal single-vendor pricers never return None, so a foreign model
+        # is silently billed against their fallback family. Model id wins.
+        ("pi", "claude-opus-4-7", "anthropic", "OpenAI fallback would bill $1.25/$10, not $5/$25"),
+        ("codex", "claude-opus-4-8", "anthropic", "same, via the codex alias"),
+        ("claude", "gpt-5", "openai", "Anthropic would fall back to its Sonnet family"),
+        # No definite match → the recorded provider stands. Re-routing here
+        # would invent Anthropic dollars for a model nobody claims.
+        ("opencode", "deepseek-v4-flash-free", "opencode", "unknown vendor keeps the shell's $0"),
+        ("grok", "grok-4.5", "grok", "no pricer declares grok hints"),
+        # The shell already delegates per model id → unchanged.
+        ("cursor", "claude-4.5-sonnet", "cursor", "CursorPricer delegates claude-* to Anthropic"),
+        ("openclaw", "claude-sonnet-4-6", "openclaw", "same rates either way"),
+        ("antigravity", "gemini-3-pro-preview", "antigravity", "delegates to Gemini"),
+        # Never trade a real number for "I don't know".
+        (
+            "cursor",
+            "gemini-2.5-pro-preview-05-06",
+            "cursor",
+            "GeminiPricer returns None for dated previews; Cursor has an estimate",
+        ),
+        # Degenerate inputs.
+        ("", "gpt-5", "openai", "empty provider defers to the model"),
+        ("claude", "", "claude", "empty model can't override anything"),
+    ],
+)
+def test_resolve_pricing_provider(stored, model, expected, why) -> None:
+    assert resolve_pricing_provider(stored, model) == expected, why
+
+
+def test_vendor_for_model_reports_no_match_instead_of_defaulting() -> None:
+    """The distinction ``_provider_for_model`` can't express."""
+    assert vendor_for_model("deepseek-v4-flash-free") is None
+    assert vendor_for_model("") is None
+    assert vendor_for_model("claude-opus-4-8") == "anthropic"
+    assert vendor_for_model("gpt-5") == "openai"
+    # …and the defaulting wrapper still answers for everything.
+    assert _provider_for_model("deepseek-v4-flash-free") == "anthropic"
