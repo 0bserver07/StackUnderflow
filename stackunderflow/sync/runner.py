@@ -281,7 +281,7 @@ def run_push(
         return cipher.encrypt(plaintext, recipient)
 
     if store is None:
-        store = bucket.s3_store_from_url(identity["bucket_url"], identity["endpoint_url"])
+        store = bucket.store_from_url(identity["bucket_url"], identity["endpoint_url"])
 
     return push(
         conn,
@@ -557,7 +557,7 @@ def run_pull(
         return cipher.decrypt(ciphertext, secret)
 
     if store is None:
-        store = bucket.s3_store_from_url(identity["bucket_url"], identity["endpoint_url"])
+        store = bucket.store_from_url(identity["bucket_url"], identity["endpoint_url"])
 
     return pull(
         conn, store,

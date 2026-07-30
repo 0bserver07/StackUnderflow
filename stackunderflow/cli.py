@@ -1420,12 +1420,21 @@ _SYNC_INSTALL_HINT = (
 )
 
 
-def _sync_missing_deps(*, need_bucket: bool) -> list[str]:
-    """Return the missing optional ``[sync]`` package names (empty = all present)."""
+def _sync_missing_deps(*, need_bucket: bool, bucket_url: str | None = None) -> list[str]:
+    """Return the missing optional ``[sync]`` package names (empty = all present).
+
+    ``bucket_url`` makes the bucket dependency scheme-aware: an ``ssh://``
+    destination talks to the system ``ssh`` binary and never needs ``boto3``.
+    Omitting it keeps the conservative behaviour (assume a bucket is involved).
+    """
     import importlib.util
     missing: list[str] = []
     if importlib.util.find_spec("pyrage") is None:
         missing.append("pyrage")
+    if need_bucket and bucket_url is not None:
+        from stackunderflow.sync.bucket import requires_boto3
+
+        need_bucket = requires_boto3(bucket_url)
     if need_bucket and importlib.util.find_spec("boto3") is None:
         missing.append("boto3")
     return missing
@@ -1467,7 +1476,9 @@ def sync_group():
 
 @sync_group.command("init")
 @click.option("--bucket", "bucket_url", required=True,
-              help="Destination bucket, e.g. s3://my-bucket or s3://my-bucket/prefix")
+              help="Sync destination: s3://my-bucket[/prefix] for any S3-compatible "
+                   "store, or ssh://[user@]host[:port]/abs/path to sync between "
+                   "machines you own with no bucket at all")
 @click.option("--endpoint", "endpoint_url", default=None,
               help="Custom object-store endpoint URL (set it for non-default storage providers)")
 @click.option("--force", is_flag=True, default=False,
@@ -1483,7 +1494,25 @@ def sync_init(bucket_url: str, endpoint_url: str | None, force: bool):
     if _sync_missing_deps(need_bucket=False):
         click.echo(_SYNC_INSTALL_HINT)
         sys.exit(1)
+    from stackunderflow.sync import bucket as _bucket
     from stackunderflow.sync import keys, runner
+
+    # Validate the destination here so a typo fails at `init` rather than at the
+    # first `push`, by which point a key has been generated and shown.
+    if _bucket.scheme_of(bucket_url) not in _bucket.SUPPORTED_SCHEMES:
+        click.echo(
+            f"  Unsupported sync destination: {bucket_url}\n"
+            f"  Expected s3://bucket[/prefix] or ssh://[user@]host[:port]/abs/path"
+        )
+        sys.exit(1)
+    if _bucket.scheme_of(bucket_url) == "ssh":
+        try:
+            from stackunderflow.sync.ssh_store import parse_ssh_url
+
+            parse_ssh_url(bucket_url)
+        except ValueError as exc:
+            click.echo(f"  Invalid ssh destination: {exc}")
+            sys.exit(1)
 
     conn = _open_store()
     try:
@@ -1520,15 +1549,21 @@ def sync_push():
     Idempotent — an unchanged shard is skipped (zero uploads). Exits non-zero on
     any failure so it is safe to script.
     """
-    if _sync_missing_deps(need_bucket=True):
-        click.echo(_SYNC_INSTALL_HINT)
-        sys.exit(1)
     from stackunderflow.sync import runner
 
     conn = _open_store()
     try:
         if not runner.is_enabled(conn):
             click.echo("  Sync is not configured. Run: stackunderflow sync init --bucket s3://your-bucket")
+            sys.exit(1)
+        # Dependency check happens here, not before opening the store, because
+        # whether boto3 is needed depends on the configured destination scheme.
+        _identity = runner.load_identity(conn)
+        if _sync_missing_deps(
+            need_bucket=True,
+            bucket_url=_identity["bucket_url"] if _identity else None,
+        ):
+            click.echo(_SYNC_INSTALL_HINT)
             sys.exit(1)
         try:
             result = runner.run_push(conn, state_dir=_STATE_DIR)
@@ -1558,15 +1593,20 @@ def sync_pull(as_json: bool):
     nothing. Exits non-zero on a hard failure (e.g. bucket unreachable) so it is
     safe to script; per-peer/per-shard problems are reported as warnings, not fatal.
     """
-    if _sync_missing_deps(need_bucket=True):
-        click.echo(_SYNC_INSTALL_HINT)
-        sys.exit(1)
     from stackunderflow.sync import runner
 
     conn = _open_store()
     try:
         if not runner.is_enabled(conn):
             click.echo("  Sync is not configured. Run: stackunderflow sync init --bucket s3://your-bucket")
+            sys.exit(1)
+        # Scheme-aware dep check — see the matching comment in `sync push`.
+        _identity = runner.load_identity(conn)
+        if _sync_missing_deps(
+            need_bucket=True,
+            bucket_url=_identity["bucket_url"] if _identity else None,
+        ):
+            click.echo(_SYNC_INSTALL_HINT)
             sys.exit(1)
         try:
             result = runner.run_pull(conn, state_dir=_STATE_DIR)

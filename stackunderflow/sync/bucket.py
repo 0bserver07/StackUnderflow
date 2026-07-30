@@ -144,3 +144,45 @@ def s3_store_from_url(bucket_url: str, endpoint_url: str | None = None) -> S3Obj
     """Build an :class:`S3ObjectStore` from an ``s3://…`` URL (imports boto3)."""
     bucket, prefix = parse_bucket_url(bucket_url)
     return S3ObjectStore(bucket, key_prefix=prefix, endpoint_url=endpoint_url)
+
+
+SUPPORTED_SCHEMES = ("s3", "ssh")
+
+
+def scheme_of(url: str) -> str:
+    """The transport scheme of a sync destination URL (``""`` when absent)."""
+    return url.split("://", 1)[0].lower() if "://" in url else ""
+
+
+def requires_boto3(url: str) -> bool:
+    """Whether *url* needs the optional ``boto3`` dependency to be usable.
+
+    ``ssh://`` destinations go through the system ``ssh`` binary, so the
+    ``[sync]`` extra's bucket dependency is not needed for them. An unknown
+    scheme answers ``True`` so the caller still gets the install hint rather
+    than a bare import error.
+    """
+    return scheme_of(url) != "ssh"
+
+
+def store_from_url(url: str, endpoint_url: str | None = None):
+    """Build the :class:`ObjectStore` for *url*, dispatching on its scheme.
+
+    ``s3://`` → :class:`S3ObjectStore` (any S3-compatible endpoint).
+    ``ssh://`` → :class:`~stackunderflow.sync.ssh_store.SSHObjectStore`, for
+    syncing between machines you own without a bucket.
+
+    The shard payload is identical either way: ``runner`` encrypts before the
+    store sees it, so the transport never handles plaintext.
+    """
+    scheme = scheme_of(url)
+    if scheme == "ssh":
+        from .ssh_store import ssh_store_from_url
+
+        return ssh_store_from_url(url)
+    if scheme == "s3":
+        return s3_store_from_url(url, endpoint_url)
+    raise ValueError(
+        f"unsupported sync destination {url!r} — expected one of: "
+        + ", ".join(f"{s}://" for s in SUPPORTED_SCHEMES)
+    )
