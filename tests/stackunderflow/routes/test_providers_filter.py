@@ -355,10 +355,10 @@ async def test_messages_multi_provider_same_slug(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.current_log_path", "/x/shared")
 
     # codex is NOT the first-inserted row (claude is) — the old bug returned empty.
-    codex = await get_messages(provider=["codex"])
+    codex = get_messages(provider=["codex"])
     assert codex["total"] >= 1
-    claude = await get_messages(provider=["claude"])
+    claude = get_messages(provider=["claude"])
     assert claude["total"] >= 1
     # A provider not present for this slug → shape-stable empty page.
-    absent = await get_messages(provider=["cursor"])
+    absent = get_messages(provider=["cursor"])
     assert absent["total"] == 0

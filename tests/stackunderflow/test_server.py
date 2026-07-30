@@ -460,7 +460,7 @@ class TestStoreBackedDataRoutes:
         monkeypatch.setattr("stackunderflow.deps.current_log_path", "/fake/path/-missing-proj")
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_stats(timezone_offset=0)
+            get_stats(timezone_offset=0)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -470,7 +470,7 @@ class TestStoreBackedDataRoutes:
 
         monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
         with pytest.raises(HTTPException) as exc_info:
-            await get_stats()
+            get_stats()
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -480,7 +480,7 @@ class TestStoreBackedDataRoutes:
 
         monkeypatch.setattr("stackunderflow.deps.current_log_path", None)
         with pytest.raises(HTTPException) as exc_info:
-            await get_messages()
+            get_messages()
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -510,7 +510,7 @@ class TestStoreBackedDataRoutes:
             return [], {"overview": {}}
 
         with patch("stackunderflow.routes.data.queries.get_project_stats", side_effect=fake_get_project_stats):
-            await get_stats(timezone_offset=0)
+            get_stats(timezone_offset=0)
 
         assert len(called_with) == 1
 

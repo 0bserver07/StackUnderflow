@@ -109,7 +109,7 @@ async def test_route_reconstructs_only_the_page(two_session_store, monkeypatch):
         "parse_record",
         lambda te: (calls.__setitem__("n", calls["n"] + 1) or real(te)),
     )
-    out = await data_route.get_messages(page=1, per_page=50)
+    out = data_route.get_messages(page=1, per_page=50)
     assert len(out["messages"]) == 50
     assert out["total"] == 250
     assert calls["n"] == 50  # not 250
@@ -124,7 +124,7 @@ async def test_route_never_uses_full_materialise_path(two_session_store, monkeyp
         raise AssertionError("get_project_messages (full materialise) must not be called")
 
     monkeypatch.setattr(queries, "get_project_messages", _boom)
-    out = await data_route.get_messages(page=2, per_page=50)
+    out = data_route.get_messages(page=2, per_page=50)
     assert out["page"] == 2
     assert len(out["messages"]) == 50
 
@@ -134,7 +134,7 @@ async def test_route_never_uses_full_materialise_path(two_session_store, monkeyp
 
 @pytest.mark.asyncio
 async def test_page_is_globally_timestamp_ordered(two_session_store):
-    out = await data_route.get_messages(page=1, per_page=10)
+    out = data_route.get_messages(page=1, per_page=10)
     ts = [m["timestamp"] for m in out["messages"]]
     assert ts == sorted(ts)
     # First 10 by global time alternate the two sessions.
@@ -157,7 +157,7 @@ async def test_pages_do_not_overlap_or_skip(two_session_store):
     """Concatenating every page reproduces the full ordered stream exactly."""
     seen: list[str] = []
     for page in range(1, 6):  # 250 / 50 = 5 pages
-        out = await data_route.get_messages(page=page, per_page=50)
+        out = data_route.get_messages(page=page, per_page=50)
         seen.extend(m["uuid"] for m in out["messages"])
     assert len(seen) == 250
     assert len(set(seen)) == 250  # no duplicates → no overlap, no skips
@@ -165,9 +165,9 @@ async def test_pages_do_not_overlap_or_skip(two_session_store):
 
 @pytest.mark.asyncio
 async def test_first_middle_last_partial_pages(two_session_store):
-    first = await data_route.get_messages(page=1, per_page=100)
-    middle = await data_route.get_messages(page=2, per_page=100)
-    last = await data_route.get_messages(page=3, per_page=100)
+    first = data_route.get_messages(page=1, per_page=100)
+    middle = data_route.get_messages(page=2, per_page=100)
+    last = data_route.get_messages(page=3, per_page=100)
     assert (first["start_index"], first["end_index"], len(first["messages"])) == (0, 100, 100)
     assert (middle["start_index"], middle["end_index"], len(middle["messages"])) == (100, 200, 100)
     # Last page is partial: 250 total → 50 rows.
@@ -178,7 +178,7 @@ async def test_first_middle_last_partial_pages(two_session_store):
 
 @pytest.mark.asyncio
 async def test_page_beyond_end_clamps_to_last(two_session_store):
-    out = await data_route.get_messages(page=999, per_page=100)
+    out = data_route.get_messages(page=999, per_page=100)
     assert out["page"] == 3
     assert len(out["messages"]) == 50
     assert out["end_index"] == 250
@@ -190,11 +190,11 @@ async def test_page_beyond_end_clamps_to_last(two_session_store):
 @pytest.mark.asyncio
 async def test_model_filter_paginates_in_sql(two_session_store):
     """Total + page both reflect the model filter, so indices stay aligned."""
-    out = await data_route.get_messages(page=1, per_page=100, model=["claude-opus-4-6"])
+    out = data_route.get_messages(page=1, per_page=100, model=["claude-opus-4-6"])
     assert out["total"] == 125  # only the s1 (opus) messages
     assert len(out["messages"]) == 100
     assert all(m["model"] == "claude-opus-4-6" for m in out["messages"])
-    out2 = await data_route.get_messages(page=2, per_page=100, model=["claude-opus-4-6"])
+    out2 = data_route.get_messages(page=2, per_page=100, model=["claude-opus-4-6"])
     assert len(out2["messages"]) == 25
     assert out2["end_index"] == 125
 
@@ -216,7 +216,7 @@ async def test_existing_project_with_zero_messages(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
 
-    out = await data_route.get_messages(page=1, per_page=100)
+    out = data_route.get_messages(page=1, per_page=100)
     assert out["messages"] == []
     assert out["total"] == 0
     assert out["total_pages"] == 0

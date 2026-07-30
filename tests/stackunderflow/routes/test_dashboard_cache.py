@@ -74,9 +74,9 @@ async def test_hot_hit_returns_same_payload_as_cold_miss(tmp_path, monkeypatch):
         _fake_get_project_stats(calls),
     )
 
-    cold = await data_route.get_dashboard_data()
-    hot1 = await data_route.get_dashboard_data()
-    hot2 = await data_route.get_dashboard_data()
+    cold = data_route.get_dashboard_data()
+    hot1 = data_route.get_dashboard_data()
+    hot2 = data_route.get_dashboard_data()
 
     # heavy work ran exactly once across the three calls
     assert len(calls) == 1, f"expected 1 cold miss, got {len(calls)}"
@@ -104,16 +104,16 @@ async def test_new_session_invalidates_cache(tmp_path, monkeypatch):
         _fake_get_project_stats(calls),
     )
 
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 1
 
     # add a brand new session — signature changes, cache must miss
     _add_session(store_db, project_id, session_id="s2", last_ts="2026-04-26T00:00:00Z", n=2)
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 2, "new session should have invalidated the cache"
 
     # subsequent call hits the cache again
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 2
 
 
@@ -135,7 +135,7 @@ async def test_more_messages_in_existing_session_invalidates(tmp_path, monkeypat
         _fake_get_project_stats(calls),
     )
 
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 1
 
     # bump message_count — same key, but signature differs
@@ -147,7 +147,7 @@ async def test_more_messages_in_existing_session_invalidates(tmp_path, monkeypat
     conn.commit()
     conn.close()
 
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 2, "growing the existing session must invalidate"
 
 
@@ -168,16 +168,16 @@ async def test_explicit_invalidate_drops_entry(tmp_path, monkeypatch):
         _fake_get_project_stats(calls),
     )
 
-    await data_route.get_dashboard_data()
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 1
 
     data_route.invalidate_dashboard_cache(slug)
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 2
 
     data_route.invalidate_dashboard_cache()  # full clear
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     assert len(calls) == 3
 
 
@@ -199,8 +199,8 @@ async def test_tz_offset_is_part_of_cache_key(tmp_path, monkeypatch):
         _fake_get_project_stats(calls),
     )
 
-    await data_route.get_dashboard_data(timezone_offset=0)
-    await data_route.get_dashboard_data(timezone_offset=300)
-    await data_route.get_dashboard_data(timezone_offset=0)
-    await data_route.get_dashboard_data(timezone_offset=300)
+    data_route.get_dashboard_data(timezone_offset=0)
+    data_route.get_dashboard_data(timezone_offset=300)
+    data_route.get_dashboard_data(timezone_offset=0)
+    data_route.get_dashboard_data(timezone_offset=300)
     assert len(calls) == 2, "each tz_offset should miss exactly once"

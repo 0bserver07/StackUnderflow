@@ -100,7 +100,7 @@ async def test_default_strips_heavy_blocks(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats()
+    stats = data_route.get_stats()
 
     # Heavy nested lists emptied — keys still present (shape stability).
     assert stats["user_interactions"]["command_details"] == []
@@ -132,7 +132,7 @@ async def test_details_true_returns_full_body(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats(details=True)
+    stats = data_route.get_stats(details=True)
 
     assert len(stats["user_interactions"]["command_details"]) == 1000
     assert len(stats["errors"]["assistant_details"]) == 5000
@@ -150,7 +150,7 @@ async def test_days_caps_daily_stats(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats(days=7)
+    stats = data_route.get_stats(days=7)
 
     assert len(stats["daily_stats"]) == 7
     # Should keep the *most recent* 7 entries.
@@ -166,7 +166,7 @@ async def test_days_zero_disables_cap(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats(days=0)
+    stats = data_route.get_stats(days=0)
     assert len(stats["daily_stats"]) == 30  # fixture seeds 30 days
 
 
@@ -178,7 +178,7 @@ async def test_default_caps_to_90_days(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats()
+    stats = data_route.get_stats()
     # 30 < 90, so all entries retained.
     assert len(stats["daily_stats"]) == 30
 
@@ -193,7 +193,7 @@ async def test_include_filters_to_named_blocks(tmp_path, monkeypatch):
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats(include=["overview", "models"])
+    stats = data_route.get_stats(include=["overview", "models"])
 
     # Only the named blocks plus currency.
     assert set(stats.keys()) == {"overview", "models", "currency"}
@@ -207,7 +207,7 @@ async def test_include_unknown_blocks_are_silently_ignored(tmp_path, monkeypatch
     _seed_project(store_db, slug)
     _patch_stats(monkeypatch, store_db, slug)
 
-    stats = await data_route.get_stats(include=["overview", "no_such_block"])
+    stats = data_route.get_stats(include=["overview", "no_such_block"])
 
     assert set(stats.keys()) == {"overview", "currency"}
 
@@ -220,7 +220,7 @@ async def test_include_empty_strings_dropped(tmp_path, monkeypatch):
     _patch_stats(monkeypatch, store_db, slug)
 
     # Empty-string includes should be no-ops (not a "return all but nothing").
-    stats = await data_route.get_stats(include=["", "  "])
+    stats = data_route.get_stats(include=["", "  "])
 
     # All blocks preserved when no real keys requested.
     assert "overview" in stats

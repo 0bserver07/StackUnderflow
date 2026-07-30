@@ -42,7 +42,7 @@ def _resolve_project_id(slug: str) -> int:
 
 async def _time_call(tz_offset: int) -> tuple[float, dict, str]:
     t0 = time.perf_counter()
-    payload = await data_route.get_dashboard_data(timezone_offset=tz_offset)
+    payload = data_route.get_dashboard_data(timezone_offset=tz_offset)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     digest = hashlib.md5(body).hexdigest()

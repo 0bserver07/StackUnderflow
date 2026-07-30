@@ -98,7 +98,7 @@ async def test_dashboard_rate_dims_single_provider(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    stats = (await data_route.get_dashboard_data())["statistics"]
+    stats = data_route.get_dashboard_data()["statistics"]
 
     assert stats["cache"]["hit_rate"] == 75.0
     ui = stats["user_interactions"]
@@ -142,7 +142,7 @@ async def test_dashboard_rate_dims_summed_multi_provider(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    stats = (await data_route.get_dashboard_data())["statistics"]
+    stats = data_route.get_dashboard_data()["statistics"]
 
     # hit_rate = (15+5)/(20+10)*100 = 66.7
     assert stats["cache"]["hit_rate"] == 66.7

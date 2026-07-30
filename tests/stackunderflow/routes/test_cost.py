@@ -291,7 +291,7 @@ async def test_dashboard_data_no_longer_carries_cost_keys(tmp_path, monkeypatch)
         lambda conn, *, project_id, tz_offset=0: ([], _fake_stats()),
     )
 
-    resp = await get_dashboard_data()
+    resp = get_dashboard_data()
     stats = resp["statistics"]
     for key in COST_KEYS:
         assert key not in stats, f"dashboard-data still exposes cost key: {key}"

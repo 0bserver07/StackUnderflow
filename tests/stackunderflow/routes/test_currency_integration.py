@@ -335,7 +335,7 @@ async def test_stats_route_converts_nested_daily_costs_to_gbp(gbp_environment, t
         lambda conn, *, project_id, tz_offset=0: ([], stats),
     )
 
-    result = await get_stats()
+    result = get_stats()
 
     assert result["currency"]["rate_from_usd"] == 0.80
     day = result["daily_stats"]["2026-04-01"]

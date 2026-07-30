@@ -85,7 +85,7 @@ async def test_dashboard_overview_dims_from_mart(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     stats = payload["statistics"]
 
     mt = stats["overview"]["message_types"]
@@ -124,7 +124,7 @@ async def test_dashboard_overview_dims_summed_multi_provider(tmp_path, monkeypat
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     stats = payload["statistics"]
     assert stats["overview"]["message_types"]["user"] == 25
     assert stats["overview"]["message_types"]["assistant"] == 22

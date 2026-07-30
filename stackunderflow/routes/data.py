@@ -195,7 +195,7 @@ def _filter_includes(stats: dict, include: set[str]) -> dict:
 
 
 @router.get("/api/stats")
-async def get_stats(
+def get_stats(
     timezone_offset: int = 0,
     days: int | None = None,
     include: Annotated[list[str] | None, Query()] = None,
@@ -216,6 +216,12 @@ async def get_stats(
             ``session_costs``, ``command_costs``, etc). On real stores
             this drops the payload from ~4 MB to ~150 KB. Set ``true``
             to opt back into the legacy "full body" response.
+
+    Declared ``def``, not ``async def``: the body is entirely blocking
+    (sqlite reads + the collector sweep behind ``_project_stats_cached``),
+    so starlette runs the whole handler in its threadpool instead of
+    stalling the event loop for the duration. The connection is opened and
+    closed inside this body, so it never crosses threads.
     """
     log_path = _require_project()
     t0 = time.time()
@@ -255,9 +261,9 @@ async def get_stats(
         if not details:
             _strip_heavy_blocks(stats)
 
-    # COST-7: off the event loop — resolution can touch config.json, the FX
-    # cache file, and (on a lapsed 24h cache) a blocking urlopen.
-    currency = await run_in_threadpool(active_currency_payload)
+    # COST-7: called directly — this whole handler already runs off the event
+    # loop (plain ``def``), and ``active_currency_payload`` is memoized.
+    currency = active_currency_payload()
     if currency["rate_from_usd"] != 1.0:
         _convert_in_place(stats, currency["rate_from_usd"])
     if isinstance(stats, dict):
@@ -272,7 +278,7 @@ async def get_stats(
 
 
 @router.get("/api/dashboard-data")
-async def get_dashboard_data(
+def get_dashboard_data(
     timezone_offset: int = 0,
     provider: Annotated[list[str] | None, Query()] = None,
     model: Annotated[list[str] | None, Query()] = None,
@@ -289,6 +295,11 @@ async def get_dashboard_data(
             inside `models`. The aggregator runs project-wide; we filter the
             top-level `models` map so the model-distribution card respects
             the user's selection.
+
+    Declared ``def``, not ``async def``: every step is blocking (mart reads
+    or, on a gate miss, the full aggregator pipeline), so starlette hands
+    the handler to its threadpool. ``_DASHBOARD_CACHE_LOCK`` is load-bearing
+    now that concurrent requests really do run in parallel.
     """
     log_path = _require_project()
     t0 = time.time()
@@ -798,7 +809,7 @@ def _empty_messages_page(*, page: int, per_page: int) -> dict:
 
 
 @router.get("/api/messages")
-async def get_messages(
+def get_messages(
     page: int = 1,
     per_page: int = MESSAGES_DEFAULT_PER_PAGE,
     limit: int | None = None,
@@ -830,6 +841,10 @@ async def get_messages(
             that excludes it returns a shape-stable empty envelope.
         model: Optional repeated query param scoping by model id. Filtered
             after the store read since the messages table has no model index.
+
+    Declared ``def``, not ``async def``: the COUNT + page fetch are blocking
+    sqlite calls, so starlette runs the handler in its threadpool. The
+    connection lives and dies inside this body.
     """
     log_path = _require_project()
     t0 = time.time()
@@ -1085,8 +1100,20 @@ def _refresh_current_project_impl(log_path: str) -> JSONResponse:
     )
 
 
-async def refresh_all_projects(request: dict):
-    """Refresh all projects — runs an incremental ingest pass via the session store."""
+@router.post("/api/refresh")
+async def refresh_data(request: dict):
+    """Refresh project data — runs an incremental ingest pass then returns status.
+
+    Stays ``async`` because it awaits ``refresh_all_projects``; the blocking
+    work is pushed to the threadpool explicitly.
+    """
+    if not deps.current_log_path:
+        return await refresh_all_projects(request)
+    return await run_in_threadpool(_refresh_current_project_impl, deps.current_log_path)
+
+
+def _refresh_all_projects_impl(request: dict) -> JSONResponse:
+    """Blocking body of the all-projects refresh — see ``refresh_all_projects``."""
     t0 = time.time()
     conn = db.connect(deps.store_path)
     try:
@@ -1116,3 +1143,12 @@ async def refresh_all_projects(request: dict):
             "total_projects": total_new,
         }
     )
+
+
+async def refresh_all_projects(request: dict):
+    """Refresh all projects — runs an incremental ingest pass via the session store.
+
+    Keeps its ``async`` signature (it is awaited directly by ``refresh_data``
+    and by tests) but runs the blocking ingest pass off the event loop.
+    """
+    return await run_in_threadpool(_refresh_all_projects_impl, request)

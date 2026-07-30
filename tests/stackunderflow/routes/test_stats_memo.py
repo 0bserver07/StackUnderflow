@@ -169,8 +169,8 @@ async def test_api_stats_shares_the_memoized_sweep(tmp_path, monkeypatch):
 
     from stackunderflow.routes.data import get_stats
 
-    first = await get_stats()
-    second = await get_stats()
+    first = get_stats()
+    second = get_stats()
     assert calls["n"] == 1  # warm /api/stats call came from the memo
     # details=False strips the heavy nested lists on the returned copy …
     assert first["user_interactions"]["tool_count_distribution"] == {}
@@ -270,16 +270,10 @@ async def test_refresh_paths_drop_the_stats_memo(tmp_path, monkeypatch):
     # Pretend ingest found new rows for this slug without actually writing any,
     # so the sessions signature stays put and ONLY the explicit invalidation can
     # bust the memo.
-    monkeypatch.setattr(data_routes, "run_ingest", lambda conn, adapters: {slug: 3})
+    # ``run_ingest`` is provider-keyed in reality; the refresh handler now sums
+    # the values, so any non-zero entry stands in for "this pass ingested rows".
+    monkeypatch.setattr(data_routes, "run_ingest", lambda conn, adapters: {"claude": 3})
     monkeypatch.setattr(data_routes, "registered", lambda: {})
-    monkeypatch.setattr(data_routes, "_reindex_services", lambda *a, **kw: None)
-    # ``get_project_messages`` runs ``get_project_stats`` internally (queries.py),
-    # so leaving it live would add a phantom tick to the counter from the
-    # reindex block rather than from the memo.
-    monkeypatch.setattr(
-        "stackunderflow.routes.data.queries.get_project_messages",
-        lambda conn, *, project_id, limit=None: [],
-    )
 
     await get_cost_data()
     await get_cost_data()

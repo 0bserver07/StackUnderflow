@@ -224,7 +224,7 @@ async def test_dashboard_data_overview_from_project_mart(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     stats = payload["statistics"]
     assert stats["overview"]["total_tokens"]["input"] == 1000
     assert stats["overview"]["total_cost"] == pytest.approx(1.25)
@@ -255,7 +255,7 @@ async def test_dashboard_data_daily_stats_from_daily_mart(tmp_path, monkeypatch)
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     daily = payload["statistics"]["daily_stats"]
     # daily_mart_by_day emits the legacy `Record<string, DailyData>` shape
     # the frontend type contract (and the legacy aggregator) expects.
@@ -281,7 +281,7 @@ async def test_dashboard_data_models_from_daily_mart(tmp_path, monkeypatch):
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     models = payload["statistics"]["models"]
     assert set(models) == {"claude-sonnet-4-5", "gpt-5"}
     assert models["claude-sonnet-4-5"]["count"] == 2
@@ -321,9 +321,9 @@ async def test_dashboard_data_under_100ms_with_100k_daily_mart_rows(tmp_path, mo
     monkeypatch.setattr("stackunderflow.deps.store_path", store_db)
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
-    await data_route.get_dashboard_data()
+    data_route.get_dashboard_data()
     t0 = time.perf_counter()
-    payload = await data_route.get_dashboard_data()
+    payload = data_route.get_dashboard_data()
     elapsed_ms = (time.perf_counter() - t0) * 1000
     assert payload["statistics"]["overview"]["total_cost"] == pytest.approx(42.0)
     assert elapsed_ms < 100, f"slow: {elapsed_ms:.1f}ms"
@@ -425,7 +425,7 @@ async def test_dashboard_data_merges_multi_provider_mart_rows(tmp_path, monkeypa
     monkeypatch.setattr("stackunderflow.routes.data.queries.get_project_stats", _boom_pipeline)
     data_route.invalidate_dashboard_cache()
 
-    stats = (await data_route.get_dashboard_data())["statistics"]
+    stats = data_route.get_dashboard_data()["statistics"]
 
     ov = stats["overview"]
     assert ov["total_tokens"]["input"] == 1500  # 1000 + 500
@@ -530,7 +530,7 @@ async def test_dashboard_data_falls_through_when_a_provider_is_unmaterialised(tm
     monkeypatch.setattr("stackunderflow.routes.data.queries.get_project_stats", _fake)
     data_route.invalidate_dashboard_cache()
 
-    stats = (await data_route.get_dashboard_data())["statistics"]
+    stats = data_route.get_dashboard_data()["statistics"]
 
     assert len(calls) == 1, "expected the full pipeline to run exactly once"
     assert sorted(calls[0]) == sorted([pid_c, pid_x]), "both ids passed to pipeline"
@@ -581,7 +581,7 @@ async def test_dashboard_data_tools_and_cache_sourced_from_marts(tmp_path, monke
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    stats = (await data_route.get_dashboard_data())["statistics"]
+    stats = data_route.get_dashboard_data()["statistics"]
 
     # RANK 7: Tool-use charts read stats.tools.usage_counts — now real.
     assert stats["tools"]["usage_counts"] == {"Read": 9, "Bash": 5}
@@ -631,7 +631,7 @@ async def test_dashboard_data_hourly_pattern_is_dict_not_list(tmp_path, monkeypa
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    hourly = (await data_route.get_dashboard_data())["statistics"]["hourly_pattern"]
+    hourly = data_route.get_dashboard_data()["statistics"]["hourly_pattern"]
     assert isinstance(hourly, dict)
     assert hourly == {"messages": {}, "tokens": {}}
 
@@ -688,7 +688,7 @@ async def test_single_provider_mart_path_matches_full_pipeline(tmp_path, monkeyp
     monkeypatch.setattr("stackunderflow.deps.current_log_path", f"/fake/{slug}")
     data_route.invalidate_dashboard_cache()
 
-    mart_ov = (await data_route.get_dashboard_data())["statistics"]["overview"]
+    mart_ov = data_route.get_dashboard_data()["statistics"]["overview"]
     pipe_ov = pipeline_stats["overview"]
 
     for key in ("input", "output", "cache_read", "cache_creation"):
@@ -769,7 +769,7 @@ async def test_multi_provider_mart_path_matches_pipeline_token_totals(tmp_path, 
     monkeypatch.setattr("stackunderflow.routes.data.queries.get_project_stats", _boom_pipeline)
     data_route.invalidate_dashboard_cache()
 
-    mart_ov = (await data_route.get_dashboard_data())["statistics"]["overview"]
+    mart_ov = data_route.get_dashboard_data()["statistics"]["overview"]
     pipe_ov = pipeline_stats["overview"]
 
     for key in ("input", "output", "cache_read", "cache_creation"):

@@ -312,7 +312,7 @@ async def test_dashboard_data_drops_command_details(tmp_path, monkeypatch):
         lambda conn, *, project_id, tz_offset=0: ([], fake_stats),
     )
 
-    resp = await get_dashboard_data()
+    resp = get_dashboard_data()
     ui = resp["statistics"]["user_interactions"]
     assert "command_details" not in ui, "command_details leaked into dashboard-data"
     # §D2: tool_count_distribution moved to /api/tool-distribution.
