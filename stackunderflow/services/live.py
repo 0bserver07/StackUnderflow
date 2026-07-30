@@ -97,13 +97,27 @@ def recent_events(
     since_id: int = 0,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return ``usage_events`` rows with ``id > since_id``, oldest first.
+    """Return the *newest* ``limit`` ``usage_events`` rows with ``id >
+    since_id``, re-sorted oldest first.
 
     The SSE handler calls this every poll cycle with the highest id it
     has emitted to-date. Limit is a defence against a long-stalled
     stream resuming and trying to fan out 10K rows in one chunk —
     individual SSE messages stay small enough to flush in a single
     write.
+
+    Skip-ahead: the fetch is ``ORDER BY id DESC LIMIT ?`` and the page is
+    reversed here, so a large backlog yields its *newest* rows instead of
+    draining oldest-first. A 231K-row backlog at 50 rows/s took 77 minutes
+    (and ~119MB) per open tab to reach "now" through a client ring buffer
+    that only keeps the last 100 rows — every one of those rows was
+    evicted before the user could see it. Emitting newest-first-by-page
+    means one cycle catches up. The intermediate rows are **deliberately
+    skipped**; the live tab is a tail, not a log reader.
+
+    The returned page is still ascending by id so the caller's
+    ``max(watermark, row_id)`` lands on the true maximum and the UI's
+    merge (which assumes each batch arrives oldest-first) stays sorted.
     """
     if not _table_exists(conn, "usage_events"):
         return []
@@ -116,11 +130,11 @@ def recent_events(
         "  FROM usage_events e "
         "  LEFT JOIN projects p ON p.id = e.project_id "
         " WHERE e.id > ? "
-        " ORDER BY e.id "
+        " ORDER BY e.id DESC "
         " LIMIT ?",
         (int(since_id), int(limit)),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in reversed(rows)]
 
 
 def recent_tool_calls(
@@ -129,10 +143,15 @@ def recent_tool_calls(
     since_id: int = 0,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return ``message_tool_mart`` rows with ``id > since_id``, oldest first.
+    """Return the *newest* ``limit`` ``message_tool_mart`` rows with
+    ``id > since_id``, re-sorted oldest first.
 
     Joined to ``projects`` so the stream payload carries a human-friendly
     project name without a follow-up round-trip.
+
+    Same skip-ahead contract as :func:`recent_events`: ``ORDER BY id DESC
+    LIMIT ?`` then reverse, so a backlog is caught up in one cycle and the
+    page still arrives ascending for the caller's watermark + the UI merge.
     """
     if not _table_exists(conn, "message_tool_mart"):
         return []
@@ -143,11 +162,11 @@ def recent_tool_calls(
         "  FROM message_tool_mart t "
         "  LEFT JOIN projects p ON p.id = t.project_id "
         " WHERE t.id > ? "
-        " ORDER BY t.id "
+        " ORDER BY t.id DESC "
         " LIMIT ?",
         (int(since_id), int(limit)),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in reversed(rows)]
 
 
 # ── burn rate ───────────────────────────────────────────────────────────

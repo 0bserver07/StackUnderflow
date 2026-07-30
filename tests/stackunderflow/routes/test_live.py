@@ -14,6 +14,7 @@ Two surfaces:
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from typing import AsyncIterator
 
@@ -24,8 +25,10 @@ from fastapi.testclient import TestClient
 import stackunderflow.deps as deps
 from stackunderflow.routes import live as live_routes
 from stackunderflow.routes.live import (
+    MAX_PER_CYCLE,
     _format_sse,
     _stream_loop,
+    get_live_stats,
     router as live_router,
 )
 from stackunderflow.services import live as live_svc
@@ -188,6 +191,22 @@ class TestSseFormat:
         body = json.loads(out.split("data: ", 1)[1].rstrip())
         assert body == {"type": "burn_tick", "x": 1}
 
+    def test_format_sse_omits_id_line_when_no_event_id(self):
+        out = _format_sse("burn_tick", {"type": "burn_tick"})
+        assert not any(line.startswith("id:") for line in out.splitlines())
+
+    def test_format_sse_emits_id_line_after_event_line(self):
+        """``id:`` sits between ``event:`` and ``data:`` — EventSource keeps the
+        last one and replays it as ``Last-Event-ID`` on reconnect."""
+        out = _format_sse("event", {"type": "event"}, event_id="12:7")
+        lines = out.splitlines()
+        assert lines[0] == "event: event"
+        assert lines[1] == "id: 12:7"
+        assert lines[2].startswith("data: ")
+        # The existing parser keys off the ``event:`` prefix — still first.
+        assert out.startswith("event: ")
+        assert _parse_sse([out]) == [("event", {"type": "event"})]
+
 
 # ── /api/live/stream — _stream_loop generator ──────────────────────────
 
@@ -226,6 +245,16 @@ def _parse_sse(chunks: list[str]) -> list[tuple[str, dict]]:
                 data = json.loads(line[len("data: ") :])
         if ev is not None and data is not None:
             out.append((ev, data))
+    return out
+
+
+def _sse_ids(chunks: list[str]) -> list[str]:
+    """Every ``id:`` value, in emission order (absent lines are skipped)."""
+    out: list[str] = []
+    for c in chunks:
+        for line in c.splitlines():
+            if line.startswith("id: "):
+                out.append(line[len("id: ") :])
     return out
 
 
@@ -373,3 +402,161 @@ class TestStatsTimezone:
         # +120 min: event shares the local day with "now" → counted today.
         body2 = client.get("/api/live/stats?timezone_offset=120").json()
         assert body2["burn"]["today_cost"] == pytest.approx(1.0)
+
+
+# ── /api/live/stats — blocking snapshot runs off the event loop ────────
+
+
+class TestStatsOffEventLoop:
+    @pytest.mark.asyncio
+    async def test_snapshot_runs_in_a_worker_thread(self, tmp_path, monkeypatch):
+        """The ~380ms snapshot must not run on the event-loop thread —
+        ``run_in_threadpool`` dispatches it to a worker (same pattern, and same
+        assertion, as ``routes/projects``' mart path)."""
+        store = tmp_path / "store.db"
+        c = db.connect(store)
+        schema.apply(c)
+        c.close()
+        monkeypatch.setattr(deps, "store_path", store)
+        monkeypatch.setattr(deps, "watcher_handle", None, raising=False)
+
+        captured: dict[str, int] = {}
+        real_snapshot = live_svc.snapshot
+
+        def spy(conn, **kwargs):
+            captured["tid"] = threading.get_ident()
+            return real_snapshot(conn, **kwargs)
+
+        monkeypatch.setattr(live_routes.live_svc, "snapshot", spy)
+        loop_tid = threading.get_ident()
+        body = await get_live_stats(timezone_offset=0)
+
+        assert captured.get("tid") is not None, "blocking body never ran"
+        assert captured["tid"] != loop_tid, "snapshot ran on the event-loop thread"
+        assert set(body.keys()) == {"burn", "tool_latency", "watermarks", "watcher"}
+
+    @pytest.mark.asyncio
+    async def test_connection_is_opened_inside_the_worker(self, tmp_path, monkeypatch):
+        """``db.connect`` leaves ``check_same_thread=True``, so a connection
+        opened on the loop thread and used in the worker would raise
+        ``sqlite3.ProgrammingError``. Pin that the open happens in the worker."""
+        store = tmp_path / "store.db"
+        c = db.connect(store)
+        schema.apply(c)
+        c.close()
+        monkeypatch.setattr(deps, "store_path", store)
+        monkeypatch.setattr(deps, "watcher_handle", None, raising=False)
+
+        opened: dict[str, int] = {}
+        real_open = live_routes._open_conn
+
+        def spy_open():
+            opened["tid"] = threading.get_ident()
+            return real_open()
+
+        monkeypatch.setattr(live_routes, "_open_conn", spy_open)
+        loop_tid = threading.get_ident()
+        await get_live_stats()
+
+        assert opened.get("tid") is not None, "_open_conn never ran"
+        assert opened["tid"] != loop_tid, "connection was opened on the event-loop thread"
+
+    def test_watcher_probe_still_runs_on_the_loop(self, app_client, monkeypatch):
+        """Only the store work is offloaded — ``watcher.running`` is a cheap
+        in-process probe and stays on the response path."""
+        client, _ = app_client
+        body = client.get("/api/live/stats").json()
+        assert body["watcher"]["running"] == "unknown"
+
+
+# ── /api/live/stream — backlog skip-ahead + resumable ids ──────────────
+
+
+class _BacklogRequest:
+    """Request stub that drops ``n_rows`` new events into the store just before
+    the loop's first read, so one cycle faces a backlog larger than the cap."""
+
+    def __init__(self, store, n_rows: int) -> None:
+        self._store = store
+        self._n = n_rows
+        self.calls = 0
+        self.ids: list[int] = []
+
+    async def is_disconnected(self) -> bool:
+        self.calls += 1
+        if self.calls == 1:
+            c = db.connect(self._store)
+            pid = c.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+            sfk = c.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
+            for i in range(self._n):
+                m = _message(c, session_fk=sfk)
+                self.ids.append(_event(c, source_message_fk=m, project_id=pid, cost_usd=float(i)))
+            c.commit()
+            c.close()
+        return False
+
+
+class TestBacklogSkipAhead:
+    @pytest.mark.asyncio
+    async def test_one_cycle_emits_only_the_newest_page_and_jumps_the_watermark(self, store):
+        """A backlog bigger than ``MAX_PER_CYCLE`` is **intentionally** skipped:
+        the cycle emits the newest ``MAX_PER_CYCLE`` rows (ascending) and the
+        watermark lands on the true maximum, so the older rows never emit.
+
+        This is the documented, deliberate gap — draining oldest-first took 77
+        minutes on a 231K backlog while the UI keeps only the last 100 rows.
+        """
+        conn = db.connect(store)
+        pid = _project(conn)
+        _session(conn, project_id=pid)
+        conn.commit()
+        conn.close()
+
+        backlog = MAX_PER_CYCLE + 50
+        req = _BacklogRequest(store, backlog)
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=1))
+        events = _parse_sse(chunks)
+
+        emitted = [p["payload"]["id"] for ev, p in events if ev == "event"]
+        assert len(emitted) == MAX_PER_CYCLE, f"expected one capped page, got {len(emitted)}"
+        # Newest page, not the oldest — the first 50 ids are skipped for good.
+        assert emitted == sorted(emitted), "batch must arrive ascending for the UI merge"
+        assert emitted == req.ids[-MAX_PER_CYCLE:]
+        skipped = set(req.ids[:50])
+        assert not skipped & set(emitted), "skipped rows must not be emitted"
+        # Watermark jumped to the true max, so the next cycle re-reads nothing.
+        assert emitted[-1] == max(req.ids)
+
+    @pytest.mark.asyncio
+    async def test_watermark_ids_track_the_max_and_ready_seeds_them(self, store):
+        """``id:`` carries ``"<event_id>:<tool_call_id>"`` — the resume pair.
+        ``ready`` seeds it; each emitted row advances its half."""
+        conn = db.connect(store)
+        pid = _project(conn)
+        _session(conn, project_id=pid)
+        conn.commit()
+        conn.close()
+
+        backlog = MAX_PER_CYCLE + 50
+        req = _BacklogRequest(store, backlog)
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=999, max_iterations=1))
+        ids = _sse_ids(chunks)
+
+        assert ids, "no id: lines emitted"
+        assert ids[0] == "0:0", "ready must seed the watermark pair from an empty store"
+        # Last id == the true max event id, tool watermark untouched.
+        assert ids[-1] == f"{max(req.ids)}:0"
+        # Monotonic in the event half.
+        event_halves = [int(i.split(":")[0]) for i in ids]
+        assert event_halves == sorted(event_halves)
+
+    @pytest.mark.asyncio
+    async def test_burn_tick_carries_no_id(self, store):
+        """Only watermark-moving messages get an ``id:`` — a burn tick doesn't
+        move either watermark, so replaying it would resume from nowhere."""
+        req = _FakeRequest(disconnect_after_iters=1)
+        chunks = await _drain(_stream_loop(req, poll_interval=0.01, burn_interval=0.0, max_iterations=2))
+        for c in chunks:
+            if "event: burn_tick" in c:
+                assert "id: " not in c
+        assert any("event: burn_tick" in c for c in chunks), "no burn tick emitted"

@@ -12,7 +12,11 @@ SSE wire format
 
 Each message is a standard ``data: <json>\\n\\n`` block with an
 explicit ``event:`` line so the browser's ``EventSource`` can
-``addEventListener("tool_call", …)``-dispatch them. Payload shape::
+``addEventListener("tool_call", …)``-dispatch them. Watermark-moving
+messages (``ready``, ``event``, ``tool_call``) also carry an ``id:`` line
+holding ``"<event_id>:<tool_call_id>"`` — the pair of ``since_id``
+watermarks the loop resumes from — which ``EventSource`` replays as
+``Last-Event-ID`` on reconnect. Payload shape::
 
     {"type": "event", "ts": "...", "payload": {…usage_events row…}}
     {"type": "tool_call", "ts": "...", "payload": {…message_tool_mart row…}}
@@ -38,7 +42,9 @@ the per-tool-call streams). The handler:
    ``request.is_disconnected()`` and we honour it on every slice.
 3. Caps each cycle's emission at ``MAX_PER_CYCLE`` rows per stream
    (events, tool_calls) so a backfill doesn't fan out a megabyte in one
-   tick — the next cycle picks up from the new watermark.
+   tick. The cap takes the *newest* rows and jumps the watermark to the
+   maximum, so a large backlog is skipped rather than drained — see the
+   ``MAX_PER_CYCLE`` comment for why that is the intended behaviour.
 4. Emits a ``burn_tick`` every ``BURN_INTERVAL_SECONDS`` (5s per spec).
 5. On any exception inside the loop, logs and exits cleanly — the
    client sees the connection drop and reconnects on its own
@@ -80,7 +86,17 @@ POLL_INTERVAL_SECONDS = 2.0
 BURN_INTERVAL_SECONDS = 5.0
 
 # Cap per-cycle emission so a backfill burst doesn't fan out a 50KB
-# message in a single tick. The next cycle picks up the rest.
+# message in a single tick.
+#
+# The next cycle does NOT pick up the rest: ``live_svc.recent_events`` /
+# ``recent_tool_calls`` fetch the *newest* ``MAX_PER_CYCLE`` rows above the
+# watermark and the loop then advances the watermark to the true maximum, so
+# anything older in a large backlog is **intentionally skipped**. That is the
+# fix, not a bug: draining a 231K-row backlog oldest-first at 50 rows/s took
+# 77 minutes and ~119MB per open tab, and the UI keeps only the last 100 rows
+# anyway — every skipped row would have been evicted from the client ring
+# buffer long before it was rendered. The live tab is a tail. Historical rows
+# live in the Sessions / Cost tabs, which read the store directly.
 MAX_PER_CYCLE = 100
 
 # Smaller sleep slices so a client disconnect breaks out fast.
@@ -162,9 +178,30 @@ def _format_sse(event_name: str, payload: dict[str, Any], *, event_id: str | Non
     code can dispatch on type without having to parse the payload's
     inner ``type`` field. The inner ``type`` is kept too so non-browser
     consumers (curl + jq) can read the stream as plain JSON-lines.
+
+    ``event_id`` (optional) emits an ``id:`` line right after ``event:``.
+    ``EventSource`` stores the last one it saw and replays it as the
+    ``Last-Event-ID`` request header on auto-reconnect, so the id carries the
+    stream's resume point: ``"<event_id>:<tool_call_id>"``, the two
+    ``since_id`` watermarks this loop advances. Omitted (``None``) for
+    messages that don't move a watermark.
     """
     body = json.dumps(payload, default=str)
-    return f"event: {event_name}\ndata: {body}\n\n"
+    head = f"event: {event_name}\n"
+    if event_id is not None:
+        head += f"id: {event_id}\n"
+    return f"{head}data: {body}\n\n"
+
+
+def _stream_id(event_id: int, tool_call_id: int) -> str:
+    """Compose the resumable SSE id from the two stream watermarks.
+
+    One stream carries two independent id sequences (``usage_events`` and
+    ``message_tool_mart``), so a single scalar can't describe the resume
+    point — the id is ``"<event_id>:<tool_call_id>"``, exactly the pair the
+    next cycle passes as ``since_id``.
+    """
+    return f"{int(event_id)}:{int(tool_call_id)}"
 
 
 async def _stream_loop(
@@ -217,6 +254,7 @@ async def _stream_loop(
                     "burn_interval_seconds": burn_interval,
                 },
             },
+            event_id=_stream_id(seed_event_id, seed_tool_id),
         )
 
         last_event_id = seed_event_id
@@ -264,7 +302,11 @@ async def _stream_loop(
                 new_tools = []
                 burn = None
 
+            # Both batches arrive ascending by id (the service reverses its
+            # DESC page), so emitting in order keeps the UI's two-pointer
+            # merge sorted and leaves the watermark on the true maximum.
             for row in new_events:
+                last_event_id = max(last_event_id, int(row["id"]))
                 yield _format_sse(
                     "event",
                     {
@@ -272,10 +314,11 @@ async def _stream_loop(
                         "ts": row.get("ts") or now.isoformat(),
                         "payload": row,
                     },
+                    event_id=_stream_id(last_event_id, last_tool_id),
                 )
-                last_event_id = max(last_event_id, int(row["id"]))
 
             for row in new_tools:
+                last_tool_id = max(last_tool_id, int(row["id"]))
                 yield _format_sse(
                     "tool_call",
                     {
@@ -283,8 +326,8 @@ async def _stream_loop(
                         "ts": row.get("ts") or now.isoformat(),
                         "payload": row,
                     },
+                    event_id=_stream_id(last_event_id, last_tool_id),
                 )
-                last_tool_id = max(last_tool_id, int(row["id"]))
 
             if burn is not None:
                 yield _format_sse(
