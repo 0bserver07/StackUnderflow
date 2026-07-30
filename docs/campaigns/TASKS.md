@@ -104,7 +104,18 @@ Against the real store: 348,452 messages / 3,396 sessions / 305 projects /
 | `/api/cost-data` | 4.23s | **0.084s** | cache works — 50× |
 | `/api/stats` | 4.31s | **4.03s** | **no warm benefit** |
 | `/api/stats?days=30` | 4.05s | 4.17s | capping days doesn't help |
-| `/api/projects?include_stats=true` | **0.042–0.059s** | — | was >180s HANG; fixed `8a83ccb` (scoped fallback, list-subquery shape), measured on a fresh instance, HTTP 200, all 303 rows with stats |
+| `/api/projects?include_stats=true` | **0.017–0.021s** | — | was >180s HANG. Two independent fixes: scoped fallback `8a83ccb` (42–59ms with 91 uncovered), then mart seed + backfill (`c7c14a8`, coverage 334/334) puts it on the pure mart path. **Live old-code 8095 server: 43ms, no restart needed** — data-only fix. |
+| `/api/stats` (chimera, warm) | 5.19s cold | **0.078–0.122s** | was 4.03s warm (no benefit); `fd23228` rides the RANK-11 memo, ingest-signature invalidation |
+
+P0+P1 closed 2026-07-30 ~00:15. Coverage verified read-only (334/334/0
+uncovered; 91 seeded rows). Remaining recorded trades: seeded rows render
+blank stats blocks (dates/counts None — needs a read-side semantic call:
+surface dims `total_records` as the message count? derive dates from
+messages?); legacy history dims land in `total_assistant_messages` despite
+being user-role rows (pre-existing classifier semantics, first visible now);
+the 12 pre-existing codex ghost rows keep their (now-seeded) listings —
+purging them is a maintainer decision; `stackunderflow-ui` `api.ts` ETL
+status type lacks the new `coverage` key (P3 candidate).
 
 **Finding worth a task: `/api/stats` costs ~4s on every single call and does not
 cache**, while `/api/cost-data` drops to 84ms warm. On the biggest project this is
