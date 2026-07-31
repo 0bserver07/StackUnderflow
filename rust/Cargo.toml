@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "parity"]
+
+# Versions are maintainer-only (CLAUDE.md / AGENTS.md, and docs/specs/rust-port.md
+# §5 restates it for this branch). Every crate in this workspace stays at 0.0.0
+# for the whole campaign; no agent moves it, not even a -dev suffix.
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.45", features = ["derive"] }
+# DEVIATION from docs/specs/rust-port.md §3, which asks for
+# features = ["bundled", "fts5"]: rusqlite has no `fts5` feature (its full list
+# is bundled / vtab / series / window / …). FTS5 arrives with `bundled`, which
+# compiles libsqlite3-sys with SQLITE_ENABLE_FTS5. Asserted rather than assumed
+# — see stax-core's `the_bundled_engine_has_fts5_compiled_in` test.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+stax-core = { path = "crates/stax-core" }
+
+[profile.release]
+lto = true
+codegen-units = 1

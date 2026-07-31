@@ -1,0 +1,10 @@
+[package]
+name = "stax-parity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "stax-parity"
+path = "src/main.rs"
