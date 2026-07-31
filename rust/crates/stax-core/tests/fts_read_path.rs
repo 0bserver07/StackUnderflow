@@ -604,10 +604,7 @@ fn worked_unions_the_tool_and_content_halves_and_carries_clustering() {
         &conn,
         Some(&idx),
         "cache",
-        None,
-        None,
-        20,
-        0.5,
+        &queries::ActionWorked::new(None, None, 20, 0.5),
     )
     .expect("query");
 
@@ -630,14 +627,15 @@ fn worked_falls_back_when_the_index_is_unpopulated() {
         &conn,
         Some(&empty),
         "cache",
-        None,
-        None,
-        20,
-        0.5,
+        &queries::ActionWorked::new(None, None, 20, 0.5),
     )
     .expect("query");
-    let direct = queries::find_sessions_where_action_worked(&conn, "cache", None, None, 20, 0.5)
-        .expect("query");
+    let direct = queries::find_sessions_where_action_worked(
+        &conn,
+        "cache",
+        &queries::ActionWorked::new(None, None, 20, 0.5),
+    )
+    .expect("query");
     assert_eq!(ids(&routed), ids(&direct));
 }
 
@@ -650,10 +648,7 @@ fn an_empty_action_is_empty_before_the_index_is_touched() {
         &conn,
         Some(&idx),
         "   ",
-        None,
-        None,
-        20,
-        0.5,
+        &queries::ActionWorked::new(None, None, 20, 0.5),
     )
     .expect("query");
     assert!(matches.is_empty());

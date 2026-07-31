@@ -64,7 +64,7 @@ pub enum Format {
 /// The error text is clap's to render (D-2's precedent: parser-owned messages
 /// differ, exit code and stdout do not) — Click says
 /// `Invalid value for '--limit': '-x' is not a valid integer.`
-fn py_int(raw: &str) -> Result<PyInt, String> {
+pub(crate) fn py_int(raw: &str) -> Result<PyInt, String> {
     PyInt::parse(raw).ok_or_else(|| "is not a valid integer".to_string())
 }
 
@@ -617,10 +617,12 @@ fn run_worked(
         conn,
         env.index.as_ref(),
         action,
-        slug.as_deref(),
-        options.since.as_deref(),
-        options.limit_i64(),
-        stax_core::queries::outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
+        &queries::ActionWorked::new(
+            slug.as_deref(),
+            options.since.as_deref(),
+            options.limit_i64(),
+            stax_core::queries::outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
+        ),
     ) {
         Ok(matches) => matches,
         Err(error) => {
@@ -856,7 +858,7 @@ pub(crate) fn rows(sessions: &[SessionMatch]) -> Vec<Value> {
 /// `stax-core` cannot depend on `serde_json` (it is the bedrock crate and the
 /// contract lives one layer up), so the two models meet here. `preserve_order`
 /// is on, so object key order survives.
-fn to_serde(value: &pyjson::Value) -> Value {
+pub(crate) fn to_serde(value: &pyjson::Value) -> Value {
     match value {
         pyjson::Value::Null => Value::Null,
         pyjson::Value::Bool(flag) => Value::Bool(*flag),
@@ -930,6 +932,21 @@ pub(crate) fn memory_fail(
 
 // ── text rendering ───────────────────────────────────────────────────────────
 
+/// `cli._emit_sessions`'s three text-only display switches.
+///
+/// The `memory` namespace only ever sets `show_snippet`; the back-compat
+/// top-level aliases (`search-past-decisions --use-embeddings`,
+/// `find-sessions-where-action-worked -v`) are what the other two exist for.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmitFlags {
+    /// Append the matched content excerpt under each row.
+    pub show_snippet: bool,
+    /// Render the outcome label as `worked (confidence 0.80)`.
+    pub show_outcome_confidence: bool,
+    /// Append `cos=X.XX` to the headline when the row carries a score.
+    pub show_embedding_score: bool,
+}
+
 /// `cli._emit_sessions` in text mode.
 #[must_use]
 pub fn emit_sessions(
@@ -938,6 +955,27 @@ pub fn emit_sessions(
     more_available: usize,
     title: &str,
     show_snippet: bool,
+) -> String {
+    emit_sessions_with(
+        sessions,
+        truncated,
+        more_available,
+        title,
+        EmitFlags {
+            show_snippet,
+            ..EmitFlags::default()
+        },
+    )
+}
+
+/// `cli._emit_sessions` in text mode, with every display switch exposed.
+#[must_use]
+pub fn emit_sessions_with(
+    sessions: &[SessionMatch],
+    truncated: bool,
+    more_available: usize,
+    title: &str,
+    flags: EmitFlags,
 ) -> String {
     let mut out = String::new();
     if sessions.is_empty() {
@@ -949,8 +987,8 @@ pub fn emit_sessions(
     }
     out.push_str(&format!("{title}  ({} session(s))\n\n", sessions.len()));
     for row in sessions {
-        out.push_str(&format!(
-            "  [{}] {}…  {}  msgs={}  ${:.4}\n",
+        let mut head = format!(
+            "  [{}] {}…  {}  msgs={}  ${:.4}",
             row.provider,
             clip(&row.session_id, 12),
             if row.last_ts.is_empty() {
@@ -960,7 +998,16 @@ pub fn emit_sessions(
             },
             row.message_count,
             row.cost_usd,
-        ));
+        );
+        // `if score is not None` — a `--use-embeddings` run with no daemon has
+        // no scores at all, so the headline is unchanged there.
+        if flags.show_embedding_score
+            && let Some(score) = row.embedding_score
+        {
+            head.push_str(&format!("  cos={score:.2}"));
+        }
+        out.push_str(&head);
+        out.push('\n');
         out.push_str(&format!(
             "      {}  {}\n",
             row.project_slug, row.project_path
@@ -968,13 +1015,21 @@ pub fn emit_sessions(
         if let Some(fields) = &row.outcome
             && !fields.outcome.is_empty()
         {
+            let label = if flags.show_outcome_confidence {
+                format!(
+                    "{} (confidence {:.2})",
+                    fields.outcome, fields.outcome_confidence
+                )
+            } else {
+                fields.outcome.clone()
+            };
             out.push_str(&format!(
                 "      → {}: {}\n",
-                fields.outcome,
+                label,
                 ellipsize(&fields.outcome_evidence, 200)
             ));
         }
-        if show_snippet
+        if flags.show_snippet
             && let Some(snippet) = &row.snippet
             && !snippet.is_empty()
         {
@@ -989,7 +1044,7 @@ pub fn emit_sessions(
 }
 
 /// `cli._truncation_footer`.
-fn truncation_footer(more_available: usize) -> String {
+pub(crate) fn truncation_footer(more_available: usize) -> String {
     let noun = if more_available == 1 {
         "session"
     } else {
@@ -1074,12 +1129,12 @@ fn text_of(row: &Value, key: &str) -> String {
 }
 
 /// `text[:width]` in Python's character units.
-fn clip(text: &str, width: usize) -> String {
+pub(crate) fn clip(text: &str, width: usize) -> String {
     text.chars().take(width).collect()
 }
 
 /// `text[:limit - 3] + "…"` when longer than `limit` — the reference's shape.
-fn ellipsize(text: &str, limit: usize) -> String {
+pub(crate) fn ellipsize(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }

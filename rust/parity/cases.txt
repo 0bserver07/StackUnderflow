@@ -15,6 +15,9 @@
 #   D2-*   the `memory ask` matrix (PARITY-wave1-memory-ask.md)
 #   V-*    the wave-1 adversarial audit's 12 out-of-matrix divergences (DIV-010)
 #   F-*    the FTS-branch rows this P0 port added (RS-1-007)
+#   A-*    the five top-level discovery ALIASES (RS-1-010..013, RS-1-020) —
+#          `find-*` / `search-past-decisions`, which are NOT `memory`
+#          subcommands and emit the original `{"sessions": [...]}` shape
 
 # ── memory decisions ─────────────────────────────────────────────────────────
 B-dec-text          | repo | memory decisions cache
@@ -119,6 +122,64 @@ R-res-prov-prefix   | repo | resume -p cod --json
 R-res-limit1        | repo | resume --limit-per-provider 1 --json
 R-res-tmp           | tmp  | resume --json
 R-res-home          | repo | resume ~/.claude --json
+
+# ── find-sessions-in-path (alias, RS-1-011) ──────────────────────────────────
+A-inp-text          | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow
+A-inp-json          | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --format json
+A-inp-provider      | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --provider codex --format json
+A-inp-prov-claude   | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --provider claude --format json
+A-inp-prov-empty    | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --provider '' --format json
+A-inp-budget150     | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --context-budget 150 --format json
+A-inp-since-limit   | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --since 7d --limit 2 --format json
+A-inp-limit-neg     | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --limit -1 --format json
+A-inp-since-bad     | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --since notadate
+A-inp-cwd-tmp       | tmp  | find-sessions-in-path . --format json
+
+# ── find-sessions-touching-file (alias, RS-1-012) ────────────────────────────
+A-tch-text          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
+A-tch-json          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
+A-tch-mode-read     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --mode read
+A-tch-mode-write    | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --mode write --format json
+A-tch-mode-any2     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --mode any --limit 2
+A-tch-budget250     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --context-budget 250 --format json
+A-tch-limit3        | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --limit 3
+A-tch-tilde         | repo | find-sessions-touching-file '~/.claude/settings.json' --format json
+A-tch-relative      | repo | find-sessions-touching-file rust/ci.sh --format json
+
+# ── search-past-decisions (alias, RS-1-020) ──────────────────────────────────
+A-dec-text          | repo | search-past-decisions cache
+A-dec-json          | repo | search-past-decisions cache --format json
+A-dec-proj-limit3   | repo | search-past-decisions cache --limit 3 --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --format json
+A-dec-empty         | repo | search-past-decisions '' --format json
+A-dec-punct         | repo | search-past-decisions '!!!' --format json
+A-dec-phrase        | repo | search-past-decisions 'cache lookup' --format json
+A-dec-unicode       | repo | search-past-decisions café --format json
+A-dec-since-budget0 | repo | search-past-decisions cache --since 30d --context-budget 0 --format json
+A-dec-limit-huge    | repo | search-past-decisions cache --limit 99999999999999999999 --format json
+A-dec-since-bad     | repo | search-past-decisions cache --since notadate
+A-dec-emb-json      | repo | search-past-decisions cache --use-embeddings --format json
+A-dec-emb-text      | repo | search-past-decisions cache --use-embeddings
+A-dec-emb-budget    | repo | search-past-decisions cache --use-embeddings --context-budget 300 --format json
+A-dec-cwd-py        | py   | search-past-decisions pytest --format json
+
+# ── find-sessions-where-action-worked (alias, RS-1-013) ──────────────────────
+A-wrk-text          | repo | find-sessions-where-action-worked pytest
+A-wrk-json          | repo | find-sessions-where-action-worked pytest --format json
+A-wrk-verbose       | repo | find-sessions-where-action-worked pytest -v
+A-wrk-file          | repo | find-sessions-where-action-worked pytest --file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
+A-wrk-minconf0      | repo | find-sessions-where-action-worked Edit --min-confidence 0.0 --format json
+A-wrk-minconf9      | repo | find-sessions-where-action-worked pytest --min-confidence 0.9 --format json
+A-wrk-phrase        | repo | find-sessions-where-action-worked 'add caching' --format json
+A-wrk-since-bad     | repo | find-sessions-where-action-worked pytest --since notadate
+
+# ── find-failure-modes-for-file (alias, RS-1-010) ────────────────────────────
+A-fail-text         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
+A-fail-json         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --min-confidence 0.0 --format json
+A-fail-verbose      | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py -v
+A-fail-since        | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --since 30d --format json
+A-fail-relative     | repo | find-failure-modes-for-file rust/ci.sh
+A-fail-conf-space   | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --min-confidence ' 0.0 ' --format json
+A-fail-since-bad    | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --since notadate
 
 # ── Rust-only commands (round-trip, no Python counterpart) ───────────────────
 rust:anchor-roundtrip  | repo | anchor

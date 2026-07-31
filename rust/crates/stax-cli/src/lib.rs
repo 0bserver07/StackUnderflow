@@ -11,6 +11,8 @@
 
 mod anchor;
 mod ask;
+mod discovery;
+mod embeddings;
 mod memory;
 mod resume;
 mod status;
@@ -20,6 +22,10 @@ use clap::{Parser, Subcommand};
 
 pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};
 pub use ask::{hybrid_env_from_process, run_ask};
+pub use discovery::{
+    ActionWorkedArgs, FailureModesArgs, InPathArgs, PastDecisionsArgs, TouchingFileArgs,
+    run_action_worked, run_failure_modes, run_in_path, run_past_decisions, run_touching_file,
+};
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
 pub use status::{StatusArgs, render_status, run_status};
@@ -38,6 +44,15 @@ pub struct Cli {
 pub enum Command {
     /// Keyed, append-only campaign state that survives a context rotation.
     Anchor(AnchorArgs),
+    /// List sessions where editing FILE led to a follow-up correction.
+    FindFailureModesForFile(FailureModesArgs),
+    /// List sessions whose project root is PATH or any ancestor of PATH.
+    FindSessionsInPath(InPathArgs),
+    /// List sessions where FILE shows up in tool calls or message text.
+    FindSessionsTouchingFile(TouchingFileArgs),
+    /// List sessions where ACTION was performed and the next user turn
+    /// confirmed it worked.
+    FindSessionsWhereActionWorked(ActionWorkedArgs),
     /// Ask the local store what past sessions already know.
     Memory(MemoryArgs),
     /// Session/resume ids for every coding agent under PATH (default: cwd).
@@ -50,6 +65,9 @@ pub enum Command {
     /// agents whose CLI has no known resume command still list their session
     /// ids.
     Resume(ResumeArgs),
+    /// Substring-search QUERY across past message content; return matching
+    /// sessions.
+    SearchPastDecisions(PastDecisionsArgs),
     /// Open the store read-only and print its schema version and row counts.
     Status(StatusArgs),
 }
@@ -70,8 +88,13 @@ pub fn run() -> Result<()> {
 pub fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Anchor(args) => run_anchor(args),
+        Command::FindFailureModesForFile(args) => run_failure_modes(args),
+        Command::FindSessionsInPath(args) => run_in_path(args),
+        Command::FindSessionsTouchingFile(args) => run_touching_file(args),
+        Command::FindSessionsWhereActionWorked(args) => run_action_worked(args),
         Command::Memory(args) => run_memory(args),
         Command::Resume(args) => run_resume(args),
+        Command::SearchPastDecisions(args) => run_past_decisions(args),
         Command::Status(args) => run_status(args),
     }
 }

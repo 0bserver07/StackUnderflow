@@ -125,16 +125,7 @@ impl HybridEnv {
         // Python's `_resolve_url` does not strip, and the probe URL is used raw.
         let probe_url =
             truthy(ollama_url_env).map_or_else(|| DEFAULT_OLLAMA_URL.to_owned(), ToOwned::to_owned);
-        // `_resolve_endpoints(None)`: cloud first (rstrip'd), then local unless
-        // the cloud entry already *is* local.
-        let cloud = truthy(cloud_url_env).or_else(|| truthy(ollama_url_env));
-        let mut endpoints: Vec<(String, Option<String>)> = Vec::new();
-        if let Some(cloud) = cloud {
-            endpoints.push((cloud.trim_end_matches('/').to_owned(), api_key.clone()));
-        }
-        if endpoints.iter().all(|(base, _)| base != DEFAULT_OLLAMA_URL) {
-            endpoints.push((DEFAULT_OLLAMA_URL.to_owned(), None));
-        }
+        let endpoints = resolve_endpoints(ollama_url_env, cloud_url_env, api_key.as_deref());
         Self {
             index_path: store_path
                 .and_then(Path::parent)
@@ -168,6 +159,70 @@ impl HybridEnv {
 /// `os.environ.get(NAME) or <default>` — an empty string counts as unset.
 fn truthy(raw: Option<&str>) -> Option<&str> {
     raw.filter(|value| !value.is_empty())
+}
+
+/// `embeddings._resolve_endpoints(None)` — cloud first (rstrip'd), then local
+/// unless the cloud entry already *is* local.
+///
+/// [`HybridEnv`] keeps only the first entry because `_vector_ranked_ids` embeds
+/// through `_resolve_endpoints()[0]`; `embed_texts` instead walks the whole list
+/// and takes the first one that answers, so the full list is what it needs.
+#[must_use]
+pub fn resolve_endpoints(
+    ollama_url_env: Option<&str>,
+    cloud_url_env: Option<&str>,
+    api_key: Option<&str>,
+) -> Vec<(String, Option<String>)> {
+    let cloud = truthy(cloud_url_env).or_else(|| truthy(ollama_url_env));
+    let mut endpoints: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(cloud) = cloud {
+        endpoints.push((
+            cloud.trim_end_matches('/').to_owned(),
+            api_key.map(ToOwned::to_owned),
+        ));
+    }
+    if endpoints.iter().all(|(base, _)| base != DEFAULT_OLLAMA_URL) {
+        endpoints.push((DEFAULT_OLLAMA_URL.to_owned(), None));
+    }
+    endpoints
+}
+
+/// `embeddings.active_endpoint()` — the first endpoint whose `/api/tags` says 200.
+#[must_use]
+pub fn active_endpoint(
+    endpoints: &[(String, Option<String>)],
+) -> Option<&(String, Option<String>)> {
+    endpoints
+        .iter()
+        .find(|(base, key)| ollama_reachable(base, key.as_deref()))
+}
+
+/// `embeddings.embed_texts(texts, model=…)` — one vector per input that worked.
+///
+/// Three properties are the contract, and each one is load-bearing for the
+/// `search-past-decisions --use-embeddings` caller:
+///
+/// * `[]` in ⇒ `Some(vec![])` out — never a probe.
+/// * A row that fails to embed is **absent** from the result rather than
+///   zero-filled, so the caller can tell partial failure from total: it length-
+///   checks the batch and discards a short answer.
+/// * Nothing reachable, or every row failed ⇒ `None`, which the caller reads as
+///   "embeddings unavailable" and degrades to substring ranking, silently.
+#[must_use]
+pub fn embed_texts(
+    texts: &[String],
+    model: &str,
+    endpoints: &[(String, Option<String>)],
+) -> Option<Vec<Vec<f64>>> {
+    if texts.is_empty() {
+        return Some(Vec::new());
+    }
+    let (base, api_key) = active_endpoint(endpoints)?;
+    let out: Vec<Vec<f64>> = texts
+        .iter()
+        .filter_map(|text| embed_one(base, model, text, api_key.as_deref()))
+        .collect();
+    if out.is_empty() { None } else { Some(out) }
 }
 
 // ── what `ask` produces ──────────────────────────────────────────────────────

@@ -1707,6 +1707,20 @@ pub mod rank {
         })
     }
 
+    /// `discovery._relevance_embeddings` — the cosine already on the match.
+    ///
+    /// `0.0` for a row that has no score (Ollama down, an unembeddable message,
+    /// an orphan row). Those rows sink to the bottom of the rank but stay in the
+    /// surface, which is why `--use-embeddings` with no daemon still answers.
+    #[must_use]
+    pub fn relevance_embeddings() -> Relevance {
+        Box::new(|session_match: &SessionMatch| {
+            session_match
+                .embedding_score
+                .map_or(0.0, |score| score.clamp(0.0, 1.0))
+        })
+    }
+
     /// `discovery._build_rank_fn` with the clock and the weights injected.
     #[must_use]
     pub fn rank_of(
@@ -2635,7 +2649,7 @@ pub fn find_sessions_touching_file(
     file_path: &str,
     limit: impl Into<Limit>,
 ) -> Result<Vec<SessionMatch>> {
-    Ok(touching_file(conn, file_path, limit.into(), None)?.0)
+    Ok(touching_file(conn, file_path, limit.into(), outcome::Mode::Any, None)?.0)
 }
 
 /// `discovery.find_sessions_touching_file(context_budget=N)` — a [`BudgetedResult`].
@@ -2648,15 +2662,35 @@ pub fn find_sessions_touching_file_budgeted(
     limit: impl Into<Limit>,
     budget: &rank::Budget,
 ) -> Result<BudgetedResult> {
-    let (_, budgeted) = touching_file(conn, file_path, limit.into(), Some(budget))?;
+    find_sessions_touching_file_budgeted_mode(conn, file_path, limit, outcome::Mode::Any, budget)
+}
+
+/// `discovery.find_sessions_touching_file(mode=…, context_budget=N)`.
+///
+/// The `read` / `write` modes are the `find-sessions-touching-file --mode`
+/// surface: the SQL filter narrows to `tools_json LIKE ?` alone (no
+/// `content_text` half at all) and the Python refinement pass only asks the
+/// tool-arg matcher, so a free-form mention of the path in prose never matches.
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file_budgeted_mode(
+    conn: &Connection,
+    file_path: &str,
+    limit: impl Into<Limit>,
+    mode: outcome::Mode,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    let (_, budgeted) = touching_file(conn, file_path, limit.into(), mode, Some(budget))?;
     budgeted.context("a budgeted touching-file query must produce a budgeted result")
 }
 
-/// The shared body — `mode="any"`, `search_service=None`.
+/// The shared body — `search_service=None`.
 fn touching_file(
     conn: &Connection,
     file_path: &str,
     limit: Limit,
+    mode: outcome::Mode,
     budget: Option<&rank::Budget>,
 ) -> Result<(Vec<SessionMatch>, Option<BudgetedResult>)> {
     let resolved = paths::resolve_input_path(file_path);
@@ -2664,15 +2698,31 @@ fn touching_file(
 
     // Stage 1 — one combined scan, refined in Python (here: in Rust). Both
     // halves of the OR are leading-wildcard, which is the full-scan §6b warns
-    // about; it is the reference's shape and stays.
-    let mut stmt = conn.prepare(
+    // about; it is the reference's shape and stays. `read`/`write` drop the
+    // `content_text` half from the SQL entirely, exactly as the reference does.
+    let any_mode = mode == outcome::Mode::Any;
+    let sql = if any_mode {
         "SELECT s.id AS sfk, s.session_id AS sid, m.tools_json, m.content_text \
          FROM messages m \
          JOIN sessions s ON s.id = m.session_fk \
-         WHERE (m.tools_json LIKE ? OR m.content_text LIKE ?)",
-    )?;
+         WHERE (m.tools_json LIKE ? OR m.content_text LIKE ?)"
+    } else {
+        "SELECT s.id AS sfk, s.session_id AS sid, m.tools_json, m.content_text \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         WHERE m.tools_json LIKE ?"
+    };
+    let params: Vec<rusqlite::types::Value> = if any_mode {
+        vec![
+            rusqlite::types::Value::Text(pattern.clone()),
+            rusqlite::types::Value::Text(pattern),
+        ]
+    } else {
+        vec![rusqlite::types::Value::Text(pattern)]
+    };
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt
-        .query_map([&pattern, &pattern], |row| {
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -2687,6 +2737,16 @@ fn touching_file(
     let mut match_kind_by_sid: HashMap<String, &'static str> = HashMap::new();
     for (sfk, sid, tools_json, content_text) in &rows {
         if seen_fks.contains(sfk) {
+            continue;
+        }
+        if !any_mode {
+            // `read` / `write`: only the tool-arg matcher decides, and a row
+            // that fails it is skipped outright (`continue` in the reference).
+            if outcome::tools_json_mentions_file(tools_json.as_deref(), &resolved, mode) {
+                seen_fks.insert(*sfk);
+                matched_session_fks.push(*sfk);
+                match_kind_by_sid.insert(sid.clone(), "tool");
+            }
             continue;
         }
         if outcome::tools_json_mentions_file(tools_json.as_deref(), &resolved, outcome::Mode::Any) {
@@ -2753,8 +2813,57 @@ pub fn search_past_decisions(
     limit: i64,
     budget: &rank::Budget,
 ) -> Result<BudgetedResult> {
+    search_past_decisions_scored(conn, query, project, since, limit, budget, None)
+}
+
+/// `{session_fk: cosine in [0, 1]}` for the first-hit `(session_fk, message_id)`
+/// pairs the substring scan collected, in insertion order.
+///
+/// A callback because the scorer talks HTTP to Ollama and `stax-core::queries`
+/// is the store layer — the CLI injects [`crate::ask::embed_texts`] behind it.
+pub type EmbeddingScorer<'a> = &'a dyn Fn(&Connection, &str, &[(i64, i64)]) -> HashMap<i64, f64>;
+
+/// `discovery.search_past_decisions(use_embeddings=True)` — the `--use-embeddings`
+/// re-rank of `search-past-decisions`.
+///
+/// Same substring pre-filter, same rows; what changes is the *relevance* term
+/// (cosine instead of needle density) and the `embedding_score` key each row
+/// gains. When the scorer returns nothing — Ollama down, which is the common
+/// case — every relevance is `0.0` and every row keeps the 9-key shape, so the
+/// only visible effect is a recency+cost ordering under a budget. That silent
+/// degradation is the reference's design, not an accident.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn search_past_decisions_embeddings(
+    conn: &Connection,
+    query: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    budget: &rank::Budget,
+    scorer: EmbeddingScorer<'_>,
+) -> Result<BudgetedResult> {
+    search_past_decisions_scored(conn, query, project, since, limit, budget, Some(scorer))
+}
+
+fn search_past_decisions_scored(
+    conn: &Connection,
+    query: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    budget: &rank::Budget,
+    scorer: Option<EmbeddingScorer<'_>>,
+) -> Result<BudgetedResult> {
     if query.trim().is_empty() {
-        let relevance = rank::relevance_decisions(HashMap::new());
+        // `rank_fn` is chosen before the empty-query floor in the reference, so
+        // the embeddings branch's floor uses the embeddings relevance too. No
+        // observable difference on an empty result — recorded for the reader.
+        let relevance = match scorer {
+            Some(_) => rank::relevance_embeddings(),
+            None => rank::relevance_decisions(HashMap::new()),
+        };
         return Ok(rank::budgeted(Vec::new(), budget, &relevance));
     }
     let needle = query.trim();
@@ -2798,7 +2907,10 @@ pub fn search_past_decisions(
     let mut snippet_by_sfk: HashMap<i64, Option<String>> = HashMap::new();
     let mut occ_by_sid: HashMap<String, i64> = HashMap::new();
     let mut msg_count_by_sfk: HashMap<i64, i64> = HashMap::new();
-    for (_mid, sfk, sid, content_text) in &hit_rows {
+    // `first_mid_by_sfk` in the reference: one `(session_fk, message_id)` pair
+    // per session, in first-hit order, which is the embed batch's order.
+    let mut first_mid_by_sfk: Vec<(i64, i64)> = Vec::new();
+    for (mid, sfk, sid, content_text) in &hit_rows {
         let content = content_text.as_deref().unwrap_or("");
         *occ_by_sid.entry(sid.clone()).or_insert(0) +=
             count_occurrences(&content.to_lowercase(), &needle_lower);
@@ -2808,9 +2920,21 @@ pub fn search_past_decisions(
         }
         snippet_order.push(*sfk);
         snippet_by_sfk.insert(*sfk, build_snippet(content, needle));
+        first_mid_by_sfk.push((*sfk, *mid));
     }
 
-    let relevance = rank::relevance_decisions(occ_by_sid);
+    // `if use_embeddings and first_mid_by_sfk:` — the scores are computed before
+    // the rows are hydrated, because they replace the relevance term as well as
+    // populating `embedding_score`.
+    let score_by_sfk: HashMap<i64, f64> = match scorer {
+        Some(scorer) if !first_mid_by_sfk.is_empty() => scorer(conn, needle, &first_mid_by_sfk),
+        _ => HashMap::new(),
+    };
+
+    let relevance = match scorer {
+        Some(_) => rank::relevance_embeddings(),
+        None => rank::relevance_decisions(occ_by_sid),
+    };
     if snippet_order.is_empty() {
         return Ok(rank::budgeted(Vec::new(), budget, &relevance));
     }
@@ -2835,6 +2959,12 @@ pub fn search_past_decisions(
     let mut out: Vec<SessionMatch> = Vec::new();
     for (session_fk, mut session_match) in rows {
         session_match.snippet = snippet_by_sfk.get(&session_fk).cloned().flatten();
+        // `score_by_sfk.get(sfk) if use_embeddings else None` — an absent score
+        // stays `None`, so the row keeps its 9-key shape and ranks 0.0.
+        session_match.embedding_score = scorer
+            .is_some()
+            .then(|| score_by_sfk.get(&session_fk).copied())
+            .flatten();
         let more = msg_count_by_sfk.get(&session_fk).copied().unwrap_or(1) - 1;
         session_match.more_matches_in_session = (more != 0).then_some(more);
         out.push(session_match);
@@ -2846,6 +2976,45 @@ pub fn search_past_decisions(
     Ok(rank::budgeted(out, budget, &relevance))
 }
 
+/// Everything `discovery.find_sessions_where_action_worked` takes past `action`.
+///
+/// A struct rather than five positional arguments because the indexed variant
+/// would otherwise cross clippy's argument bound — and because `project` and
+/// `file_path` are both `Option<&str>` and swapping them at a call site would
+/// compile silently.
+#[derive(Debug, Clone, Copy)]
+pub struct ActionWorked<'a> {
+    /// `projects.slug` filter.
+    pub project: Option<&'a str>,
+    /// Narrow to sessions that *also* mention this file, anywhere.
+    pub file_path: Option<&'a str>,
+    /// `--since`.
+    pub since: Option<&'a str>,
+    /// `--limit`; `<= 0` means no cap.
+    pub limit: i64,
+    /// `--min-confidence`, clamped into `[0.0, 1.0]` here as the reference does.
+    pub min_confidence: f64,
+}
+
+impl<'a> ActionWorked<'a> {
+    /// The defaults every `memory worked` call uses: no file narrowing.
+    #[must_use]
+    pub fn new(
+        project: Option<&'a str>,
+        since: Option<&'a str>,
+        limit: i64,
+        min_confidence: f64,
+    ) -> Self {
+        Self {
+            project,
+            file_path: None,
+            since,
+            limit,
+            min_confidence,
+        }
+    }
+}
+
 /// `discovery.find_sessions_where_action_worked` — the `search_service=None` branch.
 ///
 /// # Errors
@@ -2853,24 +3022,21 @@ pub fn search_past_decisions(
 pub fn find_sessions_where_action_worked(
     conn: &Connection,
     action: &str,
-    project: Option<&str>,
-    since: Option<&str>,
-    limit: i64,
-    min_confidence: f64,
+    filters: &ActionWorked<'_>,
 ) -> Result<Vec<SessionMatch>> {
     if action.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let min_confidence = min_confidence.clamp(0.0, 1.0);
+    let min_confidence = filters.min_confidence.clamp(0.0, 1.0);
     let needle = action.trim();
-    let since_iso = pytime::parse_since(since)?;
+    let since_iso = pytime::parse_since(filters.since)?;
 
     let mut where_clauses = vec!["(m.tools_json LIKE ? OR m.content_text LIKE ?)".to_string()];
     let mut params: Vec<rusqlite::types::Value> = vec![
         rusqlite::types::Value::Text(format!("%{needle}%")),
         rusqlite::types::Value::Text(format!("%{needle}%")),
     ];
-    if let Some(slug) = project_filter(project) {
+    if let Some(slug) = project_filter(filters.project) {
         where_clauses.push("p.slug = ?".to_string());
         params.push(rusqlite::types::Value::Text(slug.to_string()));
     }
@@ -2887,13 +3053,57 @@ pub fn find_sessions_where_action_worked(
         where_clauses.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
-    let anchor_seq_by_fk = stmt
+    let mut anchor_seq_by_fk = stmt
         .query_map(rusqlite::params_from_iter(params.iter()), |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    outcome::outcome_matches_for(conn, &anchor_seq_by_fk, &["worked"], limit, min_confidence)
+    narrow_to_file(conn, &mut anchor_seq_by_fk, filters.file_path, &mut None)?;
+
+    outcome::outcome_matches_for(
+        conn,
+        &anchor_seq_by_fk,
+        &["worked"],
+        filters.limit,
+        min_confidence,
+    )
+}
+
+/// `if file_path and anchor_seq_by_fk:` — intersect with the sessions that
+/// mention the resolved path anywhere (tool args *or* free text).
+///
+/// A no-op when no `--file` was given or the candidate set is already empty,
+/// which is load-bearing: the reference guards on both, so `--file` never runs
+/// its own full scan for a query that matched nothing.
+fn narrow_to_file(
+    conn: &Connection,
+    anchors: &mut Vec<(i64, i64)>,
+    file_path: Option<&str>,
+    more_by_fk: &mut Option<&mut HashMap<i64, i64>>,
+) -> Result<()> {
+    let Some(file_path) = file_path.filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    if anchors.is_empty() {
+        return Ok(());
+    }
+    let resolved = paths::resolve_input_path(file_path);
+    let pattern = format!("%{resolved}%");
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT s.id AS sfk FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         WHERE m.tools_json LIKE ? OR m.content_text LIKE ?",
+    )?;
+    let touched: HashSet<i64> = stmt
+        .query_map([&pattern, &pattern], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    anchors.retain(|(fk, _)| touched.contains(fk));
+    if let Some(more) = more_by_fk.as_mut() {
+        let kept: HashSet<i64> = anchors.iter().map(|(fk, _)| *fk).collect();
+        more.retain(|fk, _| kept.contains(fk));
+    }
+    Ok(())
 }
 
 /// `discovery.find_failure_modes_for_file`.
@@ -3393,12 +3603,12 @@ pub fn find_sessions_touching_file_indexed(
 ) -> Result<Vec<SessionMatch>> {
     let limit: Limit = limit.into();
     let Some(index) = index else {
-        return Ok(touching_file(conn, file_path, limit, None)?.0);
+        return Ok(touching_file(conn, file_path, limit, outcome::Mode::Any, None)?.0);
     };
     let resolved = paths::resolve_input_path(file_path);
     match touching_file_fts(conn, index, &resolved, limit, None)? {
         Some((matches, _)) => Ok(matches),
-        None => Ok(touching_file(conn, file_path, limit, None)?.0),
+        None => Ok(touching_file(conn, file_path, limit, outcome::Mode::Any, None)?.0),
     }
 }
 
@@ -3413,13 +3623,40 @@ pub fn find_sessions_touching_file_budgeted_indexed(
     limit: impl Into<Limit>,
     budget: &rank::Budget,
 ) -> Result<BudgetedResult> {
+    find_sessions_touching_file_budgeted_indexed_mode(
+        conn,
+        index,
+        file_path,
+        limit,
+        outcome::Mode::Any,
+        budget,
+    )
+}
+
+/// `discovery.find_sessions_touching_file(mode=…, context_budget=N)` with an index.
+///
+/// The FTS content half is `mode == "any"` only — the reference gates the
+/// routing on it (`if mode == "any" and search_service is not None`), so
+/// `--mode read` / `--mode write` take the store path even on a populated
+/// index. That asymmetry is the contract, not an oversight.
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file_budgeted_indexed_mode(
+    conn: &Connection,
+    index: Option<&crate::lexical::LexicalIndex>,
+    file_path: &str,
+    limit: impl Into<Limit>,
+    mode: outcome::Mode,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
     let limit: Limit = limit.into();
     let fallback = |conn: &Connection| -> Result<BudgetedResult> {
-        touching_file(conn, file_path, limit, Some(budget))?
+        touching_file(conn, file_path, limit, mode, Some(budget))?
             .1
             .context("a budgeted touching-file query must produce a budgeted result")
     };
-    let Some(index) = index else {
+    let Some(index) = index.filter(|_| mode == outcome::Mode::Any) else {
         return fallback(conn);
     };
     let resolved = paths::resolve_input_path(file_path);
@@ -3562,41 +3799,21 @@ pub fn find_sessions_where_action_worked_indexed(
     conn: &Connection,
     index: Option<&crate::lexical::LexicalIndex>,
     action: &str,
-    project: Option<&str>,
-    since: Option<&str>,
-    limit: i64,
-    min_confidence: f64,
+    filters: &ActionWorked<'_>,
 ) -> Result<Vec<SessionMatch>> {
     let Some(index) = index else {
-        return find_sessions_where_action_worked(
-            conn,
-            action,
-            project,
-            since,
-            limit,
-            min_confidence,
-        );
+        return find_sessions_where_action_worked(conn, action, filters);
     };
     if action.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let clamped = min_confidence.clamp(0.0, 1.0);
+    let clamped = filters.min_confidence.clamp(0.0, 1.0);
     let needle = action.trim();
-    let since_iso = pytime::parse_since(since)?;
+    let since_iso = pytime::parse_since(filters.since)?;
 
-    match action_worked_fts(
-        conn,
-        index,
-        needle,
-        project,
-        since_iso.as_deref(),
-        limit,
-        clamped,
-    )? {
+    match action_worked_fts(conn, index, needle, filters, since_iso.as_deref(), clamped)? {
         Some(matches) => Ok(matches),
-        None => {
-            find_sessions_where_action_worked(conn, action, project, since, limit, min_confidence)
-        }
+        None => find_sessions_where_action_worked(conn, action, filters),
     }
 }
 
@@ -3611,11 +3828,11 @@ fn action_worked_fts(
     conn: &Connection,
     index: &crate::lexical::LexicalIndex,
     needle: &str,
-    project: Option<&str>,
+    filters: &ActionWorked<'_>,
     since_iso: Option<&str>,
-    limit: i64,
     min_confidence: f64,
 ) -> Result<Option<Vec<SessionMatch>>> {
+    let (project, limit) = (filters.project, filters.limit);
     let Some(candidate_k) = crate::lexical::candidate_k(limit) else {
         return Ok(None); // the overflowing bind → caller runs the combined scan
     };
@@ -3716,6 +3933,15 @@ fn action_worked_fts(
         }
     }
 
+    // `--file` narrowing, after both halves are unioned — the reference does it
+    // here too, so a file filter never changes which half found a session.
+    narrow_to_file(
+        conn,
+        &mut anchors,
+        filters.file_path,
+        &mut Some(&mut more_by_fk),
+    )?;
+
     Ok(Some(outcome::outcome_matches_for_clustered(
         conn,
         &anchors,
@@ -3724,6 +3950,42 @@ fn action_worked_fts(
         min_confidence,
         &more_by_fk,
     )?))
+}
+
+/// `discovery._load_message_texts` — `{message_id: content_text}`.
+///
+/// Chunked at 500 to stay under SQLite's 999-parameter default even though the
+/// candidate set is normally a few dozen ids; a `NULL` reads as `""`, and an id
+/// with no row is simply absent.
+///
+/// # Errors
+/// When a query fails.
+pub fn load_message_texts(conn: &Connection, message_ids: &[i64]) -> Result<HashMap<i64, String>> {
+    let mut out: HashMap<i64, String> = HashMap::new();
+    if message_ids.is_empty() {
+        return Ok(out);
+    }
+    for chunk in message_ids.chunks(500) {
+        let sql = format!(
+            "SELECT id, content_text FROM messages WHERE id IN ({})",
+            placeholders(chunk.len())
+        );
+        let params: Vec<rusqlite::types::Value> = chunk
+            .iter()
+            .map(|id| rusqlite::types::Value::Integer(*id))
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        out.extend(rows);
+    }
+    Ok(out)
 }
 
 // ── snippets ─────────────────────────────────────────────────────────────────
@@ -4434,8 +4696,12 @@ mod tests {
         assert_eq!(all.sessions.len(), unscoped.sessions.len());
         assert_eq!(scoped.sessions.len(), 2, "a real slug still narrows");
 
-        let worked = find_sessions_where_action_worked(&conn, "watermark", Some(""), None, 20, 0.5)
-            .expect("the query runs");
+        let worked = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked::new(Some(""), None, 20, 0.5),
+        )
+        .expect("the query runs");
         assert!(!worked.is_empty(), "`worked` reads '' the same way");
     }
 
@@ -4978,7 +5244,7 @@ mod tests {
             search_past_decisions(&conn, "   ", None, None, 20, &budget(0)).expect("query runs");
         assert!(result.sessions.is_empty());
         assert_eq!(
-            find_sessions_where_action_worked(&conn, "  ", None, None, 20, 0.5)
+            find_sessions_where_action_worked(&conn, "  ", &ActionWorked::new(None, None, 20, 0.5))
                 .expect("query runs")
                 .len(),
             0
@@ -4988,8 +5254,12 @@ mod tests {
     #[test]
     fn action_worked_requires_an_explicit_confirmation() {
         let (_scratch, conn) = seeded();
-        let worked = find_sessions_where_action_worked(&conn, "watermark", None, None, 20, 0.5)
-            .expect("query runs");
+        let worked = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked::new(None, None, 20, 0.5),
+        )
+        .expect("query runs");
         let ids: Vec<&str> = worked.iter().map(|m| m.session_id.as_str()).collect();
         assert_eq!(
             ids,
@@ -5005,8 +5275,12 @@ mod tests {
     #[test]
     fn a_lower_confidence_floor_lets_the_silence_rows_back_in() {
         let (_scratch, conn) = seeded();
-        let worked = find_sessions_where_action_worked(&conn, "unrelated", None, None, 20, 0.3)
-            .expect("query runs");
+        let worked = find_sessions_where_action_worked(
+            &conn,
+            "unrelated",
+            &ActionWorked::new(None, None, 20, 0.3),
+        )
+        .expect("query runs");
         assert_eq!(worked.len(), 1, "session 3 continued without a complaint");
         assert!(
             (worked[0]
@@ -5018,6 +5292,94 @@ mod tests {
                 .abs()
                 < 1e-12
         );
+    }
+
+    /// `find-sessions-where-action-worked --file` — the intersection is loose
+    /// (any `tools_json` **or** `content_text` mention), and it runs *after*
+    /// the candidate scan, so it can only remove sessions.
+    ///
+    /// The live store cannot prove this: its `tools_json` is names-only
+    /// (`["Read"]`), so no tool-arg matcher ever fires there. This fixture has
+    /// real arguments, which is where the branch is actually exercised.
+    #[test]
+    fn the_file_narrowing_intersects_and_never_adds() {
+        let (_scratch, conn) = seeded();
+        let unfiltered = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked::new(None, None, 20, 0.5),
+        )
+        .expect("query runs");
+        assert_eq!(unfiltered.len(), 1);
+
+        let matching = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked {
+                file_path: Some("/home/dev/alpha/reader.py"),
+                ..ActionWorked::new(None, None, 20, 0.5)
+            },
+        )
+        .expect("query runs");
+        assert_eq!(matching.len(), 1, "session 2 wrote reader.py");
+
+        let elsewhere = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked {
+                file_path: Some("/home/dev/alpha/main.py"),
+                ..ActionWorked::new(None, None, 20, 0.5)
+            },
+        )
+        .expect("query runs");
+        assert!(
+            elsewhere.is_empty(),
+            "session 2 never mentions main.py, so the narrowing drops it"
+        );
+
+        // An empty `--file` is falsy in Python and filters nothing.
+        assert_eq!(
+            find_sessions_where_action_worked(
+                &conn,
+                "watermark",
+                &ActionWorked {
+                    file_path: Some(""),
+                    ..ActionWorked::new(None, None, 20, 0.5)
+                },
+            )
+            .expect("query runs")
+            .len(),
+            1
+        );
+    }
+
+    /// `find-sessions-touching-file --mode read|write` narrows to the tool-arg
+    /// half only: the SQL drops the `content_text` clause and the refinement
+    /// asks the mode-specific matcher, so a prose mention no longer counts.
+    #[test]
+    fn the_touching_file_modes_split_tool_args_from_prose() {
+        let (_scratch, conn) = seeded();
+        let ids = |mode: outcome::Mode, path: &str| -> Vec<String> {
+            find_sessions_touching_file_budgeted_mode(&conn, path, 20_i64, mode, &budget(0))
+                .expect("query runs")
+                .sessions
+                .into_iter()
+                .map(|row| row.session_id)
+                .collect()
+        };
+        // main.py is an `Edit` arg in session 1 — write and any see it, read does not.
+        assert_eq!(
+            ids(outcome::Mode::Write, "/home/dev/alpha/main.py").len(),
+            1
+        );
+        assert_eq!(ids(outcome::Mode::Any, "/home/dev/alpha/main.py").len(), 1);
+        assert!(ids(outcome::Mode::Read, "/home/dev/alpha/main.py").is_empty());
+        // reader.py is a `Write` arg in session 2.
+        assert_eq!(
+            ids(outcome::Mode::Write, "/home/dev/alpha/reader.py").len(),
+            1
+        );
+        assert!(ids(outcome::Mode::Read, "/home/dev/alpha/reader.py").is_empty());
     }
 
     #[test]
@@ -5142,7 +5504,11 @@ mod tests {
             .expect("counting");
         let _ = find_sessions_in_path(&conn, "/home/dev/alpha", None, 20, None, &budget(2000));
         let _ = search_past_decisions(&conn, "watermark", None, None, 20, &budget(2000));
-        let _ = find_sessions_where_action_worked(&conn, "watermark", None, None, 20, 0.5);
+        let _ = find_sessions_where_action_worked(
+            &conn,
+            "watermark",
+            &ActionWorked::new(None, None, 20, 0.5),
+        );
         let _ = file_risk_summary(&conn, "/home/dev/alpha/main.py", None, 5);
         let after: i64 = conn
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
