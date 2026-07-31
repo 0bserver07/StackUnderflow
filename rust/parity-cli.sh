@@ -120,6 +120,15 @@ unset STACKUNDERFLOW_EMBED_MODEL
 unset OLLAMA_API_KEY STACKUNDERFLOW_OLLAMA_API_KEY
 unset STAX_ANCHOR_DB
 
+# The reference must be THIS worktree's Python, not whatever tree the venv's
+# editable install points at — they are the same source today only by habit
+# (the `.pth` names the maintainer's other worktree, on another branch). Desk
+# ruling 1 / DIV-021 made that load-bearing: `resume`'s ORDER BY tiebreaker
+# landed in Python HERE, and without this pin the gate would compare this
+# branch's Rust against another branch's Python and call the divergence real.
+# Same split-brain class as gate 0's "run it AT the commit".
+export PYTHONPATH="${STAX_PARITY_PY_PATH:-$REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+
 CASE_TIMEOUT="${STAX_PARITY_TIMEOUT:-180}"
 
 pass=0; fail=0; skipped=0; normalized=0; accepted_count=0

@@ -335,14 +335,16 @@ pub fn resume_candidates(
         .collect::<Vec<_>>()
         .join(",");
     // Byte-for-byte `discovery.py:781`'s concatenated literal — the SQL text is
-    // what the planner keys on, so the shape ports verbatim (§6b).
+    // what the planner keys on, so the shape ports verbatim (§6b). The
+    // `, s.session_id` tiebreaker is part of that literal as of desk ruling 1
+    // (DIV-021, 2026-07-31): it landed in Python first, and the port follows.
     let sql = format!(
         "{}{}{}{}{}",
         "SELECT s.project_id, s.session_id, s.first_ts, s.last_ts,",
         "       s.message_count",
         "  FROM sessions s",
         format_args!(" WHERE s.project_id IN ({placeholders})"),
-        " ORDER BY s.last_ts DESC",
+        " ORDER BY s.last_ts DESC, s.session_id",
     );
     let cap = limit_per_provider.max(1);
     let mut sessions = conn.prepare(&sql)?;
@@ -1424,32 +1426,60 @@ mod tests {
         assert_eq!(args.provider, vec!["claude", "codex"]);
     }
 
-    /// Item D, recorded rather than fixed. `resume` orders by `s.last_ts DESC`
-    /// and 59 % of the live store's sessions have `last_ts IS NULL`, so the tie
-    /// order is the query planner's — running `ANALYZE` on the store reorders
-    /// the output, and at `--limit-per-provider 2000` it changes *which*
-    /// sessions come back (2,155 rows, 197 swapped in/out). The temptation is a
-    /// deterministic tiebreaker; the measurement says no. Appending
-    /// `, s.id ASC` to the same SQL on the same snapshot moves 675 of those
-    /// 2,155 printed rows and swaps the same 197 — in **Python** too. A
-    /// tiebreaker added here alone would therefore *break* byte-parity rather
-    /// than secure it. The SQL shape stays verbatim (§6b); this test is the
-    /// tripwire, so a future edit to the clause fails loudly.
+    /// Item D, now FIXED BY CONTRACT CHANGE (desk ruling 1 / DIV-021,
+    /// 2026-07-31). `resume` used to order by `s.last_ts DESC` alone, and 59 %
+    /// of the live store's sessions have `last_ts IS NULL` — NULLs sort last
+    /// with no defined order among themselves, so the tie order was the query
+    /// planner's. `ANALYZE` on the store reordered the output, and at
+    /// `--limit-per-provider 2000` it changed *which* sessions came back
+    /// (2,155 rows, 197 swapped in/out). The maintainer ruled the contract, not
+    /// the port: Python's `discovery.resume_candidates` gained
+    /// `, s.session_id` first and this query matches it. The tie order is now a
+    /// promise, so this test asserts the promise instead of the planner —
+    /// sessions that share a `last_ts` (here: none at all) come back in
+    /// `session_id` order, and running `ANALYZE` cannot move them.
     #[test]
-    fn the_resume_order_by_stays_verbatim_until_python_changes_it() {
+    fn tied_last_ts_orders_by_session_id_and_analyze_cannot_move_it() {
         let scratch = Scratch::new();
         seed(&scratch.db());
         let conn = Connection::open(scratch.db()).expect("opening the fixture");
-        let plan: Vec<String> = conn
-            .prepare("EXPLAIN QUERY PLAN SELECT s.project_id, s.session_id, s.first_ts, s.last_ts,       s.message_count  FROM sessions s WHERE s.project_id IN (?) ORDER BY s.last_ts DESC")
-            .expect("the ported shape still prepares")
-            .query_map([1_i64], |row| row.get::<_, String>(3))
-            .expect("planning")
-            .collect::<rusqlite::Result<_>>()
-            .expect("planning");
-        assert!(
-            plan.iter().any(|step| step.contains("ORDER BY")),
-            "the sort is the planner's, and its tie order is not a contract: {plan:?}"
+        // One project, four sessions with no `last_ts` at all, inserted in
+        // descending id order so insertion order and rowid order both disagree
+        // with the contract.
+        conn.execute(
+            "INSERT INTO projects (provider, slug, display_name, first_seen, last_modified)
+             VALUES ('claude', '-Users-t-my-ws-tied', '-Users-t-my-ws-tied', 0.0, 0.0)",
+            [],
+        )
+        .expect("inserting the tied project");
+        let pid = conn.last_insert_rowid();
+        for session_id in ["tie-d", "tie-c", "tie-b", "tie-a"] {
+            conn.execute(
+                "INSERT INTO sessions (project_id, session_id, first_ts, last_ts, message_count)
+                 VALUES (?, ?, NULL, NULL, 1)",
+                rusqlite::params![pid, session_id],
+            )
+            .expect("inserting a tied session");
+        }
+
+        let tied = |conn: &Connection| -> Vec<String> {
+            resume_candidates(conn, "/Users/t/my_ws/tied", 100)
+                .expect("querying the fixture")
+                .remove("claude")
+                .expect("claude has sessions under the tied project")
+                .into_iter()
+                .filter(|s| s.session_id.starts_with("tie-"))
+                .map(|s| s.session_id)
+                .collect()
+        };
+
+        let before = tied(&conn);
+        assert_eq!(before, ["tie-a", "tie-b", "tie-c", "tie-d"]);
+        conn.execute_batch("ANALYZE").expect("ANALYZE");
+        assert_eq!(
+            tied(&conn),
+            before,
+            "the tiebreaker is the contract; a plan change must not move the order"
         );
     }
 }

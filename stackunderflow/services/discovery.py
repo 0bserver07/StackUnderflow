@@ -738,7 +738,9 @@ def resume_candidates(
     ``last_ts`` / ``message_count`` / ``project`` (slug) /
     ``project_path`` (stored path, or ``None`` when only the slug is
     known — slug decode is lossy, so we never fabricate one), newest
-    first, capped at *limit_per_provider* per provider. Resume-command
+    first with ``session_id`` breaking ties (so equal — including
+    missing — ``last_ts`` values order the same on every run and every
+    SQLite build), capped at *limit_per_provider* per provider. Resume-command
     rendering is the CLI's job (templates live in
     ``adapters/capabilities.json``) — this function is pure store query.
     """
@@ -778,12 +780,19 @@ def resume_candidates(
     providers: dict[str, list[dict[str, Any]]] = {}
     if matched:
         placeholders = ",".join("?" for _ in matched)
+        # ``session_id`` is the tiebreaker, not decoration: a majority of
+        # sessions can carry ``last_ts IS NULL`` (59% of them on a real
+        # store), NULLs sort last under DESC with no defined order among
+        # themselves, and the planner's sort is what filled that gap. So
+        # an ANALYZE — or a different SQLite build — silently reshuffled
+        # which sessions the per-provider cap kept. The second key makes
+        # the listing a total order and therefore reproducible.
         rows = conn.execute(
             "SELECT s.project_id, s.session_id, s.first_ts, s.last_ts,"
             "       s.message_count"
             "  FROM sessions s"
             f" WHERE s.project_id IN ({placeholders})"
-            " ORDER BY s.last_ts DESC",
+            " ORDER BY s.last_ts DESC, s.session_id",
             list(matched),
         ).fetchall()
         for row in rows:

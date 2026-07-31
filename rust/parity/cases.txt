@@ -122,6 +122,11 @@ R-res-prov-prefix   | repo | resume -p cod --json
 R-res-limit1        | repo | resume --limit-per-provider 1 --json
 R-res-tmp           | tmp  | resume --json
 R-res-home          | repo | resume ~/.claude --json
+# Desk ruling 1 / DIV-021: the ORDER BY tiebreaker. Every case above caps at
+# 5 per provider and never reaches the 2,103 NULL-`last_ts` sessions, so none of
+# them can see a tie — this one returns 2,086 rows across every project and is
+# the row that would go red if either side dropped `, s.session_id`.
+R-res-tieorder      | repo | resume / --limit-per-provider 2000 --json
 
 # ── find-sessions-in-path (alias, RS-1-011) ──────────────────────────────────
 A-inp-text          | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow
