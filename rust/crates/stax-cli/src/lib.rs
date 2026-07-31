@@ -10,6 +10,7 @@
 #![warn(missing_docs)]
 
 mod anchor;
+mod ask;
 mod memory;
 mod resume;
 mod status;
@@ -18,6 +19,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};
+pub use ask::{hybrid_env_from_process, run_ask};
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
 pub use status::{StatusArgs, render_status, run_status};

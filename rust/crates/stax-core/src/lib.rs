@@ -18,6 +18,7 @@
 #![warn(missing_docs)]
 
 pub mod anchor;
+pub mod ask;
 pub mod queries;
 pub mod settings;
 pub mod store;

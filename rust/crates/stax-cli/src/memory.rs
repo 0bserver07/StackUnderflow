@@ -73,11 +73,23 @@ pub struct MemoryOptions {
     #[arg(long)]
     pub since: Option<String>,
     /// Hard cap on the number of results.
-    #[arg(long, default_value_t = 20)]
+    ///
+    /// `allow_hyphen_values` for the same reason `--project` needs it: Click
+    /// accepts `--limit -1` (a negative cap means "no cap"), and without it
+    /// clap reads the `-1` as an unknown flag and exits 2. The `--limit=-1`
+    /// form already agreed; the space-separated one did not.
+    #[arg(long, default_value_t = 20, allow_hyphen_values = true)]
     pub limit: i64,
     /// Token budget for the output. Default:
     /// STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. Pass 0 to disable.
-    #[arg(long = "context-budget", value_name = "TOKENS")]
+    ///
+    /// `allow_hyphen_values` as on `--limit` — `--context-budget -5` is a
+    /// disabled budget on the Python side, not a parse error.
+    #[arg(
+        long = "context-budget",
+        value_name = "TOKENS",
+        allow_hyphen_values = true
+    )]
     pub context_budget: Option<i64>,
 }
 
@@ -136,6 +148,16 @@ pub enum MemoryVerb {
         #[command(flatten)]
         options: MemoryOptions,
     },
+    /// Ask a natural-language question of the local store.
+    Ask {
+        /// The question. Hybrid retrieval: keyword search fused with a local
+        /// semantic vector search, which is skipped when Ollama is not running.
+        #[arg(allow_hyphen_values = true)]
+        question: String,
+        /// The six shared options.
+        #[command(flatten)]
+        options: MemoryOptions,
+    },
 }
 
 impl MemoryVerb {
@@ -146,7 +168,8 @@ impl MemoryVerb {
             Self::Decisions { options, .. }
             | Self::File { options, .. }
             | Self::Worked { options, .. }
-            | Self::Sessions { options, .. } => options,
+            | Self::Sessions { options, .. }
+            | Self::Ask { options, .. } => options,
         }
     }
 }
@@ -169,7 +192,7 @@ pub struct Output {
 }
 
 impl Output {
-    fn ok(stdout: String) -> Self {
+    pub(crate) fn ok(stdout: String) -> Self {
         Self {
             stdout,
             stderr: String::new(),
@@ -303,6 +326,7 @@ pub fn run_verb(conn: &rusqlite::Connection, verb: &MemoryVerb, env: &MemoryEnv)
         MemoryVerb::File { path, options } => run_file(conn, path, options, env),
         MemoryVerb::Worked { action, options } => run_worked(conn, action, options, env),
         MemoryVerb::Sessions { path, options } => run_sessions(conn, path.as_deref(), options, env),
+        MemoryVerb::Ask { question, options } => crate::ask::run_ask(conn, question, options, env),
     }
 }
 
@@ -641,7 +665,7 @@ fn run_sessions(
 // ── shared plumbing ──────────────────────────────────────────────────────────
 
 /// The message `_require_search_intent` raises.
-const NO_SEARCH_INTENT: &str =
+pub(crate) const NO_SEARCH_INTENT: &str =
     "query has no searchable terms — provide at least one word to search for";
 
 /// `search_service.search_has_intent` — any `\w` character.
@@ -651,7 +675,7 @@ pub fn search_has_intent(query: &str) -> bool {
 }
 
 /// The `q` dict each command echoes back, in the reference's key order.
-fn query_echo(leading: &[(&str, Value)], options: &MemoryOptions) -> Map<String, Value> {
+pub(crate) fn query_echo(leading: &[(&str, Value)], options: &MemoryOptions) -> Map<String, Value> {
     let mut echo = Map::new();
     for (key, value) in leading {
         echo.insert((*key).to_string(), value.clone());
@@ -675,7 +699,7 @@ fn query_echo(leading: &[(&str, Value)], options: &MemoryOptions) -> Map<String,
 }
 
 /// `q["project"] = slug` — the resolved scope replaces the raw flag.
-fn set_project(echo: &mut Map<String, Value>, slug: Option<&str>) {
+pub(crate) fn set_project(echo: &mut Map<String, Value>, slug: Option<&str>) {
     let value = slug.map_or(Value::Null, |slug| Value::String(slug.to_string()));
     if let Some(slot) = echo.get_mut("project") {
         *slot = value;
@@ -683,7 +707,7 @@ fn set_project(echo: &mut Map<String, Value>, slug: Option<&str>) {
 }
 
 /// `[m.to_dict() for m in …]`.
-fn rows(sessions: &[SessionMatch]) -> Vec<Value> {
+pub(crate) fn rows(sessions: &[SessionMatch]) -> Vec<Value> {
     sessions
         .iter()
         .map(|row| to_serde(&row.to_dict()))
@@ -715,7 +739,7 @@ fn to_serde(value: &pyjson::Value) -> Value {
 }
 
 /// Build + render the success envelope, with the newline `click.echo` adds.
-fn envelope_line(
+pub(crate) fn envelope_line(
     command: &str,
     query: Map<String, Value>,
     results: Vec<Value>,
@@ -735,7 +759,7 @@ fn envelope_line(
 }
 
 /// `cli._memory_fail` — the error envelope, or Click's parameter error.
-fn memory_fail(
+pub(crate) fn memory_fail(
     command: &str,
     query: &Map<String, Value>,
     error: &str,

@@ -1930,7 +1930,7 @@ pub mod outcome {
 // ── SQL fragments, ported literally ──────────────────────────────────────────
 
 /// `discovery._SESSION_SELECT`, spacing included.
-const SESSION_SELECT: &str = "  s.session_id           AS session_id,\
+pub(crate) const SESSION_SELECT: &str = "  s.session_id           AS session_id,\
   p.slug                 AS project_slug,\
   p.path                 AS stored_path,\
   p.provider             AS provider,\
@@ -1940,7 +1940,7 @@ const SESSION_SELECT: &str = "  s.session_id           AS session_id,\
   COALESCE(sm.cost_usd, 0.0) AS cost_usd";
 
 /// `discovery._SESSION_FROM`.
-const SESSION_FROM: &str = "FROM sessions s \
+pub(crate) const SESSION_FROM: &str = "FROM sessions s \
 JOIN projects p ON p.id = s.project_id \
 LEFT JOIN session_mart sm ON sm.session_id = s.session_id";
 
@@ -1955,7 +1955,7 @@ const COL_MESSAGE_COUNT: usize = 6;
 const COL_COST_USD: usize = 7;
 
 /// Build a [`SessionMatch`] from a `SESSION_SELECT` row — `discovery._row_to_match`.
-fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMatch> {
+pub(crate) fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMatch> {
     let project_slug: String = row
         .get::<_, Option<String>>(COL_PROJECT_SLUG)?
         .unwrap_or_default();
@@ -1986,7 +1986,7 @@ fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMatch> {
 
 /// `",?,?,…"` — one placeholder per element, the idiom every list-scoped query
 /// in the reference uses (§6b: the list-subquery shape is load-bearing).
-fn placeholders(count: usize) -> String {
+pub(crate) fn placeholders(count: usize) -> String {
     let mut out = String::with_capacity(count * 2);
     for index in 0..count {
         if index > 0 {
