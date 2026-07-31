@@ -249,7 +249,9 @@ pub mod pyjson {
     /// Rust's `Display` never uses exponent notation and Rust's `LowerExp`
     /// always does; CPython switches at `decpt <= -4 || decpt > 16` and always
     /// leaves a `.0` on an integral value. The shortest digits come from
-    /// `{:e}` (which is round-trip shortest), and the placement is redone here.
+    /// `{:e}` (which is round-trip shortest) except for the halfway tie
+    /// [`tie_break_to_even`] repairs (DIV-008), and the placement is redone
+    /// here.
     #[must_use]
     pub fn repr_float(value: f64) -> String {
         if value.is_nan() {
@@ -262,11 +264,9 @@ pub mod pyjson {
                 "-Infinity".to_string()
             };
         }
-        let sign = if value.is_sign_negative() && value != 0.0 {
-            "-"
-        } else {
-            ""
-        };
+        // DIV-024: `-0.0` IS sign-negative and CPython renders it "-0.0" —
+        // the old `value != 0.0` clause wrongly stripped the sign there.
+        let sign = if value.is_sign_negative() { "-" } else { "" };
         let magnitude = value.abs();
         if magnitude == 0.0 {
             return format!("{sign}0.0");
@@ -281,6 +281,9 @@ pub mod pyjson {
         let digits = if digits.is_empty() { "0" } else { digits };
         let exponent: i32 = exponent.parse().unwrap_or(0);
         let decpt = exponent + 1;
+        // DIV-008: the one place the two digit generators disagree.
+        let retied = tie_break_to_even(digits, decpt, magnitude);
+        let digits = retied.as_deref().unwrap_or(digits);
 
         if decpt <= -4 || decpt > 16 {
             let mut out = String::from(sign);
@@ -314,6 +317,128 @@ pub mod pyjson {
             out.push_str(&digits[split..]);
         }
         out
+    }
+
+    // ── DIV-008: the halfway decimal tie ────────────────────────────────────────
+    //
+    // Rust's shortest-round-trip writer and CPython's `_Py_dg_dtoa` agree on the
+    // *length* of the shortest digit string, and on the digits themselves whenever
+    // one candidate of that length is strictly closer to the double than its
+    // neighbour. They part company on the measure-zero case where the double's
+    // exact value sits *exactly* halfway between two candidates that both parse
+    // back to it: CPython selects the even final digit (`Python/dtoa.c`, mode 0 —
+    // the arm guarded by `word1(&u) & 1`), Rust rounds away from zero.
+    //
+    // `-1352070300110077.2` is the reference repro: that double is exactly
+    // …077.25, so …077.2 and …077.3 are equidistant and both parse to it. CPython
+    // prints the first, `{:e}` the second. Measured incidence before the fix:
+    // 65,839 of 5,158,262 adversarial doubles, and 0 of the 144,187 distinct
+    // `REAL`s in the live store — invisible on today's data, but `cost_usd` in the
+    // envelope is a SUM, not a stored value.
+    //
+    // The repair is one digit, so it is expressed as an exact integer question
+    // rather than a second digit generator: is the midpoint between the two
+    // candidates *equal* to the double? Both sides factor as (odd) × 2^a × 5^b,
+    // and `m < 2^53` bounds `b` far inside `u128`. No bignum, no new dependency.
+    //
+    // THIS BLOCK IS DUPLICATED, DELIBERATELY, IN:
+    //   * crates/stax-memory/src/pyjson.rs      (python_float_repr)
+    //   * crates/stax-core/src/queries.rs       (pyjson::repr_float)
+    // The two writers serve the same wire contract and the crates share no
+    // dependency edge (stax-memory is serde-only by design; stax-core drags in
+    // bundled SQLite). Keep them byte-identical — each crate's test module carries
+    // the same case table, so drift fails a test rather than a golden.
+
+    /// Re-break a halfway decimal tie the way CPython does: to the even digit.
+    ///
+    /// `digits` and `decpt` are the shortest round-trip digits `{:e}` produced —
+    /// the value is `digits × 10^(decpt - digits.len())` — and `magnitude` is the
+    /// non-negative double they describe. Returns `Some(replacement)` only when the
+    /// double is *exactly* the midpoint between `digits` and an adjacent
+    /// same-length candidate that also round-trips, and that neighbour is the even
+    /// one; `None` leaves `{:e}`'s answer alone, which is the overwhelmingly
+    /// common path and costs one parity test.
+    fn tie_break_to_even(digits: &str, decpt: i32, magnitude: f64) -> Option<String> {
+        // An even final digit is already CPython's answer: either there was no tie
+        // at all, or `{:e}` rounded up *into* the even digit and both agree.
+        if *digits.as_bytes().last()? % 2 == 0 {
+            return None;
+        }
+        // 17 digits is `f64`'s shortest-repr ceiling, so `10 * d + 5` cannot
+        // overflow `u64`; anything longer did not come from this writer.
+        let value: u64 = digits.parse().ok()?;
+        let scale = decpt - i32::try_from(digits.len()).ok()?;
+
+        for (midpoint, neighbour) in [(10 * value - 5, value - 1), (10 * value + 5, value + 1)] {
+            if !is_exact_decimal(midpoint, scale - 1, magnitude) {
+                continue;
+            }
+            // A genuine tie is between two candidates of the same length — a
+            // shorter neighbour would already have been the shortest repr — and
+            // the neighbour has to round-trip. At a binade floor the gap below the
+            // double is half the gap above it, so a lower candidate can be an
+            // exact midpoint and still parse to the *previous* double: `2^-24` is
+            // the live case, where CPython prints 5.960464477539063e-08 and the
+            // even-looking 5.960464477539062e-08 is a different float.
+            let replacement = neighbour.to_string();
+            if replacement.len() != digits.len() {
+                break;
+            }
+            match format!("{replacement}e{scale}").parse::<f64>() {
+                Ok(parsed) if parsed.to_bits() == magnitude.to_bits() => return Some(replacement),
+                _ => break,
+            }
+        }
+        None
+    }
+
+    /// Is `n × 10^exp10` *exactly* the value of the finite, non-negative
+    /// `magnitude`?
+    ///
+    /// `magnitude` is `m × 2^e` with `m < 2^53`. Splitting both sides into an odd
+    /// factor and a power of two reduces the question to two integer identities —
+    /// the odd parts must match and the 2-exponents must match. The odd parts carry
+    /// the `5^k` out of `10^k`, and `m < 2^53` caps the reachable `k` at roughly
+    /// ±27 before one side can no longer equal the other, so the running product in
+    /// [`times_pow5_eq`] stays well inside `u128`.
+    fn is_exact_decimal(n: u64, exp10: i32, magnitude: f64) -> bool {
+        let bits = magnitude.to_bits();
+        let raw_exponent = ((bits >> 52) & 0x7ff) as i32;
+        let fraction = bits & ((1 << 52) - 1);
+        // Subnormals carry no implicit leading bit and a fixed exponent.
+        let (m, e) = if raw_exponent == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1 << 52), raw_exponent - 1075)
+        };
+        if m == 0 {
+            return n == 0;
+        }
+        let m_twos = m.trailing_zeros() as i32;
+        let m_odd = m >> m_twos;
+        let n_twos = n.trailing_zeros() as i32;
+        let n_odd = n >> n_twos;
+        if exp10 >= 0 {
+            // n_odd·5^exp10 · 2^(n_twos + exp10)  ==  m_odd · 2^(m_twos + e)
+            n_twos + exp10 == m_twos + e && times_pow5_eq(n_odd, exp10.unsigned_abs(), m_odd)
+        } else {
+            // n_odd · 2^n_twos  ==  m_odd·5^(-exp10) · 2^(m_twos + e - exp10)
+            n_twos == m_twos + e - exp10 && times_pow5_eq(m_odd, exp10.unsigned_abs(), n_odd)
+        }
+    }
+
+    /// `a × 5^k == b`, without overflow: the running product is checked against `b`
+    /// after every step, so it never climbs past `u64::MAX`.
+    fn times_pow5_eq(a: u64, k: u32, b: u64) -> bool {
+        let mut product = u128::from(a);
+        let limit = u128::from(b);
+        for _ in 0..k {
+            product *= 5;
+            if product > limit {
+                return false;
+            }
+        }
+        product == limit
     }
 
     /// `json.loads` for the subset the store's `tools_json` blobs contain.
@@ -508,6 +633,277 @@ pub mod pyjson {
     }
 }
 
+// ── the exception the CLI actually catches ───────────────────────────────────
+
+/// The Python `ValueError` that `cli._memory_fail`'s `except ValueError` catches.
+///
+/// Every `memory` verb wraps its query in `except ValueError` and *only* that:
+/// a `sqlite3.DatabaseError` (a corrupt store, a `LIKE` pattern SQLite refuses)
+/// propagates out of Click and exits 1 with a traceback. Before this type
+/// existed every failure in this crate was an anonymous `anyhow` error, so the
+/// CLI funnelled all of them into `Invalid value for --since` — blaming an
+/// option the caller may never have passed, and turning a DB failure into
+/// exit 2. Errors raised here carry this marker; errors from `rusqlite` do not,
+/// and the CLI re-raises those.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueError(pub String);
+
+impl std::fmt::Display for ValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ValueError {}
+
+impl ValueError {
+    /// The message, when `error` is (or wraps) a Python-`ValueError` equivalent.
+    #[must_use]
+    pub fn of(error: &anyhow::Error) -> Option<&str> {
+        error.downcast_ref::<Self>().map(|inner| inner.0.as_str())
+    }
+}
+
+// ── Python-compatible integers ───────────────────────────────────────────────
+
+/// `int(str)` and the arbitrary-precision value it produces.
+///
+/// Click's `type=int` is CPython's `int()`, which accepts a great deal more than
+/// `str::parse::<i64>`: surrounding whitespace, a leading `+`, `_` separators
+/// between digits, decimal digits from *any* script (`٧` is seven), and integers
+/// of unbounded size. Every one of those was an exit-2 rejection here while
+/// Click exited 0, so this module is the parser clap's `value_parser` uses.
+///
+/// Values are held as a sign plus canonical decimal digits, because the CLI
+/// echoes the number back in the `--json` envelope (`"limit": 5`) and the echo
+/// has to be the *normalised* form Python prints — `' 5'`, `+5` and `٥` all
+/// print as `5`.
+pub mod pyint {
+    /// A parsed `int()` value: sign plus canonical decimal digits.
+    ///
+    /// `digits` never carries a leading zero (except the literal `"0"`), so
+    /// [`Display`](std::fmt::Display) is exactly what CPython's `str(int)` gives.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PyInt {
+        negative: bool,
+        digits: String,
+    }
+
+    /// Every Unicode code point whose decimal digit value is 0.
+    ///
+    /// CPython's `int()` accepts any character with a `Numeric_Type=Decimal`
+    /// property, whose code points come in contiguous runs of ten. Generated
+    /// from the reference interpreter's own `unicodedata` (3.12.13, UCD 15.0.0)
+    /// and verified to cover every decimal character with no irregular run —
+    /// the table is data, not a guess.
+    const DECIMAL_ZEROS: [u32; 68] = [
+        0x0_0030, 0x0_0660, 0x0_06F0, 0x0_07C0, 0x0_0966, 0x0_09E6, 0x0_0A66, 0x0_0AE6, 0x0_0B66,
+        0x0_0BE6, 0x0_0C66, 0x0_0CE6, 0x0_0D66, 0x0_0DE6, 0x0_0E50, 0x0_0ED0, 0x0_0F20, 0x0_1040,
+        0x0_1090, 0x0_17E0, 0x0_1810, 0x0_1946, 0x0_19D0, 0x0_1A80, 0x0_1A90, 0x0_1B50, 0x0_1BB0,
+        0x0_1C40, 0x0_1C50, 0x0_A620, 0x0_A8D0, 0x0_A900, 0x0_A9D0, 0x0_A9F0, 0x0_AA50, 0x0_ABF0,
+        0x0_FF10, 0x1_04A0, 0x1_0D30, 0x1_1066, 0x1_10F0, 0x1_1136, 0x1_11D0, 0x1_12F0, 0x1_1450,
+        0x1_14D0, 0x1_1650, 0x1_16C0, 0x1_1730, 0x1_18E0, 0x1_1950, 0x1_1C50, 0x1_1D50, 0x1_1DA0,
+        0x1_1F50, 0x1_6A60, 0x1_6AC0, 0x1_6B50, 0x1_D7CE, 0x1_D7D8, 0x1_D7E2, 0x1_D7EC, 0x1_D7F6,
+        0x1_E140, 0x1_E2F0, 0x1_E4F0, 0x1_E950, 0x1_FBF0,
+    ];
+
+    /// `Py_UNICODE_TODECIMAL` — the digit value of any decimal character.
+    ///
+    /// ASCII first because that is every real invocation; the table walk is the
+    /// `٧`-shaped tail.
+    #[must_use]
+    pub fn decimal_value(ch: char) -> Option<u32> {
+        if let Some(value) = ch.to_digit(10) {
+            return Some(value);
+        }
+        let code = ch as u32;
+        DECIMAL_ZEROS
+            .iter()
+            .find(|zero| (**zero..**zero + 10).contains(&code))
+            .map(|zero| code - zero)
+    }
+
+    /// The whitespace `int()` strips — Unicode `White_Space`.
+    ///
+    /// Deliberately *not* `str.isspace()`: that set also holds U+001C–U+001F,
+    /// and `int('\x1c5')` raises where `int('\u{a0}5')` returns 5. Measured
+    /// against CPython 3.12 rather than reasoned about.
+    #[must_use]
+    pub fn is_int_space(ch: char) -> bool {
+        ch.is_whitespace()
+    }
+
+    /// `str.isspace()` — what a `re` pattern's `\s` matches.
+    ///
+    /// The regex class is the wider one: `re.match(r'^\s*\d+', '\x1c7')` hits.
+    /// `parse_since`'s relative-window regex needs this, `int()` needs the other.
+    #[must_use]
+    pub fn is_regex_space(ch: char) -> bool {
+        ch.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&ch)
+    }
+
+    impl PyInt {
+        /// `int(raw)` — `None` where CPython raises `ValueError`.
+        ///
+        /// Base 10 only, which is all Click's `type=int` uses.
+        #[must_use]
+        pub fn parse(raw: &str) -> Option<Self> {
+            let text = raw.trim_matches(is_int_space);
+            let mut chars = text.chars().peekable();
+            let negative = match chars.peek() {
+                Some('-') => {
+                    chars.next();
+                    true
+                }
+                Some('+') => {
+                    chars.next();
+                    false
+                }
+                _ => false,
+            };
+            let mut digits = String::new();
+            let mut previous_was_underscore = true; // a leading `_` is an error
+            for ch in chars {
+                if ch == '_' {
+                    if previous_was_underscore {
+                        return None;
+                    }
+                    previous_was_underscore = true;
+                    continue;
+                }
+                digits.push(char::from_digit(decimal_value(ch)?, 10)?);
+                previous_was_underscore = false;
+            }
+            if digits.is_empty() || previous_was_underscore {
+                return None; // "", "+", "5_"
+            }
+            let trimmed = digits.trim_start_matches('0');
+            let digits = if trimmed.is_empty() {
+                "0".to_string()
+            } else {
+                trimmed.to_string()
+            };
+            Some(Self {
+                negative: negative && digits != "0",
+                digits,
+            })
+        }
+
+        /// The value as an `i64`, saturating at the bounds.
+        ///
+        /// Saturation is exact for every use inside the port: `--limit` is a cap
+        /// compared against a result count and `--context-budget` a token budget
+        /// compared against an estimate, and no result set approaches 2⁶³. The
+        /// one place it is *not* free is a `LIMIT ?` bind — see [`super::Limit`].
+        #[must_use]
+        pub fn saturating_i64(&self) -> i64 {
+            self.fits_i64()
+                .unwrap_or(if self.negative { i64::MIN } else { i64::MAX })
+        }
+
+        /// The value when it fits an `i64`, else `None`.
+        #[must_use]
+        pub fn fits_i64(&self) -> Option<i64> {
+            let magnitude = self.digits.parse::<i128>().ok()?;
+            i64::try_from(if self.negative { -magnitude } else { magnitude }).ok()
+        }
+
+        /// The value when it fits a `u64`, else `None` — the widest integer
+        /// `serde_json` can render exactly without `arbitrary_precision`.
+        #[must_use]
+        pub fn fits_u64(&self) -> Option<u64> {
+            if self.negative {
+                return None;
+            }
+            self.digits.parse::<u64>().ok()
+        }
+
+        /// True when this is `> 0` — Python's `limit and limit > 0` guard.
+        #[must_use]
+        pub fn is_positive(&self) -> bool {
+            !self.negative && self.digits != "0"
+        }
+    }
+
+    impl From<i64> for PyInt {
+        fn from(value: i64) -> Self {
+            Self {
+                negative: value < 0,
+                digits: value.unsigned_abs().to_string(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for PyInt {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if self.negative {
+                f.write_str("-")?;
+            }
+            f.write_str(&self.digits)
+        }
+    }
+}
+
+/// A `--limit` on its way to a `LIMIT ?` bind.
+///
+/// `sqlite3` raises `OverflowError: Python int too large to convert to SQLite
+/// INTEGER` when a limit above 2⁶³−1 is bound, and that is **not** a
+/// `ValueError`, so Click does not catch it: `memory sessions <path> --limit
+/// 99999999999999999999` exits 1 with a traceback and an empty stdout while
+/// `memory decisions … --limit 99999999999999999999` exits 0, because
+/// `search_past_decisions` compares the cap in Python and never binds it.
+/// Saturating silently would have turned that failure into a full result set —
+/// a changed answer, which is the worst kind of divergence — so the overflow
+/// travels with the value and fires at the bind, exactly where Python's does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limit {
+    value: i64,
+    overflowed: bool,
+}
+
+impl From<i64> for Limit {
+    fn from(value: i64) -> Self {
+        Self {
+            value,
+            overflowed: false,
+        }
+    }
+}
+
+impl From<&pyint::PyInt> for Limit {
+    fn from(value: &pyint::PyInt) -> Self {
+        Self {
+            value: value.saturating_i64(),
+            overflowed: value.fits_i64().is_none(),
+        }
+    }
+}
+
+impl Limit {
+    /// The cap as compared in Python — saturated, which no result set reaches.
+    #[must_use]
+    pub fn as_i64(self) -> i64 {
+        self.value
+    }
+
+    /// `limit and limit > 0` — whether a `LIMIT` clause is appended at all.
+    #[must_use]
+    pub fn is_positive(self) -> bool {
+        self.value > 0
+    }
+
+    /// The bound parameter, or `sqlite3`'s `OverflowError`.
+    ///
+    /// # Errors
+    /// When the original literal did not fit a 64-bit integer.
+    pub fn bind(self) -> Result<i64> {
+        if self.overflowed {
+            anyhow::bail!("Python int too large to convert to SQLite INTEGER");
+        }
+        Ok(self.value)
+    }
+}
+
 // ── Python-compatible time ───────────────────────────────────────────────────
 
 /// The slice of `datetime` the discovery path needs: ISO parsing, `isoformat`
@@ -638,13 +1034,17 @@ pub mod pytime {
             None => (second_field.parse::<i64>().ok()?, 0.0),
         };
         epoch += (hour * 3_600 + minute * 60 + second) as Epoch + fraction;
-        Some(epoch - offset)
+        Some(epoch - offset.unwrap_or(0.0))
     }
 
     /// Peel a trailing `Z` / `±HH:MM[:SS]` off a time string, in seconds east.
-    fn split_offset(rest: &str) -> Option<(&str, Epoch)> {
+    ///
+    /// The offset is `None` for a naive value and `Some(0.0)` for an explicit
+    /// UTC one — a distinction `parse_since` needs, because Python re-renders a
+    /// naive value with `+00:00` but keeps whatever an aware value carried.
+    fn split_offset(rest: &str) -> Option<(&str, Option<Epoch>)> {
         if let Some(stripped) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
-            return Some((stripped, 0.0));
+            return Some((stripped, Some(0.0)));
         }
         for (index, ch) in rest.char_indices() {
             if index == 0 {
@@ -653,17 +1053,47 @@ pub mod pytime {
             if ch == '+' || ch == '-' {
                 let (time_part, offset_part) = rest.split_at(index);
                 let sign = if ch == '-' { -1.0 } else { 1.0 };
-                let mut fields = offset_part[1..].split(':');
-                let hours: f64 = fields.next()?.parse().ok()?;
-                let minutes: f64 = fields.next().unwrap_or("0").parse().ok()?;
-                let seconds: f64 = fields.next().unwrap_or("0").parse().ok()?;
-                return Some((
-                    time_part,
-                    sign * (hours * 3_600.0 + minutes * 60.0 + seconds),
-                ));
+                let magnitude = offset_magnitude_seconds(&offset_part[1..])?;
+                return Some((time_part, Some(sign * magnitude)));
             }
         }
-        Some((rest, 0.0))
+        Some((rest, None))
+    }
+
+    /// The unsigned size of an ISO offset, in seconds.
+    ///
+    /// `fromisoformat` takes `HH`, `HHMM`, `HH:MM`, `HHMMSS`, `HH:MM:SS` and any
+    /// of those plus `.ffffff`. The colon-less forms are not decoration: reading
+    /// `+0530` field-by-field on `:` gives *530 hours*, which is how a
+    /// `--since 2026-07-30T00:00:00+0530` used to land in the year 2026-08-21.
+    fn offset_magnitude_seconds(body: &str) -> Option<Epoch> {
+        let (whole, fraction) = match body.split_once('.') {
+            Some((whole, fraction)) => (whole, Some(fraction)),
+            None => (body, None),
+        };
+        let compact: String = whole.chars().filter(|ch| *ch != ':').collect();
+        if !compact.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        let field = |start: usize| compact.get(start..start + 2)?.parse::<f64>().ok();
+        let (hours, minutes, seconds) = match compact.len() {
+            2 => (field(0)?, 0.0, 0.0),
+            4 => (field(0)?, field(2)?, 0.0),
+            6 => (field(0)?, field(2)?, field(4)?),
+            _ => return None,
+        };
+        let micros = match fraction {
+            Some(digits) => {
+                let taken: String = digits.chars().take(6).collect();
+                if taken.is_empty() || !taken.chars().all(|ch| ch.is_ascii_digit()) {
+                    return None;
+                }
+                let scale = 10f64.powi(6 - i32::try_from(taken.len()).unwrap_or(6));
+                taken.parse::<f64>().ok()? * scale / 1_000_000.0
+            }
+            None => 0.0,
+        };
+        Some(hours * 3_600.0 + minutes * 60.0 + seconds + micros)
     }
 
     /// `discovery.parse_since` with the clock injected.
@@ -680,23 +1110,40 @@ pub mod pytime {
             return Ok(None);
         }
         if let Some((count, unit)) = parse_relative(text) {
-            let delta_micros: i64 = match unit {
-                'h' => count * 3_600 * 1_000_000,
-                'd' => count * 86_400 * 1_000_000,
-                'w' => count * 7 * 86_400 * 1_000_000,
-                // "1m" is 30 days, not a calendar month — documented in the
-                // CLI help and ported as-is.
-                _ => count * 30 * 86_400 * 1_000_000,
+            // `timedelta` and `datetime` are bounded (years 1–9999); Python
+            // raises `OverflowError` past that, which is NOT a `ValueError`, so
+            // the CLI does not catch it. A plain error here reproduces that:
+            // exit 1, empty stdout, never the `--since` parameter error.
+            let delta_micros = count
+                .checked_mul(match unit {
+                    'h' => 3_600 * 1_000_000,
+                    'd' => 86_400 * 1_000_000,
+                    'w' => 7 * 86_400 * 1_000_000,
+                    // "1m" is 30 days, not a calendar month — documented in the
+                    // CLI help and ported as-is.
+                    _ => 30 * 86_400 * 1_000_000,
+                })
+                .and_then(|delta| now_micros.checked_sub(delta))
+                .filter(|micros| in_datetime_range(*micros));
+            let Some(micros) = delta_micros else {
+                bail!("date value out of range");
             };
-            return Ok(Some(isoformat_utc(now_micros - delta_micros)));
+            return Ok(Some(isoformat_utc(micros)));
         }
         match parse_iso_for_since(text) {
             Some(rendered) => Ok(Some(rendered)),
-            None => bail!(
+            None => Err(anyhow::Error::new(super::ValueError(format!(
                 "Invalid since value {}: expected '7d'/'1w'/'1m'/'24h' or an ISO date/datetime.",
                 super::paths::py_repr(text)
-            ),
+            )))),
         }
+    }
+
+    /// `datetime.MINYEAR`–`datetime.MAXYEAR` as epoch microseconds.
+    fn in_datetime_range(micros: i64) -> bool {
+        const MIN: i64 = -62_135_596_800_000_000; // 0001-01-01T00:00:00Z
+        const MAX: i64 = 253_402_300_799_999_999; // 9999-12-31T23:59:59.999999Z
+        (MIN..=MAX).contains(&micros)
     }
 
     /// `discovery.parse_since` against the real clock.
@@ -708,43 +1155,100 @@ pub mod pytime {
     }
 
     /// `^\s*(\d+)\s*([dwmh])\s*$` — the relative-window form.
+    ///
+    /// `\d` and `\s` are Python's, not ASCII's: `re` matches every Unicode
+    /// decimal digit, so `--since '٧d'` is seven days and `int('٧')` is 7. The
+    /// whitespace class is `str.isspace()`'s, which is *wider* than the one
+    /// `int()` strips (see [`super::pyint::is_regex_space`]).
     fn parse_relative(text: &str) -> Option<(i64, char)> {
-        let trimmed = text.trim();
+        let trimmed = text.trim_matches(super::pyint::is_regex_space);
         let mut digits = String::new();
         let mut chars = trimmed.chars().peekable();
-        while let Some(ch) = chars.peek() {
-            if ch.is_ascii_digit() {
-                digits.push(*ch);
-                chars.next();
-            } else {
-                break;
-            }
+        while let Some(value) = chars.peek().copied().and_then(super::pyint::decimal_value) {
+            digits.push(char::from_digit(value, 10)?);
+            chars.next();
         }
         if digits.is_empty() {
             return None;
         }
-        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+        while chars
+            .peek()
+            .copied()
+            .is_some_and(super::pyint::is_regex_space)
+        {
             chars.next();
         }
         let unit = chars.next()?.to_ascii_lowercase();
         if !matches!(unit, 'd' | 'w' | 'm' | 'h') {
             return None;
         }
-        if chars.any(|ch| !ch.is_whitespace()) {
+        if chars.any(|ch| !super::pyint::is_regex_space(ch)) {
             return None;
         }
+        // `int(...)` is unbounded; a count past `i64` cannot survive the
+        // `timedelta` multiply either, so `None` here lands on the same
+        // out-of-range error the caller raises.
         digits.parse().ok().map(|count| (count, unit))
     }
 
     /// The ISO leg of `parse_since`: parse, default to UTC, re-render.
+    ///
+    /// **The offset is preserved, not normalised.** `datetime.fromisoformat`
+    /// keeps whatever `tzinfo` the literal carried and `isoformat()` prints it
+    /// back, so `--since 2026-07-30T00:00:00+05:30` stays that string — and the
+    /// SQL comparison is a *string* comparison against `messages.timestamp`, so
+    /// re-rendering it in UTC (`2026-07-29T18:30:00+00:00`) silently selects a
+    /// different set of rows. Ledger row B-8, upgraded from cosmetic to
+    /// result-set-changing and ported bug-for-bug.
     fn parse_iso_for_since(text: &str) -> Option<String> {
         let epoch = parse_iso(text)?;
-        // A naive input is stamped UTC and re-emitted; an offset-carrying one
-        // keeps its offset in Python. Wave-1 callers pass either a date or a
-        // UTC datetime, so the UTC rendering is exact for them and recorded as
-        // a divergence for `--since 2026-01-01T00:00:00+02:00`.
         let micros = (epoch * 1_000_000.0).round() as i64;
-        Some(isoformat_utc(micros))
+        let Some(offset) = iso_offset_micros(text) else {
+            // `parsed.tzinfo is None` → `replace(tzinfo=UTC)` → `+00:00`.
+            return Some(isoformat_utc(micros));
+        };
+        // `isoformat()` prints the wall-clock fields as written, then the
+        // offset; `micros` is the UTC instant, so add the offset back to
+        // recover the literal's own fields.
+        let local = isoformat_utc(micros.checked_add(offset)?);
+        let naive = local.strip_suffix("+00:00")?;
+        Some(format!("{naive}{}", render_offset(offset)))
+    }
+
+    /// The trailing `Z` / `±HH:MM[:SS[.ffffff]]` of an ISO string, in
+    /// microseconds east. `None` when the value is naive.
+    fn iso_offset_micros(text: &str) -> Option<i64> {
+        let text = text.trim();
+        if text.len() <= 11 {
+            return None; // a bare date carries no offset
+        }
+        let (_, offset) = split_offset(&text[11..])?;
+        Some((offset? * 1_000_000.0).round() as i64)
+    }
+
+    /// `timezone(timedelta(...)).__str__()`'s suffix — what `isoformat()` prints.
+    ///
+    /// `+HH:MM`, widening to `:SS` and `.ffffff` only when those fields are
+    /// non-zero, and always `+00:00` for UTC (Python normalises `-00:00`).
+    fn render_offset(micros: i64) -> String {
+        let sign = if micros < 0 { '-' } else { '+' };
+        let magnitude = micros.unsigned_abs();
+        let fraction = magnitude % 1_000_000;
+        let seconds = magnitude / 1_000_000;
+        let mut out = String::with_capacity(16);
+        let _ = write!(
+            out,
+            "{sign}{:02}:{:02}",
+            seconds / 3_600,
+            (seconds % 3_600) / 60
+        );
+        if !seconds.is_multiple_of(60) || fraction != 0 {
+            let _ = write!(out, ":{:02}", seconds % 60);
+        }
+        if fraction != 0 {
+            let _ = write!(out, ".{fraction:06}");
+        }
+        out
     }
 }
 
@@ -1868,6 +2372,34 @@ pub mod outcome {
         limit: i64,
         min_confidence: f64,
     ) -> Result<Vec<SessionMatch>> {
+        outcome_matches_for_clustered(
+            conn,
+            anchor_seq_by_fk,
+            wanted_outcomes,
+            limit,
+            min_confidence,
+            &HashMap::new(),
+        )
+    }
+
+    /// `_outcome_matches_for(..., more_by_fk=…)` — the FTS branch's variant.
+    ///
+    /// `more_by_fk` carries the bm25 content half's clustering count per
+    /// `sessions.id` (how many *further* content-mention messages that session
+    /// had). It rides onto each match's `more_matches_in_session`; absent or
+    /// zero leaves the field `None`, so the JSON shape is unchanged on the
+    /// `LIKE` path.
+    ///
+    /// # Errors
+    /// When a query fails.
+    pub fn outcome_matches_for_clustered(
+        conn: &Connection,
+        anchor_seq_by_fk: &[(i64, i64)],
+        wanted_outcomes: &[&str],
+        limit: i64,
+        min_confidence: f64,
+        more_by_fk: &HashMap<i64, i64>,
+    ) -> Result<Vec<SessionMatch>> {
         if anchor_seq_by_fk.is_empty() {
             return Ok(Vec::new());
         }
@@ -1918,6 +2450,10 @@ pub mod outcome {
                 continue;
             }
             session_match.outcome = Some(fields);
+            // `more_matches_in_session=more_by_fk.get(sfk) or None` — a zero is
+            // falsy in Python, so it lands as `None`, not as `0`.
+            let more = more_by_fk.get(&session_fk).copied().unwrap_or(0);
+            session_match.more_matches_in_session = (more != 0).then_some(more);
             out.push(session_match);
             if limit > 0 && i64::try_from(out.len()).unwrap_or(i64::MAX) >= limit {
                 break;
@@ -1984,6 +2520,17 @@ pub(crate) fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionM
     })
 }
 
+/// `if project:` — Python's truthiness, where `""` is *no* filter at all.
+///
+/// `--project ''` reaches these queries as an empty string (`cli.py` only tests
+/// `slug is None` before falling back to the cwd), and every `WHERE` builder in
+/// `discovery.py` then guards with `if project:` — so an empty slug searches
+/// **every** project. Matching on `p.slug = ''` instead returns nothing, which
+/// is a changed answer on a command that exits 0 either way.
+fn project_filter(project: Option<&str>) -> Option<&str> {
+    project.filter(|slug| !slug.is_empty())
+}
+
 /// `",?,?,…"` — one placeholder per element, the idiom every list-scoped query
 /// in the reference uses (§6b: the list-subquery shape is load-bearing).
 pub(crate) fn placeholders(count: usize) -> String {
@@ -2011,10 +2558,11 @@ pub fn find_sessions_in_path(
     conn: &Connection,
     path: &str,
     since: Option<&str>,
-    limit: i64,
+    limit: impl Into<Limit>,
     provider: Option<&str>,
     budget: &rank::Budget,
 ) -> Result<BudgetedResult> {
+    let limit: Limit = limit.into();
     let resolved = paths::resolve_input_path(path);
     let relevance = rank::relevance_in_path(&resolved);
 
@@ -2065,9 +2613,9 @@ pub fn find_sessions_in_path(
         params.push(rusqlite::types::Value::Text(iso.clone()));
     }
     sql.push_str(" ORDER BY s.last_ts DESC");
-    if limit > 0 {
+    if limit.is_positive() {
         sql.push_str(" LIMIT ?");
-        params.push(rusqlite::types::Value::Integer(limit));
+        params.push(rusqlite::types::Value::Integer(limit.bind()?));
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -2085,9 +2633,9 @@ pub fn find_sessions_in_path(
 pub fn find_sessions_touching_file(
     conn: &Connection,
     file_path: &str,
-    limit: i64,
+    limit: impl Into<Limit>,
 ) -> Result<Vec<SessionMatch>> {
-    Ok(touching_file(conn, file_path, limit, None)?.0)
+    Ok(touching_file(conn, file_path, limit.into(), None)?.0)
 }
 
 /// `discovery.find_sessions_touching_file(context_budget=N)` — a [`BudgetedResult`].
@@ -2097,10 +2645,10 @@ pub fn find_sessions_touching_file(
 pub fn find_sessions_touching_file_budgeted(
     conn: &Connection,
     file_path: &str,
-    limit: i64,
+    limit: impl Into<Limit>,
     budget: &rank::Budget,
 ) -> Result<BudgetedResult> {
-    let (_, budgeted) = touching_file(conn, file_path, limit, Some(budget))?;
+    let (_, budgeted) = touching_file(conn, file_path, limit.into(), Some(budget))?;
     budgeted.context("a budgeted touching-file query must produce a budgeted result")
 }
 
@@ -2108,7 +2656,7 @@ pub fn find_sessions_touching_file_budgeted(
 fn touching_file(
     conn: &Connection,
     file_path: &str,
-    limit: i64,
+    limit: Limit,
     budget: Option<&rank::Budget>,
 ) -> Result<(Vec<SessionMatch>, Option<BudgetedResult>)> {
     let resolved = paths::resolve_input_path(file_path);
@@ -2175,9 +2723,9 @@ fn touching_file(
         .iter()
         .map(|fk| rusqlite::types::Value::Integer(*fk))
         .collect();
-    if limit > 0 {
+    if limit.is_positive() {
         sql.push_str(" LIMIT ?");
-        params.push(rusqlite::types::Value::Integer(limit));
+        params.push(rusqlite::types::Value::Integer(limit.bind()?));
     }
     let mut stmt = conn.prepare(&sql)?;
     let matches = stmt
@@ -2222,7 +2770,7 @@ pub fn search_past_decisions(
     );
     let mut params: Vec<rusqlite::types::Value> =
         vec![rusqlite::types::Value::Text(format!("%{needle}%"))];
-    if let Some(slug) = project {
+    if let Some(slug) = project_filter(project) {
         sql.push_str(" AND p.slug = ?");
         params.push(rusqlite::types::Value::Text(slug.to_string()));
     }
@@ -2322,7 +2870,7 @@ pub fn find_sessions_where_action_worked(
         rusqlite::types::Value::Text(format!("%{needle}%")),
         rusqlite::types::Value::Text(format!("%{needle}%")),
     ];
-    if let Some(slug) = project {
+    if let Some(slug) = project_filter(project) {
         where_clauses.push("p.slug = ?".to_string());
         params.push(rusqlite::types::Value::Text(slug.to_string()));
     }
@@ -2620,6 +3168,564 @@ pub fn detect_cwd_project_slug(conn: &Connection, cwd: &str) -> Option<String> {
     best_slug
 }
 
+// ── the FTS5 / bm25 branch (RS-1-007) ────────────────────────────────────────
+//
+// Everything above is `search_service=None`. The `memory` CLI does NOT pass
+// `None`: `cli._lexical_search_service()` builds a `SearchService` on every
+// invocation of `decisions`, `worked`, `file` and `sessions <file>`, and when
+// `search_index.db` has rows those three discovery functions take a different
+// path — bm25 candidate gathering, per-session clustering, and a relevance term
+// that carries the FTS score. On the maintainer's machine the index holds
+// 250,998 messages, so this is the live path and the `LIKE` scan above is the
+// fallback that runs on a fresh install.
+//
+// The fallback is signalled by exactly one value: `LexicalIndex::session_hits`
+// returning `None`. A populated index that matched nothing returns
+// `Some(vec![])` and the caller must NOT re-run the full scan — reintroducing
+// it on a genuine no-match is the anti-pattern the FTS path exists to remove.
+//
+// Two behaviours here are bug-for-bug and look like defects because they are:
+//
+// * `memory file` contradicts itself. Its `risk.total_sessions` comes from a
+//   `LIKE` scan while its session list comes from bm25, so on a tool-heavy file
+//   Python prints "sessions touching the file: 0" directly above a list of 20 of
+//   them. That is the current contract and it is reproduced exactly.
+// * The clustering count `more_matches_in_session` means different things on the
+//   two paths — messages-minus-one on `LIKE`, further-FTS-hits on bm25 — and the
+//   two disagree on the same query. Ported as found.
+
+/// `discovery._sessions_by_id` — hydrate store provenance for FTS-matched ids.
+///
+/// Mirrors the `LIKE` path's `sessions ⨯ projects ⨯ session_mart` join but keys
+/// on the provider-facing `session_id` (what the index stores), chunked under
+/// SQLite's 999-parameter limit. Later duplicates keep the first row seen.
+fn sessions_by_id(
+    conn: &Connection,
+    session_ids: &[String],
+    project: Option<&str>,
+) -> Result<HashMap<String, SessionMatch>> {
+    let mut out: HashMap<String, SessionMatch> = HashMap::new();
+    // `dict.fromkeys(s for s in session_ids if s)` — dedupe, keep first order.
+    let mut ids: Vec<&str> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for session_id in session_ids {
+        if session_id.is_empty() || !seen.insert(session_id.as_str()) {
+            continue;
+        }
+        ids.push(session_id.as_str());
+    }
+    if ids.is_empty() {
+        return Ok(out);
+    }
+    for chunk in ids.chunks(500) {
+        let mut sql = format!(
+            "SELECT {SESSION_SELECT} {SESSION_FROM} WHERE s.session_id IN ({})",
+            placeholders(chunk.len())
+        );
+        let mut params: Vec<rusqlite::types::Value> = chunk
+            .iter()
+            .map(|id| rusqlite::types::Value::Text((*id).to_owned()))
+            .collect();
+        // `if project:` — the empty slug is no filter at all, as everywhere else.
+        if let Some(slug) = project_filter(project) {
+            sql.push_str(" AND p.slug = ?");
+            params.push(rusqlite::types::Value::Text(slug.to_owned()));
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), row_to_match)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for session_match in rows {
+            out.entry(session_match.session_id.clone())
+                .or_insert(session_match);
+        }
+    }
+    Ok(out)
+}
+
+/// A `[0, 1]` relevance lookup over session ids, as a closure the packer takes.
+fn relevance_from_scores(scores: HashMap<String, f64>, missing: f64) -> rank::Relevance {
+    Box::new(move |session_match: &SessionMatch| {
+        scores
+            .get(&session_match.session_id)
+            .copied()
+            .unwrap_or(missing)
+    })
+}
+
+/// `discovery._relevance_touching_file` **with** its bm25 leg.
+///
+/// An exact tool-arg match scores `1.0`. A content mention scores `0.5` scaled
+/// by its normalised bm25, so an exact match always outranks any content
+/// mention while the content mentions still order among themselves. A session
+/// with no recorded kind scores `0.25` — that is the reference's default and it
+/// is *higher* than a poorly-ranked content hit, which is odd and is kept.
+fn relevance_touching_file_bm25(
+    match_kind_by_sid: HashMap<String, &'static str>,
+    bm25_by_sid: HashMap<String, f64>,
+) -> rank::Relevance {
+    Box::new(move |session_match: &SessionMatch| {
+        let kind = match_kind_by_sid
+            .get(&session_match.session_id)
+            .copied()
+            .unwrap_or("");
+        if kind == "content" && !bm25_by_sid.is_empty() {
+            return 0.5
+                * bm25_by_sid
+                    .get(&session_match.session_id)
+                    .copied()
+                    .unwrap_or(1.0);
+        }
+        match kind {
+            "tool" => 1.0,
+            "content" => 0.5,
+            _ => 0.25,
+        }
+    })
+}
+
+/// `discovery.search_past_decisions` with a `SearchService` injected.
+///
+/// Delegates to the `LIKE` port when no index is configured or the index is not
+/// populated, so a fresh install is byte-identical to wave 1's proven path.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn search_past_decisions_indexed(
+    conn: &Connection,
+    index: Option<&crate::lexical::LexicalIndex>,
+    query: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    let Some(index) = index else {
+        return search_past_decisions(conn, query, project, since, limit, budget);
+    };
+    // The order matters: the empty-query floor and `parse_since` both run
+    // *before* the FTS branch in the reference, so a malformed `--since` is a
+    // `ValueError` on both paths rather than an FTS miss on one of them.
+    if query.trim().is_empty() {
+        let relevance = rank::relevance_decisions(HashMap::new());
+        return Ok(rank::budgeted(Vec::new(), budget, &relevance));
+    }
+    let needle = query.trim();
+    let since_iso = pytime::parse_since(since)?;
+
+    match fts_decisions(conn, index, needle, project, since_iso.as_deref(), limit)? {
+        Some((matches, relevance)) => Ok(rank::budgeted(matches, budget, &relevance)),
+        None => search_past_decisions(conn, query, project, since, limit, budget),
+    }
+}
+
+/// `discovery._fts_decisions` — bm25 candidates, store provenance, Python
+/// snippets. `None` means "index not populated, fall back to the `LIKE` scan".
+fn fts_decisions(
+    conn: &Connection,
+    index: &crate::lexical::LexicalIndex,
+    needle: &str,
+    project: Option<&str>,
+    since_iso: Option<&str>,
+    limit: i64,
+) -> Result<Option<(Vec<SessionMatch>, rank::Relevance)>> {
+    // `None` here is the `LIMIT ?` bind that Python's unbounded int makes
+    // overflow — swallowed by the `except Exception` around the call, so it
+    // reaches the caller as "no lexical half" exactly like an empty index.
+    let Some(candidate_k) = crate::lexical::candidate_k(limit) else {
+        return Ok(None);
+    };
+    let Some(hits) = index.session_hits(needle, project, since_iso, candidate_k) else {
+        return Ok(None);
+    };
+
+    let scored: Vec<(String, f64)> = hits
+        .iter()
+        .map(|hit| (hit.session_id.clone(), hit.bm25))
+        .collect();
+    let relevance = relevance_from_scores(
+        crate::lexical::bm25_relevance(&scored)
+            .into_iter()
+            .collect(),
+        0.0,
+    );
+    if hits.is_empty() {
+        // Populated and genuinely no match — never a `LIKE` scan.
+        return Ok(Some((Vec::new(), relevance)));
+    }
+
+    let order: Vec<String> = hits.iter().map(|hit| hit.session_id.clone()).collect();
+    let rows_by_sid = sessions_by_id(conn, &order, project)?;
+
+    let mut out: Vec<SessionMatch> = Vec::new();
+    for hit in &hits {
+        // An FTS hit with no store provenance (index/store drift) is skipped.
+        let Some(row) = rows_by_sid.get(&hit.session_id) else {
+            continue;
+        };
+        let mut session_match = row.clone();
+        // The snippet is built from the FTS row's content by the *same* Python
+        // snippet builder the LIKE path uses, so the format is identical across
+        // both paths even though the source message differs.
+        session_match.snippet = build_snippet(&hit.content, needle);
+        session_match.more_matches_in_session =
+            (hit.more_matches_in_session != 0).then_some(hit.more_matches_in_session);
+        out.push(session_match);
+    }
+    // `sort(key=…, reverse=True)` on CPython is stable, so sessions sharing a
+    // `last_ts` keep their bm25 order. `sort_by` is stable too.
+    out.sort_by(|left, right| right.last_ts.cmp(&left.last_ts));
+    if limit > 0 {
+        out.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    Ok(Some((out, relevance)))
+}
+
+/// `discovery.find_sessions_touching_file(context_budget=None)` with an index.
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file_indexed(
+    conn: &Connection,
+    index: Option<&crate::lexical::LexicalIndex>,
+    file_path: &str,
+    limit: impl Into<Limit>,
+) -> Result<Vec<SessionMatch>> {
+    let limit: Limit = limit.into();
+    let Some(index) = index else {
+        return Ok(touching_file(conn, file_path, limit, None)?.0);
+    };
+    let resolved = paths::resolve_input_path(file_path);
+    match touching_file_fts(conn, index, &resolved, limit, None)? {
+        Some((matches, _)) => Ok(matches),
+        None => Ok(touching_file(conn, file_path, limit, None)?.0),
+    }
+}
+
+/// `discovery.find_sessions_touching_file(context_budget=N)` with an index.
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file_budgeted_indexed(
+    conn: &Connection,
+    index: Option<&crate::lexical::LexicalIndex>,
+    file_path: &str,
+    limit: impl Into<Limit>,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    let limit: Limit = limit.into();
+    let fallback = |conn: &Connection| -> Result<BudgetedResult> {
+        touching_file(conn, file_path, limit, Some(budget))?
+            .1
+            .context("a budgeted touching-file query must produce a budgeted result")
+    };
+    let Some(index) = index else {
+        return fallback(conn);
+    };
+    let resolved = paths::resolve_input_path(file_path);
+    match touching_file_fts(conn, index, &resolved, limit, Some(budget))? {
+        Some((_, Some(budgeted))) => Ok(budgeted),
+        Some((_, None)) => fallback(conn),
+        None => fallback(conn),
+    }
+}
+
+/// `discovery._touching_file_fts` — exact tool half on the store, free-text
+/// content half through bm25, merged exact-first.
+///
+/// The FTS half is **gated on the exact half being thin** (fewer than `limit`
+/// sessions): a well-worn file keeps its fast exact path and never pays the
+/// second-database open. That gate is why `memory file` on a heavily-edited
+/// file can stay on the pure-store path even with a populated index.
+fn touching_file_fts(
+    conn: &Connection,
+    index: &crate::lexical::LexicalIndex,
+    resolved: &str,
+    limit: Limit,
+    budget: Option<&rank::Budget>,
+) -> Result<Option<(Vec<SessionMatch>, Option<BudgetedResult>)>> {
+    let pattern = format!("%{resolved}%");
+
+    // Exact tool-arg half — one store scan, refined in Rust. Note this query
+    // selects `s.session_id`, not `s.id`: the FTS half speaks session ids, so
+    // the union is keyed on them.
+    let mut stmt = conn.prepare(
+        "SELECT s.session_id AS sid, m.tools_json AS tools_json \
+         FROM messages m JOIN sessions s ON s.id = m.session_fk \
+         WHERE m.tools_json LIKE ?",
+    )?;
+    let tool_rows = stmt
+        .query_map([&pattern], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut tool_sids: Vec<String> = Vec::new();
+    let mut tool_seen: HashSet<String> = HashSet::new();
+    for (sid, tools_json) in &tool_rows {
+        if tool_seen.contains(sid) {
+            continue;
+        }
+        if outcome::tools_json_mentions_file(tools_json.as_deref(), resolved, outcome::Mode::Any) {
+            tool_seen.insert(sid.clone());
+            tool_sids.push(sid.clone());
+        }
+    }
+
+    let mut match_kind_by_sid: HashMap<String, &'static str> =
+        tool_sids.iter().map(|sid| (sid.clone(), "tool")).collect();
+    let mut content_sids: Vec<String> = Vec::new();
+    let mut bm25_by_sid: Vec<(String, f64)> = Vec::new();
+    let mut more_by_sid: HashMap<String, i64> = HashMap::new();
+
+    // `exact_thin = (not limit) or (limit <= 0) or (len(tool_sids) < limit)`.
+    let exact_thin =
+        !limit.is_positive() || i64::try_from(tool_sids.len()).unwrap_or(i64::MAX) < limit.as_i64();
+    if exact_thin {
+        // The content half takes no project or date filter — the reference
+        // passes only the path and `candidate_k`. A `None` cap is the
+        // overflowing `LIMIT ?` bind, which `_touching_content_half` swallows
+        // into the same `None` an unpopulated index produces.
+        let Some(candidate_k) = crate::lexical::candidate_k(limit.as_i64()) else {
+            return Ok(None);
+        };
+        let Some(hits) = index.session_hits(resolved, None, None, candidate_k) else {
+            return Ok(None); // index unpopulated → caller runs the LIKE scan
+        };
+        for hit in &hits {
+            if hit.session_id.is_empty()
+                || tool_seen.contains(&hit.session_id)
+                || more_by_sid.contains_key(&hit.session_id)
+            {
+                continue;
+            }
+            content_sids.push(hit.session_id.clone());
+            bm25_by_sid.push((hit.session_id.clone(), hit.bm25));
+            more_by_sid.insert(hit.session_id.clone(), hit.more_matches_in_session);
+            match_kind_by_sid.insert(hit.session_id.clone(), "content");
+        }
+    }
+
+    let mut ordered_sids = tool_sids;
+    ordered_sids.extend(content_sids);
+    let bm25_relevance: HashMap<String, f64> = if bm25_by_sid.is_empty() {
+        HashMap::new()
+    } else {
+        crate::lexical::bm25_relevance(&bm25_by_sid)
+            .into_iter()
+            .collect()
+    };
+    let relevance = relevance_touching_file_bm25(match_kind_by_sid, bm25_relevance);
+
+    if ordered_sids.is_empty() {
+        return Ok(Some(match budget {
+            Some(budget) => (
+                Vec::new(),
+                Some(rank::budgeted(Vec::new(), budget, &relevance)),
+            ),
+            None => (Vec::new(), None),
+        }));
+    }
+
+    let rows_by_sid = sessions_by_id(conn, &ordered_sids, None)?;
+    let mut out: Vec<SessionMatch> = Vec::new();
+    for sid in &ordered_sids {
+        let Some(row) = rows_by_sid.get(sid) else {
+            continue; // FTS/tool hit with no store provenance — skip
+        };
+        let mut session_match = row.clone();
+        let more = more_by_sid.get(sid).copied().unwrap_or(0);
+        session_match.more_matches_in_session = (more != 0).then_some(more);
+        out.push(session_match);
+        if limit.is_positive() && i64::try_from(out.len()).unwrap_or(i64::MAX) >= limit.as_i64() {
+            break;
+        }
+    }
+
+    Ok(Some(match budget {
+        Some(budget) => {
+            let budgeted = rank::budgeted(out, budget, &relevance);
+            (budgeted.sessions.clone(), Some(budgeted))
+        }
+        None => (out, None),
+    }))
+}
+
+/// `discovery.find_sessions_where_action_worked` with a `SearchService`.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn find_sessions_where_action_worked_indexed(
+    conn: &Connection,
+    index: Option<&crate::lexical::LexicalIndex>,
+    action: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    min_confidence: f64,
+) -> Result<Vec<SessionMatch>> {
+    let Some(index) = index else {
+        return find_sessions_where_action_worked(
+            conn,
+            action,
+            project,
+            since,
+            limit,
+            min_confidence,
+        );
+    };
+    if action.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let clamped = min_confidence.clamp(0.0, 1.0);
+    let needle = action.trim();
+    let since_iso = pytime::parse_since(since)?;
+
+    match action_worked_fts(
+        conn,
+        index,
+        needle,
+        project,
+        since_iso.as_deref(),
+        limit,
+        clamped,
+    )? {
+        Some(matches) => Ok(matches),
+        None => {
+            find_sessions_where_action_worked(conn, action, project, since, limit, min_confidence)
+        }
+    }
+}
+
+/// `discovery._action_worked_fts` — the tool half keeps its `MAX(seq)` anchor
+/// scan; the content half is FTS-selected and its anchor resolved by a
+/// `content_text LIKE` **bounded to those sessions**.
+///
+/// On a session both halves matched, the anchor is the *later* `seq` — exactly
+/// the `MAX(seq)` over the union the single combined scan computes, so the
+/// classified outcome is unchanged by the routing.
+fn action_worked_fts(
+    conn: &Connection,
+    index: &crate::lexical::LexicalIndex,
+    needle: &str,
+    project: Option<&str>,
+    since_iso: Option<&str>,
+    limit: i64,
+    min_confidence: f64,
+) -> Result<Option<Vec<SessionMatch>>> {
+    let Some(candidate_k) = crate::lexical::candidate_k(limit) else {
+        return Ok(None); // the overflowing bind → caller runs the combined scan
+    };
+    let Some(hits) = index.session_hits(needle, project, since_iso, candidate_k) else {
+        return Ok(None); // index unpopulated → caller runs the combined scan
+    };
+
+    // ── exact tool-arg half (unchanged: LIKE + MAX(seq) anchor) ──
+    let mut where_clauses = vec!["m.tools_json LIKE ?".to_string()];
+    let mut params: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::Text(format!("%{needle}%"))];
+    if let Some(slug) = project_filter(project) {
+        where_clauses.push("p.slug = ?".to_string());
+        params.push(rusqlite::types::Value::Text(slug.to_owned()));
+    }
+    if let Some(iso) = since_iso {
+        where_clauses.push("m.timestamp >= ?".to_string());
+        params.push(rusqlite::types::Value::Text(iso.to_owned()));
+    }
+    let tool_sql = format!(
+        "SELECT s.id AS sfk, MAX(m.seq) AS anchor_seq \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         JOIN projects p ON p.id = s.project_id \
+         WHERE {} GROUP BY s.id",
+        where_clauses.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&tool_sql)?;
+    let tool_anchors = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // A dict in Python: insertion-ordered, and `d[k] = max(...)` on an existing
+    // key does not move it. A Vec plus a position index reproduces both.
+    let mut anchors: Vec<(i64, i64)> = Vec::new();
+    let mut position: HashMap<i64, usize> = HashMap::new();
+    for (fk, seq) in tool_anchors {
+        position.entry(fk).or_insert_with(|| {
+            anchors.push((fk, seq));
+            anchors.len() - 1
+        });
+    }
+
+    // ── content half: FTS-selected sessions → bounded anchor lookup ──
+    let content_sids: Vec<String> = hits
+        .iter()
+        .filter(|hit| !hit.session_id.is_empty())
+        .map(|hit| hit.session_id.clone())
+        .collect();
+    let more_by_sid: HashMap<String, i64> = hits
+        .iter()
+        .filter(|hit| !hit.session_id.is_empty())
+        .map(|hit| (hit.session_id.clone(), hit.more_matches_in_session))
+        .collect();
+    let mut more_by_fk: HashMap<i64, i64> = HashMap::new();
+
+    for chunk in content_sids.chunks(500) {
+        let mut clauses = vec![
+            format!("s.session_id IN ({})", placeholders(chunk.len())),
+            "m.content_text LIKE ?".to_string(),
+        ];
+        let mut chunk_params: Vec<rusqlite::types::Value> = chunk
+            .iter()
+            .map(|sid| rusqlite::types::Value::Text(sid.clone()))
+            .collect();
+        chunk_params.push(rusqlite::types::Value::Text(format!("%{needle}%")));
+        if let Some(iso) = since_iso {
+            clauses.push("m.timestamp >= ?".to_string());
+            chunk_params.push(rusqlite::types::Value::Text(iso.to_owned()));
+        }
+        let sql = format!(
+            "SELECT s.id AS sfk, s.session_id AS sid, MAX(m.seq) AS anchor_seq \
+             FROM messages m JOIN sessions s ON s.id = m.session_fk \
+             WHERE {} GROUP BY s.id",
+            clauses.join(" AND ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(chunk_params.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (fk, sid, content_anchor) in rows {
+            match position.get(&fk) {
+                Some(index) => anchors[*index].1 = anchors[*index].1.max(content_anchor),
+                None => {
+                    position.insert(fk, anchors.len());
+                    anchors.push((fk, content_anchor.max(-1)));
+                }
+            }
+            more_by_fk.insert(fk, more_by_sid.get(&sid).copied().unwrap_or(0));
+        }
+    }
+
+    Ok(Some(outcome::outcome_matches_for_clustered(
+        conn,
+        &anchors,
+        &["worked"],
+        limit,
+        min_confidence,
+        &more_by_fk,
+    )?))
+}
+
 // ── snippets ─────────────────────────────────────────────────────────────────
 
 /// Characters either side of the match — `discovery._SNIPPET_RADIUS`.
@@ -2856,7 +3962,7 @@ mod tests {
         // Each expectation is what `repr(x)` prints in CPython 3.12.
         for (value, expected) in [
             (0.0_f64, "0.0"),
-            (-0.0_f64, "0.0"),
+            (-0.0_f64, "-0.0"),
             (1.0, "1.0"),
             (0.5, "0.5"),
             (1.25, "1.25"),
@@ -2872,6 +3978,87 @@ mod tests {
             (123.456, "123.456"),
         ] {
             assert_eq!(pyjson::repr_float(value), expected, "repr({value})");
+        }
+    }
+
+    /// DIV-008's case table — the drift alarm for the two copies of
+    /// `tie_break_to_even`.
+    ///
+    /// `(bit pattern, CPython repr)`, every expectation produced by
+    /// `../StackUnderflow/.venv/bin/python -c 'print(repr(x))'` on the reference
+    /// interpreter. The same table lives in the other crate; if only one copy of
+    /// the algorithm is edited, one of the two fails.
+    ///
+    /// Four groups, in order:
+    ///
+    /// 1. **Ties CPython breaks downward** — the divergence itself. Rust's
+    ///    shortest writer rounds these up; the double is exactly `…25`, so both
+    ///    spellings parse back to it and only a byte comparison can see it.
+    /// 2. **Ties CPython breaks upward** — the same tie, where the even digit
+    ///    happens to be the higher one and the two writers already agreed. Pins
+    ///    that the fix did not simply invert the rounding.
+    /// 3. **Binade floors** — an exact midpoint that must *not* be taken. At the
+    ///    bottom of a binade the gap below the double is half the gap above, so
+    ///    the lower candidate is equidistant in decimal yet parses to the previous
+    ///    double. `2^-24` is the live case: CPython prints `…063`, and `…062` is a
+    ///    different float.
+    /// 4. **Odd last digit, no tie** — the fast path must not misfire on the
+    ///    ordinary values that reach it constantly.
+    const DIV008_CASES: &[(u64, &str)] = &[
+        // 1. CPython rounds the tie down to the even digit; `{:e}` rounds up.
+        (0xc313_36cd_97cc_33f5, "-1352070300110077.2"),
+        (0x430e_1c6d_958d_7b72, "1059438285926254.2"),
+        (0xc314_41f2_33f6_3165, "-1425502010969177.2"),
+        (0x42b7_fa57_c450_e950, "26363981746409.312"),
+        (0x4319_7469_53fb_86ad, "1791217536786859.2"),
+        (0xc2d8_c0fe_9119_c088, "-108868734838530.12"),
+        (0xc2bf_0dc9_05b0_7310, "-34144067629171.062"),
+        // 2. CPython rounds the tie up to the even digit; both writers agreed already.
+        (0xc310_c44c_b563_4c1f, "-1179858341778183.8"),
+        (0xc2ed_1a52_01a8_fb4c, "-255991057565658.38"),
+        (0x430d_bf9a_9de0_10e6, "1046680639898140.8"),
+        (0xc31b_4e7d_6d57_492b, "-1921531245875786.8"),
+        (0x4304_b413_2881_dc6e, "728436738898829.8"),
+        (0xc31c_dda2_f0f2_6be3, "-2031247811189496.8"),
+        // 3. Binade floors: the even-looking neighbour is a different double.
+        (0x3e70_0000_0000_0000, "5.960464477539063e-08"),
+        (0x3e60_0000_0000_0000, "2.9802322387695312e-08"),
+        (0x3e10_0000_0000_0000, "9.313225746154785e-10"),
+        (0x3ca0_0000_0000_0000, "1.1102230246251565e-16"),
+        (0x0010_0000_0000_0000, "2.2250738585072014e-308"),
+        (0x0000_0000_0000_0001, "5e-324"),
+        (0x43e0_0000_0000_0000, "9.223372036854776e+18"),
+        (0x4330_0000_0000_0000, "4503599627370496.0"),
+        (0x4340_0000_0000_0000, "9007199254740992.0"),
+        // 4. Odd final digit, no tie anywhere near it.
+        (0x3fb9_9999_9999_999a, "0.1"),
+        (0x4009_21fb_5444_2d18, "3.141592653589793"),
+        (0x4005_bf0a_8b14_5769, "2.718281828459045"),
+        (0xc02e_0000_0000_0000, "-15.0"),
+        (0x3f84_7ae1_47ae_147b, "0.01"),
+    ];
+
+    /// DIV-008: halfway ties render exactly as CPython's `repr` does.
+    #[test]
+    fn halfway_ties_break_to_even_like_cpython() {
+        for (bits, want) in DIV008_CASES {
+            let value = f64::from_bits(*bits);
+            assert_eq!(&pyjson::repr_float(value), want, "repr({bits:#018x})");
+        }
+    }
+
+    /// Both spellings of a tie parse to the same double, so a round-trip test
+    /// cannot see the fix — only these bytes can. Guards against anyone
+    /// "simplifying" the table away into a parse check.
+    #[test]
+    fn the_tie_repair_is_invisible_to_round_tripping() {
+        for (bits, want) in DIV008_CASES {
+            assert_eq!(
+                want.parse::<f64>()
+                    .expect("CPython prints a parseable float"),
+                f64::from_bits(*bits),
+                "{bits:#018x} must round-trip whatever the spelling"
+            );
         }
     }
 
@@ -3019,6 +4206,258 @@ mod tests {
             error.to_string(),
             "Invalid since value 'yesterday': expected '7d'/'1w'/'1m'/'24h' \
              or an ISO date/datetime."
+        );
+    }
+
+    /// The B-8 fix. `datetime.fromisoformat` keeps the literal's own `tzinfo`
+    /// and `isoformat()` prints it back, and the SQL comparison against
+    /// `messages.timestamp` is a **string** comparison — so re-rendering an
+    /// offset in UTC changes which rows come back, with exit 0 on both sides.
+    /// Measured against the live store: `--since 2026-07-30T00:00:00+05:30`
+    /// selected 0 sessions in Python and 1 here before this.
+    #[test]
+    fn a_since_offset_survives_verbatim_because_sql_compares_the_string() {
+        let now = 1_767_312_000_000_000;
+        let since = |value: &str| {
+            pytime::parse_since_at(Some(value), now)
+                .expect("valid")
+                .expect("a value")
+        };
+        assert_eq!(
+            since("2026-07-30T00:00:00+05:30"),
+            "2026-07-30T00:00:00+05:30",
+            "NOT 2026-07-29T18:30:00+00:00 — that string selects different rows"
+        );
+        assert_eq!(
+            since("2026-07-20T00:00:00-07:00"),
+            "2026-07-20T00:00:00-07:00"
+        );
+        // `+HHMM` is normalised to `+HH:MM`, `Z` and `-00:00` both to `+00:00`,
+        // and a naive value is stamped UTC — all four are `isoformat()`'s doing.
+        assert_eq!(
+            since("2026-07-30T00:00:00+0530"),
+            "2026-07-30T00:00:00+05:30"
+        );
+        assert_eq!(since("2026-07-30T00:00:00Z"), "2026-07-30T00:00:00+00:00");
+        assert_eq!(
+            since("2026-07-30T00:00:00-00:00"),
+            "2026-07-30T00:00:00+00:00"
+        );
+        assert_eq!(since("2026-07-30T00:00:00"), "2026-07-30T00:00:00+00:00");
+        // Sub-minute offsets and microseconds widen the rendering, exactly as
+        // `timezone.__str__` does.
+        assert_eq!(
+            since("2026-07-30T00:00:00+05:30:30"),
+            "2026-07-30T00:00:00+05:30:30"
+        );
+        assert_eq!(
+            since("2026-07-30T00:00:00.5+05:30"),
+            "2026-07-30T00:00:00.500000+05:30"
+        );
+    }
+
+    /// `re`'s `\d` is Unicode, so `--since '٧d'` is seven days — Click exits 0
+    /// where an `is_ascii_digit` scan fell through to the ISO leg and exited 2.
+    #[test]
+    fn a_relative_window_accepts_unicode_decimal_digits() {
+        let now = 1_767_312_000_000_000;
+        let seven_days = Some("2025-12-26T00:00:00+00:00".to_string());
+        assert_eq!(
+            pytime::parse_since_at(Some("\u{667}d"), now).expect("valid"),
+            seven_days,
+            "U+0667 ARABIC-INDIC DIGIT SEVEN"
+        );
+        assert_eq!(
+            pytime::parse_since_at(Some("\u{966}\u{967}d"), now).expect("valid"),
+            Some("2026-01-01T00:00:00+00:00".to_string()),
+            "Devanagari 0 then 1 reads as 01 — one day"
+        );
+        // `\s` is `str.isspace()`'s, which is wider than the set `int()` strips.
+        assert_eq!(
+            pytime::parse_since_at(Some("\u{1c}7d\u{1c}"), now).expect("valid"),
+            seven_days
+        );
+    }
+
+    /// `timedelta` is bounded and raises `OverflowError`, which is **not** a
+    /// `ValueError` — so Click does not catch it and the `--since` parameter
+    /// error is the wrong shape for it.
+    #[test]
+    fn an_out_of_range_relative_window_is_not_a_value_error() {
+        let now = 1_767_312_000_000_000;
+        let error = pytime::parse_since_at(Some("99999999999d"), now).expect_err("rejected");
+        assert_eq!(error.to_string(), "date value out of range");
+        assert_eq!(ValueError::of(&error), None, "not catchable by the CLI");
+
+        let caught = pytime::parse_since_at(Some("yesterday"), now).expect_err("rejected");
+        assert!(ValueError::of(&caught).is_some(), "this one IS catchable");
+    }
+
+    // ── pyint ────────────────────────────────────────────────────────────────
+
+    /// Every expectation here is what CPython 3.12's `int()` returns for the
+    /// same literal, checked against the reference interpreter.
+    #[test]
+    fn int_parses_what_cpython_int_parses() {
+        let parse = |raw: &str| pyint::PyInt::parse(raw).map(|value| value.to_string());
+        for (raw, expected) in [
+            ("5", "5"),
+            (" 5", "5"),
+            ("5 ", "5"),
+            ("  5  ", "5"),
+            ("\u{a0}5", "5"),   // NO-BREAK SPACE
+            ("\u{3000}5", "5"), // IDEOGRAPHIC SPACE
+            ("+5", "5"),
+            ("-1", "-1"),
+            ("1_000", "1000"),
+            ("\u{667}", "7"), // ARABIC-INDIC SEVEN
+            ("-\u{667}", "-7"),
+            ("\u{661}_\u{662}", "12"),
+            ("1\u{660}", "10"), // scripts may be mixed, digit by digit
+            ("\u{660}\u{660}5", "5"),
+            ("007", "7"),
+            ("-0", "0"), // CPython has no negative zero
+            ("99999999999999999999", "99999999999999999999"),
+        ] {
+            assert_eq!(parse(raw).as_deref(), Some(expected), "int({raw:?})");
+        }
+        for raw in [
+            "",
+            " ",
+            "+",
+            "-",
+            "0x10",
+            "5.0",
+            "_1",
+            "1_",
+            "1__0",
+            "+_1",
+            "abc",
+            "--5",
+            "5-",
+            "\u{1c}5",   // isspace() but NOT stripped by int()
+            "\u{200b}5", // ZERO WIDTH SPACE is not whitespace at all
+            "\u{bd}",    // VULGAR FRACTION ONE HALF is numeric, not decimal
+        ] {
+            assert_eq!(parse(raw), None, "int({raw:?}) must raise");
+        }
+    }
+
+    #[test]
+    fn an_oversized_int_saturates_for_arithmetic_and_says_it_did() {
+        let huge = pyint::PyInt::parse("99999999999999999999").expect("parses");
+        assert_eq!(huge.fits_i64(), None);
+        assert_eq!(huge.fits_u64(), None);
+        assert_eq!(huge.saturating_i64(), i64::MAX);
+        assert!(huge.is_positive());
+
+        // i64::MAX + 1 still fits a u64, which is what the `--limit` echo uses.
+        let past_i64 = pyint::PyInt::parse("9223372036854775808").expect("parses");
+        assert_eq!(past_i64.fits_i64(), None);
+        assert_eq!(past_i64.fits_u64(), Some(9_223_372_036_854_775_808));
+
+        let tiny = pyint::PyInt::parse("-99999999999999999999").expect("parses");
+        assert_eq!(tiny.saturating_i64(), i64::MIN);
+        assert!(!tiny.is_positive());
+
+        assert_eq!(pyint::PyInt::from(-7_i64).to_string(), "-7");
+        assert_eq!(pyint::PyInt::from(i64::MIN).fits_i64(), Some(i64::MIN));
+    }
+
+    /// The overflow travels with the value and fires at the bind, because that
+    /// is where `sqlite3` raises it — `memory decisions --limit 10**20` exits 0
+    /// (the cap is compared in Python) while `memory sessions` on the same
+    /// limit exits 1 (the cap is bound into `LIMIT ?`).
+    #[test]
+    fn an_oversized_limit_only_fails_where_python_binds_it() {
+        let plain: Limit = 20_i64.into();
+        assert_eq!(plain.as_i64(), 20);
+        assert!(plain.is_positive());
+        assert_eq!(plain.bind().expect("binds"), 20);
+
+        let huge: Limit = (&pyint::PyInt::parse("99999999999999999999").expect("parses")).into();
+        assert_eq!(huge.as_i64(), i64::MAX, "the cap comparison still works");
+        assert!(huge.is_positive());
+        assert_eq!(
+            huge.bind().expect_err("sqlite3 refuses it").to_string(),
+            "Python int too large to convert to SQLite INTEGER"
+        );
+
+        // A negative limit never reaches a bind at all (`if limit and limit > 0`).
+        let negative: Limit = (&pyint::PyInt::parse("-1").expect("parses")).into();
+        assert!(!negative.is_positive());
+    }
+
+    #[test]
+    fn an_oversized_limit_is_the_stores_error_not_the_since_error() {
+        let (_scratch, conn) = seeded();
+        let huge = pyint::PyInt::parse("99999999999999999999").expect("parses");
+        let error = find_sessions_in_path(&conn, "/home/dev/alpha", None, &huge, None, &budget(0))
+            .expect_err("the bind overflows");
+        assert!(
+            ValueError::of(&error).is_none(),
+            "an OverflowError is not catchable by `except ValueError`"
+        );
+        // The same limit through a query that never binds it is fine.
+        let ok = search_past_decisions(&conn, "watermark", None, None, i64::MAX, &budget(0))
+            .expect("no bind, no overflow");
+        assert_eq!(ok.sessions.len(), 3);
+    }
+
+    /// `--project ''` is not `None` (so no cwd fallback) but *is* falsy (so no
+    /// `WHERE` clause). Filtering on `p.slug = ''` returns nothing instead, and
+    /// both sides exit 0 — a silently different answer.
+    #[test]
+    fn an_empty_project_slug_scopes_to_every_project() {
+        assert_eq!(project_filter(Some("")), None);
+        assert_eq!(
+            project_filter(Some("-home-dev-alpha")),
+            Some("-home-dev-alpha")
+        );
+        assert_eq!(project_filter(None), None);
+
+        let (_scratch, conn) = seeded();
+        let all = search_past_decisions(&conn, "watermark", Some(""), None, 20, &budget(0))
+            .expect("the query runs");
+        let unscoped = search_past_decisions(&conn, "watermark", None, None, 20, &budget(0))
+            .expect("the query runs");
+        let scoped = search_past_decisions(
+            &conn,
+            "watermark",
+            Some("-home-dev-alpha"),
+            None,
+            20,
+            &budget(0),
+        )
+        .expect("the query runs");
+        assert_eq!(all.sessions.len(), 3, "'' searches every project");
+        assert_eq!(all.sessions.len(), unscoped.sessions.len());
+        assert_eq!(scoped.sessions.len(), 2, "a real slug still narrows");
+
+        let worked = find_sessions_where_action_worked(&conn, "watermark", Some(""), None, 20, 0.5)
+            .expect("the query runs");
+        assert!(!worked.is_empty(), "`worked` reads '' the same way");
+    }
+
+    /// A store-level failure must stay a store-level failure. Before the marker
+    /// existed the CLI reported a corrupt store as
+    /// `Invalid value for --since: database disk image is malformed` and exited
+    /// 2, on an invocation that never passed `--since`.
+    #[test]
+    fn a_database_failure_is_not_a_value_error() {
+        let (_scratch, conn) = seeded();
+        let error = search_past_decisions(&conn, "x", None, Some("yesterday"), 20, &budget(0))
+            .expect_err("a bad --since");
+        assert!(ValueError::of(&error).is_some());
+
+        conn.execute_batch("DROP TABLE messages_202601; DROP TABLE messages_202602;")
+            .expect("breaking the store");
+        let error = search_past_decisions(&conn, "watermark", None, None, 20, &budget(0))
+            .expect_err("the scan cannot run");
+        assert_eq!(
+            ValueError::of(&error),
+            None,
+            "sqlite3.DatabaseError propagates past `except ValueError`"
         );
     }
 

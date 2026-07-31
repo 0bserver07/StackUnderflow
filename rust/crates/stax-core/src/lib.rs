@@ -19,6 +19,7 @@
 
 pub mod anchor;
 pub mod ask;
+pub mod lexical;
 pub mod queries;
 pub mod settings;
 pub mod store;

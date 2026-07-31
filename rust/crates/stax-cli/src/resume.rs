@@ -46,6 +46,7 @@ use stax_adapters::capabilities::{
     CAPABILITIES_PATH_ENV, CAPABILITIES_RELATIVE_PATH, path_from_env,
 };
 use stax_core::queries::paths;
+use stax_core::queries::pyint::PyInt;
 use stax_core::settings;
 use stax_core::store::Store;
 use stax_memory::{ProviderBlock, ResumeEnvelope, ResumeSession, ResumeTemplate};
@@ -82,23 +83,47 @@ pub struct ResumeArgs {
 
     /// Max sessions listed per coding agent.
     ///
-    /// `IntRange(min=1)` on the Python side; clap's `.range(1..)` is the same
-    /// rejection with a different message (recorded divergence). Click renders
-    /// the bound into the help line (`[default: 5; x>=1]`); clap prints the
-    /// default only.
+    /// `IntRange(min=1)` on the Python side: `int(raw)` **first**, the bound
+    /// **second**. That order is the whole divergence — `clap::value_parser!(i64)`
+    /// rejected `' 5'`, `٧`, `1_000` and `99999999999999999999` outright where
+    /// Click converts them (to 5, 7, 1000 and a cap larger than any store) and
+    /// exits 0. The range rejection itself is unchanged, message and all
+    /// (recorded divergence D-2); Click renders the bound into the help line
+    /// (`[default: 5; x>=1]`), clap prints the default only.
     #[arg(
         long = "limit-per-provider",
         value_name = "INTEGER RANGE",
-        default_value_t = 5,
-        value_parser = clap::value_parser!(i64).range(1..),
+        default_value_t = PyInt::from(5),
+        value_parser = py_int_min_one,
+        allow_hyphen_values = true,
+        overrides_with = "limit_per_provider",
         help = "Max sessions listed per coding agent.",
         long_help = "Max sessions listed per coding agent."
     )]
-    pub limit_per_provider: i64,
+    pub limit_per_provider: PyInt,
 
     /// Emit the machine envelope.
-    #[arg(long = "json", help = "Emit the machine envelope.")]
+    #[arg(
+        long = "json",
+        overrides_with = "as_json",
+        help = "Emit the machine envelope."
+    )]
     pub as_json: bool,
+}
+
+/// `click.IntRange(min=1)` — `int()`, then the bound.
+///
+/// Both halves matter: the conversion is CPython's (see
+/// [`stax_core::queries::pyint`]) and the bound is checked on the converted
+/// value, so `--limit-per-provider ' 0'` is rejected for being 0, not for the
+/// space.
+fn py_int_min_one(raw: &str) -> Result<PyInt, String> {
+    let value = PyInt::parse(raw).ok_or_else(|| "is not a valid integer".to_string())?;
+    if value.is_positive() {
+        Ok(value)
+    } else {
+        Err(format!("{value} is not in the range x>=1"))
+    }
 }
 
 /// The bytes and the exit status of one `resume` invocation.
@@ -633,7 +658,11 @@ pub fn run(args: &ResumeArgs, env: &ResumeEnv) -> Result<Output> {
     // `resume_candidates` — i.e. after both store checks, so a store failure is
     // still reported first when the path itself is unresolvable.
     let resolved = paths::resolve_input_path_with(&target, env.home.as_deref(), &env.cwd);
-    let mut providers = resume_candidates(store.conn(), &resolved, args.limit_per_provider)?;
+    let mut providers = resume_candidates(
+        store.conn(),
+        &resolved,
+        args.limit_per_provider.saturating_i64(),
+    )?;
     drop(store);
 
     let mut unmatched: Vec<String> = Vec::new();
@@ -665,6 +694,8 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use clap::Parser as _;
 
     use super::*;
 
@@ -807,7 +838,7 @@ mod tests {
         ResumeArgs {
             path: Some(path.to_owned()),
             provider: Vec::new(),
-            limit_per_provider: 5,
+            limit_per_provider: PyInt::from(5),
             as_json: false,
         }
     }
@@ -823,7 +854,7 @@ mod tests {
             as_json: true,
             path: args.path.clone(),
             provider: args.provider.clone(),
-            limit_per_provider: args.limit_per_provider,
+            limit_per_provider: args.limit_per_provider.clone(),
         };
         args.as_json = true;
         let out = run_seeded(&args);
@@ -909,7 +940,7 @@ mod tests {
     #[test]
     fn the_limit_is_per_provider_and_recency_ordered() {
         let envelope = payload(&ResumeArgs {
-            limit_per_provider: 1,
+            limit_per_provider: PyInt::from(1),
             ..args("/Users/t/my_ws")
         });
         assert_eq!(ids(block(&envelope, "codex")), ["cx-child-new"]);
@@ -1317,5 +1348,108 @@ mod tests {
         assert_eq!(py_int(ValueRef::Integer(7)), 7);
         assert_eq!(py_int(ValueRef::Real(3.9)), 3);
         assert_eq!(py_int(ValueRef::Text(b"12")), 12);
+    }
+
+    /// `IntRange(min=1)` converts with `int()` **before** it checks the bound.
+    /// `clap::value_parser!(i64)` did neither, so `' 5'`, `٧`, `1_000` and a
+    /// limit past 2⁶³ were exit-2 rejections against a Python exit 0 — and
+    /// `--limit-per-provider 1_000` is not academic: it is the difference
+    /// between 12 KB and 442 KB of `resume /` output on the live store.
+    fn parse_limit(raw: &str) -> Result<PyInt, clap::error::ErrorKind> {
+        match crate::Cli::try_parse_from(["stax-rs", "resume", "/", "--limit-per-provider", raw]) {
+            Ok(cli) => {
+                let crate::Command::Resume(args) = cli.command else {
+                    panic!("expected resume");
+                };
+                Ok(args.limit_per_provider)
+            }
+            Err(error) => Err(error.kind()),
+        }
+    }
+
+    #[test]
+    fn limit_per_provider_converts_with_int_then_checks_the_bound() {
+        for (raw, expected) in [
+            ("5", "5"),
+            (" 5", "5"),
+            ("+5", "5"),
+            ("1_000", "1000"),
+            ("\u{667}", "7"),
+            ("99999999999999999999", "99999999999999999999"),
+        ] {
+            assert_eq!(
+                parse_limit(raw)
+                    .unwrap_or_else(|kind| panic!("{raw:?} → {kind:?}"))
+                    .to_string(),
+                expected,
+                "{raw:?}"
+            );
+        }
+        // The bound still rejects — and it rejects the *converted* value, so
+        // `' 0'` fails for being zero, not for the space.
+        for raw in ["0", " 0", "-3", "5.0", "0x2", ""] {
+            assert!(
+                parse_limit(raw).is_err(),
+                "{raw:?} must be a parameter error"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_resume_options_are_last_wins() {
+        let cli = crate::Cli::try_parse_from([
+            "stax-rs",
+            "resume",
+            "/",
+            "--limit-per-provider",
+            "3",
+            "--limit-per-provider",
+            "7",
+            "--json",
+            "--json",
+        ])
+        .expect("Click keeps the last occurrence of a repeated option");
+        let crate::Command::Resume(args) = cli.command else {
+            panic!("expected resume");
+        };
+        assert_eq!(args.limit_per_provider.to_string(), "7");
+        assert!(args.as_json);
+        // `-p` really is repeatable on the Python side — it must NOT collapse.
+        let cli =
+            crate::Cli::try_parse_from(["stax-rs", "resume", "/", "-p", "claude", "-p", "codex"])
+                .expect("--provider is a list, not a scalar");
+        let crate::Command::Resume(args) = cli.command else {
+            panic!("expected resume");
+        };
+        assert_eq!(args.provider, vec!["claude", "codex"]);
+    }
+
+    /// Item D, recorded rather than fixed. `resume` orders by `s.last_ts DESC`
+    /// and 59 % of the live store's sessions have `last_ts IS NULL`, so the tie
+    /// order is the query planner's — running `ANALYZE` on the store reorders
+    /// the output, and at `--limit-per-provider 2000` it changes *which*
+    /// sessions come back (2,155 rows, 197 swapped in/out). The temptation is a
+    /// deterministic tiebreaker; the measurement says no. Appending
+    /// `, s.id ASC` to the same SQL on the same snapshot moves 675 of those
+    /// 2,155 printed rows and swaps the same 197 — in **Python** too. A
+    /// tiebreaker added here alone would therefore *break* byte-parity rather
+    /// than secure it. The SQL shape stays verbatim (§6b); this test is the
+    /// tripwire, so a future edit to the clause fails loudly.
+    #[test]
+    fn the_resume_order_by_stays_verbatim_until_python_changes_it() {
+        let scratch = Scratch::new();
+        seed(&scratch.db());
+        let conn = Connection::open(scratch.db()).expect("opening the fixture");
+        let plan: Vec<String> = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT s.project_id, s.session_id, s.first_ts, s.last_ts,       s.message_count  FROM sessions s WHERE s.project_id IN (?) ORDER BY s.last_ts DESC")
+            .expect("the ported shape still prepares")
+            .query_map([1_i64], |row| row.get::<_, String>(3))
+            .expect("planning")
+            .collect::<rusqlite::Result<_>>()
+            .expect("planning");
+        assert!(
+            plan.iter().any(|step| step.contains("ORDER BY")),
+            "the sort is the planner's, and its tie order is not a contract: {plan:?}"
+        );
     }
 }

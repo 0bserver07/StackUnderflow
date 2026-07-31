@@ -1,1 +1,5 @@
 /target
+# The byte-diff harness's store states: multi-gigabyte snapshots of the live
+# dataset, rebuilt on demand with `rust/parity-cli.sh --build-state`. The case
+# matrix and the scripts are in-tree; the data never is.
+/.parity-state

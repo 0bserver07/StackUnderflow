@@ -1,0 +1,125 @@
+# The byte-diff harness's case matrix — `rust/parity-cli.sh` reads this file.
+#
+# Format:  <id> | <cwd-token> | <argv>
+#
+#   id         stable, used for the diff filename under .parity-state/diffs/
+#   cwd-token  repo = the rust worktree root · py = the Python checkout ·
+#              tmp  = a scratch dir no project covers (the cwd-detection floor)
+#   argv       shell-quoted; `eval set --` splits it, so quoting is real
+#
+# A `rust:` id prefix marks a Rust-only command (no Python counterpart): those
+# rows are self-checking round-trips, not cross-implementation diffs.
+#
+# Provenance of the rows, so nobody prunes them by accident:
+#   B-*    the wave-1 LIKE-path 55-case matrix (PARITY-wave1-memory-read-path.md)
+#   D2-*   the `memory ask` matrix (PARITY-wave1-memory-ask.md)
+#   V-*    the wave-1 adversarial audit's 12 out-of-matrix divergences (DIV-010)
+#   F-*    the FTS-branch rows this P0 port added (RS-1-007)
+
+# ── memory decisions ─────────────────────────────────────────────────────────
+B-dec-text          | repo | memory decisions cache
+B-dec-json          | repo | memory decisions cache --json
+B-dec-format-json   | repo | memory decisions cache --format json
+B-dec-proj          | repo | memory decisions cache --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow
+B-dec-proj-json     | repo | memory decisions cache --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --json
+F-dec-phrase        | repo | memory decisions 'cache lookup'
+F-dec-phrase-json   | repo | memory decisions 'cache lookup' --json
+F-dec-operator      | repo | memory decisions 'use NOT null' --json
+F-dec-multiword     | repo | memory decisions 'context budget' --json
+B-dec-limit3        | repo | memory decisions pytest --limit 3
+B-dec-limit3-json   | repo | memory decisions pytest --limit 3 --json
+B-dec-empty         | repo | memory decisions ''
+B-dec-empty-json    | repo | memory decisions '' --json
+B-dec-punct-json    | repo | memory decisions '!!!' --json
+B-dec-since7d       | repo | memory decisions cache --since 7d
+B-dec-since30d-json | repo | memory decisions cache --since 30d --json
+V-dec-since-bad     | repo | memory decisions cache --since notadate
+V-dec-since-bad-js  | repo | memory decisions cache --since notadate --json
+B-dec-budget0       | repo | memory decisions cache --context-budget 0
+B-dec-budget300     | repo | memory decisions cache --context-budget 300 --json
+B-dec-budget-small  | repo | memory decisions cache --context-budget 40 --json
+V-dec-proj-empty    | repo | memory decisions cache --project '' --json
+V-dec-limit-neg     | repo | memory decisions cache --limit -1 --json
+V-dec-limit-negeq   | repo | memory decisions cache --limit=-1 --json
+V-dec-limit-space   | repo | memory decisions cache --limit ' 5' --json
+V-dec-limit-under   | repo | memory decisions cache --limit 1_000 --json
+V-dec-limit-huge    | repo | memory decisions cache --limit 99999999999999999999 --json
+V-dec-limit-repeat  | repo | memory decisions cache --limit 3 --limit 5 --json
+V-dec-format-repeat | repo | memory decisions cache --format json --format text
+V-dec-limit-bad     | repo | memory decisions cache --limit notanint
+B-dec-unicode       | repo | memory decisions café --json
+B-dec-cwd-tmp       | tmp  | memory decisions cache --json
+B-dec-cwd-py        | py   | memory decisions cache --json
+
+# ── memory worked ────────────────────────────────────────────────────────────
+B-wrk-text          | repo | memory worked pytest
+B-wrk-json          | repo | memory worked pytest --json
+B-wrk-proj          | repo | memory worked pytest --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --json
+F-wrk-phrase        | repo | memory worked 'add caching' --json
+F-wrk-tool          | repo | memory worked Edit --json
+B-wrk-limit2        | repo | memory worked pytest --limit 2 --json
+B-wrk-since         | repo | memory worked pytest --since 7d --json
+B-wrk-budget        | repo | memory worked pytest --context-budget 200
+B-wrk-budget-json   | repo | memory worked pytest --context-budget 200 --json
+B-wrk-empty-json    | repo | memory worked '   ' --json
+B-wrk-cwd-py        | py   | memory worked pytest --json
+
+# ── memory file ──────────────────────────────────────────────────────────────
+F-file-cli          | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
+F-file-cli-json     | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --json
+F-file-server       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py
+F-file-server-json  | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --json
+F-file-discovery    | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --json
+B-file-limit5       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --limit 5 --json
+B-file-since        | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --since 30d --json
+B-file-budget       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --context-budget 250 --json
+B-file-missing      | repo | memory file /no/such/file/anywhere.py
+B-file-missing-json | repo | memory file /no/such/file/anywhere.py --json
+B-file-relative     | repo | memory file rust/ci.sh --json
+B-file-tilde        | repo | memory file ~/.claude/settings.json --json
+B-file-dir          | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --json
+
+# ── memory sessions ──────────────────────────────────────────────────────────
+B-ses-cwd           | repo | memory sessions
+B-ses-cwd-json      | repo | memory sessions --json
+B-ses-dir           | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow
+B-ses-dir-json      | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --json
+F-ses-file          | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
+F-ses-file-json     | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --json
+F-ses-file-local    | repo | memory sessions rust/ci.sh --json
+B-ses-proj          | repo | memory sessions --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --json
+B-ses-proj-empty    | repo | memory sessions --project '' --json
+B-ses-since         | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --since 7d --json
+V-ses-since-bad     | repo | memory sessions --since notadate --json
+B-ses-limit2        | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --limit 2 --json
+B-ses-budget150     | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --context-budget 150 --json
+B-ses-budget0       | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --context-budget 0 --json
+B-ses-tilde         | repo | memory sessions ~/.claude --json
+B-ses-cwd-tmp       | tmp  | memory sessions --json
+B-ses-cwd-py        | py   | memory sessions --json
+
+# ── memory ask (D2) ──────────────────────────────────────────────────────────
+D2-ask-text         | repo | memory ask 'how does caching work'
+D2-ask-json         | repo | memory ask 'how does caching work' --json
+D2-ask-proj         | repo | memory ask 'how does caching work' --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --json
+D2-ask-limit        | repo | memory ask pytest --limit 3 --json
+D2-ask-budget       | repo | memory ask pytest --context-budget 300 --json
+D2-ask-empty        | repo | memory ask '' --json
+D2-ask-punct        | repo | memory ask '***'
+D2-ask-since        | repo | memory ask pytest --since 30d --json
+D2-ask-cwd-tmp      | tmp  | memory ask pytest --json
+
+# ── resume ───────────────────────────────────────────────────────────────────
+R-res-cwd           | repo | resume
+R-res-cwd-json      | repo | resume --json
+R-res-path          | repo | resume /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow
+R-res-path-json     | repo | resume /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --json
+R-res-provider      | repo | resume --provider claude --json
+R-res-prov-prefix   | repo | resume -p cod --json
+R-res-limit1        | repo | resume --limit-per-provider 1 --json
+R-res-tmp           | tmp  | resume --json
+R-res-home          | repo | resume ~/.claude --json
+
+# ── Rust-only commands (round-trip, no Python counterpart) ───────────────────
+rust:anchor-roundtrip  | repo | anchor
+rust:status            | repo | status

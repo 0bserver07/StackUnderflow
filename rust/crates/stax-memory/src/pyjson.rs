@@ -274,7 +274,8 @@ fn escape_units(ch: char) -> Vec<u32> {
 /// CPython's `repr(float)` — the exact text `json.dumps` writes for a float.
 ///
 /// Both runtimes compute the *shortest* digit string that round-trips, so the
-/// digits are shared; only the presentation rules are CPython's, taken from
+/// digits are shared except for the one case [`tie_break_to_even`] repairs
+/// (DIV-008); the presentation rules are CPython's, taken from
 /// `Python/pystrtod.c:format_float_short` with `type='r'`:
 ///
 /// * exponent form when `decpt <= -4 || decpt > 16` — "convert to exponential
@@ -325,6 +326,8 @@ pub fn python_float_repr(value: f64) -> String {
     // `decpt` is CPython's: the position of the decimal point relative to the
     // start of `digits`, i.e. one more than the scientific exponent.
     let decpt = exp + 1;
+    // DIV-008: the one place the two digit generators disagree.
+    let digits = tie_break_to_even(&digits, decpt, value.abs()).unwrap_or(digits);
 
     let mut out = String::with_capacity(digits.len() + 8);
     out.push_str(sign);
@@ -361,6 +364,128 @@ pub fn python_float_repr(value: f64) -> String {
         out.push_str(&digits[split..]);
     }
     out
+}
+
+// ── DIV-008: the halfway decimal tie ────────────────────────────────────────
+//
+// Rust's shortest-round-trip writer and CPython's `_Py_dg_dtoa` agree on the
+// *length* of the shortest digit string, and on the digits themselves whenever
+// one candidate of that length is strictly closer to the double than its
+// neighbour. They part company on the measure-zero case where the double's
+// exact value sits *exactly* halfway between two candidates that both parse
+// back to it: CPython selects the even final digit (`Python/dtoa.c`, mode 0 —
+// the arm guarded by `word1(&u) & 1`), Rust rounds away from zero.
+//
+// `-1352070300110077.2` is the reference repro: that double is exactly
+// …077.25, so …077.2 and …077.3 are equidistant and both parse to it. CPython
+// prints the first, `{:e}` the second. Measured incidence before the fix:
+// 65,839 of 5,158,262 adversarial doubles, and 0 of the 144,187 distinct
+// `REAL`s in the live store — invisible on today's data, but `cost_usd` in the
+// envelope is a SUM, not a stored value.
+//
+// The repair is one digit, so it is expressed as an exact integer question
+// rather than a second digit generator: is the midpoint between the two
+// candidates *equal* to the double? Both sides factor as (odd) × 2^a × 5^b,
+// and `m < 2^53` bounds `b` far inside `u128`. No bignum, no new dependency.
+//
+// THIS BLOCK IS DUPLICATED, DELIBERATELY, IN:
+//   * crates/stax-memory/src/pyjson.rs      (python_float_repr)
+//   * crates/stax-core/src/queries.rs       (pyjson::repr_float)
+// The two writers serve the same wire contract and the crates share no
+// dependency edge (stax-memory is serde-only by design; stax-core drags in
+// bundled SQLite). Keep them byte-identical — each crate's test module carries
+// the same case table, so drift fails a test rather than a golden.
+
+/// Re-break a halfway decimal tie the way CPython does: to the even digit.
+///
+/// `digits` and `decpt` are the shortest round-trip digits `{:e}` produced —
+/// the value is `digits × 10^(decpt - digits.len())` — and `magnitude` is the
+/// non-negative double they describe. Returns `Some(replacement)` only when the
+/// double is *exactly* the midpoint between `digits` and an adjacent
+/// same-length candidate that also round-trips, and that neighbour is the even
+/// one; `None` leaves `{:e}`'s answer alone, which is the overwhelmingly
+/// common path and costs one parity test.
+fn tie_break_to_even(digits: &str, decpt: i32, magnitude: f64) -> Option<String> {
+    // An even final digit is already CPython's answer: either there was no tie
+    // at all, or `{:e}` rounded up *into* the even digit and both agree.
+    if *digits.as_bytes().last()? % 2 == 0 {
+        return None;
+    }
+    // 17 digits is `f64`'s shortest-repr ceiling, so `10 * d + 5` cannot
+    // overflow `u64`; anything longer did not come from this writer.
+    let value: u64 = digits.parse().ok()?;
+    let scale = decpt - i32::try_from(digits.len()).ok()?;
+
+    for (midpoint, neighbour) in [(10 * value - 5, value - 1), (10 * value + 5, value + 1)] {
+        if !is_exact_decimal(midpoint, scale - 1, magnitude) {
+            continue;
+        }
+        // A genuine tie is between two candidates of the same length — a
+        // shorter neighbour would already have been the shortest repr — and
+        // the neighbour has to round-trip. At a binade floor the gap below the
+        // double is half the gap above it, so a lower candidate can be an
+        // exact midpoint and still parse to the *previous* double: `2^-24` is
+        // the live case, where CPython prints 5.960464477539063e-08 and the
+        // even-looking 5.960464477539062e-08 is a different float.
+        let replacement = neighbour.to_string();
+        if replacement.len() != digits.len() {
+            break;
+        }
+        match format!("{replacement}e{scale}").parse::<f64>() {
+            Ok(parsed) if parsed.to_bits() == magnitude.to_bits() => return Some(replacement),
+            _ => break,
+        }
+    }
+    None
+}
+
+/// Is `n × 10^exp10` *exactly* the value of the finite, non-negative
+/// `magnitude`?
+///
+/// `magnitude` is `m × 2^e` with `m < 2^53`. Splitting both sides into an odd
+/// factor and a power of two reduces the question to two integer identities —
+/// the odd parts must match and the 2-exponents must match. The odd parts carry
+/// the `5^k` out of `10^k`, and `m < 2^53` caps the reachable `k` at roughly
+/// ±27 before one side can no longer equal the other, so the running product in
+/// [`times_pow5_eq`] stays well inside `u128`.
+fn is_exact_decimal(n: u64, exp10: i32, magnitude: f64) -> bool {
+    let bits = magnitude.to_bits();
+    let raw_exponent = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1 << 52) - 1);
+    // Subnormals carry no implicit leading bit and a fixed exponent.
+    let (m, e) = if raw_exponent == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | (1 << 52), raw_exponent - 1075)
+    };
+    if m == 0 {
+        return n == 0;
+    }
+    let m_twos = m.trailing_zeros() as i32;
+    let m_odd = m >> m_twos;
+    let n_twos = n.trailing_zeros() as i32;
+    let n_odd = n >> n_twos;
+    if exp10 >= 0 {
+        // n_odd·5^exp10 · 2^(n_twos + exp10)  ==  m_odd · 2^(m_twos + e)
+        n_twos + exp10 == m_twos + e && times_pow5_eq(n_odd, exp10.unsigned_abs(), m_odd)
+    } else {
+        // n_odd · 2^n_twos  ==  m_odd·5^(-exp10) · 2^(m_twos + e - exp10)
+        n_twos == m_twos + e - exp10 && times_pow5_eq(m_odd, exp10.unsigned_abs(), n_odd)
+    }
+}
+
+/// `a × 5^k == b`, without overflow: the running product is checked against `b`
+/// after every step, so it never climbs past `u64::MAX`.
+fn times_pow5_eq(a: u64, k: u32, b: u64) -> bool {
+    let mut product = u128::from(a);
+    let limit = u128::from(b);
+    for _ in 0..k {
+        product *= 5;
+        if product > limit {
+            return false;
+        }
+    }
+    product == limit
 }
 
 /// Parse JSON the way `json.loads` does for our purposes, keeping key order.
@@ -412,6 +537,87 @@ mod tests {
         ];
         for (value, want) in cases {
             assert_eq!(&python_float_repr(*value), want, "repr({value})");
+        }
+    }
+
+    /// DIV-008's case table — the drift alarm for the two copies of
+    /// `tie_break_to_even`.
+    ///
+    /// `(bit pattern, CPython repr)`, every expectation produced by
+    /// `../StackUnderflow/.venv/bin/python -c 'print(repr(x))'` on the reference
+    /// interpreter. The same table lives in the other crate; if only one copy of
+    /// the algorithm is edited, one of the two fails.
+    ///
+    /// Four groups, in order:
+    ///
+    /// 1. **Ties CPython breaks downward** — the divergence itself. Rust's
+    ///    shortest writer rounds these up; the double is exactly `…25`, so both
+    ///    spellings parse back to it and only a byte comparison can see it.
+    /// 2. **Ties CPython breaks upward** — the same tie, where the even digit
+    ///    happens to be the higher one and the two writers already agreed. Pins
+    ///    that the fix did not simply invert the rounding.
+    /// 3. **Binade floors** — an exact midpoint that must *not* be taken. At the
+    ///    bottom of a binade the gap below the double is half the gap above, so
+    ///    the lower candidate is equidistant in decimal yet parses to the previous
+    ///    double. `2^-24` is the live case: CPython prints `…063`, and `…062` is a
+    ///    different float.
+    /// 4. **Odd last digit, no tie** — the fast path must not misfire on the
+    ///    ordinary values that reach it constantly.
+    const DIV008_CASES: &[(u64, &str)] = &[
+        // 1. CPython rounds the tie down to the even digit; `{:e}` rounds up.
+        (0xc313_36cd_97cc_33f5, "-1352070300110077.2"),
+        (0x430e_1c6d_958d_7b72, "1059438285926254.2"),
+        (0xc314_41f2_33f6_3165, "-1425502010969177.2"),
+        (0x42b7_fa57_c450_e950, "26363981746409.312"),
+        (0x4319_7469_53fb_86ad, "1791217536786859.2"),
+        (0xc2d8_c0fe_9119_c088, "-108868734838530.12"),
+        (0xc2bf_0dc9_05b0_7310, "-34144067629171.062"),
+        // 2. CPython rounds the tie up to the even digit; both writers agreed already.
+        (0xc310_c44c_b563_4c1f, "-1179858341778183.8"),
+        (0xc2ed_1a52_01a8_fb4c, "-255991057565658.38"),
+        (0x430d_bf9a_9de0_10e6, "1046680639898140.8"),
+        (0xc31b_4e7d_6d57_492b, "-1921531245875786.8"),
+        (0x4304_b413_2881_dc6e, "728436738898829.8"),
+        (0xc31c_dda2_f0f2_6be3, "-2031247811189496.8"),
+        // 3. Binade floors: the even-looking neighbour is a different double.
+        (0x3e70_0000_0000_0000, "5.960464477539063e-08"),
+        (0x3e60_0000_0000_0000, "2.9802322387695312e-08"),
+        (0x3e10_0000_0000_0000, "9.313225746154785e-10"),
+        (0x3ca0_0000_0000_0000, "1.1102230246251565e-16"),
+        (0x0010_0000_0000_0000, "2.2250738585072014e-308"),
+        (0x0000_0000_0000_0001, "5e-324"),
+        (0x43e0_0000_0000_0000, "9.223372036854776e+18"),
+        (0x4330_0000_0000_0000, "4503599627370496.0"),
+        (0x4340_0000_0000_0000, "9007199254740992.0"),
+        // 4. Odd final digit, no tie anywhere near it.
+        (0x3fb9_9999_9999_999a, "0.1"),
+        (0x4009_21fb_5444_2d18, "3.141592653589793"),
+        (0x4005_bf0a_8b14_5769, "2.718281828459045"),
+        (0xc02e_0000_0000_0000, "-15.0"),
+        (0x3f84_7ae1_47ae_147b, "0.01"),
+    ];
+
+    /// DIV-008: halfway ties render exactly as CPython's `repr` does.
+    #[test]
+    fn halfway_ties_break_to_even_like_cpython() {
+        for (bits, want) in DIV008_CASES {
+            let value = f64::from_bits(*bits);
+            assert_eq!(&python_float_repr(value), want, "repr({bits:#018x})");
+        }
+    }
+
+    /// Both spellings of a tie parse to the same double, so a round-trip test
+    /// cannot see the fix — only these bytes can. Guards against anyone
+    /// "simplifying" the table away into a parse check.
+    #[test]
+    fn the_tie_repair_is_invisible_to_round_tripping() {
+        for (bits, want) in DIV008_CASES {
+            assert_eq!(
+                want.parse::<f64>()
+                    .expect("CPython prints a parseable float"),
+                f64::from_bits(*bits),
+                "{bits:#018x} must round-trip whatever the spelling"
+            );
         }
     }
 

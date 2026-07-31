@@ -87,7 +87,7 @@ pub fn run_ask_with(
     hybrid: &HybridEnv,
 ) -> Result<Output> {
     let json_mode = options.json_mode();
-    let budget = env.budget(options.context_budget);
+    let budget = env.budget(options.context_budget.as_ref());
     let mut echo = query_echo(&[("question", Value::String(question.to_owned()))], options);
 
     if !search_has_intent(question) {
@@ -100,27 +100,37 @@ pub fn run_ask_with(
         ));
     }
     let cwd = paths::path_to_string(&env.cwd);
+    // `--project ''` is `slug = ''` in Python: not `None`, so the cwd fallback
+    // is skipped, and falsy, so every `if project:` guard downstream drops the
+    // filter. The equivalent here is "no scope, no cwd detection"; the echo is
+    // restored to `''` below, because that is the string Python prints.
+    let empty_project = options.project.as_deref() == Some("");
     let request = ask::AskRequest {
         question,
-        project: options.project.as_deref(),
+        project: options.project.as_deref().filter(|slug| !slug.is_empty()),
         since: options.since.as_deref(),
-        limit: options.limit,
-        scope_to_cwd: true,
+        // Saturating, not [`stax_core::queries::Limit`]: nothing on `ask`'s path
+        // binds `--limit` into SQL (the FTS half binds `candidate_k`, a
+        // constant 50), so Python never raises `OverflowError` here and a
+        // saturated cap is exact — proven byte-for-byte with
+        // `--limit 99999999999999999999` on the populated index. The extra
+        // `/ 4` is arithmetic hygiene, not semantics: `hybrid_session_order`
+        // computes `(limit * 3).max(30)`, and `i64::MAX * 3` would wrap.
+        limit: options.limit_i64().min(i64::MAX / 4),
+        scope_to_cwd: !empty_project,
         cwd: &cwd,
     };
     let outcome = match ask::run_ask_query(conn, &request, &budget, hybrid) {
         Ok(outcome) => outcome,
         Err(error) => {
-            return Ok(memory_fail(
-                "ask",
-                &echo,
-                &error.to_string(),
-                json_mode,
-                USAGE,
-            ));
+            return crate::memory::caught(error, "ask", &echo, json_mode, USAGE);
         }
     };
-    set_project(&mut echo, outcome.slug.as_deref());
+    if empty_project {
+        set_project(&mut echo, Some(""));
+    } else {
+        set_project(&mut echo, outcome.slug.as_deref());
+    }
     let note = if outcome.vector_used {
         NOTE_HYBRID
     } else {
@@ -158,6 +168,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use rusqlite::Connection;
+    use stax_core::queries::pyint::PyInt;
     use stax_core::queries::rank;
 
     use super::*;
@@ -196,7 +207,7 @@ mod tests {
             as_json: json,
             project: None,
             since: None,
-            limit: 20,
+            limit: PyInt::from(20),
             context_budget: None,
         }
     }
@@ -208,6 +219,9 @@ mod tests {
             budget_default: 2000,
             weights: rank::DEFAULT_RANK_WEIGHTS,
             now_epoch: 1_785_456_000.0,
+            // `ask` has its own retriever; the structured verbs' lexical index
+            // is not part of this command's environment.
+            index: None,
         }
     }
 
@@ -509,7 +523,7 @@ mod tests {
     fn the_context_budget_truncates_and_says_so() {
         let conn = store();
         let mut tight = options(true);
-        tight.context_budget = Some(1);
+        tight.context_budget = Some(PyInt::from(1));
         let output = run_ask_with(&conn, "cache", &tight, &env(), &HybridEnv::disabled())
             .expect("a truncated answer");
         let parsed: Value = serde_json::from_str(&output.stdout).expect("valid JSON");

@@ -35,7 +35,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Map, Value};
 use stax_core::queries::{
-    self, BudgetedResult, RiskSummary, SessionMatch, paths, pyjson, rank::Budget,
+    self, BudgetedResult, RiskSummary, SessionMatch, ValueError, paths, pyint::PyInt, pyjson,
+    rank::Budget,
 };
 use stax_core::settings;
 use stax_core::store::Store;
@@ -52,25 +53,53 @@ pub enum Format {
     Json,
 }
 
+/// `click.option(type=int)` — CPython's `int()`, not `str::parse`.
+///
+/// Click hands the raw token to `int()`, which strips surrounding whitespace,
+/// takes a leading `+`, allows `_` between digits, reads decimal digits from any
+/// script, and has no width bound. `--limit ' 5'`, `--limit 1_000`,
+/// `--limit ٧` and `--limit 99999999999999999999` are all exit-0 invocations on
+/// the Python side; each was an exit-2 parse rejection here.
+///
+/// The error text is clap's to render (D-2's precedent: parser-owned messages
+/// differ, exit code and stdout do not) — Click says
+/// `Invalid value for '--limit': '-x' is not a valid integer.`
+fn py_int(raw: &str) -> Result<PyInt, String> {
+    PyInt::parse(raw).ok_or_else(|| "is not a valid integer".to_string())
+}
+
 /// The six options every `memory` subcommand shares (`cli._memory_options`).
+///
+/// Every one carries a self-`overrides_with`: Click's parser keeps the **last**
+/// occurrence of a repeated option (`--limit 3 --limit 5` is 5, `--format json
+/// --format text` is text, and a repeated `--json` is simply true), where clap's
+/// default is to reject the repeat with exit 2. Measured across all six against
+/// Click 8.4.2, not assumed.
 #[derive(Debug, Clone, Args)]
 pub struct MemoryOptions {
     /// Output format. 'json' emits the stable agent-output envelope.
-    #[arg(long = "format", value_name = "FMT", default_value = "text")]
+    #[arg(
+        long = "format",
+        value_name = "FMT",
+        default_value = "text",
+        overrides_with = "format"
+    )]
     pub format: Format,
     /// Shortcut for --format json.
-    #[arg(long = "json")]
+    #[arg(long = "json", overrides_with = "as_json")]
     pub as_json: bool,
     /// Project slug to scope to. Default: the current directory's project,
     /// when StackUnderflow recognises it.
     ///
     /// `allow_hyphen_values` because every slug starts with `-`
     /// (`-Users-you-dev-proj`): without it clap reads the value as a flag and
-    /// exits 2 where Click happily scopes the query.
-    #[arg(long, allow_hyphen_values = true)]
+    /// exits 2 where Click happily scopes the query. Click's parser simply pops
+    /// the next token whatever it looks like, so this is the faithful rule —
+    /// `--project --json` really does scope to a project named `--json`.
+    #[arg(long, allow_hyphen_values = true, overrides_with = "project")]
     pub project: Option<String>,
     /// Time lower bound: '7d', '1w', '1m', '24h', or an ISO date/datetime.
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true, overrides_with = "since")]
     pub since: Option<String>,
     /// Hard cap on the number of results.
     ///
@@ -78,8 +107,14 @@ pub struct MemoryOptions {
     /// accepts `--limit -1` (a negative cap means "no cap"), and without it
     /// clap reads the `-1` as an unknown flag and exits 2. The `--limit=-1`
     /// form already agreed; the space-separated one did not.
-    #[arg(long, default_value_t = 20, allow_hyphen_values = true)]
-    pub limit: i64,
+    #[arg(
+        long,
+        default_value_t = PyInt::from(20),
+        value_parser = py_int,
+        allow_hyphen_values = true,
+        overrides_with = "limit"
+    )]
+    pub limit: PyInt,
     /// Token budget for the output. Default:
     /// STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. Pass 0 to disable.
     ///
@@ -88,9 +123,11 @@ pub struct MemoryOptions {
     #[arg(
         long = "context-budget",
         value_name = "TOKENS",
-        allow_hyphen_values = true
+        value_parser = py_int,
+        allow_hyphen_values = true,
+        overrides_with = "context_budget"
     )]
-    pub context_budget: Option<i64>,
+    pub context_budget: Option<PyInt>,
 }
 
 impl MemoryOptions {
@@ -98,6 +135,16 @@ impl MemoryOptions {
     #[must_use]
     pub fn json_mode(&self) -> bool {
         self.as_json || self.format == Format::Json
+    }
+
+    /// `--limit` as the cap the Python-side comparisons use.
+    ///
+    /// Saturating is exact here: no result set has 2⁶³ rows. The one place the
+    /// full-width value still matters is a `LIMIT ?` bind, which takes
+    /// [`queries::Limit`] instead and reproduces `sqlite3`'s `OverflowError`.
+    #[must_use]
+    pub fn limit_i64(&self) -> i64 {
+        self.limit.saturating_i64()
     }
 }
 
@@ -217,6 +264,14 @@ pub struct MemoryEnv {
     pub weights: (f64, f64, f64),
     /// `datetime.now(UTC)` as epoch seconds, for the recency term.
     pub now_epoch: f64,
+    /// `cli._lexical_search_service()` — the FTS5 sidecar beside the store.
+    ///
+    /// `Some` on every real invocation, because Python's is: `SearchService`
+    /// is constructed unconditionally (it even *creates* `search_index.db`),
+    /// and the "is there an index?" question is answered later, per query, by
+    /// whether the `messages` table has rows. Four of the five verbs consult
+    /// it; `memory ask` has its own hybrid retriever ([`crate::ask`]).
+    pub index: Option<stax_core::lexical::LexicalIndex>,
 }
 
 impl MemoryEnv {
@@ -229,6 +284,7 @@ impl MemoryEnv {
         Ok(Self {
             cwd: std::env::current_dir()?,
             home: paths::home_dir(),
+            index: stax_core::lexical::LexicalIndex::beside_store(&settings::store_path()),
             budget_default: resolve_budget_default(
                 std::env::var("STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS")
                     .ok()
@@ -247,9 +303,9 @@ impl MemoryEnv {
 
     /// `cli._resolve_context_budget` — the flag, else the setting.
     #[must_use]
-    pub fn budget(&self, flag: Option<i64>) -> Budget {
+    pub fn budget(&self, flag: Option<&PyInt>) -> Budget {
         Budget::at(
-            flag.unwrap_or(self.budget_default),
+            flag.map_or(self.budget_default, PyInt::saturating_i64),
             self.weights,
             self.now_epoch,
         )
@@ -267,16 +323,25 @@ fn read_config(app_dir: &Path) -> Option<pyjson::Value> {
 /// The env leg goes through `int(raw)`, which falls back to the default on a
 /// non-integer; the file leg is returned as stored and cast by
 /// `_resolve_context_budget`'s `int(...)`.
+///
+/// `int(raw)` — not `raw.parse::<i64>()`. That difference was silent and it
+/// changed answers: `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=99999999999999999999`
+/// is an effectively unbounded budget in Python (20 sessions surfaced on the
+/// live store) while an `i64` parse failed and fell back to 2000 (13 sessions),
+/// with exit 0 and no warning on either side. Saturating an out-of-range value
+/// is exact for a budget, which is only ever compared against a token estimate.
 #[must_use]
 pub fn resolve_budget_default(env: Option<&str>, config: Option<&pyjson::Value>) -> i64 {
     const DEFAULT: i64 = 2000;
     if let Some(raw) = env {
-        return raw.trim().parse::<i64>().unwrap_or(DEFAULT);
+        return PyInt::parse(raw).map_or(DEFAULT, |value| value.saturating_i64());
     }
     match config.and_then(|config| config.get("discovery_budget_tokens")) {
         Some(pyjson::Value::Int(value)) => *value,
         Some(pyjson::Value::Float(value)) => *value as i64,
-        Some(pyjson::Value::Str(value)) => value.trim().parse::<i64>().unwrap_or(DEFAULT),
+        Some(pyjson::Value::Str(value)) => {
+            PyInt::parse(value).map_or(DEFAULT, |value| value.saturating_i64())
+        }
         _ => DEFAULT,
     }
 }
@@ -339,7 +404,7 @@ fn run_decisions(
     env: &MemoryEnv,
 ) -> Result<Output> {
     let json_mode = options.json_mode();
-    let budget = env.budget(options.context_budget);
+    let budget = env.budget(options.context_budget.as_ref());
     let mut echo = query_echo(&[("text", Value::String(query.to_string()))], options);
 
     if !search_has_intent(query) {
@@ -351,27 +416,32 @@ fn run_decisions(
             "memory decisions [OPTIONS] QUERY",
         ));
     }
+    // `slug = project; if slug is None and scope_to_cwd: …` — the test is
+    // `is None`, so `--project ''` stays the empty string and does NOT fall
+    // back to the cwd. The queries then read `''` as "every project"
+    // (`queries::project_filter`), which is what makes the two agree.
     let slug = match &options.project {
         Some(slug) => Some(slug.clone()),
         None => queries::detect_cwd_project_slug(conn, &paths::path_to_string(&env.cwd)),
     };
-    let result = match queries::search_past_decisions(
+    let result = match queries::search_past_decisions_indexed(
         conn,
+        env.index.as_ref(),
         query,
         slug.as_deref(),
         options.since.as_deref(),
-        options.limit,
+        options.limit_i64(),
         &budget,
     ) {
         Ok(result) => result,
         Err(error) => {
-            return Ok(memory_fail(
+            return caught(
+                error,
                 "decisions",
                 &echo,
-                &error.to_string(),
                 json_mode,
                 "memory decisions [OPTIONS] QUERY",
-            ));
+            );
         }
     };
     set_project(&mut echo, slug.as_deref());
@@ -404,27 +474,28 @@ fn run_file(
     env: &MemoryEnv,
 ) -> Result<Output> {
     let json_mode = options.json_mode();
-    let budget = env.budget(options.context_budget);
+    let budget = env.budget(options.context_budget.as_ref());
     let mut echo = query_echo(&[("path", Value::String(path.to_string()))], options);
 
-    let report = file_report(conn, path, options);
+    let report = file_report(conn, path, options, env);
     let (failure_modes, touching, risk) = match report {
         Ok(report) => report,
         Err(error) => {
-            return Ok(memory_fail(
+            return caught(
+                error,
                 "file",
                 &echo,
-                &error.to_string(),
                 json_mode,
                 "memory file [OPTIONS] PATH",
-            ));
+            );
         }
     };
     // `risk['path']` is the absolute path discovery actually matched.
     if let Some(slot) = echo.get_mut("path") {
         *slot = Value::String(risk.path.clone());
     }
-    let (results, truncated) = file_results(&failure_modes, &touching, options.limit, &budget);
+    let (results, truncated) =
+        file_results(&failure_modes, &touching, options.limit_i64(), &budget);
 
     if json_mode {
         let mut extra = Map::new();
@@ -444,19 +515,32 @@ fn run_file(
 }
 
 /// `cli._run_file_report` — the three file-scoped calls on one connection.
+///
+/// Only the middle one is index-aware, and that asymmetry is the contract:
+/// `file_risk_summary` counts touching sessions with its own `LIKE` scan while
+/// the session *list* comes from bm25, so on a populated index Python prints
+/// "sessions touching the file: 0" directly above a list of twenty of them.
+/// Ported bug-for-bug — the report contradicting itself is what the agent
+/// reading it sees today.
 fn file_report(
     conn: &rusqlite::Connection,
     path: &str,
     options: &MemoryOptions,
+    env: &MemoryEnv,
 ) -> Result<(Vec<SessionMatch>, Vec<SessionMatch>, RiskSummary)> {
     let failure_modes = queries::find_failure_modes_for_file(
         conn,
         path,
         options.since.as_deref(),
-        options.limit,
+        options.limit_i64(),
         stax_core::queries::outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
     )?;
-    let touching = queries::find_sessions_touching_file(conn, path, options.limit)?;
+    let touching = queries::find_sessions_touching_file_indexed(
+        conn,
+        env.index.as_ref(),
+        path,
+        &options.limit,
+    )?;
     let risk = queries::file_risk_summary(conn, path, options.since.as_deref(), 5)?;
     Ok((failure_modes, touching, risk))
 }
@@ -513,7 +597,7 @@ fn run_worked(
     env: &MemoryEnv,
 ) -> Result<Output> {
     let json_mode = options.json_mode();
-    let budget = env.budget(options.context_budget);
+    let budget = env.budget(options.context_budget.as_ref());
     let mut echo = query_echo(&[("action", Value::String(action.to_string()))], options);
 
     if !search_has_intent(action) {
@@ -529,23 +613,24 @@ fn run_worked(
         Some(slug) => Some(slug.clone()),
         None => queries::detect_cwd_project_slug(conn, &paths::path_to_string(&env.cwd)),
     };
-    let matches = match queries::find_sessions_where_action_worked(
+    let matches = match queries::find_sessions_where_action_worked_indexed(
         conn,
+        env.index.as_ref(),
         action,
         slug.as_deref(),
         options.since.as_deref(),
-        options.limit,
+        options.limit_i64(),
         stax_core::queries::outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
     ) {
         Ok(matches) => matches,
         Err(error) => {
-            return Ok(memory_fail(
+            return caught(
+                error,
                 "worked",
                 &echo,
-                &error.to_string(),
                 json_mode,
                 "memory worked [OPTIONS] ACTION",
-            ));
+            );
         }
     };
     set_project(&mut echo, slug.as_deref());
@@ -585,12 +670,13 @@ fn run_sessions(
     env: &MemoryEnv,
 ) -> Result<Output> {
     let json_mode = options.json_mode();
-    let budget = env.budget(options.context_budget);
+    let budget = env.budget(options.context_budget.as_ref());
 
     // An explicit --project decodes to a path and overrides PATH; else the PATH
-    // argument, else the cwd.
+    // argument, else the cwd. `if project:` here, so `--project ''` falls
+    // through to PATH — unlike the `is None` test the other verbs use.
     let target = match (&options.project, path) {
-        (Some(project), _) => {
+        (Some(project), _) if !project.is_empty() => {
             let decoded = paths::decode_slug_to_path(project);
             if decoded.is_empty() {
                 paths::path_to_string(&env.cwd)
@@ -598,8 +684,8 @@ fn run_sessions(
                 decoded
             }
         }
-        (None, Some(path)) => path.to_string(),
-        (None, None) => paths::path_to_string(&env.cwd),
+        (_, Some(path)) => path.to_string(),
+        (_, None) => paths::path_to_string(&env.cwd),
     };
     let target_path = paths::purepath_str(&paths::expanduser(
         &paths::purepath_str(&target),
@@ -613,14 +699,23 @@ fn run_sessions(
         Value::String(if as_file { "file" } else { "path" }.to_string()),
     );
 
+    // `&PyInt` rather than the saturated `i64`: these two are the only wave-1
+    // queries that bind `--limit` into SQL, so they are the only two where a
+    // limit past 2⁶³ has to raise instead of silently becoming "no cap".
     let result: Result<BudgetedResult> = if as_file {
-        queries::find_sessions_touching_file_budgeted(conn, &target_path, options.limit, &budget)
+        queries::find_sessions_touching_file_budgeted_indexed(
+            conn,
+            env.index.as_ref(),
+            &target_path,
+            &options.limit,
+            &budget,
+        )
     } else {
         queries::find_sessions_in_path(
             conn,
             &target_path,
             options.since.as_deref(),
-            options.limit,
+            &options.limit,
             None,
             &budget,
         )
@@ -628,13 +723,13 @@ fn run_sessions(
     let result = match result {
         Ok(result) => result,
         Err(error) => {
-            return Ok(memory_fail(
+            return caught(
+                error,
                 "sessions",
                 &echo,
-                &error.to_string(),
                 json_mode,
                 "memory sessions [OPTIONS] [PATH]",
-            ));
+            );
         }
     };
 
@@ -674,6 +769,48 @@ pub fn search_has_intent(query: &str) -> bool {
     query.chars().any(|ch| ch.is_alphanumeric() || ch == '_')
 }
 
+/// `except ValueError` — and nothing wider.
+///
+/// Every `memory` verb's body is wrapped in `try: … except ValueError`, so only
+/// a malformed `--since` (or the intent gate) becomes the `--since` parameter
+/// error / JSON error envelope. A `sqlite3.DatabaseError` — a corrupt store, a
+/// `LIKE` pattern SQLite refuses as too complex — is not caught: Python exits 1
+/// with a traceback and an empty stdout. This port used to funnel *every*
+/// failure into `Invalid value for --since`, so a corrupt store exited 2
+/// blaming an option the caller had never passed. Now the marker decides, and
+/// anything else propagates to `main`, which is exit 1 with the message on
+/// stderr — Python's exit code and Python's (empty) stdout.
+pub(crate) fn caught(
+    error: anyhow::Error,
+    command: &str,
+    query: &Map<String, Value>,
+    json_mode: bool,
+    usage: &str,
+) -> Result<Output> {
+    match ValueError::of(&error) {
+        Some(message) => Ok(memory_fail(command, query, message, json_mode, usage)),
+        None => Err(error),
+    }
+}
+
+/// `--limit` as the envelope echoes it back.
+///
+/// Python prints the *normalised* `int`, so `' 5'`, `+5` and `٥` all render as
+/// `5`. Exact across `[i64::MIN, u64::MAX]`; past that the echo clamps, because
+/// `serde_json::Value` cannot hold a wider integer without the
+/// `arbitrary_precision` feature and turning that on would change float
+/// rendering for the whole workspace (the golden pack gates those bytes). The
+/// clamp is echo-only — the *behaviour* of such a limit is reproduced exactly,
+/// including the `OverflowError` at a `LIMIT ?` bind.
+fn limit_json(value: &PyInt) -> Value {
+    if let Some(exact) = value.fits_i64() {
+        return Value::from(exact);
+    }
+    value
+        .fits_u64()
+        .map_or_else(|| Value::from(value.saturating_i64()), Value::from)
+}
+
 /// The `q` dict each command echoes back, in the reference's key order.
 pub(crate) fn query_echo(leading: &[(&str, Value)], options: &MemoryOptions) -> Map<String, Value> {
     let mut echo = Map::new();
@@ -694,7 +831,7 @@ pub(crate) fn query_echo(leading: &[(&str, Value)], options: &MemoryOptions) -> 
             .as_ref()
             .map_or(Value::Null, |since| Value::String(since.clone())),
     );
-    echo.insert("limit".to_string(), Value::from(options.limit));
+    echo.insert("limit".to_string(), limit_json(&options.limit));
     echo
 }
 
@@ -952,6 +1089,7 @@ fn ellipsize(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
     use stax_core::queries::OutcomeFields;
 
     use super::*;
@@ -962,7 +1100,7 @@ mod tests {
             as_json: json,
             project: None,
             since: None,
-            limit: 20,
+            limit: PyInt::from(20),
             context_budget: None,
         }
     }
@@ -1210,6 +1348,183 @@ mod tests {
         assert!(
             emit_memory_file_text("/tmp/x.py", &risk, &[])
                 .ends_with("  no failure modes or touching sessions on record.\n")
+        );
+    }
+
+    // ── the argument surface (Click's parser, not clap's defaults) ───────────
+
+    /// Parse a `memory decisions` line and hand back its shared options.
+    fn parse(extra: &[&str]) -> Result<MemoryOptions, clap::error::ErrorKind> {
+        let mut argv = vec!["stax-rs", "memory", "decisions", "cache"];
+        argv.extend_from_slice(extra);
+        match crate::Cli::try_parse_from(argv) {
+            Ok(cli) => {
+                let crate::Command::Memory(args) = cli.command else {
+                    panic!("expected memory");
+                };
+                Ok(args.verb.options().clone())
+            }
+            Err(error) => Err(error.kind()),
+        }
+    }
+
+    /// Click hands `--limit` straight to `int()`. Each of these exited 0 on the
+    /// Python side and 2 here, on a store the two otherwise agreed about.
+    #[test]
+    fn limit_accepts_everything_click_accepts() {
+        for (argv, expected) in [
+            (vec!["--limit", "-1"], "-1"),
+            (vec!["--limit=-1"], "-1"),
+            (vec!["--limit", " 5"], "5"),
+            (vec!["--limit", "  5  "], "5"),
+            (vec!["--limit", "+5"], "5"),
+            (vec!["--limit", "1_000"], "1000"),
+            (vec!["--limit", "\u{667}"], "7"),
+            (
+                vec!["--limit", "9223372036854775808"],
+                "9223372036854775808",
+            ),
+            (
+                vec!["--limit", "99999999999999999999"],
+                "99999999999999999999",
+            ),
+            // Last occurrence wins, as Click's parser does for every option.
+            (vec!["--limit", "3", "--limit", "5"], "5"),
+        ] {
+            let options = parse(&argv).unwrap_or_else(|kind| panic!("{argv:?} → {kind:?}"));
+            assert_eq!(options.limit.to_string(), expected, "{argv:?}");
+        }
+        // …and rejects exactly what `int()` rejects, with Click's exit 2.
+        for argv in [
+            vec!["--limit", "0x10"],
+            vec!["--limit", "5.0"],
+            vec!["--limit", "-x"],
+            vec!["--limit", "--json"],
+            vec!["--limit", ""],
+        ] {
+            assert!(parse(&argv).is_err(), "{argv:?} must be a parameter error");
+        }
+    }
+
+    #[test]
+    fn every_shared_option_is_last_wins_like_clicks_parser() {
+        assert_eq!(
+            parse(&["--context-budget", "10", "--context-budget", "3000"])
+                .expect("parses")
+                .context_budget
+                .expect("a budget")
+                .to_string(),
+            "3000"
+        );
+        assert_eq!(
+            parse(&["--since", "7d", "--since", "30d"])
+                .expect("parses")
+                .since
+                .as_deref(),
+            Some("30d")
+        );
+        assert_eq!(
+            parse(&["--project", "a", "--project", "b"])
+                .expect("parses")
+                .project
+                .as_deref(),
+            Some("b")
+        );
+        // `--format json --format text` is text; a repeated `--json` is true.
+        assert!(
+            !parse(&["--format", "json", "--format", "text"])
+                .expect("parses")
+                .json_mode()
+        );
+        assert!(parse(&["--json", "--json"]).expect("parses").json_mode());
+        // `--project` still takes a leading-dash slug, because Click's parser
+        // pops the next token whatever it looks like.
+        assert_eq!(
+            parse(&["--project", "-Users-you-dev-proj"])
+                .expect("parses")
+                .project
+                .as_deref(),
+            Some("-Users-you-dev-proj")
+        );
+    }
+
+    /// The echo is Python's *normalised* `int`, and it is exact through
+    /// `u64::MAX`. Past that it clamps — `serde_json::Value` has no wider
+    /// integer without `arbitrary_precision`, which would change float
+    /// rendering for the whole workspace.
+    #[test]
+    fn the_limit_echo_is_the_normalised_integer() {
+        let echo = |raw: &str| {
+            let options = parse(&["--limit", raw]).expect("parses");
+            limit_json(&options.limit).to_string()
+        };
+        assert_eq!(echo(" 5"), "5");
+        assert_eq!(echo("+5"), "5");
+        assert_eq!(echo("1_000"), "1000");
+        assert_eq!(echo("\u{667}"), "7");
+        assert_eq!(echo("-1"), "-1");
+        assert_eq!(echo("9223372036854775807"), "9223372036854775807");
+        assert_eq!(echo("9223372036854775808"), "9223372036854775808");
+        assert_eq!(
+            echo("99999999999999999999"),
+            "9223372036854775807",
+            "RECORDED CLAMP: the value is unbounded in Python's echo"
+        );
+    }
+
+    /// `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` goes through `int(raw)`, and an
+    /// `i64` parse silently fell back to 2000 for anything wider — 13 sessions
+    /// where Python surfaced 20, exit 0 on both sides.
+    #[test]
+    fn the_budget_env_var_is_int_not_str_parse() {
+        assert_eq!(
+            resolve_budget_default(Some("99999999999999999999"), None),
+            i64::MAX,
+            "an unbounded budget, not the 2000 default"
+        );
+        assert_eq!(resolve_budget_default(Some(" 500 "), None), 500);
+        assert_eq!(resolve_budget_default(Some("1_000"), None), 1000);
+        assert_eq!(resolve_budget_default(Some("\u{667}00"), None), 700);
+        assert_eq!(resolve_budget_default(Some("nope"), None), 2000);
+        assert_eq!(resolve_budget_default(Some("5.0"), None), 2000);
+    }
+
+    /// `except ValueError` and nothing wider. A corrupt store used to exit 2
+    /// with `Invalid value for --since` on a command that never saw `--since`.
+    #[test]
+    fn only_a_value_error_becomes_the_since_parameter_error() {
+        let echo = query_echo(&[("text", Value::String("cache".into()))], &options(false));
+        let caught_one = caught(
+            anyhow::Error::new(ValueError("Invalid since value 'x'".into())),
+            "decisions",
+            &echo,
+            false,
+            "memory decisions [OPTIONS] QUERY",
+        )
+        .expect("a ValueError is handled, not returned");
+        assert_eq!(caught_one.code, 2);
+        assert!(caught_one.stderr.contains("Invalid value for --since"));
+
+        let propagated = caught(
+            anyhow::anyhow!("database disk image is malformed"),
+            "decisions",
+            &echo,
+            false,
+            "memory decisions [OPTIONS] QUERY",
+        )
+        .expect_err("a store failure propagates to main → exit 1, empty stdout");
+        assert_eq!(propagated.to_string(), "database disk image is malformed");
+
+        // The JSON side too: a DatabaseError is not an error *envelope*.
+        assert!(
+            caught(
+                anyhow::anyhow!("LIKE or GLOB pattern too complex"),
+                "decisions",
+                &echo,
+                true,
+                "memory decisions [OPTIONS] QUERY",
+            )
+            .is_err()
         );
     }
 
