@@ -11,6 +11,7 @@
 
 mod anchor;
 mod memory;
+mod resume;
 mod status;
 
 use anyhow::Result;
@@ -18,6 +19,7 @@ use clap::{Parser, Subcommand};
 
 pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
+pub use resume::{ResumeArgs, ResumeEnv, run_resume};
 pub use status::{StatusArgs, render_status, run_status};
 
 /// `stax-rs` — the Rust port of StackUnderflow.
@@ -36,6 +38,16 @@ pub enum Command {
     Anchor(AnchorArgs),
     /// Ask the local store what past sessions already know.
     Memory(MemoryArgs),
+    /// Session/resume ids for every coding agent under PATH (default: cwd).
+    ///
+    /// Groups recent sessions by provider and renders each agent's real resume
+    /// invocation (templates are data in `adapters/capabilities.json`, verified
+    /// against the actual CLIs — e.g. `claude --resume <id>`, `codex resume
+    /// <id>`). Matching is bidirectional: standing inside a project finds it,
+    /// and giving a workspace folder lists every project underneath. Read-only;
+    /// agents whose CLI has no known resume command still list their session
+    /// ids.
+    Resume(ResumeArgs),
     /// Open the store read-only and print its schema version and row counts.
     Status(StatusArgs),
 }
@@ -57,6 +69,7 @@ pub fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Anchor(args) => run_anchor(args),
         Command::Memory(args) => run_memory(args),
+        Command::Resume(args) => run_resume(args),
         Command::Status(args) => run_status(args),
     }
 }

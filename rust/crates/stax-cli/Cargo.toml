@@ -20,5 +20,8 @@ clap.workspace = true
 # because the workspace manifest is the architect's this wave.
 rusqlite.workspace = true
 serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
+# `resume` renders each agent's real invocation from `adapters/capabilities.json`
+# — the templates are data, so the loader (not a transcription) is the dependency.
+stax-adapters = { path = "../stax-adapters" }
 stax-core.workspace = true
 stax-memory = { path = "../stax-memory" }
