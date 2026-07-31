@@ -31,9 +31,21 @@ gate() {
     "$@"
 }
 
-gate "gate 1/3  cargo fmt --check" cargo fmt --check
-gate "gate 2/3  cargo clippy --workspace --all-targets -- -D warnings" \
+# Gate 0 exists because it caught us: a manifest edit lived only in the working
+# tree while its Cargo.lock entry was committed, so five commits in a row failed
+# to compile from a clean checkout while every in-tree run stayed green. The
+# working tree's opinion of itself is not evidence.
+echo "=== gate 0/4  clean-checkout build (git archive HEAD) ==="
+_cc_tmp="$(mktemp -d)"
+( cd "$(git rev-parse --show-toplevel)" && git archive HEAD rust/ contracts/ ) | tar -x -C "$_cc_tmp"
+( cd "$_cc_tmp/rust" && cargo check --workspace --quiet ) \
+    || { echo "GATE 0 FAILED: HEAD does not build from a clean checkout"; rm -rf "$_cc_tmp"; exit 1; }
+rm -rf "$_cc_tmp"
+echo "    clean checkout builds"
+
+gate "gate 1/4  cargo fmt --check" cargo fmt --check
+gate "gate 2/4  cargo clippy --workspace --all-targets -- -D warnings" \
     cargo clippy --workspace --all-targets -- -D warnings
-gate "gate 3/3  cargo test --workspace" cargo test --workspace
+gate "gate 3/4  cargo test --workspace" cargo test --workspace
 
 printf '\nall three gates green\n'
