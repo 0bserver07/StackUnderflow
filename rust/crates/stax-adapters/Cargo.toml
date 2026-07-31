@@ -4,3 +4,28 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# Inherited so this crate can never disagree with the workspace about the two
+# features that are load-bearing here:
+#
+# * `preserve_order` — `Record.raw` is re-serialized verbatim into the store's
+#   `raw_json` column (`ingest/writer.py:383`, `json.dumps(rec.raw, default=str)`
+#   over a dict whose key order is the source line's). A BTree/HashMap-backed
+#   `Value` would silently reorder every row Rust ingests.
+# * `float_roundtrip` — measured, not assumed: without it serde_json's fast
+#   float parser lands 1 ULP low on inputs like the
+#   `"durationSeconds":7.5736794579997655` Claude Code writes into tool results,
+#   and `raw_json` then differs from Python's in the last digit. Three rows out
+#   of 55,587 on the maintainer's live `~/.claude` — small enough to miss, large
+#   enough to break a byte-parity gate. (Wave 1's golden runner hit the same
+#   thing independently; the feature is declared at the workspace root.)
+serde_json = { workspace = true }
+
+# The parity harness: enumerate counts on the real agent homes (read-only) and
+# record dumps over the checked-in fixture packs, both diffable against
+# `parity/python_reference.py` driving the Python adapters over the same bytes.
+[[bin]]
+name = "stax-adapter-parity"
+path = "src/bin/parity.rs"
