@@ -8,3 +8,11 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 rusqlite.workspace = true
+# `preserve_order` is the wave-0 workspace decision (docs/specs/rust-port.md §6,
+# rust/ARCHITECT-STATE.md finding 6): serde_json's Map becomes an IndexMap, so
+# the key order a contract renderer writes is the key order it reads back.
+# `anchor.rs` renders the `stackunderflow.anchor/1` envelope, whose goldens are
+# byte-compared — insertion order IS the contract. Declared here rather than in
+# `[workspace.dependencies]` to match stax-memory's precedent; cargo's feature
+# unification turns `preserve_order` on workspace-wide either way.
+serde_json = { workspace = true }
