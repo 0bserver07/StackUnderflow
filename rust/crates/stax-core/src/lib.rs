@@ -17,5 +17,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod anchor;
+pub mod queries;
 pub mod settings;
 pub mod store;

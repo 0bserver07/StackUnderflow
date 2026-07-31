@@ -1,0 +1,3723 @@
+//! The discovery read path — `services/discovery.py` + `services/risk.py`, ported.
+//!
+//! This is the substrate under the four wave-1 `memory` verbs (`sessions`,
+//! `decisions`, `worked`, `file`). It is a **bug-for-bug** port: the Python
+//! reference gathers candidates with leading-wildcard `LIKE` scans over
+//! `messages.content_text` / `messages.tools_json`, and so does this. That path
+//! has known-wrong behavior — `content_text` is empty on tool-call turns, so
+//! agent-heavy sessions are largely invisible to it, and a multi-word phrase
+//! silently matches nothing because `LIKE '%a b%'` is a literal substring test.
+//! Both are ported faithfully (`docs/specs/rust-port.md` §6b, disposition
+//! `bug-for-bug`); wave 6 fixes the substrate, not this file.
+//!
+//! Two things the reference does that this module deliberately does not:
+//!
+//! * **Telemetry writes.** `discovery._record_loaded` bumps `loaded_count` in
+//!   `discovery_telemetry` for every surfaced session. The store handle here is
+//!   opened `SQLITE_OPEN_READ_ONLY` (`store.rs`), so the write cannot happen and
+//!   is skipped. It never reaches stdout, so parity is unaffected; the ranking
+//!   input it feeds is unused today (`_build_rank_fn` has three terms, not four).
+//! * **The FTS5 content half.** The Python CLI injects a `SearchService` into
+//!   `search_past_decisions` / `find_sessions_touching_file` /
+//!   `find_sessions_where_action_worked`; when `search_index.db` is populated
+//!   those three route their free-text half through bm25 instead of `LIKE`.
+//!   That path is `stax-memory`'s (RS-1-007, bm25 read path) and is **not**
+//!   implemented here — this module is the `search_service=None` branch, which
+//!   is also what every non-CLI Python caller gets. See the divergence note in
+//!   `rust/TASKS-RS.md`.
+//!
+//! SQL shapes are ported literally, spacing included (§6b): `messages` is a
+//! UNION-ALL view over 16 monthly partitions and SQLite does not push join
+//! predicates into the arms, so an "idiomatic" rewrite silently reintroduces the
+//! hangs the July perf campaign killed.
+
+use std::collections::{HashMap, HashSet};
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+
+// ── Python-compatible JSON ───────────────────────────────────────────────────
+
+/// A JSON model that round-trips the way `json.dumps` / `json.loads` do.
+///
+/// `serde_json` is not used, and not because of taste: byte-parity needs
+/// `ensure_ascii=True` (every non-ASCII character escaped as `\uXXXX`), Python's
+/// `repr`-shortest float formatting, insertion-ordered object keys, and the
+/// int/float distinction the reference relies on (`message_count` is an int,
+/// `cost_usd` a float — `8` and `8.0` are different bytes). All four are
+/// properties of Python's encoder, so the encoder is what gets ported.
+pub mod pyjson {
+    use std::fmt::Write as _;
+
+    /// One JSON value, with Python's int/float split preserved.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Value {
+        /// `null` / `None`.
+        Null,
+        /// `true` / `false`.
+        Bool(bool),
+        /// A Python `int`.
+        Int(i64),
+        /// A Python `float` — always rendered with a `.` or an exponent.
+        Float(f64),
+        /// A Python `str`.
+        Str(String),
+        /// A Python `list`.
+        Array(Vec<Value>),
+        /// A Python `dict`, in insertion order.
+        Object(Vec<(String, Value)>),
+    }
+
+    impl From<&String> for Value {
+        fn from(value: &String) -> Self {
+            Self::Str(value.clone())
+        }
+    }
+
+    impl From<&str> for Value {
+        fn from(value: &str) -> Self {
+            Self::Str(value.to_string())
+        }
+    }
+
+    impl Value {
+        /// Look a key up in an object; `None` for every other variant.
+        #[must_use]
+        pub fn get(&self, key: &str) -> Option<&Self> {
+            match self {
+                Self::Object(entries) => entries
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value),
+                _ => None,
+            }
+        }
+
+        /// The string inside a [`Value::Str`], if that is what this is.
+        #[must_use]
+        pub fn as_str(&self) -> Option<&str> {
+            match self {
+                Self::Str(text) => Some(text),
+                _ => None,
+            }
+        }
+
+        /// Python truthiness: `None`, `False`, `0`, `""`, `[]`, `{}` are falsy.
+        ///
+        /// Load-bearing for the `entry.get("input") or entry.get("arguments") or
+        /// entry` chains in the tool-arg matchers: an empty dict falls through.
+        #[must_use]
+        pub fn is_truthy(&self) -> bool {
+            match self {
+                Self::Null => false,
+                Self::Bool(value) => *value,
+                Self::Int(value) => *value != 0,
+                Self::Float(value) => *value != 0.0,
+                Self::Str(text) => !text.is_empty(),
+                Self::Array(items) => !items.is_empty(),
+                Self::Object(entries) => !entries.is_empty(),
+            }
+        }
+    }
+
+    /// `json.dumps(obj, separators=(",", ":"))` — the compact form the token
+    /// estimator measures.
+    #[must_use]
+    pub fn dumps_compact(value: &Value) -> String {
+        let mut out = String::new();
+        write_value(&mut out, value, ",", ":", None, 0);
+        out
+    }
+
+    /// `json.dumps(obj)` — the *default* separators, `", "` and `": "`.
+    ///
+    /// This is what `_tools_json_mentions_file`'s last-ditch substring check
+    /// serialises with, so the spaces matter.
+    #[must_use]
+    pub fn dumps_default(value: &Value) -> String {
+        let mut out = String::new();
+        write_value(&mut out, value, ", ", ": ", None, 0);
+        out
+    }
+
+    /// `json.dumps(obj, indent=2)` — the envelope's wire form.
+    #[must_use]
+    pub fn dumps_indent2(value: &Value) -> String {
+        let mut out = String::new();
+        write_value(&mut out, value, ",", ": ", Some(2), 0);
+        out
+    }
+
+    fn write_value(
+        out: &mut String,
+        value: &Value,
+        item_sep: &str,
+        key_sep: &str,
+        indent: Option<usize>,
+        depth: usize,
+    ) {
+        match value {
+            Value::Null => out.push_str("null"),
+            Value::Bool(true) => out.push_str("true"),
+            Value::Bool(false) => out.push_str("false"),
+            Value::Int(number) => {
+                let _ = write!(out, "{number}");
+            }
+            Value::Float(number) => out.push_str(&repr_float(*number)),
+            Value::Str(text) => write_string(out, text),
+            Value::Array(items) => {
+                if items.is_empty() {
+                    out.push_str("[]");
+                    return;
+                }
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(item_sep);
+                    }
+                    write_newline_indent(out, indent, depth + 1);
+                    write_value(out, item, item_sep, key_sep, indent, depth + 1);
+                }
+                write_newline_indent(out, indent, depth);
+                out.push(']');
+            }
+            Value::Object(entries) => {
+                if entries.is_empty() {
+                    out.push_str("{}");
+                    return;
+                }
+                out.push('{');
+                for (index, (key, item)) in entries.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(item_sep);
+                    }
+                    write_newline_indent(out, indent, depth + 1);
+                    write_string(out, key);
+                    out.push_str(key_sep);
+                    write_value(out, item, item_sep, key_sep, indent, depth + 1);
+                }
+                write_newline_indent(out, indent, depth);
+                out.push('}');
+            }
+        }
+    }
+
+    fn write_newline_indent(out: &mut String, indent: Option<usize>, depth: usize) {
+        if let Some(width) = indent {
+            out.push('\n');
+            for _ in 0..(width * depth) {
+                out.push(' ');
+            }
+        }
+    }
+
+    /// `json.encoder.py_encode_basestring_ascii` — every non-ASCII character
+    /// escaped, astral planes as surrogate pairs.
+    fn write_string(out: &mut String, text: &str) {
+        out.push('"');
+        for ch in text.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0c}' => out.push_str("\\f"),
+                ch if (ch as u32) < 0x20 => {
+                    let _ = write!(out, "\\u{:04x}", ch as u32);
+                }
+                ch if (ch as u32) < 0x7f => out.push(ch),
+                ch => {
+                    let code = ch as u32;
+                    if code <= 0xffff {
+                        let _ = write!(out, "\\u{code:04x}");
+                    } else {
+                        let value = code - 0x1_0000;
+                        let high = 0xd800 + (value >> 10);
+                        let low = 0xdc00 + (value & 0x3ff);
+                        let _ = write!(out, "\\u{high:04x}\\u{low:04x}");
+                    }
+                }
+            }
+        }
+        out.push('"');
+    }
+
+    /// `repr(float)` — CPython's shortest round-trip formatting.
+    ///
+    /// Rust's `Display` never uses exponent notation and Rust's `LowerExp`
+    /// always does; CPython switches at `decpt <= -4 || decpt > 16` and always
+    /// leaves a `.0` on an integral value. The shortest digits come from
+    /// `{:e}` (which is round-trip shortest), and the placement is redone here.
+    #[must_use]
+    pub fn repr_float(value: f64) -> String {
+        if value.is_nan() {
+            return "NaN".to_string();
+        }
+        if value.is_infinite() {
+            return if value > 0.0 {
+                "Infinity".to_string()
+            } else {
+                "-Infinity".to_string()
+            };
+        }
+        let sign = if value.is_sign_negative() && value != 0.0 {
+            "-"
+        } else {
+            ""
+        };
+        let magnitude = value.abs();
+        if magnitude == 0.0 {
+            return format!("{sign}0.0");
+        }
+        // `{:e}` → "d.dddde±X"; digits are the shortest round-trip set.
+        let scientific = format!("{magnitude:e}");
+        let (mantissa, exponent) = scientific
+            .split_once('e')
+            .unwrap_or((scientific.as_str(), "0"));
+        let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+        let digits = digits.trim_end_matches('0');
+        let digits = if digits.is_empty() { "0" } else { digits };
+        let exponent: i32 = exponent.parse().unwrap_or(0);
+        let decpt = exponent + 1;
+
+        if decpt <= -4 || decpt > 16 {
+            let mut out = String::from(sign);
+            out.push_str(&digits[..1]);
+            if digits.len() > 1 {
+                out.push('.');
+                out.push_str(&digits[1..]);
+            }
+            let exp = decpt - 1;
+            let _ = write!(out, "e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
+            return out;
+        }
+        let mut out = String::from(sign);
+        let len = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+        if decpt <= 0 {
+            out.push_str("0.");
+            for _ in 0..(-decpt) {
+                out.push('0');
+            }
+            out.push_str(digits);
+        } else if decpt >= len {
+            out.push_str(digits);
+            for _ in 0..(decpt - len) {
+                out.push('0');
+            }
+            out.push_str(".0");
+        } else {
+            let split = usize::try_from(decpt).unwrap_or(0);
+            out.push_str(&digits[..split]);
+            out.push('.');
+            out.push_str(&digits[split..]);
+        }
+        out
+    }
+
+    /// `json.loads` for the subset the store's `tools_json` blobs contain.
+    ///
+    /// Returns `None` on anything Python's decoder would reject — the callers
+    /// treat a `JSONDecodeError` as "no match", so the error detail is unused.
+    #[must_use]
+    pub fn loads(text: &str) -> Option<Value> {
+        let bytes: Vec<char> = text.chars().collect();
+        let mut cursor = 0usize;
+        let value = parse_value(&bytes, &mut cursor)?;
+        skip_whitespace(&bytes, &mut cursor);
+        (cursor == bytes.len()).then_some(value)
+    }
+
+    fn skip_whitespace(chars: &[char], cursor: &mut usize) {
+        while *cursor < chars.len() && matches!(chars[*cursor], ' ' | '\t' | '\n' | '\r') {
+            *cursor += 1;
+        }
+    }
+
+    fn parse_value(chars: &[char], cursor: &mut usize) -> Option<Value> {
+        skip_whitespace(chars, cursor);
+        match chars.get(*cursor)? {
+            '{' => parse_object(chars, cursor),
+            '[' => parse_array(chars, cursor),
+            '"' => parse_string(chars, cursor).map(Value::Str),
+            't' => parse_literal(chars, cursor, "true", Value::Bool(true)),
+            'f' => parse_literal(chars, cursor, "false", Value::Bool(false)),
+            'n' => parse_literal(chars, cursor, "null", Value::Null),
+            _ => parse_number(chars, cursor),
+        }
+    }
+
+    fn parse_literal(
+        chars: &[char],
+        cursor: &mut usize,
+        word: &str,
+        value: Value,
+    ) -> Option<Value> {
+        for (offset, expected) in word.chars().enumerate() {
+            if chars.get(*cursor + offset) != Some(&expected) {
+                return None;
+            }
+        }
+        *cursor += word.chars().count();
+        Some(value)
+    }
+
+    fn parse_object(chars: &[char], cursor: &mut usize) -> Option<Value> {
+        *cursor += 1; // '{'
+        let mut entries: Vec<(String, Value)> = Vec::new();
+        skip_whitespace(chars, cursor);
+        if chars.get(*cursor) == Some(&'}') {
+            *cursor += 1;
+            return Some(Value::Object(entries));
+        }
+        loop {
+            skip_whitespace(chars, cursor);
+            let key = parse_string(chars, cursor)?;
+            skip_whitespace(chars, cursor);
+            if chars.get(*cursor) != Some(&':') {
+                return None;
+            }
+            *cursor += 1;
+            let value = parse_value(chars, cursor)?;
+            // Python keeps the LAST value for a duplicate key, at the original
+            // key's position.
+            match entries.iter_mut().find(|(name, _)| *name == key) {
+                Some(slot) => slot.1 = value,
+                None => entries.push((key, value)),
+            }
+            skip_whitespace(chars, cursor);
+            match chars.get(*cursor) {
+                Some(',') => *cursor += 1,
+                Some('}') => {
+                    *cursor += 1;
+                    return Some(Value::Object(entries));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn parse_array(chars: &[char], cursor: &mut usize) -> Option<Value> {
+        *cursor += 1; // '['
+        let mut items: Vec<Value> = Vec::new();
+        skip_whitespace(chars, cursor);
+        if chars.get(*cursor) == Some(&']') {
+            *cursor += 1;
+            return Some(Value::Array(items));
+        }
+        loop {
+            items.push(parse_value(chars, cursor)?);
+            skip_whitespace(chars, cursor);
+            match chars.get(*cursor) {
+                Some(',') => *cursor += 1,
+                Some(']') => {
+                    *cursor += 1;
+                    return Some(Value::Array(items));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn parse_string(chars: &[char], cursor: &mut usize) -> Option<String> {
+        if chars.get(*cursor) != Some(&'"') {
+            return None;
+        }
+        *cursor += 1;
+        let mut out = String::new();
+        loop {
+            let ch = *chars.get(*cursor)?;
+            *cursor += 1;
+            match ch {
+                '"' => return Some(out),
+                '\\' => {
+                    let escape = *chars.get(*cursor)?;
+                    *cursor += 1;
+                    match escape {
+                        '"' => out.push('"'),
+                        '\\' => out.push('\\'),
+                        '/' => out.push('/'),
+                        'b' => out.push('\u{08}'),
+                        'f' => out.push('\u{0c}'),
+                        'n' => out.push('\n'),
+                        'r' => out.push('\r'),
+                        't' => out.push('\t'),
+                        'u' => {
+                            let first = parse_hex4(chars, cursor)?;
+                            let code = if (0xd800..0xdc00).contains(&first)
+                                && chars.get(*cursor) == Some(&'\\')
+                                && chars.get(*cursor + 1) == Some(&'u')
+                            {
+                                *cursor += 2;
+                                let second = parse_hex4(chars, cursor)?;
+                                0x1_0000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+                            } else {
+                                first
+                            };
+                            // Lone surrogates are legal in Python's decoder;
+                            // Rust `char` cannot hold one, so it becomes U+FFFD.
+                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+                        }
+                        _ => return None,
+                    }
+                }
+                ch => out.push(ch),
+            }
+        }
+    }
+
+    fn parse_hex4(chars: &[char], cursor: &mut usize) -> Option<u32> {
+        let mut code = 0u32;
+        for _ in 0..4 {
+            let digit = chars.get(*cursor)?.to_digit(16)?;
+            code = code * 16 + digit;
+            *cursor += 1;
+        }
+        Some(code)
+    }
+
+    fn parse_number(chars: &[char], cursor: &mut usize) -> Option<Value> {
+        let start = *cursor;
+        if chars.get(*cursor) == Some(&'-') {
+            *cursor += 1;
+        }
+        let mut is_float = false;
+        while let Some(ch) = chars.get(*cursor) {
+            match ch {
+                '0'..='9' => *cursor += 1,
+                '.' | 'e' | 'E' | '+' | '-' => {
+                    is_float = true;
+                    *cursor += 1;
+                }
+                _ => break,
+            }
+        }
+        if *cursor == start {
+            return None;
+        }
+        let literal: String = chars[start..*cursor].iter().collect();
+        if is_float {
+            literal.parse::<f64>().ok().map(Value::Float)
+        } else {
+            match literal.parse::<i64>() {
+                Ok(number) => Some(Value::Int(number)),
+                Err(_) => literal.parse::<f64>().ok().map(Value::Float),
+            }
+        }
+    }
+}
+
+// ── Python-compatible time ───────────────────────────────────────────────────
+
+/// The slice of `datetime` the discovery path needs: ISO parsing, `isoformat`
+/// rendering, and `parse_since`'s relative-window arithmetic.
+///
+/// Injected-clock throughout (finding 5: `std::env::set_var` is `unsafe` in Rust
+/// 2024 and this workspace forbids `unsafe`, so nothing here reads a global).
+pub mod pytime {
+    use std::fmt::Write as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use anyhow::{Result, bail};
+
+    /// Seconds since the Unix epoch, with microsecond resolution.
+    pub type Epoch = f64;
+
+    /// `datetime.now(UTC)` as microseconds since the epoch.
+    #[must_use]
+    pub fn now_micros() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_micros()).unwrap_or(i64::MAX)
+            })
+    }
+
+    /// `datetime.fromisoformat(...).isoformat()` for an aware UTC datetime.
+    ///
+    /// Microseconds are omitted when zero, exactly as `isoformat()` does.
+    #[must_use]
+    pub fn isoformat_utc(micros: i64) -> String {
+        let seconds = micros.div_euclid(1_000_000);
+        let fraction = micros.rem_euclid(1_000_000);
+        let (year, month, day, hour, minute, second) = civil_from_epoch(seconds);
+        let mut out = String::with_capacity(32);
+        let _ = write!(
+            out,
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"
+        );
+        if fraction != 0 {
+            let _ = write!(out, ".{fraction:06}");
+        }
+        out.push_str("+00:00");
+        out
+    }
+
+    /// Split epoch seconds into a civil UTC date-time (Hinnant's algorithm).
+    fn civil_from_epoch(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
+        let days = seconds.div_euclid(86_400);
+        let time_of_day = seconds.rem_euclid(86_400);
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+        let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+        let year = if month <= 2 { year + 1 } else { year };
+        (
+            year,
+            month,
+            day,
+            u32::try_from(time_of_day / 3_600).unwrap_or(0),
+            u32::try_from((time_of_day % 3_600) / 60).unwrap_or(0),
+            u32::try_from(time_of_day % 60).unwrap_or(0),
+        )
+    }
+
+    /// Days since the epoch for a civil UTC date (Hinnant's algorithm).
+    fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+        let year = if month <= 2 { year - 1 } else { year };
+        let era = year.div_euclid(400);
+        let yoe = year - era * 400;
+        let mp = if month > 2 { month - 3 } else { month + 9 };
+        let doy = (153 * mp + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
+    /// `datetime.fromisoformat` — enough of it for stored timestamps.
+    ///
+    /// Accepts `YYYY-MM-DD`, an optional `T` or space separator, `HH:MM[:SS]`,
+    /// an optional fraction, and an optional `Z` / `±HH:MM[:SS]` offset. A
+    /// naive value is read as UTC, which is what `_parse_ts` does. `None` when
+    /// the string is not a datetime — the reference swallows the `ValueError`.
+    #[must_use]
+    pub fn parse_iso(value: &str) -> Option<Epoch> {
+        let text = value.trim();
+        if text.len() < 10 {
+            return None;
+        }
+        let bytes: Vec<char> = text.chars().collect();
+        let year: i64 = text.get(0..4)?.parse().ok()?;
+        if bytes.get(4) != Some(&'-') {
+            return None;
+        }
+        let month: i64 = text.get(5..7)?.parse().ok()?;
+        if bytes.get(7) != Some(&'-') {
+            return None;
+        }
+        let day: i64 = text.get(8..10)?.parse().ok()?;
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return None;
+        }
+        let mut epoch = (days_from_civil(year, month, day) * 86_400) as Epoch;
+        if bytes.len() == 10 {
+            return Some(epoch);
+        }
+        if !matches!(bytes.get(10), Some('T' | 't' | ' ')) {
+            return None;
+        }
+        let rest = &text[11..];
+        // Split the offset off the time part.
+        let (time_part, offset) = split_offset(rest)?;
+        let mut fields = time_part.split(':');
+        let hour: i64 = fields.next()?.parse().ok()?;
+        let minute: i64 = fields.next().unwrap_or("0").parse().ok()?;
+        let second_field = fields.next().unwrap_or("0");
+        let (second, fraction) = match second_field.split_once('.') {
+            Some((whole, frac)) => {
+                let digits: String = frac.chars().take(6).collect();
+                let scale = 10f64.powi(6 - i32::try_from(digits.len()).unwrap_or(6));
+                let micros: f64 = digits.parse::<f64>().ok()? * scale;
+                (whole.parse::<i64>().ok()?, micros / 1_000_000.0)
+            }
+            None => (second_field.parse::<i64>().ok()?, 0.0),
+        };
+        epoch += (hour * 3_600 + minute * 60 + second) as Epoch + fraction;
+        Some(epoch - offset)
+    }
+
+    /// Peel a trailing `Z` / `±HH:MM[:SS]` off a time string, in seconds east.
+    fn split_offset(rest: &str) -> Option<(&str, Epoch)> {
+        if let Some(stripped) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
+            return Some((stripped, 0.0));
+        }
+        for (index, ch) in rest.char_indices() {
+            if index == 0 {
+                continue;
+            }
+            if ch == '+' || ch == '-' {
+                let (time_part, offset_part) = rest.split_at(index);
+                let sign = if ch == '-' { -1.0 } else { 1.0 };
+                let mut fields = offset_part[1..].split(':');
+                let hours: f64 = fields.next()?.parse().ok()?;
+                let minutes: f64 = fields.next().unwrap_or("0").parse().ok()?;
+                let seconds: f64 = fields.next().unwrap_or("0").parse().ok()?;
+                return Some((
+                    time_part,
+                    sign * (hours * 3_600.0 + minutes * 60.0 + seconds),
+                ));
+            }
+        }
+        Some((rest, 0.0))
+    }
+
+    /// `discovery.parse_since` with the clock injected.
+    ///
+    /// # Errors
+    /// On an unrecognised string — the `ValueError` the CLI turns into either a
+    /// `--since` parameter error or a JSON error envelope.
+    pub fn parse_since_at(since: Option<&str>, now_micros: i64) -> Result<Option<String>> {
+        let Some(raw) = since else {
+            return Ok(None);
+        };
+        let text = raw.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if let Some((count, unit)) = parse_relative(text) {
+            let delta_micros: i64 = match unit {
+                'h' => count * 3_600 * 1_000_000,
+                'd' => count * 86_400 * 1_000_000,
+                'w' => count * 7 * 86_400 * 1_000_000,
+                // "1m" is 30 days, not a calendar month — documented in the
+                // CLI help and ported as-is.
+                _ => count * 30 * 86_400 * 1_000_000,
+            };
+            return Ok(Some(isoformat_utc(now_micros - delta_micros)));
+        }
+        match parse_iso_for_since(text) {
+            Some(rendered) => Ok(Some(rendered)),
+            None => bail!(
+                "Invalid since value {}: expected '7d'/'1w'/'1m'/'24h' or an ISO date/datetime.",
+                super::paths::py_repr(text)
+            ),
+        }
+    }
+
+    /// `discovery.parse_since` against the real clock.
+    ///
+    /// # Errors
+    /// As [`parse_since_at`].
+    pub fn parse_since(since: Option<&str>) -> Result<Option<String>> {
+        parse_since_at(since, now_micros())
+    }
+
+    /// `^\s*(\d+)\s*([dwmh])\s*$` — the relative-window form.
+    fn parse_relative(text: &str) -> Option<(i64, char)> {
+        let trimmed = text.trim();
+        let mut digits = String::new();
+        let mut chars = trimmed.chars().peekable();
+        while let Some(ch) = chars.peek() {
+            if ch.is_ascii_digit() {
+                digits.push(*ch);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if digits.is_empty() {
+            return None;
+        }
+        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+            chars.next();
+        }
+        let unit = chars.next()?.to_ascii_lowercase();
+        if !matches!(unit, 'd' | 'w' | 'm' | 'h') {
+            return None;
+        }
+        if chars.any(|ch| !ch.is_whitespace()) {
+            return None;
+        }
+        digits.parse().ok().map(|count| (count, unit))
+    }
+
+    /// The ISO leg of `parse_since`: parse, default to UTC, re-render.
+    fn parse_iso_for_since(text: &str) -> Option<String> {
+        let epoch = parse_iso(text)?;
+        // A naive input is stamped UTC and re-emitted; an offset-carrying one
+        // keeps its offset in Python. Wave-1 callers pass either a date or a
+        // UTC datetime, so the UTC rendering is exact for them and recorded as
+        // a divergence for `--since 2026-01-01T00:00:00+02:00`.
+        let micros = (epoch * 1_000_000.0).round() as i64;
+        Some(isoformat_utc(micros))
+    }
+}
+
+// ── path arithmetic ──────────────────────────────────────────────────────────
+
+/// `pathlib` and the discovery path helpers, ported as string arithmetic.
+pub mod paths {
+    use std::path::{Component, Path, PathBuf};
+
+    /// `discovery.decode_slug_to_path` — the lossy slug → path reconstruction.
+    #[must_use]
+    pub fn decode_slug_to_path(slug: &str) -> String {
+        if slug.is_empty() || !slug.starts_with('-') {
+            return String::new();
+        }
+        format!("/{}", slug.trim_start_matches('-').replace('-', "/"))
+    }
+
+    /// `discovery._project_fs_path` — stored path wins, else decode the slug.
+    #[must_use]
+    pub fn project_fs_path(stored_path: Option<&str>, slug: &str) -> String {
+        match stored_path.filter(|value| !value.is_empty()) {
+            Some(path) => path.to_string(),
+            None => decode_slug_to_path(slug),
+        }
+    }
+
+    /// `discovery._normalize_path`.
+    #[must_use]
+    pub fn normalize_path(path: &str) -> String {
+        if path.is_empty() {
+            return String::new();
+        }
+        path.replace('\\', "/").trim_end_matches('/').to_string()
+    }
+
+    /// `discovery._is_ancestor`.
+    #[must_use]
+    pub fn is_ancestor(ancestor: &str, descendant: &str) -> bool {
+        if ancestor.is_empty() || descendant.is_empty() {
+            return false;
+        }
+        let ancestor = normalize_path(ancestor);
+        let descendant = normalize_path(descendant);
+        ancestor == descendant || descendant.starts_with(&format!("{ancestor}/"))
+    }
+
+    /// `Path.expanduser()` — a leading `~` only.
+    ///
+    /// `~other` is left literal (RS-1-034, disposition `fixed-in-rust`), which
+    /// matches `settings::resolve_app_dir`.
+    #[must_use]
+    pub fn expanduser(path: &str, home: Option<&Path>) -> String {
+        let Some(home) = home else {
+            return path.to_string();
+        };
+        if path == "~" {
+            return path_to_string(home);
+        }
+        match path.strip_prefix("~/") {
+            Some(rest) => path_to_string(&home.join(rest)),
+            None => path.to_string(),
+        }
+    }
+
+    /// The user's home directory.
+    #[must_use]
+    pub fn home_dir() -> Option<PathBuf> {
+        #[allow(
+            deprecated,
+            reason = "std::env::home_dir is the platform-correct answer on the \
+            1.97.1 pin; the 2018-era deprecation is scheduled for removal upstream"
+        )]
+        std::env::home_dir()
+    }
+
+    /// `str(PurePosixPath(p))` — the normalisation `Path()` applies on
+    /// construction: `.` components and duplicate/trailing separators go, `..`
+    /// stays, and an empty path becomes `.`.
+    #[must_use]
+    pub fn purepath_str(path: &str) -> String {
+        if path.is_empty() {
+            return ".".to_string();
+        }
+        let absolute = path.starts_with('/');
+        let parts: Vec<&str> = path
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect();
+        if parts.is_empty() {
+            return if absolute { "/".into() } else { ".".into() };
+        }
+        let joined = parts.join("/");
+        if absolute {
+            format!("/{joined}")
+        } else {
+            joined
+        }
+    }
+
+    /// A `Path` rendered the way Python renders one.
+    #[must_use]
+    pub fn path_to_string(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    /// `Path(p).expanduser().resolve(strict=False)` — `discovery._resolve_input_path`.
+    ///
+    /// Symlinks are resolved for the longest existing prefix and the remainder
+    /// is appended lexically, which is what `resolve(strict=False)` does.
+    #[must_use]
+    pub fn resolve_input_path_with(path: &str, home: Option<&Path>, cwd: &Path) -> String {
+        let expanded = expanduser(path, home);
+        let candidate = if expanded.is_empty() {
+            cwd.to_path_buf()
+        } else {
+            let as_path = PathBuf::from(&expanded);
+            if as_path.is_absolute() {
+                as_path
+            } else {
+                cwd.join(as_path)
+            }
+        };
+        let lexical = lexically_normalize(&candidate);
+        // Resolve symlinks over the longest existing prefix.
+        let mut prefix = lexical.clone();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        loop {
+            if let Ok(resolved) = std::fs::canonicalize(&prefix) {
+                let mut out = resolved;
+                for part in tail.iter().rev() {
+                    out.push(part);
+                }
+                return path_to_string(&out);
+            }
+            let Some(name) = prefix.file_name().map(std::ffi::OsStr::to_os_string) else {
+                break;
+            };
+            tail.push(name);
+            if !prefix.pop() {
+                break;
+            }
+        }
+        path_to_string(&lexical)
+    }
+
+    /// [`resolve_input_path_with`] against the process's home and cwd.
+    #[must_use]
+    pub fn resolve_input_path(path: &str) -> String {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        resolve_input_path_with(path, home_dir().as_deref(), &cwd)
+    }
+
+    /// Collapse `.` and `..` without touching the filesystem.
+    fn lexically_normalize(path: &Path) -> PathBuf {
+        let mut out = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if !out.pop() {
+                        out.push("..");
+                    }
+                }
+                other => out.push(other.as_os_str()),
+            }
+        }
+        if out.as_os_str().is_empty() {
+            out.push(".");
+        }
+        out
+    }
+
+    /// `repr(str)` — the quoting the `memory` titles interpolate with `{!r}`.
+    ///
+    /// Python prefers single quotes and switches to double quotes only when the
+    /// string contains a `'` and no `"`.
+    #[must_use]
+    pub fn py_repr(text: &str) -> String {
+        let quote = if text.contains('\'') && !text.contains('"') {
+            '"'
+        } else {
+            '\''
+        };
+        let mut out = String::with_capacity(text.len() + 2);
+        out.push(quote);
+        for ch in text.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                ch if ch == quote => {
+                    out.push('\\');
+                    out.push(ch);
+                }
+                ch if (ch as u32) < 0x20 || ch as u32 == 0x7f => {
+                    out.push_str(&format!("\\x{:02x}", ch as u32));
+                }
+                ch => out.push(ch),
+            }
+        }
+        out.push(quote);
+        out
+    }
+}
+
+// ── the match shapes ─────────────────────────────────────────────────────────
+
+/// The four outcome fields `OutcomeMatch` adds to a [`SessionMatch`].
+///
+/// Kept as a nested struct rather than a second row type because the Python
+/// dataclass inherits: `asdict()` emits the base fields first, then these four,
+/// and [`SessionMatch::to_dict`] reproduces exactly that order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutcomeFields {
+    /// `"worked"` | `"failed"` | `"reverted"` | `"uncertain"`.
+    pub outcome: String,
+    /// Short human-readable justification, with the message excerpt.
+    pub outcome_evidence: String,
+    /// `messages.id` of the row that established the outcome.
+    pub outcome_msg_id: i64,
+    /// Confidence in `[0.0, 1.0]` — see `_classify_outcome`'s ladder.
+    pub outcome_confidence: f64,
+}
+
+/// A session that matched a discovery query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionMatch {
+    /// Provider-facing session id.
+    pub session_id: String,
+    /// `projects.slug`.
+    pub project_slug: String,
+    /// `projects.path` when populated, else the slug decoded back to a path.
+    pub project_path: String,
+    /// `projects.provider`.
+    pub provider: String,
+    /// `sessions.first_ts`, `""` when null.
+    pub first_ts: String,
+    /// `sessions.last_ts`, `""` when null.
+    pub last_ts: String,
+    /// `sessions.message_count`.
+    pub message_count: i64,
+    /// `session_mart.cost_usd`, `0.0` when the mart has no row.
+    pub cost_usd: f64,
+    /// Content excerpt — only `search_past_decisions` populates it.
+    pub snippet: Option<String>,
+    /// Cosine similarity — only the `use_embeddings` path populates it, which
+    /// no wave-1 command uses; kept so the `to_dict` shape can grow without a
+    /// schema bump.
+    pub embedding_score: Option<f64>,
+    /// Further matching messages in the same session, when > 0.
+    pub more_matches_in_session: Option<i64>,
+    /// Present on `OutcomeMatch` rows only.
+    pub outcome: Option<OutcomeFields>,
+}
+
+impl SessionMatch {
+    /// Serialise exactly as `SessionMatch.to_dict()` / `asdict(OutcomeMatch)`.
+    ///
+    /// `embedding_score` and `more_matches_in_session` are dropped when unset,
+    /// so single-hit substring-mode rows keep the original 9-key shape.
+    #[must_use]
+    pub fn to_dict(&self) -> pyjson::Value {
+        let mut out: Vec<(String, pyjson::Value)> = Vec::with_capacity(15);
+        out.push(("session_id".into(), pyjson::Value::from(&self.session_id)));
+        out.push((
+            "project_slug".into(),
+            pyjson::Value::from(&self.project_slug),
+        ));
+        out.push((
+            "project_path".into(),
+            pyjson::Value::from(&self.project_path),
+        ));
+        out.push(("provider".into(), pyjson::Value::from(&self.provider)));
+        out.push(("first_ts".into(), pyjson::Value::from(&self.first_ts)));
+        out.push(("last_ts".into(), pyjson::Value::from(&self.last_ts)));
+        out.push((
+            "message_count".into(),
+            pyjson::Value::Int(self.message_count),
+        ));
+        out.push(("cost_usd".into(), pyjson::Value::Float(self.cost_usd)));
+        out.push((
+            "snippet".into(),
+            match &self.snippet {
+                Some(text) => pyjson::Value::from(text),
+                None => pyjson::Value::Null,
+            },
+        ));
+        if let Some(score) = self.embedding_score {
+            out.push(("embedding_score".into(), pyjson::Value::Float(score)));
+        }
+        if let Some(more) = self.more_matches_in_session {
+            out.push(("more_matches_in_session".into(), pyjson::Value::Int(more)));
+        }
+        if let Some(outcome) = &self.outcome {
+            out.push(("outcome".into(), pyjson::Value::from(&outcome.outcome)));
+            out.push((
+                "outcome_evidence".into(),
+                pyjson::Value::from(&outcome.outcome_evidence),
+            ));
+            out.push((
+                "outcome_msg_id".into(),
+                pyjson::Value::Int(outcome.outcome_msg_id),
+            ));
+            out.push((
+                "outcome_confidence".into(),
+                pyjson::Value::Float(outcome.outcome_confidence),
+            ));
+        }
+        pyjson::Value::Object(out)
+    }
+}
+
+/// Outcome of running a discovery query with a token budget applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BudgetedResult {
+    /// Rank-ordered, budget-packed rows.
+    pub sessions: Vec<SessionMatch>,
+    /// At least one matched session was dropped to fit.
+    pub truncated: bool,
+    /// How many were dropped.
+    pub more_available: usize,
+    /// Σ of the chars/4 estimate over the kept rows.
+    pub budget_used_tokens: i64,
+    /// The budget that was enforced (`<= 0` means "no enforcement").
+    pub budget_max_tokens: i64,
+}
+
+// ── ranking + budget packing ─────────────────────────────────────────────────
+
+/// The rank-and-pack machinery behind `--context-budget`.
+///
+/// A rank is a weighted sum of three terms in `[0, 1]` — recency, cost, and a
+/// command-specific relevance — and the packer is greedy and strict: the first
+/// row that does not fit ends the pack (it does not skip ahead to a smaller
+/// one, which would reorder by size and defeat the ranking).
+pub mod rank {
+    use std::collections::HashMap;
+
+    use super::{BudgetedResult, SessionMatch, pyjson, pytime};
+
+    /// `discovery._DEFAULT_RANK_WEIGHTS` — recency, cost, relevance.
+    pub const DEFAULT_RANK_WEIGHTS: (f64, f64, f64) = (0.5, 0.2, 0.3);
+    /// `discovery._COST_SATURATION_USD`.
+    pub const COST_SATURATION_USD: f64 = 5.0;
+    /// `discovery._DECISIONS_OCCURRENCE_SATURATION`.
+    pub const DECISIONS_OCCURRENCE_SATURATION: f64 = 5.0;
+
+    /// A command-specific relevance term.
+    pub type Relevance = Box<dyn Fn(&SessionMatch) -> f64>;
+
+    /// `discovery._estimate_tokens` — `len(compact json) // 4 + 1`.
+    ///
+    /// Python measures the *string* length in characters; with `ensure_ascii`
+    /// on, every character is ASCII, so bytes and characters agree.
+    #[must_use]
+    pub fn estimate_tokens(value: &pyjson::Value) -> i64 {
+        let serialized = pyjson::dumps_compact(value);
+        i64::try_from(serialized.chars().count() / 4).unwrap_or(i64::MAX) + 1
+    }
+
+    /// `discovery._parse_rank_weights` — lenient, defaults on anything odd.
+    #[must_use]
+    pub fn parse_rank_weights(raw: Option<&str>) -> (f64, f64, f64) {
+        let Some(raw) = raw else {
+            return DEFAULT_RANK_WEIGHTS;
+        };
+        let parts: Vec<&str> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        let mut values: Vec<f64> = Vec::with_capacity(parts.len());
+        for part in parts {
+            match parse_python_float(part) {
+                Some(value) => values.push(value),
+                None => return DEFAULT_RANK_WEIGHTS,
+            }
+        }
+        if values.len() < 3 || values[..3].iter().any(|value| *value < 0.0) {
+            return DEFAULT_RANK_WEIGHTS;
+        }
+        (values[0], values[1], values[2])
+    }
+
+    /// `float(str)` — Rust's parser plus Python's acceptance of `inf`/`nan`.
+    fn parse_python_float(text: &str) -> Option<f64> {
+        text.parse::<f64>().ok()
+    }
+
+    /// `discovery._recency_score` — `1 / (1 + days_since_last_ts)`.
+    #[must_use]
+    pub fn recency_score(session_match: &SessionMatch, now_epoch: f64) -> f64 {
+        let Some(timestamp) = pytime::parse_iso(&session_match.last_ts) else {
+            return 0.0;
+        };
+        let days = ((now_epoch - timestamp) / 86_400.0).max(0.0);
+        1.0 / (1.0 + days)
+    }
+
+    /// `discovery._cost_score` — `min(1.0, cost_usd / 5.0)`.
+    #[must_use]
+    pub fn cost_score(session_match: &SessionMatch) -> f64 {
+        (session_match.cost_usd.max(0.0) / COST_SATURATION_USD).min(1.0)
+    }
+
+    /// `discovery._relevance_in_path`.
+    #[must_use]
+    pub fn relevance_in_path(resolved: &str) -> Relevance {
+        let target = resolved.trim_end_matches('/').to_string();
+        Box::new(move |session_match: &SessionMatch| {
+            let project = session_match.project_path.trim_end_matches('/');
+            if project.is_empty() {
+                return 0.0;
+            }
+            if project == target {
+                return 1.0;
+            }
+            if target.starts_with(&format!("{project}/")) {
+                return 0.5;
+            }
+            if project.starts_with(&format!("{target}/")) {
+                return 0.25;
+            }
+            0.0
+        })
+    }
+
+    /// `discovery._relevance_touching_file` without the bm25 leg (that leg only
+    /// exists on the FTS path, which is `stax-memory`'s).
+    #[must_use]
+    pub fn relevance_touching_file(match_kind_by_sid: HashMap<String, &'static str>) -> Relevance {
+        Box::new(move |session_match: &SessionMatch| {
+            match match_kind_by_sid
+                .get(&session_match.session_id)
+                .copied()
+                .unwrap_or("")
+            {
+                "tool" => 1.0,
+                "content" => 0.5,
+                _ => 0.25,
+            }
+        })
+    }
+
+    /// `discovery._relevance_decisions` — LIKE-match density, saturating at 5.
+    #[must_use]
+    pub fn relevance_decisions(occurrences_by_sid: HashMap<String, i64>) -> Relevance {
+        Box::new(move |session_match: &SessionMatch| {
+            let occurrences = occurrences_by_sid
+                .get(&session_match.session_id)
+                .copied()
+                .unwrap_or(0);
+            (occurrences as f64 / DECISIONS_OCCURRENCE_SATURATION).min(1.0)
+        })
+    }
+
+    /// `discovery._build_rank_fn` with the clock and the weights injected.
+    #[must_use]
+    pub fn rank_of(
+        session_match: &SessionMatch,
+        relevance: &Relevance,
+        weights: (f64, f64, f64),
+        now_epoch: f64,
+    ) -> f64 {
+        let (w_recency, w_cost, w_relevance) = weights;
+        w_recency * recency_score(session_match, now_epoch)
+            + w_cost * cost_score(session_match)
+            + w_relevance * relevance(session_match)
+    }
+
+    /// `discovery.pack_within_budget` — `(kept, dropped, used)`.
+    ///
+    /// `rank` of `None` keeps the input order (the caller already sorted).
+    #[must_use]
+    pub fn pack_within_budget(
+        sessions: Vec<SessionMatch>,
+        budget_tokens: i64,
+        rank: Option<(&Relevance, (f64, f64, f64), f64)>,
+    ) -> (Vec<SessionMatch>, usize, i64) {
+        let mut ordered = sessions;
+        if let Some((relevance, weights, now_epoch)) = rank {
+            // Python's `sorted(..., reverse=True)` is stable: equal ranks keep
+            // their input order, which for these queries is `last_ts DESC`.
+            let mut keyed: Vec<(f64, SessionMatch)> = ordered
+                .into_iter()
+                .map(|session_match| {
+                    (
+                        rank_of(&session_match, relevance, weights, now_epoch),
+                        session_match,
+                    )
+                })
+                .collect();
+            keyed.sort_by(|left, right| right.0.total_cmp(&left.0));
+            ordered = keyed.into_iter().map(|(_, value)| value).collect();
+        }
+
+        if budget_tokens <= 0 {
+            let used = ordered
+                .iter()
+                .map(|session_match| estimate_tokens(&session_match.to_dict()))
+                .sum();
+            return (ordered, 0, used);
+        }
+
+        let total = ordered.len();
+        let mut kept: Vec<SessionMatch> = Vec::new();
+        let mut used: i64 = 0;
+        for session_match in ordered {
+            let cost = estimate_tokens(&session_match.to_dict());
+            if used + cost > budget_tokens {
+                break;
+            }
+            used += cost;
+            kept.push(session_match);
+        }
+        let dropped = total - kept.len();
+        (kept, dropped, used)
+    }
+
+    /// Everything the budget path needs, injected rather than read.
+    ///
+    /// The clock lives here because `_recency_score` calls `datetime.now(UTC)`
+    /// and the weights because they come from a setting
+    /// (`STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS`); reading either from ambient
+    /// state would make the rank untestable and, for the env var, would need
+    /// the `unsafe` `set_var` this workspace forbids (finding 5).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Budget {
+        /// The `--context-budget` in estimated tokens; `<= 0` disables packing.
+        pub tokens: i64,
+        /// `recency, cost, relevance`.
+        pub weights: (f64, f64, f64),
+        /// `datetime.now(UTC)` as epoch seconds.
+        pub now_epoch: f64,
+    }
+
+    impl Budget {
+        /// A budget with the default weights and the real clock.
+        #[must_use]
+        pub fn new(tokens: i64) -> Self {
+            Self {
+                tokens,
+                weights: DEFAULT_RANK_WEIGHTS,
+                now_epoch: now_epoch(),
+            }
+        }
+
+        /// A fully injected budget — what tests and the parity harness use.
+        #[must_use]
+        pub fn at(tokens: i64, weights: (f64, f64, f64), now_epoch: f64) -> Self {
+            Self {
+                tokens,
+                weights,
+                now_epoch,
+            }
+        }
+    }
+
+    /// `discovery._budgeted` — pack and wrap.
+    #[must_use]
+    pub fn budgeted(
+        matches: Vec<SessionMatch>,
+        budget: &Budget,
+        relevance: &Relevance,
+    ) -> BudgetedResult {
+        let (kept, dropped, used) = pack_within_budget(
+            matches,
+            budget.tokens,
+            Some((relevance, budget.weights, budget.now_epoch)),
+        );
+        BudgetedResult {
+            sessions: kept,
+            truncated: dropped > 0,
+            more_available: dropped,
+            budget_used_tokens: used,
+            budget_max_tokens: budget.tokens,
+        }
+    }
+
+    /// `datetime.now(UTC)` as epoch seconds.
+    #[must_use]
+    pub fn now_epoch() -> f64 {
+        pytime::now_micros() as f64 / 1_000_000.0
+    }
+}
+
+// ── outcome inference ────────────────────────────────────────────────────────
+
+/// The outcome heuristic — "did the thing work?" — read off the transcript.
+///
+/// Ported keyword-for-keyword from `discovery.py`'s `OUTCOME_KEYWORDS` +
+/// `_classify_outcome`. The Python side compiles one alternation regex per class
+/// (longest phrase first, `\b` on the alphanumeric ends); this scans the same
+/// alternatives at each position in the same order, which is what the regex
+/// engine does, without pulling in a regex dependency.
+pub mod outcome {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    use anyhow::Result;
+    use rusqlite::Connection;
+
+    use super::{OutcomeFields, SessionMatch, pyjson, row_to_match};
+
+    /// `discovery.DEFAULT_MIN_OUTCOME_CONFIDENCE`.
+    pub const DEFAULT_MIN_OUTCOME_CONFIDENCE: f64 = 0.5;
+    /// In-vocabulary phrase from a user turn.
+    pub const CONF_EXPLICIT: f64 = 0.8;
+    /// The agent ran a revert command.
+    pub const CONF_TOOL_REVERT: f64 = 0.5;
+    /// "No complaint before the session ended".
+    pub const CONF_SILENCE: f64 = 0.3;
+    /// No signal at all.
+    pub const CONF_NONE: f64 = 0.0;
+    /// `discovery._OUTCOME_LOOKAHEAD`.
+    pub const LOOKAHEAD: usize = 5;
+
+    /// Which tool family a file mention has to come from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Mode {
+        /// `Read`.
+        Read,
+        /// `Edit` / `Write` / `MultiEdit` / `NotebookEdit`.
+        Write,
+        /// Either of the above.
+        Any,
+    }
+
+    const READ_TOOL_NAMES: &[&str] = &["Read"];
+    const WRITE_TOOL_NAMES: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+    const SHELL_TOOL_NAMES: &[&str] = &[
+        "Bash",
+        "shell",
+        "run_command",
+        "execute_command",
+        "RunCommand",
+    ];
+    const REVERT_COMMAND_PATTERNS: &[&str] = &[
+        "git revert",
+        "git reset --hard",
+        "git reset --merge",
+        "git reset head",
+        "git checkout --",
+        "git checkout .",
+        "git restore ",
+        "git stash",
+    ];
+    const BENIGN_NO_SUFFIXES: &[&str] = &[
+        "problem", "problems", "worries", "worry", "rush", "biggie", "prob", "issue", "issues",
+        "need", "need to", "doubt",
+    ];
+
+    const REVERT_KEYWORDS: &[&str] = &[
+        "undo",
+        "undo that",
+        "undo it",
+        "revert",
+        "revert that",
+        "revert it",
+        "roll back",
+        "rollback",
+        "roll that back",
+        "take that back",
+        "back it out",
+        "back that out",
+        "try again",
+        "try a different",
+        "git revert",
+        "git reset --hard",
+        "git checkout --",
+    ];
+    const NEGATIVE_KEYWORDS: &[&str] = &[
+        "no",
+        "nope",
+        "that broke",
+        "you broke",
+        "broke it",
+        "broke the build",
+        "broke the tests",
+        "broke",
+        "broken",
+        "still broken",
+        "still failing",
+        "still fails",
+        "still errors",
+        "doesn't work",
+        "does not work",
+        "didn't work",
+        "did not work",
+        "not working",
+        "isn't working",
+        "won't work",
+        "wont work",
+        "stopped working",
+        "failing",
+        "tests fail",
+        "test failed",
+        "build failed",
+        "wrong",
+        "that's wrong",
+        "thats wrong",
+        "incorrect",
+        "mistake",
+        "error",
+        "not what i asked",
+        "not what i wanted",
+        "not what i meant",
+        "that's not right",
+        "thats not right",
+        "that's not it",
+        "thats not it",
+        "no good",
+        "doesn't help",
+        "didn't help",
+        "regression",
+        "regressed",
+        "❌",
+        "👎",
+    ];
+    const POSITIVE_KEYWORDS: &[&str] = &[
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "that worked",
+        "it worked",
+        "works now",
+        "working now",
+        "that works",
+        "it works",
+        "works great",
+        "works perfectly",
+        "tests pass",
+        "tests passed",
+        "tests passing",
+        "passes",
+        "fixed",
+        "solved",
+        "perfect",
+        "nice",
+        "great",
+        "awesome",
+        "excellent",
+        "ship it",
+        "lgtm",
+        "looks good",
+        "looks great",
+        "love it",
+        "exactly right",
+        "that's it",
+        "thats it",
+        "nailed it",
+        "correct",
+        "+1",
+        "👍",
+        "🎉",
+        "✅",
+        "✓",
+    ];
+
+    /// One keyword hit: where it started and what matched.
+    struct KeywordHit {
+        start: usize,
+        end: usize,
+        text: String,
+    }
+
+    /// The phrases of one class, deduped and sorted longest-first, as chars.
+    ///
+    /// Built once per process: `_compile_keyword_re` compiles its alternation
+    /// once at import too, and rebuilding this per message turned
+    /// `memory worked` into the slowest verb in the port (885ms → 250ms once
+    /// the table stopped being rebuilt inside the scan loop).
+    fn phrase_table(keywords: &[&'static str]) -> Vec<Vec<char>> {
+        let mut deduped: Vec<&str> = Vec::with_capacity(keywords.len());
+        for keyword in keywords {
+            let trimmed = keyword.trim();
+            if !trimmed.is_empty() && !deduped.contains(&trimmed) {
+                deduped.push(trimmed);
+            }
+        }
+        deduped.sort_by_key(|phrase| std::cmp::Reverse(phrase.chars().count()));
+        deduped
+            .into_iter()
+            .map(|phrase| phrase.chars().collect())
+            .collect()
+    }
+
+    fn revert_phrases() -> &'static [Vec<char>] {
+        static TABLE: OnceLock<Vec<Vec<char>>> = OnceLock::new();
+        TABLE.get_or_init(|| phrase_table(REVERT_KEYWORDS))
+    }
+
+    fn negative_phrases() -> &'static [Vec<char>] {
+        static TABLE: OnceLock<Vec<Vec<char>>> = OnceLock::new();
+        TABLE.get_or_init(|| phrase_table(NEGATIVE_KEYWORDS))
+    }
+
+    fn positive_phrases() -> &'static [Vec<char>] {
+        static TABLE: OnceLock<Vec<Vec<char>>> = OnceLock::new();
+        TABLE.get_or_init(|| phrase_table(POSITIVE_KEYWORDS))
+    }
+
+    /// Scan `text` for a class's phrases, longest-first at each position.
+    ///
+    /// Mirrors `re.finditer` over `_compile_keyword_re(words)`: alternatives are
+    /// ordered longest-first, matching is case-insensitive, and a phrase whose
+    /// first/last character is alphanumeric needs a `\b` on that side.
+    fn find_keywords(text: &str, phrases: &[Vec<char>], first_only: bool) -> Vec<KeywordHit> {
+        let chars: Vec<char> = text.chars().collect();
+        let lowered: Vec<char> = chars
+            .iter()
+            .map(|ch| ch.to_lowercase().next().unwrap_or(*ch))
+            .collect();
+
+        let mut hits: Vec<KeywordHit> = Vec::new();
+        let mut position = 0usize;
+        while position < lowered.len() {
+            let head = lowered[position];
+            let mut matched: Option<(usize, String)> = None;
+            for phrase in phrases {
+                if phrase[0] != head {
+                    continue; // cheap prefilter; the regex engine's first-byte test
+                }
+                let end = position + phrase.len();
+                if end > lowered.len() || lowered[position..end] != phrase[..] {
+                    continue;
+                }
+                let left_ok = !is_word_char(phrase[0])
+                    || position == 0
+                    || !is_word_char(lowered[position - 1]);
+                let right_ok = !is_word_char(phrase[phrase.len() - 1])
+                    || end == lowered.len()
+                    || !is_word_char(lowered[end]);
+                if left_ok && right_ok {
+                    matched = Some((end, chars[position..end].iter().collect()));
+                    break;
+                }
+            }
+            match matched {
+                Some((end, text)) => {
+                    hits.push(KeywordHit {
+                        start: position,
+                        end,
+                        text,
+                    });
+                    if first_only {
+                        return hits;
+                    }
+                    position = end;
+                }
+                None => position += 1,
+            }
+        }
+        hits
+    }
+
+    /// Python's `\w`: alphanumeric (Unicode) or underscore.
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    /// `discovery._classify_user_text` — revert > negative > positive.
+    #[must_use]
+    pub fn classify_user_text(text: &str) -> Option<&'static str> {
+        if text.is_empty() {
+            return None;
+        }
+        if !find_keywords(text, revert_phrases(), true).is_empty() {
+            return Some("revert");
+        }
+        let chars: Vec<char> = text.chars().collect();
+        for hit in find_keywords(text, negative_phrases(), false) {
+            if hit.text.to_lowercase() == "no" {
+                let tail: String = chars
+                    .iter()
+                    .skip(hit.end)
+                    .take(16)
+                    .collect::<String>()
+                    .to_lowercase()
+                    .trim_start_matches([' ', ',', '.', '!', ':', ';', '-'])
+                    .to_string();
+                if BENIGN_NO_SUFFIXES
+                    .iter()
+                    .any(|suffix| tail.starts_with(suffix))
+                {
+                    continue; // "no problem" / "no worries" — not a complaint
+                }
+            }
+            let _ = hit.start;
+            return Some("negative");
+        }
+        if !find_keywords(text, positive_phrases(), true).is_empty() {
+            return Some("positive");
+        }
+        None
+    }
+
+    /// `discovery._trim_inline` — collapse whitespace, clip with an ellipsis.
+    #[must_use]
+    pub fn trim_inline(text: &str, limit: usize) -> String {
+        let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if one_line.chars().count() <= limit {
+            return one_line;
+        }
+        let keep = limit.saturating_sub(1).max(1);
+        let clipped: String = one_line.chars().take(keep).collect();
+        format!("{}…", clipped.trim_end())
+    }
+
+    /// `discovery._tools_json_mentions_file`.
+    #[must_use]
+    pub fn tools_json_mentions_file(tools_json: Option<&str>, file_path: &str, mode: Mode) -> bool {
+        let Some(tools_json) = tools_json.filter(|raw| !raw.is_empty() && *raw != "[]") else {
+            return false;
+        };
+        let Some(pyjson::Value::Array(tools)) = pyjson::loads(tools_json) else {
+            return false;
+        };
+        let wanted: Vec<&str> = match mode {
+            Mode::Read => READ_TOOL_NAMES.to_vec(),
+            Mode::Write => WRITE_TOOL_NAMES.to_vec(),
+            Mode::Any => READ_TOOL_NAMES
+                .iter()
+                .chain(WRITE_TOOL_NAMES.iter())
+                .copied()
+                .collect(),
+        };
+        for entry in &tools {
+            if !matches!(entry, pyjson::Value::Object(_)) {
+                continue;
+            }
+            let name = truthy_key(entry, "name")
+                .or_else(|| truthy_key(entry, "tool"))
+                .and_then(pyjson::Value::as_str)
+                .unwrap_or("");
+            if !wanted.contains(&name) {
+                continue;
+            }
+            let candidate = truthy_key(entry, "input")
+                .or_else(|| truthy_key(entry, "arguments"))
+                .unwrap_or(entry);
+            if matches!(candidate, pyjson::Value::Object(_)) {
+                for key in ["file_path", "path", "filename", "notebook_path"] {
+                    if let Some(value) = candidate.get(key).and_then(pyjson::Value::as_str)
+                        && value.contains(file_path)
+                    {
+                        return true;
+                    }
+                }
+            }
+            if pyjson::dumps_default(entry).contains(file_path) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `entry.get(key)` under Python truthiness — a falsy value is skipped.
+    fn truthy_key<'a>(entry: &'a pyjson::Value, key: &str) -> Option<&'a pyjson::Value> {
+        entry.get(key).filter(|value| value.is_truthy())
+    }
+
+    /// `discovery._revert_command_in_tools`.
+    #[must_use]
+    pub fn revert_command_in_tools(tools_json: Option<&str>) -> Option<String> {
+        let tools_json = tools_json.filter(|raw| !raw.is_empty() && *raw != "[]")?;
+        let pyjson::Value::Array(tools) = pyjson::loads(tools_json)? else {
+            return None;
+        };
+        for entry in &tools {
+            if !matches!(entry, pyjson::Value::Object(_)) {
+                continue;
+            }
+            let name = truthy_key(entry, "name")
+                .or_else(|| truthy_key(entry, "tool"))
+                .and_then(pyjson::Value::as_str)
+                .unwrap_or("");
+            if !SHELL_TOOL_NAMES.contains(&name) {
+                continue;
+            }
+            let candidate = truthy_key(entry, "input")
+                .or_else(|| truthy_key(entry, "arguments"))
+                .unwrap_or(entry);
+            let command = if matches!(candidate, pyjson::Value::Object(_)) {
+                truthy_key(candidate, "command")
+                    .or_else(|| truthy_key(candidate, "cmd"))
+                    .and_then(pyjson::Value::as_str)
+                    .unwrap_or("")
+            } else {
+                ""
+            };
+            if command.is_empty() {
+                continue;
+            }
+            let normalized = command
+                .to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if REVERT_COMMAND_PATTERNS
+                .iter()
+                .any(|pattern| normalized.contains(pattern))
+            {
+                return Some(command.to_string());
+            }
+        }
+        None
+    }
+
+    /// One transcript row, as `_classify_outcome` reads it.
+    #[derive(Debug, Clone)]
+    pub struct MessageRow {
+        /// `messages.id`.
+        pub id: i64,
+        /// `messages.role`.
+        pub role: String,
+        /// `messages.content_text`.
+        pub content_text: String,
+        /// `messages.tools_json`.
+        pub tools_json: Option<String>,
+        /// `messages.is_sidechain`.
+        pub is_sidechain: bool,
+    }
+
+    /// `discovery._classify_outcome` — `(outcome, evidence, msg_id, confidence)`.
+    #[must_use]
+    pub fn classify_outcome(messages: &[MessageRow], anchor_idx: usize) -> OutcomeFields {
+        let anchor_id = messages.get(anchor_idx).map_or(0, |row| row.id);
+        let tail: Vec<&MessageRow> = messages
+            .iter()
+            .skip(anchor_idx + 1)
+            .filter(|row| !row.is_sidechain)
+            .collect();
+        if tail.is_empty() {
+            return OutcomeFields {
+                outcome: "uncertain".into(),
+                outcome_evidence:
+                    "action is the last recorded turn in the session — no follow-up to judge".into(),
+                outcome_msg_id: anchor_id,
+                outcome_confidence: CONF_NONE,
+            };
+        }
+
+        let mut user_turns_seen = 0usize;
+        let mut last_user_id = anchor_id;
+        for row in tail {
+            let role = row.role.to_lowercase();
+            if role == "assistant" {
+                if let Some(command) = revert_command_in_tools(row.tools_json.as_deref()) {
+                    return OutcomeFields {
+                        outcome: "reverted".into(),
+                        outcome_evidence: format!(
+                            "agent ran `{}` after the action",
+                            trim_inline(&command, 120)
+                        ),
+                        outcome_msg_id: row.id,
+                        outcome_confidence: CONF_TOOL_REVERT,
+                    };
+                }
+                continue;
+            }
+            if role != "user" {
+                continue;
+            }
+            let text = row.content_text.trim();
+            if text.is_empty() {
+                continue; // a tool-result user message — not a real turn
+            }
+            let Some(class) = classify_user_text(text) else {
+                user_turns_seen += 1;
+                last_user_id = row.id;
+                if user_turns_seen >= LOOKAHEAD {
+                    break;
+                }
+                continue;
+            };
+            let excerpt = trim_inline(text, 160);
+            let outcome = match class {
+                "revert" => "reverted",
+                "negative" => "failed",
+                _ => "worked",
+            };
+            return OutcomeFields {
+                outcome: outcome.into(),
+                outcome_evidence: format!("user wrote: '{excerpt}'"),
+                outcome_msg_id: row.id,
+                outcome_confidence: CONF_EXPLICIT,
+            };
+        }
+
+        if user_turns_seen == 0 {
+            return OutcomeFields {
+                outcome: "worked".into(),
+                outcome_evidence:
+                    "session continued after the action with no user complaint or revert".into(),
+                outcome_msg_id: messages.last().map_or(anchor_id, |row| row.id),
+                outcome_confidence: CONF_SILENCE,
+            };
+        }
+        OutcomeFields {
+            outcome: "uncertain".into(),
+            outcome_evidence: format!(
+                "{user_turns_seen} follow-up user turn(s) but none confirmed or rejected the action"
+            ),
+            outcome_msg_id: last_user_id,
+            outcome_confidence: CONF_NONE,
+        }
+    }
+
+    /// `discovery._outcome_matches_for` — the back half both outcome queries share.
+    ///
+    /// # Errors
+    /// When a query fails.
+    pub fn outcome_matches_for(
+        conn: &Connection,
+        anchor_seq_by_fk: &[(i64, i64)],
+        wanted_outcomes: &[&str],
+        limit: i64,
+        min_confidence: f64,
+    ) -> Result<Vec<SessionMatch>> {
+        if anchor_seq_by_fk.is_empty() {
+            return Ok(Vec::new());
+        }
+        let anchors: HashMap<i64, i64> = anchor_seq_by_fk.iter().copied().collect();
+        let sql = format!(
+            "SELECT {}, s.id AS session_fk {} WHERE s.id IN ({}) ORDER BY s.last_ts DESC",
+            super::SESSION_SELECT,
+            super::SESSION_FROM,
+            super::placeholders(anchor_seq_by_fk.len())
+        );
+        let params: Vec<rusqlite::types::Value> = anchor_seq_by_fk
+            .iter()
+            .map(|(fk, _)| rusqlite::types::Value::Integer(*fk))
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let meta_rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                Ok((row.get::<_, i64>(8)?, row_to_match(row)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut out: Vec<SessionMatch> = Vec::new();
+        let mut messages_stmt = conn.prepare(
+            "SELECT id, seq, role, content_text, tools_json, is_sidechain \
+             FROM messages WHERE session_fk = ? AND seq >= ? ORDER BY seq, id",
+        )?;
+        for (session_fk, mut session_match) in meta_rows {
+            let anchor_seq = anchors.get(&session_fk).copied().unwrap_or(0);
+            let msg_rows = messages_stmt
+                .query_map(rusqlite::params![session_fk, anchor_seq], |row| {
+                    Ok(MessageRow {
+                        id: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                        role: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                        content_text: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                        tools_json: row.get::<_, Option<String>>(4)?,
+                        is_sidechain: row.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if msg_rows.is_empty() {
+                continue;
+            }
+            let fields = classify_outcome(&msg_rows, 0);
+            if !wanted_outcomes.contains(&fields.outcome.as_str()) {
+                continue;
+            }
+            if fields.outcome_confidence < min_confidence {
+                continue;
+            }
+            session_match.outcome = Some(fields);
+            out.push(session_match);
+            if limit > 0 && i64::try_from(out.len()).unwrap_or(i64::MAX) >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+}
+
+// ── SQL fragments, ported literally ──────────────────────────────────────────
+
+/// `discovery._SESSION_SELECT`, spacing included.
+const SESSION_SELECT: &str = "  s.session_id           AS session_id,\
+  p.slug                 AS project_slug,\
+  p.path                 AS stored_path,\
+  p.provider             AS provider,\
+  s.first_ts             AS first_ts,\
+  s.last_ts              AS last_ts,\
+  s.message_count        AS message_count,\
+  COALESCE(sm.cost_usd, 0.0) AS cost_usd";
+
+/// `discovery._SESSION_FROM`.
+const SESSION_FROM: &str = "FROM sessions s \
+JOIN projects p ON p.id = s.project_id \
+LEFT JOIN session_mart sm ON sm.session_id = s.session_id";
+
+/// Column indices into a `SESSION_SELECT` row.
+const COL_SESSION_ID: usize = 0;
+const COL_PROJECT_SLUG: usize = 1;
+const COL_STORED_PATH: usize = 2;
+const COL_PROVIDER: usize = 3;
+const COL_FIRST_TS: usize = 4;
+const COL_LAST_TS: usize = 5;
+const COL_MESSAGE_COUNT: usize = 6;
+const COL_COST_USD: usize = 7;
+
+/// Build a [`SessionMatch`] from a `SESSION_SELECT` row — `discovery._row_to_match`.
+fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMatch> {
+    let project_slug: String = row
+        .get::<_, Option<String>>(COL_PROJECT_SLUG)?
+        .unwrap_or_default();
+    let stored_path: Option<String> = row.get(COL_STORED_PATH)?;
+    Ok(SessionMatch {
+        session_id: row
+            .get::<_, Option<String>>(COL_SESSION_ID)?
+            .unwrap_or_default(),
+        project_path: paths::project_fs_path(stored_path.as_deref(), &project_slug),
+        project_slug,
+        provider: row
+            .get::<_, Option<String>>(COL_PROVIDER)?
+            .unwrap_or_default(),
+        first_ts: row
+            .get::<_, Option<String>>(COL_FIRST_TS)?
+            .unwrap_or_default(),
+        last_ts: row
+            .get::<_, Option<String>>(COL_LAST_TS)?
+            .unwrap_or_default(),
+        message_count: row.get::<_, Option<i64>>(COL_MESSAGE_COUNT)?.unwrap_or(0),
+        cost_usd: row.get::<_, Option<f64>>(COL_COST_USD)?.unwrap_or(0.0),
+        snippet: None,
+        embedding_score: None,
+        more_matches_in_session: None,
+        outcome: None,
+    })
+}
+
+/// `",?,?,…"` — one placeholder per element, the idiom every list-scoped query
+/// in the reference uses (§6b: the list-subquery shape is load-bearing).
+fn placeholders(count: usize) -> String {
+    let mut out = String::with_capacity(count * 2);
+    for index in 0..count {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('?');
+    }
+    out
+}
+
+// ── queries ──────────────────────────────────────────────────────────────────
+
+/// `discovery.find_sessions_in_path` — sessions whose project is `path` or an
+/// ancestor of it.
+///
+/// `context_budget` is always applied (the CLI always passes one); the plain
+/// `list[SessionMatch]` overload of the Python function has no wave-1 caller.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed (`ValueError` in Python).
+pub fn find_sessions_in_path(
+    conn: &Connection,
+    path: &str,
+    since: Option<&str>,
+    limit: i64,
+    provider: Option<&str>,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    let resolved = paths::resolve_input_path(path);
+    let relevance = rank::relevance_in_path(&resolved);
+
+    let mut stmt = conn.prepare("SELECT id, provider, slug, path FROM projects")?;
+    let project_rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut matched_ids: Vec<i64> = Vec::new();
+    for (id, row_provider, slug, stored_path) in &project_rows {
+        if let Some(wanted) = provider
+            && row_provider != wanted
+        {
+            continue;
+        }
+        let fs_path = paths::project_fs_path(stored_path.as_deref(), slug);
+        if fs_path.is_empty() {
+            continue;
+        }
+        if paths::is_ancestor(&fs_path, &resolved) {
+            matched_ids.push(*id);
+        }
+    }
+
+    if matched_ids.is_empty() {
+        return Ok(rank::budgeted(Vec::new(), budget, &relevance));
+    }
+
+    let since_iso = pytime::parse_since(since)?;
+
+    let mut sql = format!(
+        "SELECT {SESSION_SELECT} {SESSION_FROM} WHERE s.project_id IN ({})",
+        placeholders(matched_ids.len())
+    );
+    let mut params: Vec<rusqlite::types::Value> = matched_ids
+        .iter()
+        .map(|id| rusqlite::types::Value::Integer(*id))
+        .collect();
+    if let Some(iso) = &since_iso {
+        sql.push_str(" AND s.last_ts >= ?");
+        params.push(rusqlite::types::Value::Text(iso.clone()));
+    }
+    sql.push_str(" ORDER BY s.last_ts DESC");
+    if limit > 0 {
+        sql.push_str(" LIMIT ?");
+        params.push(rusqlite::types::Value::Integer(limit));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let matches = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), row_to_match)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rank::budgeted(matches, budget, &relevance))
+}
+
+/// `discovery.find_sessions_touching_file(context_budget=None)` — a plain list.
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file(
+    conn: &Connection,
+    file_path: &str,
+    limit: i64,
+) -> Result<Vec<SessionMatch>> {
+    Ok(touching_file(conn, file_path, limit, None)?.0)
+}
+
+/// `discovery.find_sessions_touching_file(context_budget=N)` — a [`BudgetedResult`].
+///
+/// # Errors
+/// When a query fails.
+pub fn find_sessions_touching_file_budgeted(
+    conn: &Connection,
+    file_path: &str,
+    limit: i64,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    let (_, budgeted) = touching_file(conn, file_path, limit, Some(budget))?;
+    budgeted.context("a budgeted touching-file query must produce a budgeted result")
+}
+
+/// The shared body — `mode="any"`, `search_service=None`.
+fn touching_file(
+    conn: &Connection,
+    file_path: &str,
+    limit: i64,
+    budget: Option<&rank::Budget>,
+) -> Result<(Vec<SessionMatch>, Option<BudgetedResult>)> {
+    let resolved = paths::resolve_input_path(file_path);
+    let pattern = format!("%{resolved}%");
+
+    // Stage 1 — one combined scan, refined in Python (here: in Rust). Both
+    // halves of the OR are leading-wildcard, which is the full-scan §6b warns
+    // about; it is the reference's shape and stays.
+    let mut stmt = conn.prepare(
+        "SELECT s.id AS sfk, s.session_id AS sid, m.tools_json, m.content_text \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         WHERE (m.tools_json LIKE ? OR m.content_text LIKE ?)",
+    )?;
+    let rows = stmt
+        .query_map([&pattern, &pattern], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut matched_session_fks: Vec<i64> = Vec::new();
+    let mut seen_fks: HashSet<i64> = HashSet::new();
+    let mut match_kind_by_sid: HashMap<String, &'static str> = HashMap::new();
+    for (sfk, sid, tools_json, content_text) in &rows {
+        if seen_fks.contains(sfk) {
+            continue;
+        }
+        if outcome::tools_json_mentions_file(tools_json.as_deref(), &resolved, outcome::Mode::Any) {
+            seen_fks.insert(*sfk);
+            matched_session_fks.push(*sfk);
+            match_kind_by_sid.insert(sid.clone(), "tool");
+        } else if content_text.as_deref().unwrap_or("").contains(&resolved) {
+            seen_fks.insert(*sfk);
+            matched_session_fks.push(*sfk);
+            match_kind_by_sid.insert(sid.clone(), "content");
+        }
+    }
+
+    let relevance = rank::relevance_touching_file(match_kind_by_sid);
+
+    if matched_session_fks.is_empty() {
+        return Ok(match budget {
+            Some(budget) => (
+                Vec::new(),
+                Some(rank::budgeted(Vec::new(), budget, &relevance)),
+            ),
+            None => (Vec::new(), None),
+        });
+    }
+
+    // Python iterates a `set` here, so the id order handed to SQLite is
+    // arbitrary — but the query is `ORDER BY s.last_ts DESC`, so the result
+    // order is not. Insertion order is used instead: same rows, same order out.
+    let mut sql = format!(
+        "SELECT {SESSION_SELECT} {SESSION_FROM} WHERE s.id IN ({}) ORDER BY s.last_ts DESC",
+        placeholders(matched_session_fks.len())
+    );
+    let mut params: Vec<rusqlite::types::Value> = matched_session_fks
+        .iter()
+        .map(|fk| rusqlite::types::Value::Integer(*fk))
+        .collect();
+    if limit > 0 {
+        sql.push_str(" LIMIT ?");
+        params.push(rusqlite::types::Value::Integer(limit));
+    }
+    let mut stmt = conn.prepare(&sql)?;
+    let matches = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), row_to_match)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(match budget {
+        Some(budget) => {
+            let budgeted = rank::budgeted(matches, budget, &relevance);
+            (budgeted.sessions.clone(), Some(budgeted))
+        }
+        None => (matches, None),
+    })
+}
+
+/// `discovery.search_past_decisions` — the `LIKE` branch (`search_service=None`).
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn search_past_decisions(
+    conn: &Connection,
+    query: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    budget: &rank::Budget,
+) -> Result<BudgetedResult> {
+    if query.trim().is_empty() {
+        let relevance = rank::relevance_decisions(HashMap::new());
+        return Ok(rank::budgeted(Vec::new(), budget, &relevance));
+    }
+    let needle = query.trim();
+    let since_iso = pytime::parse_since(since)?;
+
+    let mut sql = String::from(
+        "SELECT m.id AS mid, m.session_fk AS sfk, s.session_id AS sid, \
+         m.content_text AS content_text \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         JOIN projects p ON p.id = s.project_id \
+         WHERE m.content_text LIKE ?",
+    );
+    let mut params: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::Text(format!("%{needle}%"))];
+    if let Some(slug) = project {
+        sql.push_str(" AND p.slug = ?");
+        params.push(rusqlite::types::Value::Text(slug.to_string()));
+    }
+    if let Some(iso) = &since_iso {
+        sql.push_str(" AND m.timestamp >= ?");
+        params.push(rusqlite::types::Value::Text(iso.clone()));
+    }
+    sql.push_str(" ORDER BY m.timestamp DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let hit_rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let needle_lower = needle.to_lowercase();
+    // Insertion-ordered so the `IN (…)` list matches Python's dict order.
+    let mut snippet_order: Vec<i64> = Vec::new();
+    let mut snippet_by_sfk: HashMap<i64, Option<String>> = HashMap::new();
+    let mut occ_by_sid: HashMap<String, i64> = HashMap::new();
+    let mut msg_count_by_sfk: HashMap<i64, i64> = HashMap::new();
+    for (_mid, sfk, sid, content_text) in &hit_rows {
+        let content = content_text.as_deref().unwrap_or("");
+        *occ_by_sid.entry(sid.clone()).or_insert(0) +=
+            count_occurrences(&content.to_lowercase(), &needle_lower);
+        *msg_count_by_sfk.entry(*sfk).or_insert(0) += 1;
+        if snippet_by_sfk.contains_key(sfk) {
+            continue;
+        }
+        snippet_order.push(*sfk);
+        snippet_by_sfk.insert(*sfk, build_snippet(content, needle));
+    }
+
+    let relevance = rank::relevance_decisions(occ_by_sid);
+    if snippet_order.is_empty() {
+        return Ok(rank::budgeted(Vec::new(), budget, &relevance));
+    }
+
+    let sql = format!(
+        "SELECT {SESSION_SELECT}, s.id AS session_fk {SESSION_FROM} \
+         WHERE s.id IN ({}) ORDER BY s.last_ts DESC",
+        placeholders(snippet_order.len())
+    );
+    let params: Vec<rusqlite::types::Value> = snippet_order
+        .iter()
+        .map(|fk| rusqlite::types::Value::Integer(*fk))
+        .collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            let session_fk: i64 = row.get(8)?;
+            Ok((session_fk, row_to_match(row)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut out: Vec<SessionMatch> = Vec::new();
+    for (session_fk, mut session_match) in rows {
+        session_match.snippet = snippet_by_sfk.get(&session_fk).cloned().flatten();
+        let more = msg_count_by_sfk.get(&session_fk).copied().unwrap_or(1) - 1;
+        session_match.more_matches_in_session = (more != 0).then_some(more);
+        out.push(session_match);
+        if limit > 0 && i64::try_from(out.len()).unwrap_or(i64::MAX) >= limit {
+            break;
+        }
+    }
+
+    Ok(rank::budgeted(out, budget, &relevance))
+}
+
+/// `discovery.find_sessions_where_action_worked` — the `search_service=None` branch.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn find_sessions_where_action_worked(
+    conn: &Connection,
+    action: &str,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: i64,
+    min_confidence: f64,
+) -> Result<Vec<SessionMatch>> {
+    if action.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let min_confidence = min_confidence.clamp(0.0, 1.0);
+    let needle = action.trim();
+    let since_iso = pytime::parse_since(since)?;
+
+    let mut where_clauses = vec!["(m.tools_json LIKE ? OR m.content_text LIKE ?)".to_string()];
+    let mut params: Vec<rusqlite::types::Value> = vec![
+        rusqlite::types::Value::Text(format!("%{needle}%")),
+        rusqlite::types::Value::Text(format!("%{needle}%")),
+    ];
+    if let Some(slug) = project {
+        where_clauses.push("p.slug = ?".to_string());
+        params.push(rusqlite::types::Value::Text(slug.to_string()));
+    }
+    if let Some(iso) = &since_iso {
+        where_clauses.push("m.timestamp >= ?".to_string());
+        params.push(rusqlite::types::Value::Text(iso.clone()));
+    }
+    let sql = format!(
+        "SELECT s.id AS sfk, MAX(m.seq) AS anchor_seq \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         JOIN projects p ON p.id = s.project_id \
+         WHERE {} GROUP BY s.id",
+        where_clauses.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let anchor_seq_by_fk = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    outcome::outcome_matches_for(conn, &anchor_seq_by_fk, &["worked"], limit, min_confidence)
+}
+
+/// `discovery.find_failure_modes_for_file`.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn find_failure_modes_for_file(
+    conn: &Connection,
+    file_path: &str,
+    since: Option<&str>,
+    limit: i64,
+    min_confidence: f64,
+) -> Result<Vec<SessionMatch>> {
+    let resolved = paths::resolve_input_path(file_path);
+    let since_iso = pytime::parse_since(since)?;
+    let min_confidence = min_confidence.clamp(0.0, 1.0);
+    let anchors = write_mode_anchors(conn, &resolved, since_iso.as_deref())?;
+    outcome::outcome_matches_for(
+        conn,
+        &anchors,
+        &["failed", "reverted"],
+        limit,
+        min_confidence,
+    )
+}
+
+/// The "last write-mode mention per session" anchor pass shared by
+/// `find_failure_modes_for_file` and `risk.file_risk_summary`.
+fn write_mode_anchors(
+    conn: &Connection,
+    resolved: &str,
+    since_iso: Option<&str>,
+) -> Result<Vec<(i64, i64)>> {
+    let mut sql = String::from(
+        "SELECT s.id AS sfk, m.seq AS seq, m.tools_json AS tools_json \
+         FROM messages m JOIN sessions s ON s.id = m.session_fk \
+         WHERE m.tools_json LIKE ?",
+    );
+    let mut params: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::Text(format!("%{resolved}%"))];
+    if let Some(iso) = since_iso {
+        sql.push_str(" AND m.timestamp >= ?");
+        params.push(rusqlite::types::Value::Text(iso.to_string()));
+    }
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut order: Vec<i64> = Vec::new();
+    let mut anchor_by_fk: HashMap<i64, i64> = HashMap::new();
+    for (sfk, seq, tools_json) in &rows {
+        if !outcome::tools_json_mentions_file(tools_json.as_deref(), resolved, outcome::Mode::Write)
+        {
+            continue;
+        }
+        match anchor_by_fk.get_mut(sfk) {
+            Some(current) => {
+                if *seq > *current {
+                    *current = *seq;
+                }
+            }
+            None => {
+                order.push(*sfk);
+                anchor_by_fk.insert(*sfk, *seq);
+            }
+        }
+    }
+    Ok(order
+        .into_iter()
+        .map(|fk| (fk, anchor_by_fk[&fk]))
+        .collect())
+}
+
+/// `risk.file_risk_summary`'s return shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RiskSummary {
+    /// The absolute path the heuristic actually looked at.
+    pub path: String,
+    /// The `--since` string, echoed verbatim (not the parsed ISO form).
+    pub since: Option<String>,
+    /// Distinct sessions touching the file at all.
+    pub total_sessions: i64,
+    /// Sessions whose last write-mode mention was reverted.
+    pub reverted: i64,
+    /// …whose last write-mode mention failed.
+    pub failed: i64,
+    /// …whose last write-mode mention worked.
+    pub worked: i64,
+    /// Failure-mode session ids, newest first, capped at `recent_limit`.
+    pub recent_session_ids: Vec<String>,
+}
+
+impl RiskSummary {
+    /// Serialise in `file_risk_summary`'s key order.
+    #[must_use]
+    pub fn to_dict(&self) -> pyjson::Value {
+        pyjson::Value::Object(vec![
+            ("path".into(), pyjson::Value::from(&self.path)),
+            (
+                "since".into(),
+                match &self.since {
+                    Some(raw) => pyjson::Value::from(raw),
+                    None => pyjson::Value::Null,
+                },
+            ),
+            (
+                "total_sessions".into(),
+                pyjson::Value::Int(self.total_sessions),
+            ),
+            ("reverted".into(), pyjson::Value::Int(self.reverted)),
+            ("failed".into(), pyjson::Value::Int(self.failed)),
+            ("worked".into(), pyjson::Value::Int(self.worked)),
+            (
+                "recent_session_ids".into(),
+                pyjson::Value::Array(
+                    self.recent_session_ids
+                        .iter()
+                        .map(pyjson::Value::from)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+/// `risk.file_risk_summary`.
+///
+/// # Errors
+/// When a query fails, or `since` is malformed.
+pub fn file_risk_summary(
+    conn: &Connection,
+    path: &str,
+    since: Option<&str>,
+    recent_limit: i64,
+) -> Result<RiskSummary> {
+    let since_iso = pytime::parse_since(since)?;
+    let resolved = paths::resolve_input_path(path);
+    let pattern = format!("%{resolved}%");
+
+    let mut sql = String::from(
+        "SELECT DISTINCT s.id AS sfk \
+         FROM messages m JOIN sessions s ON s.id = m.session_fk \
+         WHERE (m.tools_json LIKE ? OR m.content_text LIKE ?)",
+    );
+    let mut params: Vec<rusqlite::types::Value> = vec![
+        rusqlite::types::Value::Text(pattern.clone()),
+        rusqlite::types::Value::Text(pattern.clone()),
+    ];
+    if let Some(iso) = &since_iso {
+        sql.push_str(" AND m.timestamp >= ?");
+        params.push(rusqlite::types::Value::Text(iso.clone()));
+    }
+    let mut stmt = conn.prepare(&sql)?;
+    let total_sessions = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .len();
+
+    // The Python helper re-enters `find_failure_modes_for_file` with the raw
+    // `since` (not the parsed ISO) and an unbounded limit.
+    let fail_mode = find_failure_modes_for_file(
+        conn,
+        &resolved,
+        since,
+        0,
+        outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
+    )?;
+    let reverted = fail_mode
+        .iter()
+        .filter(|m| m.outcome.as_ref().is_some_and(|o| o.outcome == "reverted"))
+        .count();
+    let failed = fail_mode
+        .iter()
+        .filter(|m| m.outcome.as_ref().is_some_and(|o| o.outcome == "failed"))
+        .count();
+
+    let anchors = write_mode_anchors(conn, &resolved, since_iso.as_deref())?;
+    let worked = outcome::outcome_matches_for(
+        conn,
+        &anchors,
+        &["worked"],
+        0,
+        outcome::DEFAULT_MIN_OUTCOME_CONFIDENCE,
+    )?
+    .len();
+
+    let mut recent: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for session_match in &fail_mode {
+        if seen.contains(&session_match.session_id) {
+            continue;
+        }
+        recent.push(session_match.session_id.clone());
+        seen.insert(session_match.session_id.clone());
+        if recent_limit > 0 && i64::try_from(recent.len()).unwrap_or(i64::MAX) >= recent_limit {
+            break;
+        }
+    }
+
+    Ok(RiskSummary {
+        path: resolved,
+        since: since.map(str::to_string),
+        total_sessions: i64::try_from(total_sessions).unwrap_or(i64::MAX),
+        reverted: i64::try_from(reverted).unwrap_or(i64::MAX),
+        failed: i64::try_from(failed).unwrap_or(i64::MAX),
+        worked: i64::try_from(worked).unwrap_or(i64::MAX),
+        recent_session_ids: recent,
+    })
+}
+
+/// `cli._detect_cwd_project_slug` — which project does `cwd` belong to?
+///
+/// This is the cwd-scoping the `memory` verbs apply when `--project` is absent.
+/// It is a **ledgered behavior**: on a store whose slugs came from a different
+/// machine nothing matches, the scope stays `None`, and the query silently runs
+/// unscoped. Ported as-is.
+///
+/// # Errors
+/// Never — a failing query yields `None`, as the Python `except` does.
+pub fn detect_cwd_project_slug(conn: &Connection, cwd: &str) -> Option<String> {
+    let cwd_slug: String = cwd
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT slug, path FROM projects")
+        .ok()?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })
+        .ok()?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .ok()?;
+
+    let mut best_slug: Option<String> = None;
+    let mut best_score: i64 = -1;
+    for (slug, path) in rows {
+        let Some(slug) = slug.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let (matched, score) = match path.filter(|value| !value.is_empty()) {
+            Some(path) => {
+                let anchor = path.trim_end_matches('/');
+                (
+                    cwd == anchor || cwd.starts_with(&format!("{anchor}/")),
+                    i64::try_from(anchor.chars().count()).unwrap_or(i64::MAX),
+                )
+            }
+            None => (
+                cwd_slug == slug || cwd_slug.starts_with(&format!("{slug}-")),
+                i64::try_from(slug.chars().count()).unwrap_or(i64::MAX),
+            ),
+        };
+        if matched && score > best_score {
+            best_score = score;
+            best_slug = Some(slug);
+        }
+    }
+    best_slug
+}
+
+// ── snippets ─────────────────────────────────────────────────────────────────
+
+/// Characters either side of the match — `discovery._SNIPPET_RADIUS`.
+const SNIPPET_RADIUS: usize = 100;
+
+/// `discovery._build_snippet` — a ~200-char excerpt around the first hit.
+///
+/// Python slices by **characters**, so this does too; the ellipses are U+2026.
+#[must_use]
+pub fn build_snippet(content: &str, query: &str) -> Option<String> {
+    if content.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let needle_len = query.chars().count();
+    let excerpt: String = match find_char_index(&content.to_lowercase(), &query.to_lowercase()) {
+        None => chars.iter().take(SNIPPET_RADIUS * 2).collect(),
+        Some(idx) => {
+            let start = idx.saturating_sub(SNIPPET_RADIUS);
+            let end = chars.len().min(idx + needle_len + SNIPPET_RADIUS);
+            let mut excerpt: String = chars[start..end].iter().collect();
+            if start > 0 {
+                excerpt.insert(0, '…');
+            }
+            if end < chars.len() {
+                excerpt.push('…');
+            }
+            excerpt
+        }
+    };
+    Some(excerpt.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// `str.find` in **character** units, as Python returns.
+///
+/// The lowercased haystack can differ in length from the original (`ß` → `ss`),
+/// exactly as it does in Python; the reference has the same wart.
+fn find_char_index(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .find(needle)
+        .map(|byte_idx| haystack[..byte_idx].chars().count())
+}
+
+/// Non-overlapping occurrence count — Python's `str.count`.
+fn count_occurrences(haystack: &str, needle: &str) -> i64 {
+    if needle.is_empty() {
+        return i64::try_from(haystack.chars().count() + 1).unwrap_or(i64::MAX);
+    }
+    i64::try_from(haystack.matches(needle).count()).unwrap_or(i64::MAX)
+}
+
+/// The store's canonical location, for callers that open it themselves.
+///
+/// # Errors
+/// When the current directory cannot be read.
+pub fn current_dir_string() -> Result<String> {
+    let cwd = std::env::current_dir().context("reading the current directory")?;
+    Ok(paths::path_to_string(&cwd))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    // ── fixtures ─────────────────────────────────────────────────────────────
+
+    /// A scratch directory that removes itself (no `tempfile` dependency).
+    struct Scratch {
+        path: PathBuf,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before the epoch")
+                .as_nanos();
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("stax-queries-{}-{nanos}-{seq}", std::process::id()));
+            fs::create_dir_all(&path).expect("creating the scratch directory");
+            Self { path }
+        }
+
+        fn db(&self) -> PathBuf {
+            self.path.join("store.db")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// The real schema, trimmed to the columns the discovery path reads.
+    ///
+    /// `messages` is a UNION-ALL view over monthly partitions because that is
+    /// what schema v030 has (`store/migrations/v008_messages_partitioning.py`),
+    /// and the partitioning is exactly what makes the ported SQL shapes
+    /// load-bearing (§6b).
+    const FIXTURE_SCHEMA: &str = "
+        CREATE TABLE projects (
+          id INTEGER PRIMARY KEY, provider TEXT NOT NULL, slug TEXT NOT NULL,
+          path TEXT, display_name TEXT NOT NULL, first_seen REAL NOT NULL,
+          last_modified REAL NOT NULL, worktree_of TEXT,
+          UNIQUE (provider, slug));
+        CREATE TABLE sessions (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL, first_ts TEXT, last_ts TEXT,
+          message_count INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (project_id, session_id));
+        CREATE TABLE session_mart (
+          session_id TEXT PRIMARY KEY, project_id INTEGER NOT NULL,
+          provider TEXT NOT NULL, first_ts TEXT NOT NULL, last_ts TEXT NOT NULL,
+          message_count INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL NOT NULL DEFAULT 0.0);
+        CREATE TABLE messages_202601 (
+          id INTEGER PRIMARY KEY, session_fk INTEGER NOT NULL, seq INTEGER NOT NULL,
+          timestamp TEXT NOT NULL, role TEXT NOT NULL, model TEXT,
+          content_text TEXT NOT NULL DEFAULT '', tools_json TEXT NOT NULL DEFAULT '[]',
+          raw_json TEXT NOT NULL DEFAULT '{}', is_sidechain INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (session_fk, seq));
+        CREATE TABLE messages_202602 (
+          id INTEGER PRIMARY KEY, session_fk INTEGER NOT NULL, seq INTEGER NOT NULL,
+          timestamp TEXT NOT NULL, role TEXT NOT NULL, model TEXT,
+          content_text TEXT NOT NULL DEFAULT '', tools_json TEXT NOT NULL DEFAULT '[]',
+          raw_json TEXT NOT NULL DEFAULT '{}', is_sidechain INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (session_fk, seq));
+        CREATE VIEW messages AS
+          SELECT id, session_fk, seq, timestamp, role, model, content_text,
+                 tools_json, raw_json, is_sidechain FROM messages_202601
+          UNION ALL
+          SELECT id, session_fk, seq, timestamp, role, model, content_text,
+                 tools_json, raw_json, is_sidechain FROM messages_202602;
+        CREATE INDEX idx_messages_202601_session_seq ON messages_202601(session_fk, seq);
+        CREATE INDEX idx_messages_202602_session_seq ON messages_202602(session_fk, seq);
+        CREATE INDEX idx_sessions_last_ts ON sessions(last_ts);
+    ";
+
+    fn open_fixture(scratch: &Scratch) -> Connection {
+        let conn = Connection::open(scratch.db()).expect("creating the fixture store");
+        conn.execute_batch(FIXTURE_SCHEMA)
+            .expect("applying the fixture schema");
+        conn.pragma_update(None, "user_version", 30_i64)
+            .expect("stamping user_version");
+        conn
+    }
+
+    /// Two projects, three sessions, a handful of messages — enough to exercise
+    /// every wave-1 read path including the empty-`content_text` blind spot.
+    fn seed(conn: &Connection) {
+        conn.execute_batch(
+            "
+            INSERT INTO projects (id, provider, slug, path, display_name, first_seen, last_modified)
+            VALUES (1, 'claude', '-home-dev-alpha', NULL, 'alpha', 0, 0),
+                   (2, 'codex',  '-home-dev-beta',  NULL, 'beta',  0, 0);
+
+            INSERT INTO sessions (id, project_id, session_id, first_ts, last_ts, message_count)
+            VALUES (1, 1, 'aaaaaaaa-1111-4111-8111-111111111111',
+                    '2026-01-02T09:00:00+00:00', '2026-01-02T10:00:00+00:00', 6),
+                   (2, 1, 'bbbbbbbb-2222-4222-8222-222222222222',
+                    '2026-01-03T09:00:00+00:00', '2026-01-03T10:00:00+00:00', 4),
+                   (3, 2, 'cccccccc-3333-4333-8333-333333333333',
+                    '2026-02-01T09:00:00+00:00', '2026-02-01T10:00:00+00:00', 2);
+
+            INSERT INTO session_mart (session_id, project_id, provider, first_ts, last_ts,
+                                      message_count, cost_usd)
+            VALUES ('aaaaaaaa-1111-4111-8111-111111111111', 1, 'claude',
+                    '2026-01-02T09:00:00+00:00', '2026-01-02T10:00:00+00:00', 6, 1.25),
+                   ('cccccccc-3333-4333-8333-333333333333', 2, 'codex',
+                    '2026-02-01T09:00:00+00:00', '2026-02-01T10:00:00+00:00', 2, 0.5);
+            ",
+        )
+        .expect("seeding projects and sessions");
+
+        // Session 1: an Edit of alpha/main.py the user then says broke.
+        conn.execute_batch(
+            r#"
+            INSERT INTO messages_202601
+              (id, session_fk, seq, timestamp, role, content_text, tools_json)
+            VALUES
+              (1, 1, 1, '2026-01-02T09:10:00+00:00', 'user',
+               'we should cache the watermark lookup', '[]'),
+              (2, 1, 2, '2026-01-02T09:20:00+00:00', 'assistant', '',
+               '[{"name": "Edit", "input": {"file_path": "/home/dev/alpha/main.py"}}]'),
+              (3, 1, 3, '2026-01-02T09:30:00+00:00', 'user',
+               'that broke the build', '[]'),
+              (4, 1, 4, '2026-01-02T09:40:00+00:00', 'assistant', 'sorry, reverting', '[]');
+
+            INSERT INTO messages_202601
+              (id, session_fk, seq, timestamp, role, content_text, tools_json)
+            VALUES
+              (5, 2, 1, '2026-01-03T09:10:00+00:00', 'user',
+               'add the watermark cache to the reader', '[]'),
+              (6, 2, 2, '2026-01-03T09:20:00+00:00', 'assistant', '',
+               '[{"name": "Write", "input": {"file_path": "/home/dev/alpha/reader.py"}}]'),
+              (7, 2, 3, '2026-01-03T09:30:00+00:00', 'user', 'that worked, thanks', '[]');
+
+            INSERT INTO messages_202602
+              (id, session_fk, seq, timestamp, role, content_text, tools_json)
+            VALUES
+              (8, 3, 1, '2026-02-01T09:10:00+00:00', 'user',
+               'unrelated beta work on the watermark', '[]'),
+              (9, 3, 2, '2026-02-01T09:20:00+00:00', 'assistant', 'done', '[]');
+            "#,
+        )
+        .expect("seeding messages");
+    }
+
+    /// A budget with the default weights and a pinned clock — 2026-07-31T00:00Z.
+    fn budget(tokens: i64) -> rank::Budget {
+        rank::Budget::at(tokens, rank::DEFAULT_RANK_WEIGHTS, 1_785_456_000.0)
+    }
+
+    fn seeded() -> (Scratch, Connection) {
+        let scratch = Scratch::new();
+        let conn = open_fixture(&scratch);
+        seed(&conn);
+        (scratch, conn)
+    }
+
+    // ── pyjson ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn float_repr_matches_cpython() {
+        // Each expectation is what `repr(x)` prints in CPython 3.12.
+        for (value, expected) in [
+            (0.0_f64, "0.0"),
+            (-0.0_f64, "0.0"),
+            (1.0, "1.0"),
+            (0.5, "0.5"),
+            (1.25, "1.25"),
+            (0.4269, "0.4269"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e+16"),
+            (1.5e16, "1.5e+16"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (6.3e-5, "6.3e-05"),
+            (-2.5, "-2.5"),
+            (123.456, "123.456"),
+        ] {
+            assert_eq!(pyjson::repr_float(value), expected, "repr({value})");
+        }
+    }
+
+    #[test]
+    fn strings_are_escaped_the_way_ensure_ascii_does() {
+        // `json.dumps("… ok\n\"q\" \\ 🎉")` in CPython, byte for byte: the BMP
+        // ellipsis becomes one escape, the astral party popper a surrogate pair.
+        let value = pyjson::Value::Str("… ok\n\"q\" \\ 🎉".into());
+        assert_eq!(
+            pyjson::dumps_compact(&value),
+            r#""\u2026 ok\n\"q\" \\ \ud83c\udf89""#
+        );
+    }
+
+    #[test]
+    fn indent_two_matches_json_dumps() {
+        let value = pyjson::Value::Object(vec![
+            (
+                "schema".into(),
+                pyjson::Value::from("stackunderflow.memory/1"),
+            ),
+            ("results".into(), pyjson::Value::Array(vec![])),
+            (
+                "query".into(),
+                pyjson::Value::Object(vec![
+                    ("limit".into(), pyjson::Value::Int(20)),
+                    ("project".into(), pyjson::Value::Null),
+                ]),
+            ),
+            ("truncated".into(), pyjson::Value::Bool(false)),
+        ]);
+        assert_eq!(
+            pyjson::dumps_indent2(&value),
+            "{\n  \"schema\": \"stackunderflow.memory/1\",\n  \"results\": [],\n  \
+             \"query\": {\n    \"limit\": 20,\n    \"project\": null\n  },\n  \
+             \"truncated\": false\n}"
+        );
+    }
+
+    #[test]
+    fn default_separators_carry_the_spaces() {
+        let value = pyjson::Value::Object(vec![
+            ("name".into(), pyjson::Value::from("Edit")),
+            (
+                "input".into(),
+                pyjson::Value::Object(vec![("file_path".into(), pyjson::Value::from("/tmp/x.py"))]),
+            ),
+        ]);
+        assert_eq!(
+            pyjson::dumps_default(&value),
+            r#"{"name": "Edit", "input": {"file_path": "/tmp/x.py"}}"#
+        );
+    }
+
+    #[test]
+    fn json_round_trips_the_shapes_tools_json_uses() {
+        let parsed = pyjson::loads(
+            r#"[{"name": "Bash", "input": {"command": "git reset --hard"}, "n": 3, "f": 1.5}]"#,
+        )
+        .expect("valid JSON");
+        let pyjson::Value::Array(items) = &parsed else {
+            panic!("expected an array");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("input").and_then(|v| v.get("command")),
+            Some(&pyjson::Value::from("git reset --hard"))
+        );
+        assert_eq!(items[0].get("n"), Some(&pyjson::Value::Int(3)));
+        assert_eq!(items[0].get("f"), Some(&pyjson::Value::Float(1.5)));
+        assert!(pyjson::loads("{bad json").is_none());
+        assert!(pyjson::loads("[1, 2] trailing").is_none());
+    }
+
+    #[test]
+    fn python_truthiness_drives_the_arg_fallback_chain() {
+        assert!(!pyjson::Value::Object(vec![]).is_truthy());
+        assert!(!pyjson::Value::Str(String::new()).is_truthy());
+        assert!(!pyjson::Value::Int(0).is_truthy());
+        assert!(pyjson::Value::Int(1).is_truthy());
+    }
+
+    // ── pytime ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn iso_timestamps_parse_the_way_fromisoformat_does() {
+        let base = pytime::parse_iso("2026-01-02T00:00:00+00:00").expect("parses");
+        assert!((base - 1_767_312_000.0).abs() < 1e-6, "{base}");
+        assert_eq!(pytime::parse_iso("2026-01-02"), Some(base));
+        assert_eq!(pytime::parse_iso("2026-01-02T00:00:00Z"), Some(base));
+        assert_eq!(pytime::parse_iso("2026-01-02T00:00:00"), Some(base));
+        assert_eq!(
+            pytime::parse_iso("2026-01-02T02:00:00+02:00"),
+            Some(base),
+            "an offset is applied, not ignored"
+        );
+        let fractional = pytime::parse_iso("2026-01-02T00:00:00.500000+00:00").expect("parses");
+        assert!((fractional - base - 0.5).abs() < 1e-9);
+        assert_eq!(pytime::parse_iso("not a date"), None);
+    }
+
+    #[test]
+    fn isoformat_matches_datetime_isoformat() {
+        assert_eq!(
+            pytime::isoformat_utc(1_767_312_000_000_000),
+            "2026-01-02T00:00:00+00:00"
+        );
+        assert_eq!(
+            pytime::isoformat_utc(1_767_312_000_123_456),
+            "2026-01-02T00:00:00.123456+00:00"
+        );
+    }
+
+    #[test]
+    fn relative_since_windows_match_the_reference() {
+        let now = 1_767_312_000_000_000; // 2026-01-02T00:00:00Z
+        assert_eq!(
+            pytime::parse_since_at(Some("7d"), now).expect("valid"),
+            Some("2025-12-26T00:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            pytime::parse_since_at(Some("24h"), now).expect("valid"),
+            Some("2026-01-01T00:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            pytime::parse_since_at(Some(" 1 W "), now).expect("valid"),
+            Some("2025-12-26T00:00:00+00:00".to_string())
+        );
+        // "1m" is 30 days, not a calendar month — ported as-is.
+        assert_eq!(
+            pytime::parse_since_at(Some("1m"), now).expect("valid"),
+            Some("2025-12-03T00:00:00+00:00".to_string())
+        );
+        assert_eq!(pytime::parse_since_at(None, now).expect("valid"), None);
+        assert_eq!(
+            pytime::parse_since_at(Some("  "), now).expect("valid"),
+            None
+        );
+        assert_eq!(
+            pytime::parse_since_at(Some("2026-01-01"), now).expect("valid"),
+            Some("2026-01-01T00:00:00+00:00".to_string())
+        );
+        let error = pytime::parse_since_at(Some("yesterday"), now).expect_err("rejected");
+        assert_eq!(
+            error.to_string(),
+            "Invalid since value 'yesterday': expected '7d'/'1w'/'1m'/'24h' \
+             or an ISO date/datetime."
+        );
+    }
+
+    // ── paths ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn slug_decoding_is_the_lossy_reference_decode() {
+        assert_eq!(
+            paths::decode_slug_to_path("-Users-foo-dev-proj"),
+            "/Users/foo/dev/proj"
+        );
+        assert_eq!(paths::decode_slug_to_path("workspace-id"), "");
+        assert_eq!(paths::decode_slug_to_path(""), "");
+    }
+
+    #[test]
+    fn ancestry_is_pure_string_arithmetic() {
+        assert!(paths::is_ancestor("/a/b", "/a/b"));
+        assert!(paths::is_ancestor("/a/b/", "/a/b/c"));
+        assert!(paths::is_ancestor("\\a\\b", "/a/b/c"));
+        assert!(!paths::is_ancestor("/a/b", "/a/bc"));
+        assert!(!paths::is_ancestor("", "/a"));
+    }
+
+    #[test]
+    fn purepath_normalisation_matches_pathlib() {
+        assert_eq!(paths::purepath_str("foo/"), "foo");
+        assert_eq!(paths::purepath_str("a//b"), "a/b");
+        assert_eq!(paths::purepath_str("a/./b"), "a/b");
+        assert_eq!(paths::purepath_str("a/../b"), "a/../b");
+        assert_eq!(paths::purepath_str(""), ".");
+        assert_eq!(paths::purepath_str("."), ".");
+        assert_eq!(paths::purepath_str("/"), "/");
+    }
+
+    #[test]
+    fn tilde_expansion_stops_at_tilde_user() {
+        let home = PathBuf::from("/home/tester");
+        assert_eq!(paths::expanduser("~", Some(&home)), "/home/tester");
+        assert_eq!(paths::expanduser("~/x", Some(&home)), "/home/tester/x");
+        assert_eq!(paths::expanduser("~other/x", Some(&home)), "~other/x");
+        assert_eq!(paths::expanduser("/abs", Some(&home)), "/abs");
+    }
+
+    #[test]
+    fn relative_paths_resolve_against_the_cwd() {
+        let scratch = Scratch::new();
+        let cwd = scratch.path.clone();
+        let resolved = paths::resolve_input_path_with("sub/file.py", None, &cwd);
+        let canonical = fs::canonicalize(&cwd).expect("scratch exists");
+        assert_eq!(
+            resolved,
+            format!("{}/sub/file.py", canonical.to_string_lossy())
+        );
+        assert_eq!(
+            paths::resolve_input_path_with("", None, &cwd),
+            canonical.to_string_lossy()
+        );
+        assert_eq!(
+            paths::resolve_input_path_with("a/../b", None, &cwd),
+            format!("{}/b", canonical.to_string_lossy())
+        );
+    }
+
+    #[test]
+    fn repr_quotes_like_python() {
+        assert_eq!(paths::py_repr("cache"), "'cache'");
+        assert_eq!(paths::py_repr("it's"), "\"it's\"");
+        assert_eq!(paths::py_repr("it's \"q\""), "'it\\'s \"q\"'");
+        assert_eq!(paths::py_repr("a\nb"), "'a\\nb'");
+    }
+
+    // ── ranking ──────────────────────────────────────────────────────────────
+
+    fn sample(session_id: &str, last_ts: &str, cost: f64) -> SessionMatch {
+        SessionMatch {
+            session_id: session_id.into(),
+            project_slug: "-home-dev-alpha".into(),
+            project_path: "/home/dev/alpha".into(),
+            provider: "claude".into(),
+            first_ts: last_ts.into(),
+            last_ts: last_ts.into(),
+            message_count: 3,
+            cost_usd: cost,
+            snippet: None,
+            embedding_score: None,
+            more_matches_in_session: None,
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn token_estimate_is_the_compact_json_length_over_four() {
+        let row = sample("s1", "2026-01-02T10:00:00+00:00", 1.25);
+        let serialized = pyjson::dumps_compact(&row.to_dict());
+        assert_eq!(
+            rank::estimate_tokens(&row.to_dict()),
+            i64::try_from(serialized.len() / 4).unwrap() + 1
+        );
+    }
+
+    #[test]
+    fn packing_is_greedy_and_strict() {
+        let rows = vec![
+            sample("s1", "2026-01-02T10:00:00+00:00", 1.0),
+            sample("s2", "2026-01-02T10:00:00+00:00", 1.0),
+            sample("s3", "2026-01-02T10:00:00+00:00", 1.0),
+        ];
+        let per_row = rank::estimate_tokens(&rows[0].to_dict());
+        let (kept, dropped, used) = rank::pack_within_budget(rows.clone(), per_row * 2, None);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(dropped, 1);
+        assert_eq!(used, per_row * 2);
+
+        // A budget under the first row's cost keeps nothing.
+        let (kept, dropped, used) = rank::pack_within_budget(rows.clone(), 1, None);
+        assert!(kept.is_empty());
+        assert_eq!(dropped, 3);
+        assert_eq!(used, 0);
+
+        // `<= 0` disables enforcement entirely.
+        let (kept, dropped, _) = rank::pack_within_budget(rows, 0, None);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn equal_ranks_keep_their_input_order() {
+        let rows = vec![
+            sample("first", "2026-01-02T10:00:00+00:00", 1.0),
+            sample("second", "2026-01-02T10:00:00+00:00", 1.0),
+            sample("third", "2026-01-02T10:00:00+00:00", 1.0),
+        ];
+        let relevance: rank::Relevance = Box::new(|_| 1.0);
+        let (kept, _, _) = rank::pack_within_budget(
+            rows,
+            0,
+            Some((&relevance, rank::DEFAULT_RANK_WEIGHTS, 1_767_312_000.0)),
+        );
+        let ids: Vec<&str> = kept.iter().map(|m| m.session_id.as_str()).collect();
+        assert_eq!(ids, ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn rank_weights_fall_back_on_anything_odd() {
+        assert_eq!(rank::parse_rank_weights(None), (0.5, 0.2, 0.3));
+        assert_eq!(rank::parse_rank_weights(Some("")), (0.5, 0.2, 0.3));
+        assert_eq!(rank::parse_rank_weights(Some("1,2")), (0.5, 0.2, 0.3));
+        assert_eq!(rank::parse_rank_weights(Some("1,-2,3")), (0.5, 0.2, 0.3));
+        assert_eq!(rank::parse_rank_weights(Some("x,y,z")), (0.5, 0.2, 0.3));
+        assert_eq!(
+            rank::parse_rank_weights(Some("0.4, 0.1, 0.5, 0.9")),
+            (0.4, 0.1, 0.5)
+        );
+    }
+
+    #[test]
+    fn cost_saturates_at_five_dollars() {
+        assert!((rank::cost_score(&sample("s", "", 10.0)) - 1.0).abs() < 1e-12);
+        assert!((rank::cost_score(&sample("s", "", 2.5)) - 0.5).abs() < 1e-12);
+        assert!((rank::cost_score(&sample("s", "", -1.0)) - 0.0).abs() < 1e-12);
+    }
+
+    // ── outcome heuristics ───────────────────────────────────────────────────
+
+    #[test]
+    fn user_text_classification_keeps_the_reference_precedence() {
+        assert_eq!(classify("revert that, thanks"), Some("revert"));
+        assert_eq!(classify("that broke the build"), Some("negative"));
+        assert_eq!(classify("that worked, thanks"), Some("positive"));
+        assert_eq!(classify("no"), Some("negative"));
+        assert_eq!(classify("no problem, keep going"), None);
+        assert_eq!(classify("no worries — but it broke"), Some("negative"));
+        assert_eq!(classify("another node in the notes"), None);
+        assert_eq!(classify("👍"), Some("positive"));
+        assert_eq!(classify(""), None);
+    }
+
+    fn classify(text: &str) -> Option<&'static str> {
+        outcome::classify_user_text(text)
+    }
+
+    #[test]
+    fn inline_trimming_matches_the_reference() {
+        assert_eq!(outcome::trim_inline("  a \n b  ", 100), "a b");
+        assert_eq!(outcome::trim_inline("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn tool_arg_matching_honours_the_mode() {
+        let tools = r#"[{"name": "Edit", "input": {"file_path": "/a/b/main.py"}}]"#;
+        assert!(outcome::tools_json_mentions_file(
+            Some(tools),
+            "/a/b/main.py",
+            outcome::Mode::Write
+        ));
+        assert!(outcome::tools_json_mentions_file(
+            Some(tools),
+            "/a/b/main.py",
+            outcome::Mode::Any
+        ));
+        assert!(!outcome::tools_json_mentions_file(
+            Some(tools),
+            "/a/b/main.py",
+            outcome::Mode::Read
+        ));
+        assert!(!outcome::tools_json_mentions_file(
+            Some("[]"),
+            "/a/b/main.py",
+            outcome::Mode::Any
+        ));
+        assert!(!outcome::tools_json_mentions_file(
+            Some("{not json"),
+            "/a/b/main.py",
+            outcome::Mode::Any
+        ));
+        // The last-ditch check serialises the whole entry with Python's default
+        // separators, so a path anywhere in the args still matches.
+        let loose = r#"[{"name": "Read", "input": {"pattern": "/a/b/main.py:12"}}]"#;
+        assert!(outcome::tools_json_mentions_file(
+            Some(loose),
+            "/a/b/main.py",
+            outcome::Mode::Read
+        ));
+    }
+
+    #[test]
+    fn revert_commands_are_spotted_in_shell_tool_calls() {
+        assert_eq!(
+            outcome::revert_command_in_tools(Some(
+                r#"[{"name": "Bash", "input": {"command": "git   reset --hard HEAD~1"}}]"#
+            ))
+            .as_deref(),
+            Some("git   reset --hard HEAD~1")
+        );
+        assert_eq!(
+            outcome::revert_command_in_tools(Some(
+                r#"[{"name": "Bash", "input": {"command": "pytest -q"}}]"#
+            )),
+            None
+        );
+        assert_eq!(outcome::revert_command_in_tools(Some("[]")), None);
+    }
+
+    fn message(
+        id: i64,
+        role: &str,
+        text: &str,
+        tools: &str,
+        sidechain: bool,
+    ) -> outcome::MessageRow {
+        outcome::MessageRow {
+            id,
+            role: role.into(),
+            content_text: text.into(),
+            tools_json: Some(tools.into()),
+            is_sidechain: sidechain,
+        }
+    }
+
+    #[test]
+    fn outcome_confidence_follows_the_reference_ladder() {
+        let anchor_only = vec![message(1, "assistant", "", "[]", false)];
+        let fields = outcome::classify_outcome(&anchor_only, 0);
+        assert_eq!(fields.outcome, "uncertain");
+        assert!((fields.outcome_confidence - 0.0).abs() < 1e-12);
+
+        let explicit = vec![
+            message(1, "assistant", "", "[]", false),
+            message(2, "user", "that worked, thanks", "[]", false),
+        ];
+        let fields = outcome::classify_outcome(&explicit, 0);
+        assert_eq!(fields.outcome, "worked");
+        assert_eq!(fields.outcome_evidence, "user wrote: 'that worked, thanks'");
+        assert!((fields.outcome_confidence - 0.8).abs() < 1e-12);
+
+        let tool_revert = vec![
+            message(1, "assistant", "", "[]", false),
+            message(
+                2,
+                "assistant",
+                "",
+                r#"[{"name": "Bash", "input": {"command": "git revert abc"}}]"#,
+                false,
+            ),
+        ];
+        let fields = outcome::classify_outcome(&tool_revert, 0);
+        assert_eq!(fields.outcome, "reverted");
+        assert_eq!(
+            fields.outcome_evidence,
+            "agent ran `git revert abc` after the action"
+        );
+        assert!((fields.outcome_confidence - 0.5).abs() < 1e-12);
+
+        let silence = vec![
+            message(1, "assistant", "", "[]", false),
+            message(2, "assistant", "still working", "[]", false),
+        ];
+        let fields = outcome::classify_outcome(&silence, 0);
+        assert_eq!(fields.outcome, "worked");
+        assert!((fields.outcome_confidence - 0.3).abs() < 1e-12);
+        assert_eq!(fields.outcome_msg_id, 2);
+
+        // Sidechain rows never speak for the parent session.
+        let sidechain_only = vec![
+            message(1, "assistant", "", "[]", false),
+            message(2, "user", "that broke", "[]", true),
+        ];
+        let fields = outcome::classify_outcome(&sidechain_only, 0);
+        assert_eq!(fields.outcome, "uncertain");
+        assert_eq!(fields.outcome_msg_id, 1);
+    }
+
+    // ── the queries, against the fixture store ───────────────────────────────
+
+    #[test]
+    fn sessions_in_path_matches_ancestor_projects_only() {
+        let (_scratch, conn) = seeded();
+        let result =
+            find_sessions_in_path(&conn, "/home/dev/alpha/src", None, 20, None, &budget(0))
+                .expect("query runs");
+        let mut ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            [
+                "aaaaaaaa-1111-4111-8111-111111111111",
+                "bbbbbbbb-2222-4222-8222-222222222222"
+            ],
+            "the beta project is not an ancestor of this path"
+        );
+        assert_eq!(
+            result
+                .sessions
+                .iter()
+                .find(|m| m.session_id.starts_with("aaaa"))
+                .expect("session a")
+                .cost_usd,
+            1.25
+        );
+        assert_eq!(
+            result
+                .sessions
+                .iter()
+                .find(|m| m.session_id.starts_with("bbbb"))
+                .expect("session b")
+                .cost_usd,
+            0.0,
+            "no mart row → 0.0"
+        );
+        assert_eq!(result.sessions[0].project_path, "/home/dev/alpha");
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn the_budget_path_returns_rank_order_not_sql_order() {
+        // The SQL is `last_ts DESC`, but every `memory` verb passes a budget and
+        // `_budgeted` re-sorts by rank — so the newest session is not
+        // necessarily first. Here the older session outranks the newer one on
+        // the cost term (0.2 × 1.25/5 = 0.05) by more than a day of recency is
+        // worth at this distance, exactly as the reference orders it.
+        let (_scratch, conn) = seeded();
+        let result = find_sessions_in_path(&conn, "/home/dev/alpha", None, 20, None, &budget(2000))
+            .expect("query runs");
+        let ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "aaaaaaaa-1111-4111-8111-111111111111",
+                "bbbbbbbb-2222-4222-8222-222222222222"
+            ]
+        );
+        assert!(result.budget_used_tokens > 0);
+        assert_eq!(result.budget_max_tokens, 2000);
+    }
+
+    #[test]
+    fn sessions_in_path_returns_nothing_for_an_unknown_tree() {
+        let (_scratch, conn) = seeded();
+        let result = find_sessions_in_path(&conn, "/somewhere/else", None, 20, None, &budget(0))
+            .expect("query runs");
+        assert!(result.sessions.is_empty());
+        assert_eq!(result.more_available, 0);
+    }
+
+    #[test]
+    fn sessions_in_path_honours_provider_since_and_limit() {
+        let (_scratch, conn) = seeded();
+        let filtered = find_sessions_in_path(&conn, "/home/dev/alpha", None, 1, None, &budget(0))
+            .expect("query runs")
+            .sessions;
+        assert_eq!(filtered.len(), 1);
+
+        let by_provider = find_sessions_in_path(
+            &conn,
+            "/home/dev/alpha",
+            None,
+            20,
+            Some("codex"),
+            &budget(0),
+        )
+        .expect("query runs")
+        .sessions;
+        assert!(by_provider.is_empty(), "alpha is a claude project");
+
+        let since = find_sessions_in_path(
+            &conn,
+            "/home/dev/alpha",
+            Some("2026-01-03T00:00:00+00:00"),
+            20,
+            None,
+            &budget(0),
+        )
+        .expect("query runs")
+        .sessions;
+        assert_eq!(since.len(), 1);
+        assert_eq!(since[0].session_id, "bbbbbbbb-2222-4222-8222-222222222222");
+    }
+
+    #[test]
+    fn decisions_snippets_and_clustering_match_the_like_path() {
+        let (_scratch, conn) = seeded();
+        let result = search_past_decisions(&conn, "watermark", None, None, 20, &budget(0))
+            .expect("query runs");
+        let mut ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            [
+                "aaaaaaaa-1111-4111-8111-111111111111",
+                "bbbbbbbb-2222-4222-8222-222222222222",
+                "cccccccc-3333-4333-8333-333333333333"
+            ]
+        );
+        assert_eq!(
+            result
+                .sessions
+                .iter()
+                .find(|m| m.session_id.starts_with("aaaa"))
+                .expect("session a")
+                .snippet
+                .as_deref(),
+            Some("we should cache the watermark lookup")
+        );
+        assert!(
+            result
+                .sessions
+                .iter()
+                .all(|m| m.more_matches_in_session.is_none()),
+            "one hit per session → the clustering field stays absent"
+        );
+    }
+
+    #[test]
+    fn decisions_scope_to_a_project_slug() {
+        let (_scratch, conn) = seeded();
+        let scoped = search_past_decisions(
+            &conn,
+            "watermark",
+            Some("-home-dev-beta"),
+            None,
+            20,
+            &budget(0),
+        )
+        .expect("query runs");
+        assert_eq!(scoped.sessions.len(), 1);
+        assert_eq!(scoped.sessions[0].project_slug, "-home-dev-beta");
+    }
+
+    #[test]
+    fn multi_word_phrases_silently_zero_on_the_like_path() {
+        // Findings ledger #3: `LIKE '%a b%'` is a literal substring test, so a
+        // phrase whose words are adjacent matches and one whose words are not
+        // returns nothing at all. This is the wave-1 contract, bug and all.
+        let (_scratch, conn) = seeded();
+        let adjacent = search_past_decisions(&conn, "watermark lookup", None, None, 20, &budget(0))
+            .expect("runs");
+        assert_eq!(adjacent.sessions.len(), 1);
+        let scattered =
+            search_past_decisions(&conn, "cache lookup", None, None, 20, &budget(0)).expect("runs");
+        assert!(
+            scattered.sessions.is_empty(),
+            "both words are present, in that order, but not adjacent"
+        );
+    }
+
+    #[test]
+    fn tool_call_turns_are_invisible_to_the_decisions_scan() {
+        // Findings ledger #1: `content_text` is empty on tool-call turns, so the
+        // file an Edit touched cannot be found by searching message content.
+        let (_scratch, conn) = seeded();
+        let result =
+            search_past_decisions(&conn, "/home/dev/alpha/main.py", None, None, 20, &budget(0))
+                .expect("query runs");
+        assert!(result.sessions.is_empty());
+        // …while the tool-arg scan does find it.
+        let touching =
+            find_sessions_touching_file(&conn, "/home/dev/alpha/main.py", 20).expect("query runs");
+        assert_eq!(touching.len(), 1);
+    }
+
+    #[test]
+    fn empty_queries_short_circuit_before_the_scan() {
+        let (_scratch, conn) = seeded();
+        let result =
+            search_past_decisions(&conn, "   ", None, None, 20, &budget(0)).expect("query runs");
+        assert!(result.sessions.is_empty());
+        assert_eq!(
+            find_sessions_where_action_worked(&conn, "  ", None, None, 20, 0.5)
+                .expect("query runs")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn action_worked_requires_an_explicit_confirmation() {
+        let (_scratch, conn) = seeded();
+        let worked = find_sessions_where_action_worked(&conn, "watermark", None, None, 20, 0.5)
+            .expect("query runs");
+        let ids: Vec<&str> = worked.iter().map(|m| m.session_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["bbbbbbbb-2222-4222-8222-222222222222"],
+            "session 1 was told it broke; session 3's anchor is the last turn"
+        );
+        let fields = worked[0].outcome.as_ref().expect("an outcome match");
+        assert_eq!(fields.outcome, "worked");
+        assert_eq!(fields.outcome_evidence, "user wrote: 'that worked, thanks'");
+        assert!((fields.outcome_confidence - 0.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_lower_confidence_floor_lets_the_silence_rows_back_in() {
+        let (_scratch, conn) = seeded();
+        let worked = find_sessions_where_action_worked(&conn, "unrelated", None, None, 20, 0.3)
+            .expect("query runs");
+        assert_eq!(worked.len(), 1, "session 3 continued without a complaint");
+        assert!(
+            (worked[0]
+                .outcome
+                .as_ref()
+                .expect("outcome")
+                .outcome_confidence
+                - 0.3)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn failure_modes_anchor_on_the_last_write_mention() {
+        let (_scratch, conn) = seeded();
+        let failures = find_failure_modes_for_file(&conn, "/home/dev/alpha/main.py", None, 20, 0.5)
+            .expect("query runs");
+        assert_eq!(failures.len(), 1);
+        let fields = failures[0].outcome.as_ref().expect("an outcome match");
+        assert_eq!(fields.outcome, "failed");
+        assert_eq!(
+            fields.outcome_evidence,
+            "user wrote: 'that broke the build'"
+        );
+    }
+
+    #[test]
+    fn risk_counts_the_three_slices_and_the_recent_ids() {
+        let (_scratch, conn) = seeded();
+        let risk =
+            file_risk_summary(&conn, "/home/dev/alpha/main.py", None, 5).expect("query runs");
+        assert_eq!(risk.path, "/home/dev/alpha/main.py");
+        assert_eq!(risk.total_sessions, 1);
+        assert_eq!(risk.failed, 1);
+        assert_eq!(risk.reverted, 0);
+        assert_eq!(risk.worked, 0);
+        assert_eq!(
+            risk.recent_session_ids,
+            ["aaaaaaaa-1111-4111-8111-111111111111"]
+        );
+
+        let clean = file_risk_summary(&conn, "/home/dev/alpha/reader.py", None, 5).expect("runs");
+        assert_eq!(clean.worked, 1);
+        assert_eq!(clean.failed, 0);
+        assert!(clean.recent_session_ids.is_empty());
+    }
+
+    #[test]
+    fn risk_echoes_the_raw_since_string_not_the_parsed_one() {
+        let (_scratch, conn) = seeded();
+        let risk = file_risk_summary(&conn, "/home/dev/alpha/main.py", Some("30d"), 5)
+            .expect("query runs");
+        assert_eq!(risk.since.as_deref(), Some("30d"));
+    }
+
+    #[test]
+    fn cwd_scoping_prefers_the_longest_slug_match() {
+        let (_scratch, conn) = seeded();
+        assert_eq!(
+            detect_cwd_project_slug(&conn, "/home/dev/alpha/src/deep"),
+            Some("-home-dev-alpha".to_string())
+        );
+        assert_eq!(
+            detect_cwd_project_slug(&conn, "/home/dev/beta"),
+            Some("-home-dev-beta".to_string())
+        );
+        // The ledgered behavior: a cwd no slug covers scopes to nothing, and the
+        // caller then queries every project.
+        assert_eq!(detect_cwd_project_slug(&conn, "/opt/elsewhere"), None);
+    }
+
+    #[test]
+    fn cwd_scoping_prefers_the_stored_path_when_one_exists() {
+        let (_scratch, conn) = seeded();
+        conn.execute(
+            "UPDATE projects SET path = '/mnt/data/alpha' WHERE id = 1",
+            [],
+        )
+        .expect("setting a stored path");
+        assert_eq!(
+            detect_cwd_project_slug(&conn, "/mnt/data/alpha/src"),
+            Some("-home-dev-alpha".to_string())
+        );
+        assert_eq!(detect_cwd_project_slug(&conn, "/home/dev/alpha"), None);
+    }
+
+    #[test]
+    fn snippets_are_bounded_and_whitespace_collapsed() {
+        let content = format!("{}NEEDLE{}", "a".repeat(300), "b".repeat(300));
+        let snippet = build_snippet(&content, "needle").expect("a snippet");
+        assert!(snippet.starts_with('…') && snippet.ends_with('…'));
+        assert_eq!(snippet.chars().count(), 100 + 6 + 100 + 2);
+        assert_eq!(
+            build_snippet("  a\n\nb  ", "zzz").as_deref(),
+            Some("a b"),
+            "a miss falls back to the leading slice"
+        );
+        assert_eq!(build_snippet("", "x"), None);
+    }
+
+    #[test]
+    fn session_rows_serialise_in_the_dataclass_field_order() {
+        let mut row = sample("s1", "2026-01-02T10:00:00+00:00", 1.25);
+        row.snippet = Some("hit".into());
+        row.more_matches_in_session = Some(2);
+        row.outcome = Some(OutcomeFields {
+            outcome: "worked".into(),
+            outcome_evidence: "user wrote: 'thanks'".into(),
+            outcome_msg_id: 42,
+            outcome_confidence: 0.8,
+        });
+        assert_eq!(
+            pyjson::dumps_compact(&row.to_dict()),
+            r#"{"session_id":"s1","project_slug":"-home-dev-alpha","project_path":"/home/dev/alpha","provider":"claude","first_ts":"2026-01-02T10:00:00+00:00","last_ts":"2026-01-02T10:00:00+00:00","message_count":3,"cost_usd":1.25,"snippet":"hit","more_matches_in_session":2,"outcome":"worked","outcome_evidence":"user wrote: 'thanks'","outcome_msg_id":42,"outcome_confidence":0.8}"#
+        );
+    }
+
+    #[test]
+    fn absent_optional_fields_keep_the_nine_key_shape() {
+        let row = sample("s1", "2026-01-02T10:00:00+00:00", 0.0);
+        assert_eq!(
+            pyjson::dumps_compact(&row.to_dict()),
+            r#"{"session_id":"s1","project_slug":"-home-dev-alpha","project_path":"/home/dev/alpha","provider":"claude","first_ts":"2026-01-02T10:00:00+00:00","last_ts":"2026-01-02T10:00:00+00:00","message_count":3,"cost_usd":0.0,"snippet":null}"#
+        );
+    }
+
+    #[test]
+    fn the_store_is_never_written_by_a_read_path() {
+        let (_scratch, conn) = seeded();
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .expect("counting");
+        let _ = find_sessions_in_path(&conn, "/home/dev/alpha", None, 20, None, &budget(2000));
+        let _ = search_past_decisions(&conn, "watermark", None, None, 20, &budget(2000));
+        let _ = find_sessions_where_action_worked(&conn, "watermark", None, None, 20, 0.5);
+        let _ = file_risk_summary(&conn, "/home/dev/alpha/main.py", None, 5);
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .expect("counting");
+        assert_eq!(before, after);
+        // The telemetry table the reference bumps does not even exist here —
+        // the port drops that write (documented divergence).
+        let telemetry: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'discovery_telemetry'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("counting");
+        assert_eq!(telemetry, 0);
+    }
+}

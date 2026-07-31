@@ -9,11 +9,15 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod anchor;
+mod memory;
 mod status;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};
+pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use status::{StatusArgs, render_status, run_status};
 
 /// `stax-rs` — the Rust port of StackUnderflow.
@@ -28,6 +32,10 @@ pub struct Cli {
 /// Every command `stax-rs` understands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Keyed, append-only campaign state that survives a context rotation.
+    Anchor(AnchorArgs),
+    /// Ask the local store what past sessions already know.
+    Memory(MemoryArgs),
     /// Open the store read-only and print its schema version and row counts.
     Status(StatusArgs),
 }
@@ -47,6 +55,8 @@ pub fn run() -> Result<()> {
 /// Whatever the command returns.
 pub fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
+        Command::Anchor(args) => run_anchor(args),
+        Command::Memory(args) => run_memory(args),
         Command::Status(args) => run_status(args),
     }
 }
@@ -65,12 +75,16 @@ mod tests {
     #[test]
     fn status_takes_an_optional_store_path() {
         let cli = Cli::try_parse_from(["stax-rs", "status"]).expect("bare status parses");
-        let Command::Status(args) = &cli.command;
+        let Command::Status(args) = &cli.command else {
+            panic!("expected status");
+        };
         assert!(args.store.is_none());
 
         let cli = Cli::try_parse_from(["stax-rs", "status", "--store", "/data/su/store.db"])
             .expect("--store parses");
-        let Command::Status(args) = &cli.command;
+        let Command::Status(args) = &cli.command else {
+            panic!("expected status");
+        };
         assert_eq!(
             args.store.as_deref(),
             Some(std::path::Path::new("/data/su/store.db"))

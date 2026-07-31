@@ -12,4 +12,13 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+# The `memory` verbs hand rows straight to the shared envelope contract, so the
+# CLI speaks both value models: `stax-core`'s for the store side and
+# `serde_json`'s for the wire side. `rusqlite` is here for the connection type
+# the verb runners take — the store handle itself still comes from `stax-core`,
+# read-only. Declared as path deps rather than in `[workspace.dependencies]`
+# because the workspace manifest is the architect's this wave.
+rusqlite.workspace = true
+serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
 stax-core.workspace = true
+stax-memory = { path = "../stax-memory" }
