@@ -55,6 +55,24 @@
 //!   share verbatim.
 //! * [`sqlite`] — read-only access with `sqlite3`'s value semantics, for the
 //!   database-kind providers.
+//!
+//! ## Wave 2, batch 3 — the orphans
+//!
+//! The three providers the stamp-out batches left behind, each for its own
+//! reason, and with them the registry reaches 20/20:
+//!
+//! * [`codeium`] — a **discovery-only stub**. Its chat state is protobuf with no
+//!   published schema, so `enumerate()` yields nothing by design. It registers
+//!   anyway, because silent absence is the failure mode the registry exists to
+//!   prevent, and because the support matrix can then carry an honest
+//!   `partial` / `emits_usage_events: false` row for it.
+//! * [`cursor_agent`] — the only provider whose **every** record timestamp is
+//!   `datetime.now(tz=UTC)`. Two processes never agree on that microsecond, so
+//!   the clock is injected and the parity harness excludes exactly that field
+//!   (`--blank-timestamps`) rather than pretending to compare it.
+//! * [`hermes`] — an ordinary JSONL provider, and the one that shows the
+//!   support modules paid for themselves: it is `walk` + `jsonl` + `blocks` +
+//!   `pyval` with a `model_change` pre-scan, and carries no helper of its own.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -65,16 +83,19 @@ pub mod blocks;
 pub mod capabilities;
 pub mod claude;
 pub mod cline;
+pub mod codeium;
 pub mod codex;
 pub mod continue_ext;
 pub mod contract;
 pub mod copilot;
 pub mod cursor;
+pub mod cursor_agent;
 pub mod custom_import;
 pub mod droid;
 pub mod dump;
 pub mod gemini;
 pub mod grok;
+pub mod hermes;
 pub mod jsonl;
 pub mod kiro;
 pub mod openclaw;

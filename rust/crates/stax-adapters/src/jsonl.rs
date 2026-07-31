@@ -34,10 +34,10 @@ pub const STREAM_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The deepest nesting [`parse_json`] accepts — orjson's ceiling, to the level.
 ///
-/// Every Python adapter parses with `orjson.loads` and catches
-/// `(orjson.JSONDecodeError, ValueError)`, so *its* limit is the one this port
-/// has to match. Measured on the reference interpreter (orjson 3.11.9) rather
-/// than read off a doc page: depth 1024 parses, depth 1025 raises
+/// `claude.py` parses with `orjson.loads` and catches
+/// `(orjson.JSONDecodeError, ValueError)`, so *its* limit is the one this
+/// constant matches. Measured on the reference interpreter (orjson 3.11.9)
+/// rather than read off a doc page: depth 1024 parses, depth 1025 raises
 /// `JSONDecodeError: array and object recursion depth exceeded` — which is a
 /// `ValueError`, so the adapter skips that line. Arrays and objects have the
 /// same ceiling.
@@ -47,6 +47,29 @@ pub const STREAM_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
 /// d = lambda n: "["*n + "1" + "]"*n
 /// orjson.loads(d(1024)); orjson.loads(d(1025))'
 /// # orjson.JSONDecodeError: array and object recursion depth exceeded: line 1 column 1026
+/// ```
+///
+/// **CORRECTION (wave 2c, measured 2026-07-31).** An earlier revision of this
+/// comment said *every* Python adapter parses with `orjson`. It does not:
+/// `claude.py` is the **only** `orjson` caller in `stackunderflow/adapters/`,
+/// and the other 18 use the stdlib `json`, whose ceiling is 9997 (it raises
+/// `RecursionError` — not a `ValueError` — at 9998, which escapes every
+/// adapter's `except` clause and kills that file's ingest). So for 19 of the 20
+/// providers this constant is ~9× *stricter* than the original: a line nested
+/// 1025–9997 deep is a record Python ingests and this port refuses. It is
+/// counted rather than swallowed ([`deep_json_skips`]) and no corpus measured so
+/// far comes within an order of magnitude of it, so the constant is left where
+/// it is — moving it would change behaviour for 19 landed providers and their
+/// pinned tests, which is a decision for the wave that decides to make it, not a
+/// side effect of a doc fix. The stdlib also accepts `NaN` / `Infinity` /
+/// `-Infinity` / `1e999`, all of which `serde_json` refuses; that class is
+/// recorded on [`crate::hermes`] with the same measurement.
+///
+/// ```sh
+/// .venv/bin/python -c 'import json
+/// d = lambda n: "["*n + "1" + "]"*n
+/// json.loads(d(9997)); json.loads(d(9998))'
+/// # RecursionError: maximum recursion depth exceeded
 /// ```
 pub const MAX_JSON_DEPTH: usize = 1024;
 
@@ -353,6 +376,44 @@ pub fn splitlines(data: &[u8]) -> Vec<&[u8]> {
     out
 }
 
+/// `bytes.splitlines(keepends=True)` — the same split as [`splitlines`], with
+/// each terminator left on the end of its line (`cursor_agent.py:366`).
+///
+/// The terminator is what makes this a different function rather than a flag on
+/// the other one: `cursor_agent._read_text` computes `offset += len(line_bytes)`
+/// as it walks, so `seq` is only a byte offset if the `\n` (or `\r\n`) is still
+/// part of the line's length.
+#[must_use]
+pub fn splitlines_keepends(data: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < data.len() {
+        match data[i] {
+            b'\n' => {
+                out.push(&data[start..=i]);
+                i += 1;
+                start = i;
+            }
+            b'\r' => {
+                let end = if data.get(i + 1) == Some(&b'\n') {
+                    i + 2
+                } else {
+                    i + 1
+                };
+                out.push(&data[start..end]);
+                i = end;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < data.len() {
+        out.push(&data[start..]);
+    }
+    out
+}
+
 /// `bytes.strip()` — ASCII whitespace only, both ends.
 ///
 /// Python strips `b' \t\n\r\x0b\x0c'`; `u8::is_ascii_whitespace` is
@@ -425,6 +486,26 @@ mod tests {
         );
         assert_eq!(splitlines(b"a\n"), vec![&b"a"[..]]);
         assert_eq!(splitlines(b""), Vec::<&[u8]>::new());
+    }
+
+    #[test]
+    fn splitlines_keepends_leaves_the_terminator_on() {
+        assert_eq!(
+            splitlines_keepends(b"a\nb\r\nc\rd"),
+            vec![&b"a\n"[..], b"b\r\n", b"c\r", b"d"]
+        );
+        assert_eq!(splitlines_keepends(b"a\n"), vec![&b"a\n"[..]]);
+        assert_eq!(splitlines_keepends(b""), Vec::<&[u8]>::new());
+        // The property `cursor_agent._read_text` depends on: the pieces
+        // reassemble the file, so summing their lengths walks byte offsets.
+        let data = b"user: hi\r\nA: there\n\n";
+        assert_eq!(
+            splitlines_keepends(data)
+                .iter()
+                .map(|line| line.len())
+                .sum::<usize>(),
+            data.len()
+        );
     }
 
     #[test]

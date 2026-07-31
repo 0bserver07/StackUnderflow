@@ -36,10 +36,25 @@ Verbs and options mirror the binary exactly:
     --opencode-root <path>     injected as OpenCodeAdapter(data_dir=...)
     --pi-root <path>           injected as PiAdapter(roots=[(..., "pi")])
     --omp-root <path>          the OMP half of the same PiAdapter
+    --codeium-root <path>      injected as CodeiumAdapter(root=...)
+    --cursor-agent-root <path> injected as CursorAgentAdapter(projects_root=...)
+    --cursor-agent-db <path>   injected as CursorAgentAdapter(tracking_db=...)
+    --hermes-root <path>       injected as HermesAdapter(roots=[...])
     --since-offset <n>         resume watermark for `records`
     --session <id>             restrict `records` to one session id
+    --blank-timestamps         replace every record timestamp with `<now>`
 
 Read-only: nothing here writes, so it is safe against the live `~/.claude`.
+
+## `--blank-timestamps`, and why it is not cheating
+
+Exactly one provider — `cursor-agent` — stamps `datetime.now(tz=UTC)` on every
+record, because its source records no per-message time at all. Two processes
+never agree on that microsecond, so a byte diff of the field would be a coin
+flip. The flag replaces it with a literal `<now>` on **both** sides, so every
+other field of every record is still compared byte for byte, and the excluded
+field is named in the output rather than quietly normalised. The clock itself is
+pinned on the Rust side by unit test with an injected `pytime::Clock`.
 """
 
 from __future__ import annotations
@@ -59,13 +74,16 @@ _COUNT_PROVIDERS = (
     "cline",
     "kilocode",
     "roocode",
+    "codeium",
     "codex",
     "continue",
     "copilot",
     "cursor",
+    "cursor-agent",
     "droid",
     "gemini",
     "grok",
+    "hermes",
     "kiro",
     "openclaw",
     "opencode",
@@ -99,13 +117,16 @@ def _adapters(args: argparse.Namespace):
         KiloCodeAdapter,
         RooCodeAdapter,
     )
+    from stackunderflow.adapters.codeium import CodeiumAdapter
     from stackunderflow.adapters.codex import CodexAdapter
     from stackunderflow.adapters.continue_adapter import ContinueAdapter
     from stackunderflow.adapters.copilot import CopilotAdapter
     from stackunderflow.adapters.cursor import CursorAdapter
+    from stackunderflow.adapters.cursor_agent import CursorAgentAdapter
     from stackunderflow.adapters.droid import DroidAdapter
     from stackunderflow.adapters.gemini import GeminiAdapter
     from stackunderflow.adapters.grok import GrokAdapter
+    from stackunderflow.adapters.hermes import HermesAdapter
     from stackunderflow.adapters.kiro import KiroAdapter
     from stackunderflow.adapters.openclaw import OpenClawAdapter
     from stackunderflow.adapters.opencode import OpenCodeAdapter
@@ -140,6 +161,9 @@ def _adapters(args: argparse.Namespace):
         "cline": ClineAdapter(tasks_root=_path(args.cline_root)),
         "kilocode": KiloCodeAdapter(tasks_root=_path(args.kilocode_root)),
         "roocode": RooCodeAdapter(tasks_root=_path(args.roocode_root)),
+        # Registered-but-inert: the root is injectable so a parity run can prove
+        # that a *populated* tree still enumerates nothing.
+        "codeium": CodeiumAdapter(root=_path(args.codeium_root)),
         "codex": (
             CodexAdapter(sessions_root=pathlib.Path(args.codex_root))
             if args.codex_root
@@ -151,9 +175,19 @@ def _adapters(args: argparse.Namespace):
             vscode_workspace_storage=_path(args.copilot_vscode),
         ),
         "cursor": CursorAdapter(vscdb_path=_path(args.cursor_db)),
+        # Both paths default independently, so a hermetic run injects both:
+        # passing only the projects root would still read the developer's real
+        # `~/.cursor/ai-tracking/ai-code-tracking.db` for the model.
+        "cursor-agent": CursorAgentAdapter(
+            projects_root=_path(args.cursor_agent_root),
+            tracking_db=_path(args.cursor_agent_db),
+        ),
         "droid": DroidAdapter(sessions_root=_path(args.droid_root)),
         "gemini": GeminiAdapter(projects_root=_path(args.gemini_root)),
         "grok": GrokAdapter(sessions_root=_path(args.grok_root)),
+        "hermes": HermesAdapter(
+            roots=[pathlib.Path(args.hermes_root)] if args.hermes_root else None
+        ),
         "kiro": KiroAdapter(storage_root=_path(args.kiro_root)),
         "openclaw": OpenClawAdapter(
             base_dirs=[pathlib.Path(args.openclaw_base)] if args.openclaw_base else None
@@ -187,13 +221,16 @@ def _ref_line(ref) -> str:
     )
 
 
-def _record_line(rec) -> str:
+def _record_line(rec, *, blank_timestamp: bool = False) -> str:
     return _dumps(
         {
             "provider": rec.provider,
             "session_id": rec.session_id,
             "seq": rec.seq,
-            "timestamp": rec.timestamp,
+            # See `--blank-timestamps` in the module docstring: the one field
+            # two processes cannot agree on, excluded by name rather than
+            # normalised in silence.
+            "timestamp": "<now>" if blank_timestamp else rec.timestamp,
             "role": rec.role,
             "model": rec.model,
             "input_tokens": rec.input_tokens,
@@ -269,8 +306,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--opencode-root")
     parser.add_argument("--pi-root")
     parser.add_argument("--omp-root")
+    parser.add_argument("--codeium-root")
+    parser.add_argument("--cursor-agent-root")
+    parser.add_argument("--cursor-agent-db")
+    parser.add_argument("--hermes-root")
     parser.add_argument("--since-offset", type=int, default=0)
     parser.add_argument("--session")
+    parser.add_argument("--blank-timestamps", action="store_true")
     args = parser.parse_args(argv)
 
     if args.verb == "capabilities":
@@ -305,7 +347,9 @@ def main(argv: list[str]) -> int:
 
     for ref in refs:
         for rec in adapter.read(ref, since_offset=args.since_offset):
-            sys.stdout.write(_record_line(rec) + "\n")
+            sys.stdout.write(
+                _record_line(rec, blank_timestamp=args.blank_timestamps) + "\n"
+            )
     return 0
 
 

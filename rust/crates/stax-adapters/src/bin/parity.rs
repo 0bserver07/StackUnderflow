@@ -26,14 +26,17 @@ use stax_adapters::antigravity::AntigravityAdapter;
 use stax_adapters::base::SourceAdapter;
 use stax_adapters::claude::ClaudeAdapter;
 use stax_adapters::cline::{ClineFamilyAdapter, Variant};
+use stax_adapters::codeium::CodeiumAdapter;
 use stax_adapters::codex::CodexAdapter;
 use stax_adapters::continue_ext::ContinueAdapter;
 use stax_adapters::copilot::CopilotAdapter;
 use stax_adapters::cursor::CursorAdapter;
+use stax_adapters::cursor_agent::CursorAgentAdapter;
 use stax_adapters::droid::DroidAdapter;
 use stax_adapters::dump;
 use stax_adapters::gemini::GeminiAdapter;
 use stax_adapters::grok::GrokAdapter;
+use stax_adapters::hermes::HermesAdapter;
 use stax_adapters::kiro::KiroAdapter;
 use stax_adapters::openclaw::OpenClawAdapter;
 use stax_adapters::opencode::OpenCodeAdapter;
@@ -69,6 +72,10 @@ options:
   --opencode-root <path>    inject the OpenCode data dir (default: live env)
   --pi-root <path>          inject the Pi sessions root (default: live env)
   --omp-root <path>         inject the OMP sessions root (default: live env)
+  --codeium-root <path>     inject the Codeium discovery root (default: live env)
+  --cursor-agent-root <path> inject the Cursor Agent projects root (default: live env)
+  --cursor-agent-db <path>  inject the Cursor Agent tracking DB (default: live env)
+  --hermes-root <path>      inject the Hermes sessions root (default: live env)
   --capabilities <path>     the capabilities.json to load (default: $STACKUNDERFLOW_CAPABILITIES,
                             else <cwd>/stackunderflow/adapters/capabilities.json)
   --since-offset <n>        resume watermark for `records` (default: 0)
@@ -135,9 +142,14 @@ struct Options {
     opencode_root: Option<PathBuf>,
     pi_root: Option<PathBuf>,
     omp_root: Option<PathBuf>,
+    codeium_root: Option<PathBuf>,
+    cursor_agent_root: Option<PathBuf>,
+    cursor_agent_db: Option<PathBuf>,
+    hermes_root: Option<PathBuf>,
     capabilities: Option<PathBuf>,
     since_offset: i64,
     session: Option<String>,
+    blank_timestamps: bool,
 }
 
 /// One adapter per provider key, in the registry's order — the same list, in
@@ -167,6 +179,14 @@ fn adapters(options: &Options) -> Vec<(&'static str, Box<dyn SourceAdapter>)> {
         ("cline", cline(Variant::Cline, &options.cline_root)),
         ("kilocode", cline(Variant::KiloCode, &options.kilocode_root)),
         ("roocode", cline(Variant::RooCode, &options.roocode_root)),
+        (
+            // Registered-but-inert; the root is injectable so a parity run can
+            // prove a *populated* tree still enumerates nothing.
+            "codeium",
+            Box::new(CodeiumAdapter::with_optional_root(
+                options.codeium_root.clone(),
+            )),
+        ),
         (
             "codex",
             options.codex_root.clone().map_or_else(
@@ -205,6 +225,16 @@ fn adapters(options: &Options) -> Vec<(&'static str, Box<dyn SourceAdapter>)> {
             ),
         ),
         (
+            // Both paths default independently, mirroring the Python
+            // constructor: injecting only the projects root would still read
+            // the developer's real tracking DB for the model.
+            "cursor-agent",
+            Box::new(CursorAgentAdapter::with_optional_roots(
+                options.cursor_agent_root.clone(),
+                options.cursor_agent_db.clone(),
+            )),
+        ),
+        (
             "droid",
             options.droid_root.clone().map_or_else(
                 || Box::new(DroidAdapter::new()) as Box<dyn SourceAdapter>,
@@ -224,6 +254,12 @@ fn adapters(options: &Options) -> Vec<(&'static str, Box<dyn SourceAdapter>)> {
                 || Box::new(GrokAdapter::new()) as Box<dyn SourceAdapter>,
                 |root| Box::new(GrokAdapter::with_sessions_root(root)),
             ),
+        ),
+        (
+            "hermes",
+            Box::new(HermesAdapter::with_optional_roots(
+                options.hermes_root.clone().map(|root| vec![root]),
+            )),
         ),
         (
             "kiro",
@@ -332,8 +368,16 @@ fn run(args: &[String], out: &mut dyn Write) -> Result<(), String> {
             // each record over as it is parsed, so peak memory is one record
             // rather than one session.
             let mut failure = None;
+            let blank = options.blank_timestamps;
             for session in &refs {
-                adapter.read_into(session, options.since_offset, &mut |record| {
+                adapter.read_into(session, options.since_offset, &mut |mut record| {
+                    // The one field two processes cannot agree on
+                    // (`cursor-agent` stamps `datetime.now(tz=UTC)` per
+                    // record). Excluded by name on both sides rather than
+                    // normalised in silence.
+                    if blank {
+                        record.timestamp = "<now>".to_string();
+                    }
                     if failure.is_none()
                         && let Err(err) = line(out, &dump::record_line(&record))
                     {
@@ -369,9 +413,14 @@ fn parse_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
         opencode_root: None,
         pi_root: None,
         omp_root: None,
+        codeium_root: None,
+        cursor_agent_root: None,
+        cursor_agent_db: None,
+        hermes_root: None,
         capabilities: None,
         since_offset: 0,
         session: None,
+        blank_timestamps: false,
     };
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -400,6 +449,10 @@ fn parse_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
             "--opencode-root" => options.opencode_root = Some(PathBuf::from(value()?)),
             "--pi-root" => options.pi_root = Some(PathBuf::from(value()?)),
             "--omp-root" => options.omp_root = Some(PathBuf::from(value()?)),
+            "--codeium-root" => options.codeium_root = Some(PathBuf::from(value()?)),
+            "--cursor-agent-root" => options.cursor_agent_root = Some(PathBuf::from(value()?)),
+            "--cursor-agent-db" => options.cursor_agent_db = Some(PathBuf::from(value()?)),
+            "--hermes-root" => options.hermes_root = Some(PathBuf::from(value()?)),
             "--capabilities" => options.capabilities = Some(PathBuf::from(value()?)),
             "--since-offset" => {
                 options.since_offset = value()?
@@ -407,6 +460,7 @@ fn parse_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
                     .map_err(|_| "--since-offset must be an integer".to_string())?;
             }
             "--session" => options.session = Some(value()?),
+            "--blank-timestamps" => options.blank_timestamps = true,
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => positional.push(other.to_string()),
         }

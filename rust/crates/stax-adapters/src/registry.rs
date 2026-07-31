@@ -14,8 +14,9 @@
 //! second registration mechanism only adds a way for the two to disagree. What
 //! replaces Python's loudness is a test:
 //! `every_registered_adapter_has_a_capabilities_row` fails the build if a
-//! provider is registered without a curated row, and (once all 20 land) the
-//! reverse.
+//! provider is registered without a curated row, and — now that all 20 have
+//! landed — `the_table_and_the_registry_cover_the_same_twenty_providers` fails
+//! it if the table carries a row no adapter answers for.
 //!
 //! **Adding a provider is two lines:** `mod <name>;` in `lib.rs` and one entry
 //! in [`registered`].
@@ -23,8 +24,8 @@
 use crate::base::SourceAdapter;
 use crate::cline::{ClineFamilyAdapter, Variant};
 use crate::{
-    antigravity, claude, codex, continue_ext, copilot, cursor, droid, gemini, grok, kiro, openclaw,
-    opencode, pi, qwen,
+    antigravity, claude, codeium, codex, continue_ext, copilot, cursor, cursor_agent, droid,
+    gemini, grok, hermes, kiro, openclaw, opencode, pi, qwen,
 };
 
 /// Every adapter this build carries, in Python's registration order (module
@@ -42,13 +43,16 @@ pub fn registered() -> Vec<Box<dyn SourceAdapter>> {
         Box::new(ClineFamilyAdapter::new(Variant::Cline)),
         Box::new(ClineFamilyAdapter::new(Variant::KiloCode)),
         Box::new(ClineFamilyAdapter::new(Variant::RooCode)),
+        Box::new(codeium::CodeiumAdapter::new()),
         Box::new(codex::CodexAdapter::new()),
         Box::new(continue_ext::ContinueAdapter::new()),
         Box::new(copilot::CopilotAdapter::new()),
         Box::new(cursor::CursorAdapter::new()),
+        Box::new(cursor_agent::CursorAgentAdapter::new()),
         Box::new(droid::DroidAdapter::new()),
         Box::new(gemini::GeminiAdapter::new()),
         Box::new(grok::GrokAdapter::new()),
+        Box::new(hermes::HermesAdapter::new()),
         Box::new(kiro::KiroAdapter::new()),
         Box::new(openclaw::OpenClawAdapter::new()),
         Box::new(opencode::OpenCodeAdapter::new()),
@@ -59,9 +63,10 @@ pub fn registered() -> Vec<Box<dyn SourceAdapter>> {
 
 /// The full twenty, in the order Python's module walk yields them.
 ///
-/// The canonical order lives here as data so a partially-landed build can still
-/// assert it is *in* order without hardcoding how many providers exist yet —
-/// see `registration_order_is_a_prefix_free_subsequence_of_pythons`.
+/// The canonical order lives here as data. It carried the stamp-out batches —
+/// a partially-landed build could assert it was *in* order without hardcoding
+/// how many providers existed yet — and now that [`registered`] has reached
+/// 20/20 it is also the exact expected list.
 pub const PYTHON_WALK_ORDER: [&str; 20] = [
     "antigravity",
     "claude",
@@ -100,28 +105,12 @@ mod tests {
 
     #[test]
     fn registration_order_matches_pythons_module_walk() {
-        assert_eq!(
-            registered_names(),
-            vec![
-                "antigravity",
-                "claude",
-                "cline",
-                "kilocode",
-                "roocode",
-                "codex",
-                "continue",
-                "copilot",
-                "cursor",
-                "droid",
-                "gemini",
-                "grok",
-                "kiro",
-                "openclaw",
-                "opencode",
-                "pi",
-                "qwen",
-            ]
-        );
+        // 20/20. The list is `PYTHON_WALK_ORDER` itself now that every provider
+        // has landed, which is the assertion that closes the wave: a registry
+        // that is a *prefix-free subsequence* of Python's could still be
+        // missing a provider, and this one cannot.
+        assert_eq!(registered_names(), PYTHON_WALK_ORDER.to_vec());
+        assert_eq!(registered_names().len(), 20);
     }
 
     #[test]

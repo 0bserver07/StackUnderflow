@@ -67,9 +67,8 @@ fn every_provider_row_in_the_shipped_table_loads() {
 #[test]
 fn every_registered_adapter_has_a_capabilities_row() {
     // Python's drift test asserts the table covers exactly the introspected
-    // adapter set. Rust carries 2 of 20 providers today, so this is the half
-    // that can hold now — and it is the half that matters: an adapter must not
-    // ship without an honest fidelity row.
+    // adapter set. This is the half that matters most: an adapter must not ship
+    // without an honest fidelity row.
     let table = table();
     for name in registered_names() {
         let cap = table
@@ -77,6 +76,25 @@ fn every_registered_adapter_has_a_capabilities_row() {
             .unwrap_or_else(|| panic!("registered adapter {name:?} has no capabilities row"));
         assert_eq!(cap.provider, name);
     }
+}
+
+#[test]
+fn the_table_and_the_registry_cover_the_same_twenty_providers() {
+    // The other half of Python's drift test, which only became assertable when
+    // the twentieth provider landed: a curated row with no adapter behind it is
+    // a support matrix that lies in the *other* direction — it advertises a
+    // fidelity nothing can deliver.
+    let table = table();
+    let mut registered = registered_names();
+    registered.sort();
+    // `providers()` is already sorted; the copy keeps the comparison symmetric.
+    let mut curated: Vec<String> = table.providers().iter().map(|p| (*p).to_string()).collect();
+    curated.sort();
+    assert_eq!(
+        registered, curated,
+        "the registry and capabilities.json disagree about which providers exist"
+    );
+    assert_eq!(registered.len(), 20, "the full provider set");
 }
 
 #[test]
