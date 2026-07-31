@@ -39,6 +39,48 @@ anyhow.workspace = true
 # dropped record. Features are not recorded in Cargo.lock, so this adds no lock
 # churn for the fleet.
 serde_json = { workspace = true, features = ["unbounded_depth"] }
+# WAVE 4 — promoted from a dev-dependency to a real one.
+#
+# The ingest layer *is* the seam between the adapters and the store: `ingest_file`
+# takes a `SessionRef` and a `&dyn SourceAdapter` and turns the `Record`s they
+# yield into `messages` rows. There is no way to express that without the
+# contract types, and re-declaring them here is the exact drift the single
+# `base.rs` exists to prevent.
+#
+# The charter's dependency direction is unchanged: `stax-adapters` depends on
+# nothing but `anyhow` + `rusqlite`, so `etl → adapters → ()` stays acyclic and
+# the architect's "adapters stay storage-free" ruling still holds — the
+# `PostIngestHook` trait that replaces Python's `getattr(adapter,
+# "materialize_metadata")` lives HERE (`ingest::hooks`), not over there.
+#
+# The `[dev-dependencies]` entry below is now redundant but kept, deliberately:
+# `tests/fixture_parity.rs` needs the adapters, and dropping the dev entry would
+# make that test's dependency invisible if this one is ever narrowed.
+stax-adapters = { path = "../stax-adapters" }
+
+# WAVE 4 — the filesystem watcher (`etl/watcher.py`, `notify` per spec §3).
+#
+# LOCK ADDITION, documented per the campaign's anti-drift rule: this is the
+# first third-party crate the port adds beyond the wave-0 four
+# (anyhow/clap/rusqlite/serde_json). `notify 8.2.0` pulls
+# `notify-types`/`inotify`/`inotify-sys`/`filetime`/`log`/`walkdir`/`same-file`
+# on Linux; `Cargo.lock` records them.
+#
+# `default-features = false` is the smallest set that still works: notify's
+# defaults are `macos_fsevent` (irrelevant off macOS) and `crossbeam-channel`
+# (an extra dependency whose only purpose is letting callers select on a
+# crossbeam channel — the watcher thread here owns a plain `std::sync::mpsc`).
+# The per-platform backend — inotify on Linux, ReadDirectoryChangesW on Windows,
+# kqueue on the BSDs — is unconditional and is what we actually use. Turning
+# `macos_fsevent` back on is a one-word change if wave 8's packaging wants
+# FSEvents over the kqueue fallback on macOS; it is not a parity question.
+#
+# Target-gated so wave 9's `wasm32` build of this crate cannot be broken by a
+# dependency that has no wasm backend. `ingest::watcher` is `#[cfg]`-ed off the
+# same way, and everything else in `ingest` (the writer, the watermarks, the
+# enumerate pass) stays available there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+notify = { version = "8.2.0", default-features = false }
 
 [dev-dependencies]
 # `tests/fixture_parity.rs` runs the SAME fourteen fixture packs through
@@ -61,3 +103,10 @@ path = "src/bin/normalize_parity.rs"
 [[bin]]
 name = "stax-mart-parity"
 path = "src/bin/mart_parity.rs"
+
+# The wave-4 ingest gate: run a full ingest pass over a SCRATCH home, dump the
+# four store tables full-row, and drive the live-tail latency measurement. The
+# same dumper runs over the Python-ingested store.
+[[bin]]
+name = "stax-ingest-parity"
+path = "src/bin/ingest_parity.rs"

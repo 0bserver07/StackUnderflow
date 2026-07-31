@@ -41,7 +41,7 @@ pub const CHUNK_SIZE: i64 = 5_000;
 pub const CHECKPOINT_EVERY_CHUNKS: u64 = 5;
 
 /// The columns `_run_normalizers` selects, in its order.
-const SELECTED_COLUMNS: [&str; 20] = [
+pub(crate) const SELECTED_COLUMNS: [&str; 20] = [
     "id",
     "session_fk",
     "seq",
@@ -223,7 +223,7 @@ fn fetch_chunk(
 /// 383,700 rows) and is mapped to a lossy-UTF-8 string, which is what
 /// `_safe_load_raw`'s `decode("utf-8", errors="replace")` would have produced
 /// had it been reached.
-fn sqlite_to_py(value: rusqlite::types::ValueRef<'_>) -> PyValue {
+pub(crate) fn sqlite_to_py(value: rusqlite::types::ValueRef<'_>) -> PyValue {
     use rusqlite::types::ValueRef;
     match value {
         ValueRef::Null => PyValue::Null,
@@ -266,7 +266,7 @@ fn normalize_and_insert(
 /// chain. The `or`s are Python truthiness, so a `0` token count falls back the
 /// same way a missing one does — which is invisible here (both sides are 0) and
 /// would not be for a column where zero is meaningful.
-fn insert_event(conn: &Connection, row: &MsgRow, event: &UsageEvent) -> SqlResult<bool> {
+pub(crate) fn insert_event(conn: &Connection, row: &MsgRow, event: &UsageEvent) -> SqlResult<bool> {
     use rusqlite::types::Value as SqlValue;
 
     let provider = first_truthy_str(&[&event.provider, &super::row::str_or_empty(row, "provider")]);

@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ingest;
 pub mod marts;
 pub mod normalize;
 pub mod pricing;

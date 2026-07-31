@@ -17,8 +17,17 @@
 #                            populated-FTS state is the maintainer's machine,
 #                            not an edge case. Skipped only where the Python
 #                            venv or the harness states are absent — loudly.
+#   5. Ingest parity       — one full `run_ingest` pass over a scratch home by
+#                            each implementation, then a full-row diff of
+#                            projects / sessions / messages / usage_events /
+#                            ingest_log. The wave-4 gate: the store IS the
+#                            contract, so the comparison is of rows, not counts.
+#                            Fixture-corpus only by default (~2 s); export
+#                            STAX_INGEST_REAL_PROJECTS=N to widen it to N of the
+#                            maintainer's real ~/.claude projects, which is what
+#                            the wave gate itself was run at.
 #
-# Usage:  rust/ci.sh                (runs all five)
+# Usage:  rust/ci.sh                (runs all six)
 #         rust/ci.sh --skip-parity  (gates 0-3 only; boxes without the venv)
 # Exit:   first failing gate's status.
 set -euo pipefail
@@ -52,7 +61,7 @@ gate() {
 # tree while its Cargo.lock entry was committed, so five commits in a row failed
 # to compile from a clean checkout while every in-tree run stayed green. The
 # working tree's opinion of itself is not evidence.
-echo "=== gate 0/5  clean-checkout build (git archive HEAD) ==="
+echo "=== gate 0/6  clean-checkout build (git archive HEAD) ==="
 _cc_tmp="$(mktemp -d)"
 ( cd "$(git rev-parse --show-toplevel)" && git archive HEAD rust/ contracts/ ) | tar -x -C "$_cc_tmp"
 ( cd "$_cc_tmp/rust" && cargo check --workspace --quiet ) \
@@ -60,17 +69,17 @@ _cc_tmp="$(mktemp -d)"
 rm -rf "$_cc_tmp"
 echo "    clean checkout builds"
 
-gate "gate 1/5  cargo fmt --check" cargo fmt --check
-gate "gate 2/5  cargo clippy --workspace --all-targets -- -D warnings" \
+gate "gate 1/6  cargo fmt --check" cargo fmt --check
+gate "gate 2/6  cargo clippy --workspace --all-targets -- -D warnings" \
     cargo clippy --workspace --all-targets -- -D warnings
-gate "gate 3/5  cargo test --workspace" cargo test --workspace
+gate "gate 3/6  cargo test --workspace" cargo test --workspace
 
 # Gate 4 — the P0 gate. It is last because it is the slowest and because a
 # workspace that does not compile cannot be diffed; it is not optional because
 # every gate above it can be green while the shipped binary answers a question
 # differently from the tool it replaces. That is exactly what happened: 39 of
 # 188 cases diverged on the populated-FTS store while gates 0-3 were green.
-printf '\n=== gate 4/5  CLI byte-parity vs the Python CLI ===\n'
+printf '\n=== gate 4/6  CLI byte-parity vs the Python CLI ===\n'
 if [ "$SKIP_PARITY" = 1 ]; then
     echo '  !!  GATE 4 SKIPPED by --skip-parity.'
     echo '  !!  Drop-in parity is UNVERIFIED for this run. The only sanctioned'
@@ -101,6 +110,32 @@ else
             ;;
     esac
     rm -f "$_parity_out"
+fi
+
+# Gate 5 — the wave-4 ingest gate. Cheap in its default shape because the
+# fixture corpus is 1 MB; the value is that the writer, the watermarks and the
+# per-record normalize hook cannot regress silently between here and wave 10.
+printf '\n=== gate 5/6  ingest parity (full-row, scratch home) ===\n'
+if [ "$SKIP_PARITY" = 1 ]; then
+    echo '  !!  GATE 5 SKIPPED by --skip-parity (it needs the Python venv too).'
+else
+    set +e
+    STAX_INGEST_REAL_PROJECTS="${STAX_INGEST_REAL_PROJECTS:-0}" ./ingest-parity.sh
+    _ingest_rc=$?
+    set -e
+    case "$_ingest_rc" in
+        0) : ;;
+        2)
+            echo
+            echo '  !!  GATE 5 COULD NOT RUN (setup): see the message above.'
+            exit 2
+            ;;
+        *)
+            echo
+            echo "GATE 5 FAILED: the ingest layer does not reproduce Python's rows."
+            exit 1
+            ;;
+    esac
 fi
 
 printf '\nall gates green\n'
