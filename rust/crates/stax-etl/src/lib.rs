@@ -10,3 +10,5 @@
 //! `<synthetic>` folding) exactly, not fixing it silently.
 
 #![forbid(unsafe_code)]
+
+pub mod pricing;
