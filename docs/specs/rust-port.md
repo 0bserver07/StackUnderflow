@@ -131,6 +131,54 @@ orchestrator schedules; the table is dependency order, not strict serial.
   structure exists so value ships from wave 1 (the static memory binary) even
   if the campaign pauses mid-flight.
 
+### 6b. Parity traps measured by the July perf campaign (2026-07-30)
+
+The reference implementation has **known-wrong behavior that is deliberately
+deferred** (`docs/campaigns/TASKS.md` §4f). A faithful port enshrines bugs; an
+honest port "fails" parity. So the divergence ledger in TASKS-RS.md gets a
+`disposition` column with exactly two values — `bug-for-bug` (ported
+faithfully, divergence from *truth* recorded) or `fixed-in-rust` (divergence
+from *Python* recorded) — and these five start pre-filed:
+
+1. **Frozen mart costs.** `daily_mart.cost_usd` freezes the rate card at
+   normalization time; raw paths re-price at read time. Divergence is ±0.001%
+   on `all` today and −65% on a dirty project's `week` window; every rate-card
+   edit reopens it. Fixture stores must pin the rate card or the cent-exact
+   wave-3 gate flakes.
+2. **Classifier fall-through dims** (`stats/classifier.py:174` → `"assistant"`):
+   5,656 legacy-history user turns count as assistant messages in
+   `project_mart`; 57 of 243 events-backed rows carry `total_commands = 0`
+   from the same path. Cent-exact mart parity means reproducing these wrong
+   numbers exactly.
+3. **`<synthetic>` folding:** model-less and `<synthetic>` rows fold into
+   `by_model["N/A"]` (0.05% of rows) on the mart-gated summary path.
+4. **Sub-second `until`-edge asymmetry:** raw paths compare timestamp strings
+   (`…T23:59:59+00:00`), mart paths truncate to days — a `…59.5Z` row lands on
+   different sides. No occurrence in the real store; fixtures must not mint one.
+5. **Sign-inverted tz offsets from the React callers**
+   (`ProjectDashboard.tsx:154`, `:173` send raw `getTimezoneOffset()` where the
+   backend wants minutes-east). Wave 5's byte-parity oracle *inherits* the wrong
+   bucketing — the Rust server must reproduce it faithfully until the frontend
+   fix lands, then both flip together.
+
+**Load-bearing SQL shapes (do not "idiomatize"):** `messages` is a UNION-ALL
+view over 16 monthly partitions and SQLite does **not** push join predicates
+into the arms. The `session_fk IN (SELECT id FROM sessions WHERE …)`
+list-subquery idiom is the difference between 9ms and 912ms (measured); the
+live-latency path additionally hoists its floor + session set into a first
+statement because a scalar subquery re-evaluates per arm (16×). rusqlite
+bundles the same engine with the same planner: port the query *shapes*, and
+port the Python suite's EXPLAIN-plan assertions
+(`test_scoped_helpers_seek_the_partition_indexes` et al.) as plan-shape tests,
+or a clean-looking rewrite silently re-detonates the exact hangs the July
+campaign killed. Same class: `json_extract` has no common-subexpression
+elimination — extract once in a CTE (see `services/worktrees.py`).
+
+**Baseline honesty:** the §5 baseline's `search 6–14ms` is per-query —
+`?q=cache` measures 40–86ms on the same store. PERF.md rows must carry the
+exact query/command; re-baseline each gated endpoint with its own term before
+wave 5/6 gates, or Rust gets graded against a number Python never hit.
+
 ## 7. Relationship to existing work
 
 - `docs/specs/agent-remotes.md`: unblocked and *improved* by wave 1 — a static
