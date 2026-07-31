@@ -67,6 +67,7 @@ use stax_etl::pricing::costs::PricingEngine;
 use stax_etl::stats::aggregator::jf;
 use stax_etl::stats::pydatetime::{PyDateTime, parse_ts};
 
+use super::mart_queries::table_exists;
 use super::scope::{Instant, Scope, parse_period};
 
 /// `_GIT_TIMEOUT_SECONDS = 5`.
@@ -552,13 +553,6 @@ fn query_sessions(
         return query_sessions_from_mart(conn, scope, project_filter);
     }
     query_sessions_from_messages(conn, scope, project_filter, engine)
-}
-
-/// `_table_exists(conn, name)`.
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
 }
 
 /// `mart_queries.mart_has_session_rows`.

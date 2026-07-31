@@ -61,8 +61,10 @@ use stax_etl::pricing::costs::PricingEngine;
 use stax_etl::stats::aggregator::{Neumaier, PyNum, round_py};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422};
+use crate::pyops::COST_KEYS;
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::services::messages as messages_api;
 use crate::state::AppState;
 
@@ -304,46 +306,6 @@ fn filter_includes(stats: &Map<String, Value>, wanted: &[String]) -> Value {
     Value::Object(out)
 }
 
-/// pydantic's validation body for a query parameter that will not coerce.
-///
-/// FastAPI's `RequestValidationError` handler renders `{"detail": exc.errors()}`
-/// — a LIST of error objects. Every other error in this module is a
-/// single-string `detail`, so the two cannot share a type: this returns a
-/// [`JsonBody`] directly, and the handlers `return Ok(...)` on it. The status
-/// and the bytes are what a client sees either way.
-///
-/// The bytes are not a guess. `DD-bad-int` and `MSG-tz-bad` were divergent on
-/// the first full gate run of this batch — the port answered
-/// `{"detail":"timezone_offset"}` where the reference answered the structured
-/// list — and these are the reference's own bytes, measured.
-///
-/// FLAGGED FOR THE ARCHITECT'S DEDUP LIST: `routes/optimize.rs`,
-/// `routes/pricing.rs`, `routes/projects.rs` and `routes/sessions.rs` each
-/// carry this privately too. All five want one `json.rs` helper — a change to
-/// shared foundation that no single batch should make unilaterally.
-fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from(match err.kind {
-            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
-            _ => "Input should be a valid integer, unable to parse string as an integer",
-        }),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
-}
-
 // ═══ batch C — the other four endpoints ══════════════════════════════════════
 
 /// `MESSAGES_DEFAULT_PER_PAGE` / `MESSAGES_MAX_PER_PAGE`.
@@ -534,12 +496,6 @@ fn config_block(state: &AppState) -> Value {
 // carries a third set. Three copies is two too many; the merge is a
 // post-landing task, not a mid-flight cross-file edit while the other two are
 // uncommitted.
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
-}
 
 /// `mart_queries.mart_has_project_row` — the "is this project materialised?" gate.
 fn mart_has_project_row(conn: &Connection, project_id: i64) -> rusqlite::Result<bool> {
@@ -914,7 +870,7 @@ fn dashboard_statistics(
     let mut lean = Map::new();
     if let Value::Object(map) = &mut stats {
         for (key, value) in std::mem::take(map) {
-            if COST_KEYS_LEAN.contains(&key.as_str()) {
+            if COST_KEYS.contains(&key.as_str()) {
                 continue;
             }
             lean.insert(key, value);
@@ -946,23 +902,6 @@ fn dashboard_statistics(
         statistics: Value::Object(lean),
     })
 }
-
-/// `routes/cost.py::COST_KEYS`, the nine sections `/api/dashboard-data` strips.
-///
-/// Batch A owns the canonical copy in `routes/cost.rs`; it is `pub(crate)`-less
-/// there, so this is a second literal of the same nine strings. Flagged for the
-/// dedup list alongside the mart helpers.
-const COST_KEYS_LEAN: [&str; 9] = [
-    "session_costs",
-    "command_costs",
-    "tool_costs",
-    "token_composition",
-    "outliers",
-    "retry_signals",
-    "session_efficiency",
-    "error_cost",
-    "trends",
-];
 
 // ── the mart-backed statistics block ─────────────────────────────────────────
 

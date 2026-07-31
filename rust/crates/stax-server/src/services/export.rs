@@ -92,7 +92,9 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 use stax_etl::pricing::RawTokens;
 use stax_etl::pricing::costs::PricingEngine;
-use stax_etl::stats::aggregator::Neumaier;
+// `round_py` is Python's `round(x, n)`; this file used to carry a private copy
+// under the name below, which is kept so the call sites read unchanged.
+use stax_etl::stats::aggregator::{Neumaier, round_py as round_half_even};
 use stax_etl::stats::pytext::{is_py_space, py_char_prefix, py_lstrip, py_strip, py_truthy};
 
 use super::scope::{Instant, Scope, parse_period};
@@ -1406,18 +1408,6 @@ fn get_i64(row: &Value, key: &str) -> i64 {
 /// `float(row.get(key, 0.0))`.
 fn get_f64(row: &Value, key: &str) -> f64 {
     row.get(key).and_then(Value::as_f64).unwrap_or(0.0)
-}
-
-/// Python's `round(x, n)` — correct decimal rounding, ties to even.
-///
-/// FLAGGED FOR DEDUP: identical to `routes/projects.rs::round_half_even` and
-/// `routes/pricing.rs::round_half_even`. Kept private here rather than reaching
-/// into modules batch C does not own.
-fn round_half_even(value: f64, digits: usize) -> f64 {
-    if !value.is_finite() {
-        return value;
-    }
-    format!("{value:.digits$}").parse().unwrap_or(value)
 }
 
 /// An insertion-ordered map — `dict` with `setdefault`.

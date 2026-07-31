@@ -34,7 +34,7 @@
 //! ```text
 //! JSONResponse (pyjson::dumps_http)   {"status":"pong"}
 //! agent_output (pyjson::dumps_pretty) {\n  "status": "pong"\n}
-//! this module  (dumps_py_default)     {"status": "pong"}
+//! bare dumps   (pyjson::dumps_py_default) {"status": "pong"}
 //! ```
 //!
 //! [`dumps_py_default`] is that third layout. The `raw_json` column both upserts
@@ -721,35 +721,12 @@ fn plain_json(result: &Map<String, Value>) -> Response {
 /// `(", ", ": ")` separators. See the module docs for why this is a third
 /// writer rather than one of the two the crate already has.
 ///
-/// Scalars delegate to `pyjson::dumps_compact`, which owns the escaping and
-/// CPython's float `repr`; only the container separators are written here, which
-/// is exactly the difference between the two layouts.
+/// Batch D wrote this file-locally because `stax-memory` is another crate; the
+/// wave-5 dedup pass moved it into `pyjson` as a fourth `Layout`, next to the
+/// two writers it has to stay distinguishable from. This alias keeps the call
+/// sites and the module docs reading the way they were measured.
 fn dumps_py_default(value: &Value) -> String {
-    match value {
-        Value::Object(map) => {
-            let body = map
-                .iter()
-                .map(|(key, val)| {
-                    format!(
-                        "{}: {}",
-                        stax_memory::pyjson::dumps_compact(&Value::String(key.clone())),
-                        dumps_py_default(val)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{{{body}}}")
-        }
-        Value::Array(items) => {
-            let body = items
-                .iter()
-                .map(dumps_py_default)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{body}]")
-        }
-        scalar => stax_memory::pyjson::dumps_compact(scalar),
-    }
+    stax_memory::pyjson::dumps_py_default(value)
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

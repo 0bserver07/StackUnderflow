@@ -46,9 +46,10 @@ use axum::routing::get;
 use rusqlite::Connection;
 use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
-use stax_etl::stats::aggregator::PyNum;
+use stax_etl::stats::aggregator::{PyNum, round_py};
 
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
 
 /// `_SIGNIFICANT_DELTA_PCT`.
@@ -350,17 +351,6 @@ fn opt_float(value: Option<f64>) -> Value {
     value.map_or(Value::Null, |f| PyNum::Float(f).to_json())
 }
 
-/// Python's `round(x, n)` — correct decimal rounding, ties to even.
-///
-/// FLAGGED FOR DEDUP: identical to `routes/pricing.rs::round_half_even` and
-/// `routes/projects.rs`'s copy.
-fn round_py(value: f64, digits: usize) -> f64 {
-    if !value.is_finite() {
-        return value;
-    }
-    format!("{value:.digits$}").parse().unwrap_or(value)
-}
-
 /// `f"{value:.3g}"` — Python's general format, three significant digits.
 ///
 /// `{:.3e}`-then-trim is not the same thing: `g` drops trailing zeros AND the
@@ -400,12 +390,6 @@ fn trim_zeros(text: &str) -> String {
         return text.to_owned();
     }
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
-}
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
 }
 
 fn sql_500(err: rusqlite::Error) -> HttpError {

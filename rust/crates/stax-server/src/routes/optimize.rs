@@ -67,7 +67,7 @@ use serde_json::{Map, Value};
 use stax_etl::stats::aggregator::{Neumaier, PyNum};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422};
 use crate::qs::Query;
 use crate::services::optimize::{FsRoots, round_half_even};
 use crate::services::prescribe::{
@@ -377,35 +377,6 @@ fn qa_db_path(state: &AppState) -> Option<PathBuf> {
         .store_path()
         .parent()
         .map(|dir| dir.join("qa_pairs.db"))
-}
-
-/// pydantic's validation body for a query parameter that will not coerce.
-///
-/// FLAGGED FOR THE ARCHITECT'S DEDUP LIST: `routes/pricing.rs`,
-/// `routes/projects.rs` and `routes/sessions.rs` each carry this privately.
-/// All four want one `json.rs` helper — a cross-file change this batch will not
-/// make unilaterally.
-fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from(match err.kind {
-            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
-            _ => "Input should be a valid integer, unable to parse string as an integer",
-        }),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
 }
 
 // ── campaign #7 — prescriptions ──────────────────────────────────────────────

@@ -133,6 +133,104 @@ impl IntoResponse for HttpError {
 /// handler that can `raise`.
 pub type HandlerResult = Result<JsonBody, HttpError>;
 
+// ── FastAPI's RequestValidationError — the 422 body ─────────────────────────
+//
+// A query parameter that will not coerce never reaches the handler: FastAPI's
+// dependency solver collects the errors and its installed
+// `request_validation_exception_handler` renders
+// `JSONResponse({"detail": jsonable_encoder(exc.errors())}, status_code=422)` —
+// a *list* of pydantic error objects, not the one-line `{"detail": "<field>"}`
+// four route modules shipped before batch C measured it.
+//
+// This lived in eight route modules under five spellings before the wave-5
+// dedup pass, because the claim protocol forbade a batch from editing
+// `json.rs`. The five that keyed `msg` off `err.kind` and the three that
+// hard-coded the integer message rendered the SAME bytes at every live call
+// site — `QueryError::kind` is only ever `int_parsing` or `bool_parsing`, and
+// the three int-only copies were reached exclusively from `int_or` / `opt_int`.
+// `the_int_only_copies_were_byte_identical_to_the_kind_aware_ones` below is the
+// proof that collapsing them moved nothing, and the guard if a `bool_or` call
+// is ever added to one of those routes.
+
+/// pydantic's error list for a query parameter that would not coerce.
+///
+/// The value is the whole `{"detail": [ … ]}` object, so a caller that has to
+/// wrap it in its own `JsonBody` (three routes do) gets the same bytes as one
+/// that takes [`validation_422`].
+///
+/// Field order is pydantic's: `type`, `loc`, `msg`, `input`. `loc` is
+/// `["query", <field>]` and `input` is the raw string that failed — both
+/// measured against fastapi 0.141.1 / pydantic 2.13.4, not transcribed.
+#[must_use]
+pub fn validation_detail(err: &crate::qs::QueryError) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("type".to_owned(), Value::from(err.kind));
+    entry.insert(
+        "loc".to_owned(),
+        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
+    );
+    entry.insert(
+        "msg".to_owned(),
+        Value::from(match err.kind {
+            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
+            _ => "Input should be a valid integer, unable to parse string as an integer",
+        }),
+    );
+    entry.insert("input".to_owned(), Value::from(err.input.clone()));
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "detail".to_owned(),
+        Value::Array(vec![Value::Object(entry)]),
+    );
+    Value::Object(obj)
+}
+
+/// [`validation_detail`] at the `422` status — the whole response.
+///
+/// A `JsonBody`, not an `HttpError`: `HttpError`'s `detail` is a plain string
+/// and this one is a list. Same bytes on the wire either way.
+#[must_use]
+pub fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
+    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, validation_detail(err))
+}
+
+/// FastAPI's 422 for an absent *required* query parameter.
+///
+/// A different pydantic error type from [`validation_detail`]'s — `missing`,
+/// with the fixed `"Field required"` message and a null `input`. Measured
+/// (`J-content-no-file`), not transcribed.
+#[must_use]
+pub fn missing_query_param(field: &str) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("type".to_owned(), Value::from("missing"));
+    entry.insert(
+        "loc".to_owned(),
+        Value::Array(vec![Value::from("query"), Value::from(field)]),
+    );
+    entry.insert("msg".to_owned(), Value::from("Field required"));
+    entry.insert("input".to_owned(), Value::Null);
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "detail".to_owned(),
+        Value::Array(vec![Value::Object(entry)]),
+    );
+    Value::Object(obj)
+}
+
+/// The `{"detail": "<field>"}` 422 — **NOT** what FastAPI answers.
+///
+/// Four call sites (`routes/commands.rs` ×2, `routes/cost.rs`,
+/// `routes/budgets.rs`) still spell a coercion failure this way. It is the same
+/// latent bug batch C found and fixed in `routes/data.rs` and `/api/stats`: the
+/// real body is [`validation_detail`]'s list. Those four endpoints have no case
+/// row that sends an uncoercible parameter, so nothing has ever measured them —
+/// see the ledger row. Named here so the shape is greppable and so fixing it is
+/// one edit; the wave-5 dedup pass was a refactor and did not change the bytes.
+#[must_use]
+pub fn validation_422_field_only(err: &crate::qs::QueryError) -> HttpError {
+    HttpError::new(StatusCode::UNPROCESSABLE_ENTITY, err.field.clone())
+}
+
 /// FastAPI's fallback for a path no route claims.
 ///
 /// Starlette's default 404 is `PlainTextResponse("Not Found")`, but FastAPI
@@ -207,6 +305,90 @@ mod tests {
         assert_eq!(
             method_not_allowed().render(),
             r#"{"detail":"Method Not Allowed"}"#
+        );
+    }
+
+    fn err(field: &str, input: &str, kind: &'static str) -> crate::qs::QueryError {
+        crate::qs::QueryError {
+            field: field.to_owned(),
+            input: input.to_owned(),
+            kind,
+        }
+    }
+
+    /// The bytes the reference answers, for both error kinds. `?page=abc` is
+    /// `X-bad-int` / `Q-bad-int`; `?raw_media=maybe` is `J-content-bad-bool`.
+    #[test]
+    fn the_validation_body_is_pydantics_list_not_a_one_line_detail() {
+        assert_eq!(
+            validation_422(&err("page", "abc", "int_parsing")).render(),
+            r#"{"detail":[{"type":"int_parsing","loc":["query","page"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"abc"}]}"#
+        );
+        assert_eq!(
+            validation_422(&err("raw_media", "maybe", "bool_parsing")).render(),
+            r#"{"detail":[{"type":"bool_parsing","loc":["query","raw_media"],"msg":"Input should be a valid boolean, unable to interpret input","input":"maybe"}]}"#
+        );
+        assert_eq!(
+            validation_422(&err("page", "abc", "int_parsing")).status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    /// The dedup pass's own gate. `routes/{search,qa,context_replay}.rs` each
+    /// carried a copy that ignored `kind` and always wrote the integer message;
+    /// those routes only ever build `int_parsing` errors, so the two spellings
+    /// agreed on every reachable input. This pins the equality that made
+    /// collapsing them a refactor rather than a change.
+    #[test]
+    fn the_int_only_copies_were_byte_identical_to_the_kind_aware_ones() {
+        let int_only = |e: &crate::qs::QueryError| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("type".to_owned(), Value::from(e.kind));
+            entry.insert(
+                "loc".to_owned(),
+                Value::Array(vec![Value::from("query"), Value::from(e.field.clone())]),
+            );
+            entry.insert(
+                "msg".to_owned(),
+                Value::from(
+                    "Input should be a valid integer, unable to parse string as an integer",
+                ),
+            );
+            entry.insert("input".to_owned(), Value::from(e.input.clone()));
+            let mut obj = serde_json::Map::new();
+            obj.insert(
+                "detail".to_owned(),
+                Value::Array(vec![Value::Object(entry)]),
+            );
+            Value::Object(obj)
+        };
+        for (field, input) in [("page", "abc"), ("per_page", ""), ("at", "5.5")] {
+            let e = err(field, input, "int_parsing");
+            assert_eq!(validation_detail(&e), int_only(&e));
+        }
+    }
+
+    #[test]
+    fn an_absent_required_parameter_is_a_missing_not_a_parse_failure() {
+        assert_eq!(
+            JsonBody::with_status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                missing_query_param("file")
+            )
+            .render(),
+            r#"{"detail":[{"type":"missing","loc":["query","file"],"msg":"Field required","input":null}]}"#
+        );
+    }
+
+    /// The shape four endpoints still answer, pinned so the dedup pass is
+    /// visibly a refactor: it did NOT quietly upgrade them to the list.
+    #[test]
+    fn the_field_only_422_is_the_unmeasured_shape_and_stays_that_way() {
+        assert_eq!(
+            validation_422_field_only(&err("timezone_offset", "abc", "int_parsing"))
+                .body()
+                .render(),
+            r#"{"detail":"timezone_offset"}"#
         );
     }
 

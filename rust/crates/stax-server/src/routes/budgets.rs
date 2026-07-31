@@ -37,8 +37,9 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422_field_only};
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
 
 /// `services/budgets.APPROACHING_PCT`.
@@ -150,7 +151,7 @@ fn read_leg(fields: &Map<String, Value>, key: &str) -> Result<Leg, HttpError> {
 fn timezone_offset(raw: &Option<String>) -> Result<i64, HttpError> {
     Query::parse(raw.as_deref().unwrap_or_default())
         .int_or("timezone_offset", 0)
-        .map_err(|err| HttpError::new(StatusCode::UNPROCESSABLE_ENTITY, err.field))
+        .map_err(|err| validation_422_field_only(&err))
 }
 
 async fn blocking_payload(state: AppState, tz_offset: i64, write: Option<Write>) -> HandlerResult {
@@ -401,12 +402,6 @@ fn spend_scalars(conn: &Connection, tz_offset: i64) -> rusqlite::Result<Spend> {
         days_so_far,
         days_in_month,
     })
-}
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
 }
 
 // ── status math (`services/budgets.compute_status`) ──────────────────────────

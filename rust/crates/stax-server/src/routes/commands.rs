@@ -35,11 +35,16 @@ use axum::routing::get;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use stax_etl::pricing::costs::PricingEngine;
+// CPython's `sum()` over floats — one home, in the crate that owns the
+// CPython-numeric ports. This file used to carry a private copy.
+use stax_etl::stats::aggregator::neumaier_sum;
 use stax_etl::stats::enricher::{EnrichedDataset, Interaction, Record, TokenBag};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422_field_only};
+use crate::pyops::path_name;
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
 
 /// `_DEFAULT_LIMIT` / `_MAX_LIMIT`.
@@ -80,13 +85,6 @@ fn resolve_log_path(query: &Query, state: &AppState) -> Result<String, HttpError
             "No project selected or log_path provided",
         )),
     }
-}
-
-/// `pathlib.Path(p).name`.
-fn path_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
 /// `queries.get_projects_by_slug` — `(id, provider)` in row order.
@@ -140,8 +138,9 @@ struct CommandRow {
 async fn get_commands(State(state): State<AppState>, RawQuery(raw): RawQuery) -> HandlerResult {
     let query = Query::parse(raw.as_deref().unwrap_or_default());
     let path = resolve_log_path(&query, &state)?;
-    let unprocessable =
-        |err: crate::qs::QueryError| HttpError::new(StatusCode::UNPROCESSABLE_ENTITY, err.field);
+    // NOT FastAPI's shape — see `json::validation_422_field_only`. Preserved
+    // byte-for-byte by the wave-5 dedup pass; the fix is a behaviour change.
+    let unprocessable = |err: crate::qs::QueryError| validation_422_field_only(&err);
     let mut offset = query.int_or("offset", 0).map_err(unprocessable)?;
     let mut limit = query
         .int_or("limit", DEFAULT_LIMIT)
@@ -514,12 +513,6 @@ fn command_day_series(
     Ok(out)
 }
 
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
-}
-
 // ── GET /api/tool-distribution ───────────────────────────────────────────────
 
 async fn get_tool_distribution(
@@ -530,7 +523,7 @@ async fn get_tool_distribution(
     let path = resolve_log_path(&query, &state)?;
     let timezone_offset = query
         .int_or("timezone_offset", 0)
-        .map_err(|err| HttpError::new(StatusCode::UNPROCESSABLE_ENTITY, err.field))?;
+        .map_err(|err| validation_422_field_only(&err))?;
     let provider_filter = normalise_filter(query.opt_list("provider").as_deref());
     let model_filter = normalise_filter(query.opt_list("model").as_deref());
 
@@ -671,26 +664,6 @@ fn truthy(value: Option<&Value>) -> bool {
         Some(Value::Array(a)) => !a.is_empty(),
         Some(Value::Object(o)) => !o.is_empty(),
     }
-}
-
-/// CPython's `sum()` over floats — Neumaier-compensated since gh-100425.
-///
-/// FLAGGED FOR DEDUP: `stax_etl::stats::aggregator` owns the same accumulator
-/// and `routes/pricing.rs` carries a second copy; neither is reachable from
-/// here without a cross-crate edit batch A may not make.
-fn neumaier_sum(values: impl Iterator<Item = f64>) -> f64 {
-    let mut sum = 0.0_f64;
-    let mut compensation = 0.0_f64;
-    for value in values {
-        let t = sum + value;
-        if sum.abs() >= value.abs() {
-            compensation += (sum - t) + value;
-        } else {
-            compensation += (value - t) + sum;
-        }
-        sum = t;
-    }
-    sum + compensation
 }
 
 #[cfg(test)]

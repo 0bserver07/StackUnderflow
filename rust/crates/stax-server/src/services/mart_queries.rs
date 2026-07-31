@@ -146,6 +146,18 @@ pub fn mart_has_tool_rows(conn: &Connection) -> rusqlite::Result<bool> {
     has_any_row(conn, "tool_mart")
 }
 
+/// `mart_has_model_day_rows` — `model_day_mart` has at least one row.
+///
+/// `services/compare.rs` carried this one privately until the wave-5 dedup
+/// pass; it is a `mart_queries.py` function and belongs here with its three
+/// siblings.
+///
+/// # Errors
+/// Any SQLite error.
+pub fn mart_has_model_day_rows(conn: &Connection) -> rusqlite::Result<bool> {
+    has_any_row(conn, "model_day_mart")
+}
+
 /// `mart_has_message_tool_rows` — `message_tool_mart` has at least one row.
 ///
 /// The gate `/api/optimize`'s `mart_empty` warning is built from, and the one

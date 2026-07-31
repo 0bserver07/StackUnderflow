@@ -57,7 +57,9 @@ use stax_etl::stats::aggregator::{Neumaier, PyNum};
 use crate::currency::active_currency_payload;
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
+use stax_etl::stats::pydatetime::civil_from_epoch;
 
 /// Mount this module's endpoints onto `router`.
 ///
@@ -442,12 +444,6 @@ fn string_at(row: &Map<String, Value>, key: &str) -> String {
         .to_owned()
 }
 
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
-}
-
 fn sql_500(err: rusqlite::Error) -> HttpError {
     HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
 }
@@ -469,29 +465,12 @@ fn now_iso() -> String {
     };
     let secs = i64::try_from(delta.as_secs()).unwrap_or(0);
     let micros = i64::from(delta.subsec_micros());
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (year, month, day, hour, minute, second) = civil_from_epoch(secs);
     if micros == 0 {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+00:00")
     } else {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}+00:00")
     }
-}
-
-/// Howard Hinnant's `civil_from_days`, the standard days→(y, m, d) conversion.
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[cfg(test)]
@@ -568,7 +547,13 @@ mod tests {
 
     #[test]
     fn the_epoch_renders_as_pythons_epoch() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(20_665), (2026, 7, 31));
+        // Same two dates the file-local `civil_from_days` was pinned on before
+        // the dedup pass, now expressed in epoch SECONDS against the shared
+        // routine — the drift alarm for the crate boundary.
+        assert_eq!(civil_from_epoch(0), (1970, 1, 1, 0, 0, 0));
+        assert_eq!(
+            civil_from_epoch(20_665 * 86_400 + 13 * 3600 + 45 * 60 + 12),
+            (2026, 7, 31, 13, 45, 12)
+        );
     }
 }

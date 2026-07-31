@@ -63,6 +63,7 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 use stax_etl::pricing::{PricingEngine, RawTokens};
 
+use super::mart_queries::{mart_has_model_day_rows, mart_has_session_rows, table_exists};
 use super::scope::{Instant, Scope, parse_period};
 
 /// `PERIOD_MAP` — CLI/HTTP alias → the spec `reports/scope.parse_period` knows.
@@ -675,42 +676,31 @@ fn compare_models_from_marts(
     Ok(out)
 }
 
-// ── `store/mart_queries.py`, the four compare-facing reads ───────────────────
-
-/// `_table_exists(conn, name)`.
-fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")?;
-    Ok(stmt.exists([name])?)
-}
-
-/// `mart_has_session_rows(conn)`.
-///
-/// # Errors
-/// Any SQLite failure other than the table being absent, which is `false`.
-fn mart_has_session_rows(conn: &Connection) -> Result<bool> {
-    if !table_exists(conn, "session_mart")? {
-        return Ok(false);
-    }
-    Ok(conn
-        .prepare("SELECT 1 FROM session_mart LIMIT 1")?
-        .exists([])?)
-}
-
-/// `mart_has_model_day_rows(conn)`.
-fn mart_has_model_day_rows(conn: &Connection) -> Result<bool> {
-    if !table_exists(conn, "model_day_mart")? {
-        return Ok(false);
-    }
-    Ok(conn
-        .prepare("SELECT 1 FROM model_day_mart LIMIT 1")?
-        .exists([])?)
-}
+// ── `store/mart_queries.py`, the compare-facing reads that stay here ─────────
+//
+// The wave-5 dedup pass folded this module's `table_exists`,
+// `mart_has_session_rows` and `mart_has_model_day_rows` into
+// `services/mart_queries.rs`. The three below are DELIBERATELY NOT COLLAPSED —
+// DIV-089 filed the warning and the diff confirms it:
+//
+//   * `iso_to_day` — this one slices by CODE POINT (Python's `[:10]`), the
+//     sibling in `mart_queries.rs` slices by BYTE. Identical on every ASCII
+//     stamp, which is every stamp either caller can produce; different on a
+//     non-ASCII one. Two ports of one Python function that are not the same
+//     function, so neither may silently absorb the other.
+//   * `session_mart_rows_for_compare` — `mart_queries.rs`'s narrows to six
+//     columns and has no `provider` filter; see the doc on this module's copy
+//     for why the SELECT width is load-bearing.
+//   * `model_day_totals` — no sibling exists, and its `WHERE 1=1` / absent
+//     `ORDER BY` are the text Python runs.
 
 /// `_iso_to_day(iso_ts)` — the leading `YYYY-MM-DD` of an ISO stamp.
 ///
 /// `len(iso_ts) < 10` and `iso_ts[:10]` count *characters*, not bytes; every
 /// stamp in the store is ASCII, but the char-wise form is the one Python runs
 /// and costs nothing to keep.
+///
+/// NOT [`super::mart_queries::iso_to_day`], which is the byte-wise spelling.
 fn iso_to_day(iso: Option<&str>) -> Option<String> {
     // `if not iso_ts` — `None` and `""` both fall out here.
     let iso = iso.filter(|value| !value.is_empty())?;
@@ -792,6 +782,11 @@ struct SessionMartRow {
 /// narrowing it could let SQLite pick a covering index and hand back the rows in
 /// a *different order*, and the row order decides which `provider` wins
 /// `setdefault` for a model. Same text, same plan, same order.
+///
+/// DIV-089: [`super::mart_queries::session_mart_rows_for_compare`] shares the
+/// name and is **not** a substitute — six columns, no `provider` filter, and it
+/// exposes `message_count`/`cost_usd` where this needs
+/// `assistant_message_count`/`is_one_shot`. Both stay.
 fn session_mart_rows_for_compare(
     conn: &Connection,
     since_iso: Option<&str>,

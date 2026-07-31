@@ -100,6 +100,32 @@ pub fn dumps_http<T: Serialize + ?Sized>(value: &T) -> String {
     dump_styled(value, Layout::Compact, EnsureAscii::No)
 }
 
+/// Serialize like `json.dumps(obj)` with **every default** — the *third* live
+/// response writer.
+///
+/// `routes/webhooks.py` returns a bare `Response(content=json.dumps(result),
+/// media_type="application/json")` on all three of its endpoints, and
+/// `routes/live.py::_format_sse` builds every SSE frame the same way. A bare
+/// `json.dumps` is `ensure_ascii=True` (the CLI's flag) with the `(", ", ": ")`
+/// separators (neither writer's), so it is a layout of its own:
+///
+/// ```text
+/// JSONResponse  (dumps_http)        {"status":"pong"}
+/// agent_output  (dumps_pretty)      {\n  "status": "pong"\n}
+/// bare dumps    (dumps_py_default)  {"status": "pong"}
+/// ```
+///
+/// Empty containers collapse exactly as CPython's do (`{}`, `[]`): the
+/// separator is only written *between* items.
+///
+/// # Panics
+///
+/// See [`dumps_pretty`].
+#[must_use]
+pub fn dumps_py_default<T: Serialize + ?Sized>(value: &T) -> String {
+    dump(value, Layout::PyDefault)
+}
+
 /// The `chars/4 + 1` token estimate of `agent_output.estimate_tokens`.
 ///
 /// Python measures `len()` of the compact `json.dumps` string in *characters*;
@@ -110,10 +136,36 @@ pub fn estimate_tokens<T: Serialize + ?Sized>(value: &T) -> u64 {
     (dumps_compact(value).len() as u64) / 4 + 1
 }
 
+/// The three separator/indent combinations CPython's `json.dumps` is called
+/// with anywhere in the reference tree.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
+    /// `separators=(",", ":")`, `indent=None`.
     Compact,
+    /// `indent=2` — which also implies the `(",", ": ")` separators.
     Indent2,
+    /// No arguments at all: `(", ", ": ")`, `indent=None`.
+    PyDefault,
+}
+
+impl Layout {
+    /// What goes *between* two items — CPython's `item_separator`.
+    const fn item_separator(self) -> &'static [u8] {
+        match self {
+            // `indent` is not None, so CPython strips the trailing space from
+            // the default item separator and the newline supplies the gap.
+            Self::Compact | Self::Indent2 => b",",
+            Self::PyDefault => b", ",
+        }
+    }
+
+    /// What goes between a key and its value — CPython's `key_separator`.
+    const fn key_separator(self) -> &'static [u8] {
+        match self {
+            Self::Compact => b":",
+            Self::Indent2 | Self::PyDefault => b": ",
+        }
+    }
 }
 
 /// CPython's `ensure_ascii` flag, as a type rather than a bare `bool`.
@@ -167,7 +219,7 @@ impl PythonFormatter {
     where
         W: ?Sized + std::io::Write,
     {
-        if self.layout == Layout::Compact {
+        if self.layout != Layout::Indent2 {
             return Ok(());
         }
         writer.write_all(b"\n")?;
@@ -258,7 +310,7 @@ impl Formatter for PythonFormatter {
         W: ?Sized + std::io::Write,
     {
         if !first {
-            writer.write_all(b",")?;
+            writer.write_all(self.layout.item_separator())?;
         }
         self.newline_indent(writer)
     }
@@ -297,7 +349,7 @@ impl Formatter for PythonFormatter {
         W: ?Sized + std::io::Write,
     {
         if !first {
-            writer.write_all(b",")?;
+            writer.write_all(self.layout.item_separator())?;
         }
         self.newline_indent(writer)
     }
@@ -306,10 +358,7 @@ impl Formatter for PythonFormatter {
     where
         W: ?Sized + std::io::Write,
     {
-        writer.write_all(match self.layout {
-            Layout::Compact => b":",
-            Layout::Indent2 => b": ",
-        })
+        writer.write_all(self.layout.key_separator())
     }
 
     fn end_object_value<W>(&mut self, _writer: &mut W) -> std::io::Result<()>
@@ -792,6 +841,65 @@ mod tests {
         assert_eq!(
             dumps_compact(&loads("[0,0.0,-0.0]").expect("valid")),
             "[0,0.0,-0.0]"
+        );
+    }
+
+    // ── the bare-defaults writer (routes/webhooks.py, routes/live.py) ──────
+
+    /// Every expectation is `json.dumps(obj)` — no keyword arguments — run on
+    /// the reference interpreter, and each one is a shape batch D measured
+    /// against the live Python server before this layout existed.
+    #[test]
+    fn py_default_layout_is_comma_space_colon_space() {
+        assert_eq!(
+            dumps_py_default(&json!({"status": "pong"})),
+            r#"{"status": "pong"}"#
+        );
+        assert_eq!(
+            dumps_py_default(&json!({"a": [1, {"b": 2}], "c": true})),
+            r#"{"a": [1, {"b": 2}], "c": true}"#
+        );
+        // Empty containers collapse: the separator is written BETWEEN items.
+        assert_eq!(dumps_py_default(&json!({})), "{}");
+        assert_eq!(dumps_py_default(&json!([])), "[]");
+        assert_eq!(
+            dumps_py_default(&json!({"a": {}, "b": []})),
+            r#"{"a": {}, "b": []}"#
+        );
+    }
+
+    /// The flag that separates this layout from [`dumps_http`]: it is the CLI's
+    /// `ensure_ascii=True`, not starlette's `False`, and the float presentation
+    /// is CPython's in both.
+    #[test]
+    fn py_default_escapes_non_ascii_and_keeps_pythons_floats() {
+        // The é goes out as the six ASCII bytes `é`, where `dumps_http`
+        // would ship the two raw UTF-8 ones. Same value, different bytes.
+        assert_eq!(
+            dumps_py_default(&json!({"event": "café"})),
+            "{\"event\": \"caf\\u00e9\"}"
+        );
+        assert_eq!(
+            dumps_http(&json!({"event": "café"})),
+            "{\"event\":\"café\"}"
+        );
+        assert_eq!(
+            dumps_py_default(&json!({"n": 1e16, "m": 1e-5, "z": 0.0})),
+            r#"{"n": 1e+16, "m": 1e-05, "z": 0.0}"#
+        );
+    }
+
+    /// The three writers are three different strings for one value. If any two
+    /// ever collapse into each other, a response body moved.
+    #[test]
+    fn the_three_writers_disagree_on_the_same_value() {
+        let value = json!({"status": "pong", "n": 1});
+        assert_eq!(dumps_http(&value), r#"{"status":"pong","n":1}"#);
+        assert_eq!(dumps_compact(&value), r#"{"status":"pong","n":1}"#);
+        assert_eq!(dumps_py_default(&value), r#"{"status": "pong", "n": 1}"#);
+        assert_eq!(
+            dumps_pretty(&value),
+            "{\n  \"status\": \"pong\",\n  \"n\": 1\n}"
         );
     }
 

@@ -31,9 +31,14 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 use stax_etl::pricing::RawTokens;
 use stax_etl::pricing::costs::PricingEngine;
+// `round_py` is `round(x, n)` and `neumaier_sum` is CPython's `sum()` over
+// floats. Both used to be private copies in this file, on the (mistaken) claim
+// that `stax_etl::stats::aggregator` did not expose them.
+use stax_etl::stats::aggregator::{neumaier_sum, round_py as round_half_even};
 
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422};
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
 
 /// `DEFAULT_STALE_DAYS` — mirrors `PricingService.STALE_THRESHOLD`.
@@ -81,44 +86,6 @@ async fn get_pricing_doctor(
     })
     .await
     .map_err(|err| join_failure(&err))?
-}
-
-/// pydantic's validation body, as FastAPI's handler renders it.
-///
-/// `{"detail":[{"type","loc","msg","input"}]}` — four keys in that order, no
-/// `url`. Measured against the reference on `PR-doctor-bad-int`; the naive
-/// `HttpError::new(422, err.field)` this replaced shipped `{"detail":"limit"}`
-/// and the differ caught it on the first run.
-///
-/// FLAGGED FOR THE ARCHITECT'S DEDUP LIST: `routes/projects.rs` carries the same
-/// function privately, and `routes/data.rs` still ships the naive form. All
-/// three want one `json.rs` helper — a cross-file change batch A will not make
-/// unilaterally.
-fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from(match err.kind {
-            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
-            _ => "Input should be a valid integer, unable to parse string as an integer",
-        }),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    // A `JsonBody`, not an `HttpError`: `HttpError`'s detail is a plain string
-    // (every `raise HTTPException` in the ported routes passes one), and
-    // widening it would mean editing `json.rs`, which is not batch A's file.
-    // Same bytes on the wire either way.
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
 }
 
 // ── the assembler ────────────────────────────────────────────────────────────
@@ -600,43 +567,6 @@ fn truthy(value: &Value) -> bool {
 }
 
 // ── shared numerics ──────────────────────────────────────────────────────────
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
-}
-
-/// CPython's `sum()` over floats — Neumaier-compensated since gh-100425.
-///
-/// FLAGGED FOR THE ARCHITECT'S DEDUP LIST: `stax_etl::stats::aggregator` owns a
-/// `Neumaier` accumulator; it is not public API this crate can reach, so the
-/// three-line kernel lives here file-locally rather than as a cross-crate edit
-/// batch A is not allowed to make.
-fn neumaier_sum(values: impl Iterator<Item = f64>) -> f64 {
-    let mut sum = 0.0_f64;
-    let mut compensation = 0.0_f64;
-    for value in values {
-        let t = sum + value;
-        if sum.abs() >= value.abs() {
-            compensation += (sum - t) + value;
-        } else {
-            compensation += (value - t) + sum;
-        }
-        sum = t;
-    }
-    sum + compensation
-}
-
-/// Python's `round(x, n)` — correct decimal rounding, ties to even.
-///
-/// FLAGGED FOR DEDUP: identical to `routes/projects.rs::round_half_even`.
-fn round_half_even(value: f64, digits: usize) -> f64 {
-    if !value.is_finite() {
-        return value;
-    }
-    format!("{value:.digits$}").parse().unwrap_or(value)
-}
 
 #[cfg(test)]
 mod tests {

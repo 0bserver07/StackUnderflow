@@ -80,9 +80,9 @@ use axum::extract::{Path as PathParam, RawQuery, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use rusqlite::Connection;
-use serde_json::{Map, Value};
 
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_detail};
+use crate::pyops::path_name;
 use crate::qs::Query;
 use crate::services::context_replay as service;
 use crate::services::context_replay::py_strip;
@@ -287,38 +287,6 @@ fn project_ids_for_slug(conn: &Connection, slug: &str) -> rusqlite::Result<Vec<i
     let mut stmt = conn.prepare("SELECT id FROM projects WHERE slug = ?")?;
     let rows = stmt.query_map([slug], |row| row.get::<_, i64>(0))?;
     rows.collect()
-}
-
-/// `Path(path).name`.
-fn path_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-}
-
-/// pydantic's `422` body — see DIV-053.
-///
-/// `at` is the only coerced parameter this module has, so `int_parsing` is the
-/// only `type` reachable. Measured byte-identical against fastapi 0.141.1 for
-/// `?at=abc` and `?at=`.
-fn validation_detail(err: &crate::qs::QueryError) -> Value {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from("Input should be a valid integer, unable to parse string as an integer"),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    Value::Object(obj)
 }
 
 #[cfg(test)]

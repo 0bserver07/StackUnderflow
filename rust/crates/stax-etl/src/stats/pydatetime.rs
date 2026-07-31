@@ -293,7 +293,16 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 /// Hinnant's `civil_from_days`, plus the time of day.
-fn civil_from_epoch(seconds: i64) -> (i64, i64, i64, i64, i64, i64) {
+///
+/// `(year, month, day, hour, minute, second)` for a UTC epoch second. Public
+/// since the wave-5 dedup pass: `routes/bookmarks.rs` and `routes/sync.rs` each
+/// carried a transcription of this exact routine because `PyDateTime` models a
+/// *parsed* value and had no "now" entry point. Both now call this.
+///
+/// Pure integer arithmetic, defined for every `i64` including pre-epoch values
+/// (`div_euclid` floors, which is what the algorithm requires).
+#[must_use]
+pub fn civil_from_epoch(seconds: i64) -> (i64, i64, i64, i64, i64, i64) {
     let days = seconds.div_euclid(86_400);
     let tod = seconds.rem_euclid(86_400);
     let z = days + 719_468;

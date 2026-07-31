@@ -53,7 +53,9 @@ use stax_etl::pricing::costs::PricingEngine;
 
 use crate::currency::active_currency_payload;
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::pyops::path_name;
 use crate::qs::Query;
+use crate::services::mart_queries::table_exists;
 use crate::state::AppState;
 
 /// Mount this module's endpoints onto `router`.
@@ -362,18 +364,6 @@ fn string_at(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
-}
-
-fn path_name(path: &str) -> String {
-    StdPath::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-}
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
 }
 
 fn sql_500(err: rusqlite::Error) -> HttpError {

@@ -76,6 +76,8 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 use stax_memory::pyjson;
 
+use crate::pyops::char_prefix;
+
 /// `_PREVIEW_CHARS` — the per-message content preview cap, in code points.
 const PREVIEW_CHARS: usize = 240;
 
@@ -143,11 +145,6 @@ fn py_first_line(text: &str) -> &str {
         )
     };
     text.find(boundary).map_or(text, |idx| &text[..idx])
-}
-
-/// `text[:limit]` — a CPython `str` slice, so **code points**.
-fn char_prefix(text: &str, limit: usize) -> String {
-    text.chars().take(limit).collect()
 }
 
 // ── defensive JSON helpers (`services/playback.py`) ──────────────────────────

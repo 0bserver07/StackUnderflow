@@ -49,7 +49,10 @@ use stax_etl::stats::aggregator::round_py;
 use stax_etl::stats::pydatetime::{PyDateTime, parse_ts};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{
+    HandlerResult, HttpError, JsonBody, join_failure, missing_query_param, validation_detail,
+};
+use crate::pyops::{char_prefix, path_name};
 use crate::qs::Query;
 use crate::state::AppState;
 
@@ -826,13 +829,6 @@ fn duration_minutes(first: Option<&str>, last: Option<&str>) -> Option<f64> {
     Some(end.sub_total_seconds(start)? / 60.0)
 }
 
-/// `pathlib.PurePath(p).name`.
-fn path_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-}
-
 /// `pathlib.PurePath(p).stem` — the name with one trailing suffix removed.
 ///
 /// `PurePath(".bashrc").stem` is `".bashrc"`, not `""`: a leading dot does not
@@ -841,59 +837,6 @@ fn path_stem(path: &str) -> String {
     std::path::Path::new(path)
         .file_stem()
         .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned())
-}
-
-/// `text[:n]` — a CPython `str` slice, so **code points**.
-fn char_prefix(text: &str, limit: usize) -> String {
-    text.chars().take(limit).collect()
-}
-
-/// FastAPI's 422 for a query parameter that will not coerce.
-///
-/// The four keys and both `msg` strings are pydantic v2's, verified against the
-/// reference on `J-content-bad-bool` (`?raw_media=maybe`) and on the two
-/// `int_parsing` rows in the batch's matrix — all three byte-identical.
-/// **Flagged for the architect's dedup list:** `routes/projects.rs` carries the
-/// same function privately.
-fn validation_detail(err: &crate::qs::QueryError) -> Value {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from(match err.kind {
-            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
-            _ => "Input should be a valid integer, unable to parse string as an integer",
-        }),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    Value::Object(obj)
-}
-
-/// FastAPI's 422 for an absent required query parameter (best effort, DIV-053).
-fn missing_query_param(field: &str) -> Value {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from("missing"));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(field)]),
-    );
-    entry.insert("msg".to_owned(), Value::from("Field required"));
-    entry.insert("input".to_owned(), Value::Null);
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    Value::Object(obj)
 }
 
 #[cfg(test)]

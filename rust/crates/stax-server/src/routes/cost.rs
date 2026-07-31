@@ -47,22 +47,11 @@ use stax_etl::pricing::costs::PricingEngine;
 use stax_etl::stats::enricher::{EnrichedDataset, Interaction, Record};
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422_field_only};
+use crate::pyops::{COST_KEYS, path_name};
 use crate::qs::Query;
+use crate::services::mart_queries::{mart_has_tool_rows, table_exists};
 use crate::state::AppState;
-
-/// `COST_KEYS` — the 9 analytics sections split off `/api/dashboard-data` (§A3).
-const COST_KEYS: [&str; 9] = [
-    "session_costs",
-    "command_costs",
-    "tool_costs",
-    "token_composition",
-    "outliers",
-    "retry_signals",
-    "session_efficiency",
-    "error_cost",
-    "trends",
-];
 
 /// The `COST_KEYS` members whose missing-value default is `{}` rather than `[]`.
 const DICT_SHAPED_KEYS: [&str; 5] = [
@@ -111,12 +100,6 @@ fn optional_log_path(query: &Query, state: &AppState) -> String {
     state.current_project().log_path.unwrap_or_default()
 }
 
-fn path_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-}
-
 /// `_project_ids_for` — the 404 string, em-dash included.
 fn project_ids_for(conn: &Connection, path: &str) -> Result<Vec<i64>, HttpError> {
     let slug = path_name(path);
@@ -154,12 +137,6 @@ fn normalise_filter(raw: Option<&[String]>) -> Option<HashSet<String>> {
     (!normed.is_empty()).then_some(normed)
 }
 
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")?;
-    let mut rows = stmt.query([name])?;
-    Ok(rows.next()?.is_some())
-}
-
 // ── GET /api/cost-data ───────────────────────────────────────────────────────
 
 /// `_COST_DATA_RANGE_DAYS` — `all` (and absent) mean "no window".
@@ -177,7 +154,7 @@ async fn get_cost_data(State(state): State<AppState>, RawQuery(raw): RawQuery) -
     let path = resolve_log_path(&query, &state)?;
     let timezone_offset = query
         .int_or("timezone_offset", 0)
-        .map_err(|err| HttpError::new(StatusCode::UNPROCESSABLE_ENTITY, err.field))?;
+        .map_err(|err| validation_422_field_only(&err))?;
     let model_filter = normalise_filter(query.opt_list("model").as_deref());
 
     // `if range_ is not None and range_ not in _COST_DATA_RANGE_DAYS` — note the
@@ -511,15 +488,6 @@ fn mart_has_project_row(conn: &Connection, project_id: i64) -> rusqlite::Result<
     }
     let mut stmt = conn.prepare("SELECT 1 FROM project_mart WHERE project_id = ? LIMIT 1")?;
     let mut rows = stmt.query([project_id])?;
-    Ok(rows.next()?.is_some())
-}
-
-fn mart_has_tool_rows(conn: &Connection) -> rusqlite::Result<bool> {
-    if !table_exists(conn, "tool_mart")? {
-        return Ok(false);
-    }
-    let mut stmt = conn.prepare("SELECT 1 FROM tool_mart LIMIT 1")?;
-    let mut rows = stmt.query([])?;
     Ok(rows.next()?.is_some())
 }
 

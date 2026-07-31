@@ -45,7 +45,8 @@ use axum::routing::get;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
-use crate::json::JsonBody;
+use crate::json::{JsonBody, validation_422};
+use crate::pyops::{floor_div, sql_value};
 use crate::qs::Query;
 use crate::state::AppState;
 
@@ -502,18 +503,6 @@ fn failure(message: String) -> JsonBody {
     JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
 }
 
-/// A SQLite cell as `sqlite3.Row` hands it to `json.dumps` — no coercion.
-fn sql_value(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Value> {
-    use rusqlite::types::ValueRef;
-    Ok(match row.get_ref(index)? {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(value) => Value::from(value),
-        ValueRef::Real(value) => Value::from(value),
-        ValueRef::Text(bytes) => Value::from(String::from_utf8_lossy(bytes).into_owned()),
-        ValueRef::Blob(_) => Value::Null,
-    })
-}
-
 /// `row["question_text"][:500]`.
 ///
 /// The column is `NOT NULL`, so Python slices a `str` unconditionally and a
@@ -538,41 +527,6 @@ fn json_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Value>
         _ => "[]".to_owned(),
     };
     Ok(serde_json::from_str(&text).unwrap_or_else(|_| Value::Array(Vec::new())))
-}
-
-/// Python's `//`, floor division — see [`super::search`] for the same note.
-fn floor_div(numerator: i64, denominator: i64) -> i64 {
-    if denominator == 0 {
-        return 0;
-    }
-    let quotient = numerator / denominator;
-    let remainder = numerator % denominator;
-    if remainder != 0 && ((remainder < 0) != (denominator < 0)) {
-        quotient - 1
-    } else {
-        quotient
-    }
-}
-
-/// FastAPI's `422` for an uncoercible query parameter (DIV-053).
-fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from("Input should be a valid integer, unable to parse string as an integer"),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
 }
 
 #[cfg(test)]

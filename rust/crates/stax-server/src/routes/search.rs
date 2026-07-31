@@ -43,7 +43,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 use stax_core::ask::{build_filter_clauses, sanitize_fts_query};
 
-use crate::json::JsonBody;
+use crate::json::{JsonBody, validation_422};
+use crate::pyops::{char_prefix, floor_div, sql_value};
 use crate::qs::Query;
 use crate::state::AppState;
 
@@ -357,77 +358,6 @@ fn index_stats(state: &AppState) -> Value {
 }
 
 // ── shared ───────────────────────────────────────────────────────────────────
-
-/// A SQLite cell as `sqlite3.Row` hands it to `json.dumps` — no coercion.
-///
-/// The `messages` table declares affinities but SQLite stores what it is given,
-/// so a `tokens_input` written as a float comes back a float and Python ships
-/// `0.0`, not `0`. Reading through the declared type would "fix" that and
-/// diverge; reading the *actual* type reproduces it.
-fn sql_value(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Value> {
-    use rusqlite::types::ValueRef;
-    Ok(match row.get_ref(index)? {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(value) => Value::from(value),
-        ValueRef::Real(value) => Value::from(value),
-        ValueRef::Text(bytes) => Value::from(String::from_utf8_lossy(bytes).into_owned()),
-        // `sqlite3` hands a BLOB to `json.dumps` as `bytes`, which raises
-        // `TypeError` and 500s the route. No column here is ever a BLOB;
-        // rendering it as null rather than panicking keeps the port total.
-        ValueRef::Blob(_) => Value::Null,
-    })
-}
-
-/// `text[:n]` — code points, not bytes.
-fn char_prefix(text: &str, limit: usize) -> String {
-    text.chars().take(limit).collect()
-}
-
-/// Python's `//` — floor division, which differs from Rust's `/` on negatives.
-///
-/// Reachable: `per_page` is clamped from ABOVE (`min(…, 100)`) and never from
-/// below, so `?per_page=-5` reaches `(total + per_page - 1) // per_page` with a
-/// negative divisor and CPython floors toward minus infinity where Rust
-/// truncates toward zero.
-fn floor_div(numerator: i64, denominator: i64) -> i64 {
-    if denominator == 0 {
-        // CPython raises `ZeroDivisionError`, which the route's `except
-        // Exception` turns into a 500. `?per_page=0` is the only way in;
-        // recorded as DIV-079 and answered with 0 rather than a panic.
-        return 0;
-    }
-    // NOT `div_euclid`: that floors the *remainder* to non-negative, which is a
-    // different function. `-4 // -5` is `0` in CPython and `1` under euclid.
-    let quotient = numerator / denominator;
-    let remainder = numerator % denominator;
-    if remainder != 0 && ((remainder < 0) != (denominator < 0)) {
-        quotient - 1
-    } else {
-        quotient
-    }
-}
-
-/// A query parameter that will not coerce is FastAPI's `422`, before the
-/// handler's own `try` — same shape [`super::projects`] uses (DIV-053).
-fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from("Input should be a valid integer, unable to parse string as an integer"),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
-}
 
 #[cfg(test)]
 mod tests {

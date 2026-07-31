@@ -38,6 +38,7 @@
 pub mod currency;
 pub mod json;
 pub mod pricing;
+pub mod pyops;
 pub mod qs;
 pub mod routes;
 pub mod services;

@@ -54,6 +54,7 @@ use stax_etl::pricing::costs::PricingEngine;
 
 use super::mart_queries::{self, ToolCountColumn};
 use super::scope::Scope;
+use crate::pyops::char_prefix;
 
 // ── tunables ─────────────────────────────────────────────────────────────────
 
@@ -103,16 +104,11 @@ fn severity_order(severity: &str) -> i64 {
 /// through Rust's `{:.n}` (which also rounds the decimal expansion half-to-even)
 /// and re-parsing gets the same answer.
 ///
-/// FLAGGED FOR DEDUP: `routes/projects.rs` and `routes/pricing.rs` each carry a
-/// private copy of this function (DIV-119's neighbour). Neither file belongs to
-/// this batch.
-#[must_use]
-pub fn round_half_even(value: f64, digits: usize) -> f64 {
-    if !value.is_finite() {
-        return value;
-    }
-    format!("{value:.digits$}").parse().unwrap_or(value)
-}
+/// The wave-5 dedup pass collapsed the five private copies of this (here,
+/// `routes/projects.rs`, `routes/pricing.rs`, `routes/static_analysis.rs`,
+/// `services/export.rs`) onto the one in the crate that owns the CPython
+/// numerics. The name stays so this module's callers read unchanged.
+pub use stax_etl::stats::aggregator::round_py as round_half_even;
 
 /// `format(n, ",")` — thousands separators on a non-negative integer.
 fn grouped_int(value: i64) -> String {
@@ -435,11 +431,6 @@ fn looped_qa(qa: &Connection, slug: &str, scope: &Scope) -> rusqlite::Result<(i6
         .map(|text| char_prefix(text.as_deref().unwrap_or_default(), 120))
         .collect();
     Ok((total, samples))
-}
-
-/// `text[:n]` — a CPython `str` slice, so CODE POINTS.
-fn char_prefix(text: &str, limit: usize) -> String {
-    text.chars().take(limit).collect()
 }
 
 // ── detector 1: bloated CLAUDE.md ────────────────────────────────────────────

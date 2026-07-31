@@ -55,6 +55,7 @@ use serde_json::{Map, Value};
 use crate::json::{JsonBody, join_failure};
 use crate::qs::Query;
 use crate::state::AppState;
+use stax_etl::stats::pydatetime::civil_from_epoch;
 
 /// `data.get("title", "Untitled bookmark")`.
 const DEFAULT_TITLE: &str = "Untitled bookmark";
@@ -593,6 +594,14 @@ fn toggle(
 /// CPython omits the microseconds field entirely when it is zero, which happens
 /// about once in a million calls; reproduced, because a consumer that parses
 /// the string with a fixed-width format would break on exactly that call.
+///
+/// DELIBERATELY NOT COLLAPSED onto `stax_adapters::pytime::Clock::now_iso`,
+/// which looks like the same function and is not: that one rounds nanoseconds
+/// to microseconds HALF-TO-EVEN (CPython's own conversion) where this one
+/// truncates via `subsec_micros()`. The two disagree by up to 1 µs. Both stamps
+/// are DIV-073 non-deterministic and no case row can gate either, so switching
+/// would be an unmeasurable behaviour change on a refactor pass — filed, not
+/// done. The *calendar* half is now shared.
 fn now_iso_utc() -> String {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -605,28 +614,6 @@ fn now_iso_utc() -> String {
     } else {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}+00:00")
     }
-}
-
-/// Hinnant's `civil_from_days`, plus the time of day.
-///
-/// A file-local copy: `stax_etl::stats::pydatetime` has the same routine but
-/// keeps it private behind `PyDateTime`, which models a *parsed* value and has
-/// no "now" constructor. **Flagged for the architect's dedup list** rather than
-/// pushed into another crate mid-batch.
-fn civil_from_epoch(seconds: i64) -> (i64, i64, i64, i64, i64, i64) {
-    let days = seconds.div_euclid(86_400);
-    let rem = seconds.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m <= 2 { y + 1 } else { y };
-    (year, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
 /// `str(uuid.uuid4())` — 122 random bits in the canonical hyphenated form.

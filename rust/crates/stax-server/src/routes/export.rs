@@ -63,9 +63,8 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde_json::{Map, Value};
 
-use crate::json::{HttpError, JsonBody};
+use crate::json::{HttpError, JsonBody, missing_query_param};
 use crate::qs::Query;
 use crate::services::export::{Export, ExportError, run_export};
 use crate::services::scope::Instant;
@@ -240,28 +239,6 @@ fn sorted_repr(values: &[&str]) -> String {
     sorted.sort_unstable();
     let items: Vec<String> = sorted.iter().map(|v| format!("'{v}'")).collect();
     format!("[{}]", items.join(", "))
-}
-
-/// FastAPI's 422 for an absent required query parameter.
-///
-/// FLAGGED FOR DEDUP: `routes/sessions.rs::missing_query_param` is identical.
-/// Verified byte-for-byte against the reference on `GET /api/export` with no
-/// `format` (DIV-053's caveat does not bite for the `missing` shape).
-fn missing_query_param(field: &str) -> Value {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from("missing"));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(field)]),
-    );
-    entry.insert("msg".to_owned(), Value::from("Field required"));
-    entry.insert("input".to_owned(), Value::Null);
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    Value::Object(obj)
 }
 
 #[cfg(test)]

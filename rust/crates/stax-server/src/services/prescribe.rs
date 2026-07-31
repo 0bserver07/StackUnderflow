@@ -65,6 +65,7 @@ use super::optimize::{
     tokens_to_usd,
 };
 use super::scope::Scope;
+use crate::pyops::char_prefix;
 
 // ── tunables — CLAUDE.md slimmer ─────────────────────────────────────────────
 
@@ -256,11 +257,6 @@ fn render(blocks: &[Block]) -> String {
         }
     }
     out.join("\n")
-}
-
-/// `text[:n]` — a CPython `str` slice, so CODE POINTS.
-fn char_prefix(text: &str, limit: usize) -> String {
-    text.chars().take(limit).collect()
 }
 
 /// `_strip_comments(blocks)` — drop HTML comment blocks.

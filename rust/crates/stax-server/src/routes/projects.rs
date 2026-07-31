@@ -31,9 +31,14 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use rusqlite::Connection;
 use serde_json::{Map, Value};
+// Python's `round(x, n)` — correct decimal rounding, ties to even, via CPython's
+// `_Py_dg_dtoa`. One home, in the crate that owns the CPython numerics; this
+// file used to carry a private copy.
+use stax_etl::stats::aggregator::round_py as round_half_even;
 
 use crate::currency::active_currency_payload;
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
+use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_detail};
+use crate::pyops::path_name;
 use crate::qs::Query;
 use crate::state::{AppState, CurrentProject};
 
@@ -144,13 +149,6 @@ async fn get_current_project(State(state): State<AppState>) -> JsonBody {
         },
     );
     JsonBody::ok(Value::Object(obj))
-}
-
-/// `pathlib.PurePath(p).name` — the last component, ignoring trailing slashes.
-fn path_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
 // ── POST /api/project-by-dir ─────────────────────────────────────────────────
@@ -506,30 +504,6 @@ fn projects_error(message: &str) -> JsonBody {
         Value::from(format!("Failed to get projects: {message}")),
     );
     JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
-}
-
-/// pydantic's error body, best effort — see DIV-053.
-fn validation_detail(err: &crate::qs::QueryError) -> Value {
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(err.kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from(err.field.clone())]),
-    );
-    entry.insert(
-        "msg".to_owned(),
-        Value::from(match err.kind {
-            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
-            _ => "Input should be a valid integer, unable to parse string as an integer",
-        }),
-    );
-    entry.insert("input".to_owned(), Value::from(err.input.clone()));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    Value::Object(obj)
 }
 
 fn parse_projects_params(query: &Query) -> Result<ProjectsParams, crate::qs::QueryError> {
@@ -1109,22 +1083,6 @@ fn dir_size_mb(log_dir: &str, cache: &mut HashMap<(String, i64, i64), f64>) -> f
     mb
 }
 
-/// Python's `round(x, 2)` — banker's rounding on the *decimal* value, not
-/// `f64::round`'s half-away-from-zero.
-///
-/// CPython's `round(float, n)` goes through `_Py_dg_dtoa`, i.e. correct decimal
-/// rounding with ties to even. `(x * 100.0).round() / 100.0` differs from it on
-/// exact ties *and* on values whose binary representation straddles the
-/// midpoint. Formatting through the shortest-repr path and re-parsing gets the
-/// same answer for the 2-dp case this function needs, because `{:.*}` in Rust
-/// also rounds the decimal expansion half-to-even.
-fn round_half_even(value: f64, digits: usize) -> f64 {
-    if !value.is_finite() {
-        return value;
-    }
-    format!("{value:.digits$}").parse().unwrap_or(value)
-}
-
 // ── project_mart + bulk helpers ──────────────────────────────────────────────
 
 /// The `project_mart` columns this module reads.
@@ -1153,7 +1111,7 @@ fn list_project_mart(
     provider_filter: Option<&HashSet<String>>,
     project_ids: Option<&[i64]>,
 ) -> rusqlite::Result<Vec<MartRow>> {
-    if !table_exists(conn, "project_mart")? {
+    if !table_or_view_exists(conn, "project_mart")? {
         return Ok(Vec::new());
     }
     if project_ids.is_some_and(<[i64]>::is_empty) {
@@ -1215,7 +1173,15 @@ fn list_project_mart(
     rows.collect()
 }
 
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+/// `queries._table_exists` — **`type IN ('table','view')`**, not `type='table'`.
+///
+/// DELIBERATELY NOT COLLAPSED onto [`crate::services::mart_queries::table_exists`],
+/// which the other ten route/service modules now share. Python has two guards
+/// with the same name in two modules, and this is the wider one: it answers
+/// `true` for a VIEW, which the partitioned `messages` object is. Renamed here
+/// so the asymmetry is visible at the call site instead of hiding behind a
+/// shared spelling — the wave-5 dedup pass found the two by diffing them.
+fn table_or_view_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     let mut stmt =
         conn.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?")?;
     let mut rows = stmt.query([name])?;

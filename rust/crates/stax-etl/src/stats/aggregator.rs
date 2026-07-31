@@ -751,13 +751,27 @@ impl Neumaier {
     }
 }
 
-/// `sum(list_of_floats)`.
-fn sum_in_order(values: &[f64]) -> f64 {
+/// `sum(iterable_of_floats)` — [`Neumaier`] over an iterator, in one call.
+///
+/// The wave-5 dedup pass's home for the three-line kernel that had been copied
+/// into `routes/pricing.rs` and `routes/commands.rs` file-locally, each with a
+/// comment asserting `Neumaier` was unreachable from `stax-server`. It was
+/// reachable; the copies are gone and this is what they call.
+///
+/// Callers that need `sum()`'s int-vs-float result (the `int 0` an empty
+/// iterable returns) want [`Neumaier::finish_pynum`], not this.
+#[must_use]
+pub fn neumaier_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     let mut acc = Neumaier::default();
     for v in values {
-        acc.add(*v);
+        acc.add(v);
     }
     acc.finish()
+}
+
+/// `sum(list_of_floats)`.
+fn sum_in_order(values: &[f64]) -> f64 {
+    neumaier_sum(values.iter().copied())
 }
 
 /// `(_parse_ts(t1) - _parse_ts(t0)).total_seconds()`, or `None` where Python
