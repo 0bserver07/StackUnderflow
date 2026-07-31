@@ -443,6 +443,13 @@ dependencies = [
 [[package]]
 name = "stax-etl"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde_json",
+ "stax-adapters",
+ "stax-core",
+]
 
 [[package]]
 name = "stax-hooks"

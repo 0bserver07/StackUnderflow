@@ -11,4 +11,5 @@
 
 #![forbid(unsafe_code)]
 
+pub mod normalize;
 pub mod pricing;

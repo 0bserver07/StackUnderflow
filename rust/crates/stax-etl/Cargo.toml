@@ -4,3 +4,60 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+# `stax_core::queries::pyjson` is the Python-semantics JSON model the
+# normalizers need and must not fork: a `messages` row's values carry Python's
+# int/float split (`sqlite3` hands back `int` for INTEGER and `float` for REAL,
+# and `int(x or 0)` behaves differently on each), object keys are
+# insertion-ordered because `raw_extras` is re-serialised with `json.dumps`
+# whose output is a byte contract, and `dumps_default` is exactly
+# `json.dumps(obj)` — default `", "` / `": "` separators, `ensure_ascii=True`.
+# Re-implementing any of that here is how two ports drift. etl → core is the
+# charter's dependency direction (§3); nothing flows the other way.
+stax-core.workspace = true
+# The normalize *pass* streams `messages` and writes `usage_events` on a store
+# copy — the wave-3 parity proof. A plain dependency, not a feature: the
+# architect's binding ruling on db-kind consumers (feature unification would let
+# one member's build decide whether another member's normalize pass exists).
+rusqlite.workspace = true
+# The mart layer's error type. Every builder returns `Result<_>` because a mart
+# refresh is one leg of a transaction the caller owns; `anyhow` keeps the SQL
+# context attached without inventing an error enum nobody matches on.
+anyhow.workspace = true
+# `project_mart`'s second pass parses `messages.raw_json` and runs the real
+# classifier + enricher over it, so this crate needs a JSON value model.
+#
+# `preserve_order` + `float_roundtrip` come from the workspace (§6's byte-parity
+# decision and the measured 1-ULP CPython parse divergence). `unbounded_depth`
+# is added here for the same reason `stax-adapters` adds it: it gates ONE method
+# (`Deserializer::disable_recursion_limit`) and changes no default, so the
+# 128-container limit still applies everywhere it is not explicitly opted out
+# of. `marts::json` opts in per blob, after a byte scan has bounded the depth —
+# without it a `raw_json` deeper than 128 containers would parse in CPython and
+# be *skipped* here, which on the dims path is a changed dimension rather than a
+# dropped record. Features are not recorded in Cargo.lock, so this adds no lock
+# churn for the fleet.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
+
+[dev-dependencies]
+# `tests/fixture_parity.rs` runs the SAME fourteen fixture packs through
+# adapter -> normalizer that the Python suite's `test_beta_normalizers.py`
+# does. Seven of them (codeium, continue, copilot, cursor-agent, kilocode,
+# kiro, roocode) have ZERO rows on the maintainer's store, so the live-store
+# diff says nothing about them and this is their only evidence. A dev-dep, not
+# a dependency: the library must not need the adapters to normalize a row.
+stax-adapters = { path = "../stax-adapters" }
+
+# The normalize-pass harness: run the pass over a store COPY and dump
+# `usage_events` in a form diffable against the Python originals driven over a
+# second copy of the identical pre-state.
+[[bin]]
+name = "stax-normalize-parity"
+path = "src/bin/normalize_parity.rs"
+
+# The wave-3 mart gate: rebuild every mart on a store COPY and dump each mart
+# table bit-exactly, so the same dumper can run over the Python-rebuilt copy.
+[[bin]]
+name = "stax-mart-parity"
+path = "src/bin/mart_parity.rs"
