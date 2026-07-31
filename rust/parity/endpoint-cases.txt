@@ -98,3 +98,314 @@ V-bad-int           | GET | /api/projects?limit=abc            | -
 V-unknown-path      | GET | /api/definitely-not-a-route        | -
 V-method-not-allowed | POST | /api/projects                    | {}
 V-spa-method        | POST | /settings                         | {}
+
+# ═══ BATCH A — cost / usage / dashboard family ═══════════════════════════════
+#
+# These rows run AFTER `P-by-dir-known`, so a project is selected and every
+# `log_path`-defaulting route below resolves to it. Do not move them above it.
+#
+#   M-*   routes/misc.py       (RS-5-079..084)
+#   PR-*  routes/pricing.py    (RS-5-094)
+#   C-*   routes/commands.py   (RS-5-056..058)
+#   B-*   routes/budgets.py    (RS-5-047..049)  — the only WRITING rows in the file
+
+# ── misc: health, favicon, assets ────────────────────────────────────────────
+M-health            | GET | /api/health                        | -
+M-favicon           | GET | /favicon.ico                       | -
+M-assets-real       | GET | /assets/index-CQL5TeFe.css         | -
+M-assets-js         | GET | /assets/CostTab-CTkdsIc3.js        | -
+M-assets-missing    | GET | /assets/definitely-not-a-chunk.js  | -
+M-assets-nested     | GET | /assets/a/b/c.js                   | -
+# `/assets/` with an empty rest: FastAPI's `{full_path:path}` matches it and the
+# containment check rejects the directory itself, so this is a 400, not a 404.
+M-assets-bare       | GET | /assets/                           | -
+# `/ollama-api` proxies to localhost:11434 — unported (DIV-066), reported every
+# run and never green. It is safe to EXECUTE: nothing local changes.
+!M-ollama           | GET  | /ollama-api/tags                  | -
+#
+# `/api/pricing` and `/api/pricing/refresh` (RS-5-079/080, DIV-065) are NOT rows
+# here, and that is a deliberate exception to "unported belongs in the file".
+# They were added as `!` rows first and the run proved why they cannot stay: the
+# Python side fetched LiteLLM and WROTE $STACKUNDERFLOW_HOME/cache/pricing.json,
+# which turned every `PR-doctor*` row below from a deterministic "no overlay on
+# disk" payload into a live `age_days` elapsed-time float — 5 clean cases became
+# 5 divergences on one field, in one run, with no code change. A `!` row still
+# issues the request; the differ only softens the VERDICT. An endpoint whose
+# side effect is another endpoint's input cannot share a home with it.
+# Tracked in the ledger (DIV-065) and in `routes/misc.rs`'s module docs instead.
+
+# ── pricing doctor: read-only, three sweeps + the no-network freshness probe ─
+PR-doctor           | GET | /api/pricing/doctor                | -
+PR-doctor-limit     | GET | /api/pricing/doctor?limit=5        | -
+PR-doctor-limit0    | GET | /api/pricing/doctor?limit=0        | -
+PR-doctor-stale     | GET | /api/pricing/doctor?stale_days=90  | -
+PR-doctor-bad-int   | GET | /api/pricing/doctor?limit=abc      | -
+
+# ── commands: the enriched-dataset rebuild + the command_day_mart series ─────
+C-daily             | GET | /api/commands/daily                | -
+C-list-default      | GET | /api/commands                      | -
+C-list-page2        | GET | /api/commands?offset=50&limit=25    | -
+C-list-asc          | GET | /api/commands?order=asc&limit=10    | -
+C-sort-tokens       | GET | /api/commands?sort=tokens&limit=10  | -
+C-sort-tools        | GET | /api/commands?sort=tools&limit=10   | -
+C-sort-steps        | GET | /api/commands?sort=steps&limit=10   | -
+C-sort-time         | GET | /api/commands?sort=time&limit=10    | -
+C-sort-unknown      | GET | /api/commands?sort=nonsense&limit=10 | -
+C-limit-clamp-lo    | GET | /api/commands?limit=0              | -
+C-limit-clamp-hi    | GET | /api/commands?limit=99999&offset=-5 | -
+C-tooldist          | GET | /api/tool-distribution             | -
+C-tooldist-tz       | GET | /api/tool-distribution?timezone_offset=-480 | -
+C-tooldist-prov     | GET | /api/tool-distribution?provider=claude | -
+C-tooldist-prov-none | GET | /api/tool-distribution?provider=nosuchprovider | -
+C-tooldist-model    | GET | /api/tool-distribution?model=claude-opus-4-5-20251101 | -
+C-tooldist-model-none | GET | /api/tool-distribution?model=nosuchmodel | -
+
+# ── budgets: the ONLY rows in this file that write. Sequenced to self-clean ──
+#
+# `PUT` / `DELETE` persist through `settings._save`, i.e. `json.dumps(indent=2)`
+# over the shared home's `config.json`. The order below is load-bearing: it ends
+# with a DELETE that must restore the file byte-for-byte, and the final GET
+# proves the round-trip. Never reorder, and never leave a PUT as the last row.
+B-get-unset         | GET    | /api/budgets                    | -
+B-put-monthly       | PUT    | /api/budgets                    | {"monthly_usd": 150.0}
+B-get-monthly       | GET    | /api/budgets                    | -
+B-put-daily         | PUT    | /api/budgets                    | {"daily_usd": 10.0}
+B-get-both          | GET    | /api/budgets                    | -
+B-get-tz            | GET    | /api/budgets?timezone_offset=-480 | -
+B-put-clear-monthly | PUT    | /api/budgets                    | {"monthly_usd": null}
+B-get-daily-only    | GET    | /api/budgets                    | -
+B-put-negative      | PUT    | /api/budgets                    | {"daily_usd": -5}
+B-put-empty-body    | PUT    | /api/budgets                    | {}
+B-delete            | DELETE | /api/budgets                    | -
+B-get-after-delete  | GET    | /api/budgets                    | -
+
+# ── cost: the mart-overlay flagship + the two rollups + one interaction ──────
+#
+# `?period=week` is `now - timedelta(days=7)`, a rolling INSTANT with
+# microseconds, so the two servers compute bounds a few ms apart. It stays a
+# real row (a message inside that gap is a genuine finding, not noise) — but if
+# it ever flakes, that is the reason, and the mart fast-path refuses `week` for
+# the same lossiness.
+CD-cost-data        | GET | /api/cost-data                     | -
+CD-cost-data-tz     | GET | /api/cost-data?timezone_offset=-480 | -
+CD-range-7d         | GET | /api/cost-data?range=7d            | -
+CD-range-30d        | GET | /api/cost-data?range=30d           | -
+CD-range-all        | GET | /api/cost-data?range=all           | -
+CD-range-bad        | GET | /api/cost-data?range=nonsense      | -
+CD-model-filter     | GET | /api/cost-data?model=claude-opus-4-5-20251101 | -
+CD-model-none       | GET | /api/cost-data?model=nosuchmodel   | -
+CD-model-and-range  | GET | /api/cost-data?model=claude-opus-4-5-20251101&range=7d | -
+CD-prov-default     | GET | /api/cost-data/by-provider         | -
+CD-prov-today       | GET | /api/cost-data/by-provider?period=today | -
+CD-prov-all         | GET | /api/cost-data/by-provider?period=all   | -
+CD-prov-week        | GET | /api/cost-data/by-provider?period=week  | -
+CD-prov-bad         | GET | /api/cost-data/by-provider?period=nope  | -
+CD-prov-filter      | GET | /api/cost-data/by-provider?period=all&provider=claude | -
+CD-prov-filter-none | GET | /api/cost-data/by-provider?period=all&provider=nosuchprovider | -
+CD-model-default    | GET | /api/cost-data/by-model            | -
+CD-model-today      | GET | /api/cost-data/by-model?period=today | -
+CD-model-all        | GET | /api/cost-data/by-model?period=all   | -
+CD-model-week       | GET | /api/cost-data/by-model?period=week  | -
+CD-model-bad        | GET | /api/cost-data/by-model?period=nope  | -
+CD-interaction-miss | GET | /api/interaction/no-such-interaction | -
+# A REAL interaction id, taken from `C-list-default`'s own response. The 404 row
+# above proves the miss path; this proves the hit path — the full `Record`
+# serialisation for the command, every response and every tool_result, including
+# the `{"name","id","input"}` tool blocks and the `Counter`-shaped `tokens`.
+CD-interaction-hit  | GET | /api/interaction/8f2bd929023b5151 | -
+
+# ── batch B (sessions/search/qa/tags/bookmarks) — merged from endpoint-cases-b.txt at integration ──
+# BATCH B's endpoint case matrix — the sessions / search side.
+#
+# Same row format as `endpoint-cases.txt`, which stays batch A's this round:
+#
+#   <id> | <METHOD> | <path-and-query> | <json body or ->
+#
+# A LEADING `!` marks a KNOWN-OPEN case: reported in full under a loud banner,
+# never fatal. Unported endpoints belong HERE, in the file — "we know" beats
+# "nobody looked".
+#
+# Run it with the batch-B ports (A owns the defaults):
+#
+#   STAX_ENDPOINT_CASES=rust/parity/endpoint-cases-b.txt \
+#   STAX_ENDPOINT_RS_PORT=8098 STAX_ENDPOINT_PY_PORT=8099 \
+#   rust/endpoint-parity.sh
+#
+# :8095 is the maintainer's live server and :8096/:8097 are batch A's. Never
+# bind any of the three from here.
+#
+# ORDER IS SIGNIFICANT and this file leans on it harder than A's does:
+#   * `deps.current_log_path` is server state; the `J-select` row writes it and
+#     the two `*-default` rows after it read it.
+#   * the `T-*` block MUTATES `tags.json`, which both servers share. The differ
+#     runs Python then Rust for each case in turn, so `T-add` writes the file
+#     twice with the same content (the service is idempotent) and every row
+#     after it observes the same file on both sides. The block cleans up after
+#     itself with `T-remove`.
+#   * the three `!B-*write*` rows are LAST in their block on purpose: they stamp
+#     a `uuid4` and a wall clock, so the two servers write genuinely different
+#     rows and nothing may read `bookmarks.json` after them.
+#
+# ── DESTRUCTIVE ROWS: why the three `reindex` endpoints are NOT in this file ──
+#
+# `!` marks a case reported-but-not-failed. It does NOT stop the request being
+# sent. The first run of this matrix learned that the hard way: `!X-reindex`
+# reached Python's real `SearchService.reindex_all`, which rebuilt
+# `.parity-state/fresh/search_index.db` from 0 to 383,580 messages (53 KB ->
+# 520 MB, 192 seconds) and starved the differ's remaining 47 cases into
+# connection errors. That state is SHARED — gate 4 diffs the CLI against a
+# `fresh` home precisely because its FTS index is empty, so the LIKE fallback
+# is the path under test. The index was restored to its empty schema
+# immediately.
+#
+# So the rule for this file: a `!` row must still be SAFE to execute. The three
+# reindex endpoints are writers that rebuild shared corpora and stamp a wall
+# clock into their own bodies; they are recorded as open in their modules'
+# doc tables and in the divergence ledger, and they are not exercised here.
+#
+# The two `!B-*` writer rows below ARE safe — they append one row to a
+# `bookmarks.json` nothing else reads, and the block is ordered so nothing
+# after them observes the file. `bookmarks.json` and `tags.json` are removed
+# from the home after a run; both are absent in the pristine state.
+#
+# Fixtures this file names, all measured on `.parity-state/fresh`:
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow   claude, 2 sessions
+#   04a86c63-4cfd-4929-91a3-3edfe80e3e2f                       3 messages
+#   -Users-yadkonrad-dev-dev-year26-jun26-worldcup             claude, 19-msg session
+#   927a29a6-9409-411d-ac6b-f2e7b44abdb5                       2 inline base64 images
+#
+# Group provenance:
+#   J-*  routes/sessions.py  (RS-5-104..106)
+#   X-*  routes/search.py    (RS-6-016..018)
+#   Q-*  routes/qa.py        (RS-6-012..015)
+#   T-*  routes/tags.py      (RS-6-019..024)
+#   B-*  routes/bookmarks.py (RS-6-006..011)
+#   A-*  routes/agent_teams.py (RS-5-042..044) — all known-open
+# ── sessions: the no-project state, before anything is selected ──────────────
+J-files-noproject   | GET | /api/jsonl-files                    | -
+J-content-noproject | GET | /api/jsonl-content?file=x.jsonl     | -
+# ── /api/jsonl-files, explicitly scoped ──────────────────────────────────────
+J-files-project     | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+J-files-unknown     | GET | /api/jsonl-files?project=-no-such-project-anywhere | -
+J-files-empty-proj  | GET | /api/jsonl-files?project=            | -
+J-files-worldcup    | GET | /api/jsonl-files?project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+# The provider filter has three distinct empty shapes; all three are here.
+J-files-provider    | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=claude | -
+J-files-prov-case   | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=CLAUDE | -
+J-files-prov-multi  | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=claude&provider=codex | -
+J-files-prov-none   | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=nosuchprovider | -
+J-files-prov-blank  | GET | /api/jsonl-files?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider= | -
+# ── /api/jsonl-content ───────────────────────────────────────────────────────
+J-content-small     | GET | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3edfe80e3e2f.jsonl&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+J-content-no-ext    | GET | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+J-content-bad-stem  | GET | /api/jsonl-content?file=&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+J-content-no-proj   | GET | /api/jsonl-content?file=x.jsonl&project=-no-such-project-anywhere | -
+J-content-no-sess   | GET | /api/jsonl-content?file=00000000-0000-0000-0000-000000000000.jsonl&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+# The base64 elision — the reason this endpoint is affordable. The `raw_media`
+# row is two orders of magnitude larger and proves the stub is the ONLY thing
+# that differs between them.
+J-content-media     | GET | /api/jsonl-content?file=927a29a6-9409-411d-ac6b-f2e7b44abdb5.jsonl&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+J-content-raw-media | GET | /api/jsonl-content?file=927a29a6-9409-411d-ac6b-f2e7b44abdb5.jsonl&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup&raw_media=1 | -
+# ── the state mutation, then the two default-project reads ───────────────────
+J-select            | POST | /api/project-by-dir                | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+J-files-default     | GET  | /api/jsonl-files                   | -
+J-content-default   | GET  | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3edfe80e3e2f.jsonl | -
+# ── sessions: validation + the unported endpoint ─────────────────────────────
+# DIV-053 says a 422 `detail` list is only APPROXIMATED. These three rows are
+# the counter-evidence: `missing`, `bool_parsing` and (below) `int_parsing` all
+# come out byte-identical against the reference, so the caveat is narrower than
+# it was written. What remains unpinned is the wording pydantic may change
+# between releases — see `ci_dep_drift_fastapi_routes`.
+J-content-no-file   | GET | /api/jsonl-content?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+J-content-bad-bool  | GET | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3edfe80e3e2f.jsonl&raw_media=maybe | -
+# DIV-070: `/api/sessions/compare` needs `aggregator.summarise_session_costs`,
+# which `stax_etl::stats` names as out of the ported subset. Rust 404s.
+!J-compare          | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# ── search ───────────────────────────────────────────────────────────────────
+X-stats             | GET | /api/search/stats                   | -
+X-empty             | GET | /api/search?q=                      | -
+X-empty-echo        | GET | /api/search?q=&page=-3&per_page=5    | -
+X-punct-only        | GET | /api/search?q=%21%21%21             | -
+X-basic             | GET | /api/search?q=sqlite                 | -
+X-basic-small       | GET | /api/search?q=sqlite&per_page=5      | -
+X-page2             | GET | /api/search?q=sqlite&page=2&per_page=5 | -
+X-page-clamp-hi     | GET | /api/search?q=sqlite&page=99999&per_page=5 | -
+X-page-clamp-lo     | GET | /api/search?q=sqlite&page=-4&per_page=5 | -
+X-perpage-clamp     | GET | /api/search?q=sqlite&per_page=9999   | -
+X-filter-project    | GET | /api/search?q=sqlite&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+X-filter-role       | GET | /api/search?q=sqlite&role=user&per_page=5 | -
+X-filter-model      | GET | /api/search?q=sqlite&model=claude-opus-4-20250514&per_page=5 | -
+X-filter-dates      | GET | /api/search?q=sqlite&date_from=2026-01-01&date_to=2026-06-30&per_page=5 | -
+X-filter-nohit      | GET | /api/search?q=sqlite&project=-no-such-project-anywhere | -
+# The sanitiser proof: `NOT` must arrive as a literal term, not an operator.
+X-operators         | GET | /api/search?q=use+NOT+null           | -
+X-quote             | GET | /api/search?q=%22unbalanced          | -
+X-multi-word        | GET | /api/search?q=session+fk+index&per_page=5 | -
+!X-bad-int          | GET | /api/search?page=abc                 | -
+# DIV-078 / `POST /api/search/reindex` is DELIBERATELY ABSENT — see the
+# "destructive rows" note in this file's header. It rebuilt the shared
+# `.parity-state/fresh` search index (0 -> 383,580 rows, 520 MB, 192 s) on the
+# Python side of the very first run, which is state gate 4 depends on being
+# EMPTY. `!` suppresses the failure, not the request.
+# ── qa ───────────────────────────────────────────────────────────────────────
+Q-list              | GET | /api/qa                              | -
+Q-list-page         | GET | /api/qa?page=2&per_page=5            | -
+Q-list-clamp        | GET | /api/qa?page=-1&per_page=9999        | -
+Q-search            | GET | /api/qa?search=index                 | -
+Q-search-operator   | GET | /api/qa?search=index+AND+scan        | -
+Q-status            | GET | /api/qa?resolution_status=looped     | -
+Q-status-open       | GET | /api/qa?resolution_status=open       | -
+Q-project           | GET | /api/qa?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+Q-dates             | GET | /api/qa?date_from=2026-01-01&date_to=2026-06-30 | -
+Q-stats             | GET | /api/qa/stats                        | -
+Q-byid-missing      | GET | /api/qa/no-such-qa-pair              | -
+!Q-bad-int          | GET | /api/qa?page=abc                     | -
+# DIV-080 / `POST /api/qa/reindex` is DELIBERATELY ABSENT, same reason.
+# ── tags — this block mutates tags.json and cleans up after itself ───────────
+T-cloud             | GET | /api/tags                            | -
+T-session           | GET | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+T-session-unknown   | GET | /api/tags/session/no-such-session    | -
+T-browse-empty      | GET | /api/tags/browse/parity-b            | -
+T-add-blank         | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {"tag": "   "}
+# Deterministic on purpose: `add_manual_tag` has no clock and no random id, and
+# it is idempotent, so Python writing then Rust writing yields one identical
+# body from each. The case-insensitivity is the point of the mixed case.
+T-add               | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {"tag": "Parity-B"}
+T-add-again         | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {"tag": "parity-b"}
+T-session-after     | GET | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+T-cloud-after       | GET | /api/tags                            | -
+T-browse-after      | GET | /api/tags/browse/parity-b            | -
+T-browse-case       | GET | /api/tags/browse/PARITY-B            | -
+T-remove            | DELETE | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/parity-b | -
+T-remove-again      | DELETE | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/parity-b | -
+T-session-clean     | GET | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+T-cloud-clean       | GET | /api/tags                            | -
+# `dict[str, str]` handed an int: pydantic's `string_type` entry, byte-exact.
+T-add-non-string    | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {"tag": 3}
+# DIV-075 / `POST /api/tags/reindex` is DELIBERATELY ABSENT, same reason.
+# ── bookmarks — reads and error legs first, the stamped writers LAST ─────────
+B-list              | GET | /api/bookmarks                       | -
+B-list-sort-title   | GET | /api/bookmarks?sort_by=title         | -
+B-list-sort-unknown | GET | /api/bookmarks?sort_by=nonsense      | -
+B-list-tag          | GET | /api/bookmarks?tag=perf              | -
+B-session           | GET | /api/bookmarks/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+B-add-no-session    | POST | /api/bookmarks                      | {}
+B-add-empty-session | POST | /api/bookmarks                      | {"session_id": ""}
+B-toggle-no-session | POST | /api/bookmarks/toggle               | {}
+B-delete-missing    | DELETE | /api/bookmarks/no-such-bookmark   | -
+B-put-missing       | PUT | /api/bookmarks/no-such-bookmark      | {"notes": "x"}
+# DIV-073: `uuid4()` + `datetime.now(UTC)`. Two servers, two ids, two clocks —
+# a byte differ can only ever prove the shape, so these report and never fail.
+# Nothing below them reads `bookmarks.json`.
+!B-add              | POST | /api/bookmarks                      | {"session_id": "04a86c63-4cfd-4929-91a3-3edfe80e3e2f", "title": "parity b", "notes": "n", "tags": ["parity"]}
+!B-toggle           | POST | /api/bookmarks/toggle               | {"session_id": "04a86c63-4cfd-4929-91a3-3edfe80e3e2f", "title": "parity b"}
+# ── agent teams — the whole module is open ──────────────────────────────────
+# DIV-082: `services/agent_teams.py` is 847 lines with three dispatch strategies
+# (task-tool scan, materialised `teams` tables, sidechain heuristic) and every
+# route calls `schema.apply(conn)` — a MIGRATION — on each request. Deferred
+# whole rather than half-ported; Rust 404s all three.
+!A-list             | GET | /api/agent-teams                     | -
+!A-list-scoped      | GET | /api/agent-teams?limit=5&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!A-graph            | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+!A-graph-missing    | GET | /api/agent-teams/no-such-session     | -
+!A-transcript       | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | -

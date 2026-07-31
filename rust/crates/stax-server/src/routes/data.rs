@@ -168,8 +168,19 @@ fn compute_stats(state: &AppState, log_path: &str, tz_offset: i64) -> Result<Val
     // `_clamp_tz_offset` lives in the memo on the Python side, so the clamp
     // reaches `get_project_stats` there too. Applied here for the same reason.
     let tz_offset = tz_offset.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX);
+    // RS-3-082's seam, and it is not theoretical: `get_project_stats` builds the
+    // *manifest* engine (`default_engine`), while `server.py`'s lifespan flips
+    // `infra.costs` onto the primed `price_book` table before it serves a byte.
+    // On a store whose book has been backfilled the two rate sources disagree,
+    // and the differ measured it — `overview.total_cost` 568.59588725 (python,
+    // book) vs 557.33358795 (rust, manifest), a 2.0% gap on eight D-stats cases
+    // that were green when the harness store's `price_book` was still empty.
+    // `crate::pricing::engine` is the same source `routes/pricing.rs` and
+    // `routes/commands.rs` price with; injecting it is the whole fix.
+    let engine = crate::pricing::engine(&conn, state.package_dir())
+        .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     let (_messages, stats) =
-        stax_etl::stats::dataset::get_project_stats(&conn, &project_ids, tz_offset)
+        stax_etl::stats::dataset::get_project_stats_with(&conn, &project_ids, tz_offset, &engine)
             .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     Ok(stats)
 }
