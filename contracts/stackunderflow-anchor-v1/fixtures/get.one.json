@@ -1,0 +1,18 @@
+{
+  "schema": "stackunderflow.anchor/1",
+  "command": "get",
+  "db": "/campaign/.stax-anchors.db",
+  "generated": "2026-07-31T04:00:00.000Z",
+  "query": {
+    "key": "architect-state"
+  },
+  "anchors": [
+    {
+      "key": "architect-state",
+      "ts": "2026-07-31T03:04:00.000Z",
+      "session_hint": null,
+      "body": "# Architect state\n\n- wave 0: GATED (69fb328)\n- wave 1: anchor storage, `anchor set|get|log`, goldens\n- next: wave 2 adapters\n"
+    }
+  ],
+  "anchor_count": 1
+}

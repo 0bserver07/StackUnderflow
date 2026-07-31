@@ -1,0 +1,11 @@
+{
+  "schema": "stackunderflow.anchor/1",
+  "command": "get",
+  "db": "/campaign/.stax-anchors.db",
+  "generated": "2026-07-31T04:00:00.000Z",
+  "query": {
+    "key": "never-anchored"
+  },
+  "anchors": [],
+  "anchor_count": 0
+}

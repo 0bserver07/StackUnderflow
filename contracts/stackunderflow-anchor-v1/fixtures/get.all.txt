@@ -1,0 +1,12 @@
+== architect-state  2026-07-31T03:04:00.000Z  -
+# Architect state
+
+- wave 0: GATED (69fb328)
+- wave 1: anchor storage, `anchor set|get|log`, goldens
+- next: wave 2 adapters
+
+== unicode-note  2026-07-31T03:03:00.000Z  -
+π ≈ 3.14159 — ünïcode ✓ 日本語 «quoted» "escaped"	and\backslashed
+
+== wave-state  2026-07-31T03:01:00.000Z  019849e2-7c4f-7a51-9f2b-6b1d0c3ea4d7
+wave 1 fanning out: A envelopes, B memory verbs, C anchor

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackunderflow.local/contracts/stackunderflow-anchor-v1/schema.json",
+  "title": "stackunderflow.anchor/1 agent-continuity envelope",
+  "description": "The stable, versioned contract for `stax-rs anchor get --json` and `stax-rs anchor log --json`. Anchors are a keyed, append-only, timestamped state store an agent writes at every decision (`anchor set`) and re-reads after a context rotation (`anchor get --json` at session start) -- the ARCHITECT-STATE.md continuity pattern, productized. ORIGIN: added by the Rust-port campaign (rust/TASKS-RS.md RS-1-029..033); the Rust CLI is the first producer, and the envelope is renderered by stax-core's `anchor::render_json`. WIRE RULES: (1) key order is part of the contract -- producers emit the keys in the order this schema lists them (serde_json `preserve_order`, the wave-0 workspace decision), so goldens are compared byte for byte; (2) rendering is pretty-printed with a two-space indent and exactly one trailing newline, matching contracts/stackunderflow-memory-v1; (3) non-ASCII is emitted VERBATIM UTF-8 -- unlike stackunderflow.memory/1, which is produced by Python's `json.dumps` default and therefore \\u-escapes. A Python producer of this contract must pass ensure_ascii=False. (4) There is no error envelope: a failure goes to stderr with a non-zero exit and stdout stays empty, so stdout is either a complete envelope or nothing. An empty result -- unknown key, or no sidecar in this directory -- is a SUCCESS with `anchors: []`. Objects are intentionally open (no additionalProperties:false) so an unknown ADDITIVE field stays forward-compatible.",
+  "type": "object",
+  "required": [
+    "schema",
+    "command",
+    "db",
+    "generated",
+    "query",
+    "anchors",
+    "anchor_count"
+  ],
+  "properties": {
+    "schema": { "$ref": "#/$defs/schema_tag" },
+    "command": { "$ref": "#/$defs/command" },
+    "db": {
+      "description": "Absolute path of the sidecar that answered. Present because the default sidecar is cwd-local (./.stax-anchors.db, project-scoped like .git): when `anchors` comes back empty, this field is the difference between 'nothing was ever anchored' and 'you are in the wrong directory'. Resolution order: --db flag, then $STAX_ANCHOR_DB, then <cwd>/.stax-anchors.db.",
+      "type": "string"
+    },
+    "generated": {
+      "description": "When this envelope was rendered. RFC 3339 UTC, millisecond precision, literal Z -- the same shape store.db uses for first_ts/last_ts.",
+      "type": "string"
+    },
+    "query": { "$ref": "#/$defs/query" },
+    "anchors": {
+      "description": "For `get`: the newest entry of each key, ordered by key under SQLite's BINARY collation (byte order, locale-independent). For `log`: one key's entire history, oldest first. NEWEST means LAST APPENDED, not largest `ts`: storage is append-only and ordered by insertion, so a clock that jumps backwards cannot reorder history. Bodies are carried VERBATIM and are never truncated -- an anchor is meant to be spliced into a context window as-is, so the token bound comes from the caller keeping bodies anchor-sized and from `get` returning one entry per key.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/anchor" }
+    },
+    "anchor_count": {
+      "description": "len(anchors). Redundant by construction and checked by the fixture runner; present so a consumer can branch without materialising the array.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "schema_tag": {
+      "description": "The frozen contract id. The trailing integer is the MAJOR version and bumps only on a breaking change to the envelope; a consumer pins it and refuses an unknown major.",
+      "const": "stackunderflow.anchor/1"
+    },
+    "command": {
+      "description": "Which read produced this envelope. Both shapes carry `anchors[]`, and this is what says whether the array is newest-per-key (`get`) or one key's history (`log`). ADDITIVE enum: a new producer appends a value without bumping the major.",
+      "enum": ["get", "log"]
+    },
+    "query": {
+      "description": "Echo of the resolved input, so a caller can correlate a response with the call that produced it.",
+      "type": "object",
+      "required": ["key"],
+      "properties": {
+        "key": {
+          "description": "The key that was asked for; null for a bare `anchor get`, which returns every key's newest entry.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "anchor": {
+      "description": "One appended anchor. Immutable: entries are only ever INSERTed (SQLite triggers refuse UPDATE and DELETE), so a `log` is an audit trail rather than a mutable document.",
+      "type": "object",
+      "required": ["key", "ts", "session_hint", "body"],
+      "properties": {
+        "key": {
+          "description": "The caller's key -- architect-state, wave-state, ... Free-form and never blank; stable keys are the point, since `get` returns one row per key.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "When the anchor was appended. RFC 3339 UTC, millisecond precision, literal Z. Two anchors written inside the same millisecond share a `ts` and are still ordered by insertion.",
+          "type": "string"
+        },
+        "session_hint": {
+          "description": "Best-effort id of the session that wrote the anchor, read from $CLAUDE_SESSION_ID at write time; null when the variable was unset or blank. Nothing keys off it -- it is a breadcrumb back to indexed session history, which is what a store-less notes tool cannot offer.",
+          "type": ["string", "null"]
+        },
+        "body": {
+          "description": "The anchored text, byte-verbatim as supplied (positional TEXT, --file, or stdin). Trailing newlines from a file or a pipe are preserved. A body that is only whitespace is refused at write time, so this is never blank.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

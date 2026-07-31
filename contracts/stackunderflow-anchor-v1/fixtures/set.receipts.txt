@@ -1,0 +1,5 @@
+anchored architect-state at 2026-07-31T03:00:00.000Z (20 bytes) -> /campaign/.stax-anchors.db
+anchored wave-state at 2026-07-31T03:01:00.000Z (57 bytes) -> /campaign/.stax-anchors.db
+anchored architect-state at 2026-07-31T03:02:00.000Z (65 bytes) -> /campaign/.stax-anchors.db
+anchored unicode-note at 2026-07-31T03:03:00.000Z (79 bytes) -> /campaign/.stax-anchors.db
+anchored architect-state at 2026-07-31T03:04:00.000Z (125 bytes) -> /campaign/.stax-anchors.db

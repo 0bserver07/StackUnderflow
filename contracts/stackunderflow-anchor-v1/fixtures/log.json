@@ -1,0 +1,30 @@
+{
+  "schema": "stackunderflow.anchor/1",
+  "command": "log",
+  "db": "/campaign/.stax-anchors.db",
+  "generated": "2026-07-31T04:00:00.000Z",
+  "query": {
+    "key": "architect-state"
+  },
+  "anchors": [
+    {
+      "key": "architect-state",
+      "ts": "2026-07-31T03:00:00.000Z",
+      "session_hint": "019849e2-7c4f-7a51-9f2b-6b1d0c3ea4d7",
+      "body": "wave 0 gated 69fb328"
+    },
+    {
+      "key": "architect-state",
+      "ts": "2026-07-31T03:02:00.000Z",
+      "session_hint": "019849f0-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+      "body": "wave 1 landed — the anchor feature is dogfooded by the campaign"
+    },
+    {
+      "key": "architect-state",
+      "ts": "2026-07-31T03:04:00.000Z",
+      "session_hint": null,
+      "body": "# Architect state\n\n- wave 0: GATED (69fb328)\n- wave 1: anchor storage, `anchor set|get|log`, goldens\n- next: wave 2 adapters\n"
+    }
+  ],
+  "anchor_count": 3
+}
