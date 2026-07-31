@@ -31,7 +31,7 @@ use std::io::Write;
 use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 use stax_etl::marts::json::deep_counters;
-use stax_etl::marts::watermark::rebuild_all_marts;
+use stax_etl::marts::watermark::rebuild_all_marts_with;
 
 /// Every table the mart layer writes, with the ordering key its rows are
 /// compared on. The key is the mart's own grain, never the rowid — two rebuilds
@@ -89,7 +89,12 @@ fn rebuild(path: &str) -> Result<()> {
     // One transaction for the whole rebuild, which is what `backfill --force`
     // does for the mart half: a partial rebuild is a store nobody can read.
     conn.execute_batch("BEGIN")?;
-    let report = match rebuild_all_marts(&conn, "1970-01-01T00:00:00+00:00") {
+    let report = match rebuild_all_marts_with(&conn, "1970-01-01T00:00:00+00:00", |n, h, s| {
+        // Flushed per mart: a 40-minute silent run is indistinguishable from a
+        // hang, and the Python side prints the same three columns.
+        println!("{n}\t{h}\t{s:.1}s");
+        std::io::stdout().flush().ok();
+    }) {
         Ok(r) => r,
         Err(e) => {
             conn.execute_batch("ROLLBACK").ok();
@@ -97,10 +102,8 @@ fn rebuild(path: &str) -> Result<()> {
         }
     };
     conn.execute_batch("COMMIT")?;
+    println!("# marts\t{}", report.len());
 
-    for (name, high) in &report {
-        println!("{name}\t{high}");
-    }
     let (deep, skipped) = deep_counters();
     println!("# deep_json_parses\t{deep}");
     println!("# deep_json_skips\t{skipped}");
