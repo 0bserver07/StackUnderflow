@@ -1,0 +1,37 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "ask",
+  "query": {
+    "question": "does the envelope survive a newer producer",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 1
+  },
+  "results": [
+    {
+      "session_id": "f0000000-0000-4000-8000-000000000001",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": null,
+      "x_future_row_field": "ignored, not rejected"
+    }
+  ],
+  "result_count": 1,
+  "token_estimate": 99,
+  "budget": 2000,
+  "truncated": false,
+  "note": "keyword search over past decisions.",
+  "vector_used": false,
+  "x_future_additive_field": {
+    "added_later": [
+      1,
+      2,
+      3
+    ]
+  }
+}

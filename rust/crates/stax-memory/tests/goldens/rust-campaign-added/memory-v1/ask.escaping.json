@@ -1,0 +1,29 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "ask",
+  "query": {
+    "question": "why did the \ud83d\ude80 deploy of \"\u672c\u756a\" fail on C:\\Users\\dev\\tmp?",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 1
+  },
+  "results": [
+    {
+      "session_id": "7e5d9f31-2c08-4b6a-9f14-0d3a8b6c5e72",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": "\u2026the run died at\tstep 3: `C:\\Users\\dev\\tmp` is not a path the \ud83d\ude80 runner can write \u2014 \u672c\u756a env only\u2026"
+    }
+  ],
+  "result_count": 1,
+  "token_estimate": 121,
+  "budget": 2000,
+  "truncated": false,
+  "note": "hybrid retrieval (keyword + local semantic vectors).",
+  "vector_used": true
+}

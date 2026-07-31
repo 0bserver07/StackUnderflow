@@ -20,6 +20,12 @@ clap = { version = "4.5.45", features = ["derive"] }
 # compiles libsqlite3-sys with SQLITE_ENABLE_FTS5. Asserted rather than assumed
 # — see stax-core's `the_bundled_engine_has_fts5_compiled_in` test.
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+# preserve_order: the §6 byte-parity decision (key order is the contract).
+# float_roundtrip: closes the 1-ULP CPython parse divergence the golden runner
+# caught (three goldens broke without it) — declared HERE so member crates can
+# never be correct only by accident of feature unification (wave 9's reduced
+# member set would silently lose it otherwise).
+serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
 stax-core = { path = "crates/stax-core" }
 
 [profile.release]

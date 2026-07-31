@@ -1,0 +1,37 @@
+{
+  "schema": "stackunderflow.resume/1",
+  "path": "/Users/t/my_ws",
+  "providers": [
+    {
+      "provider": "codex",
+      "resume": {
+        "command": "codex resume {session_id}",
+        "scope": "session",
+        "verified": "codex resume --help on a real install, 2026-07-10"
+      },
+      "sessions": [
+        {
+          "session_id": "cx-child-new",
+          "first_ts": "2026-07-08T10:00:00Z",
+          "last_ts": "2026-07-08T10:00:00Z",
+          "message_count": 151,
+          "project": "-Users-t-my-ws-child",
+          "project_path": null,
+          "resume_command": "codex resume cx-child-new"
+        },
+        {
+          "session_id": "cx-child-old",
+          "first_ts": "2026-06-26T10:00:00Z",
+          "last_ts": "2026-06-26T10:00:00Z",
+          "message_count": 62,
+          "project": "-Users-t-my-ws-child",
+          "project_path": null,
+          "resume_command": "codex resume cx-child-old"
+        }
+      ]
+    }
+  ],
+  "provider_filter": [
+    "codex"
+  ]
+}

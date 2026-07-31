@@ -1,0 +1,25 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "context-replay",
+  "query": {
+    "session_id": "43da8464-3633-45cc-a2a4-a056daaffb84",
+    "around": "the retry decision",
+    "limit": 2
+  },
+  "results": [
+    {
+      "role": "user",
+      "ts": "2026-05-01T04:27:10.652Z",
+      "text": "let's disable retry for EtlPipelineNotReadyError"
+    },
+    {
+      "role": "assistant",
+      "ts": "2026-05-01T04:27:44.918Z",
+      "text": "done \u2014 React Query `retry` is off for that error class."
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 58,
+  "budget": 2000,
+  "truncated": false
+}

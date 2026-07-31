@@ -17,6 +17,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # The toolchain is user-local (docs/specs/rust-port.md §5: rustup, no sudo).
+# Rustup must WIN over a distro cargo (found the hard way: /usr/bin/cargo 1.75
+# shadows the pinned 1.97 and dies on edition2024). Prepend unconditionally.
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
     # shellcheck disable=SC1091
     . "$HOME/.cargo/env"

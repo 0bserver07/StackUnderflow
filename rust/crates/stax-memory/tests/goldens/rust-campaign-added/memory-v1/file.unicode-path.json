@@ -1,0 +1,39 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "file",
+  "query": {
+    "path": "/Users/yadkonrad/dev/Mes Projets/na\u00efve caf\u00e9/src/r\u00e9sum\u00e9_builder.py",
+    "project": null,
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "3a2f5c88-71bb-4e19-9c07-8ad4e6f21b55",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": null,
+      "kind": "touched"
+    }
+  ],
+  "result_count": 1,
+  "token_estimate": 92,
+  "budget": 2000,
+  "truncated": false,
+  "risk": {
+    "path": "/Users/yadkonrad/dev/Mes Projets/na\u00efve caf\u00e9/src/r\u00e9sum\u00e9_builder.py",
+    "since": null,
+    "total_sessions": 1,
+    "reverted": 0,
+    "failed": 1,
+    "worked": 3,
+    "recent_session_ids": [
+      "3a2f5c88-71bb-4e19-9c07-8ad4e6f21b55"
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "decisions",
+  "query": {
+    "text": "cost accounting rounding",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 6
+  },
+  "results": [
+    {
+      "session_id": "float-0",
+      "cost_usd": 0.0
+    },
+    {
+      "session_id": "float-neg-zero",
+      "cost_usd": -0.0
+    },
+    {
+      "session_id": "float-long",
+      "cost_usd": 600.7909187500001
+    },
+    {
+      "session_id": "float-longer",
+      "cost_usd": 499.25254474999997
+    },
+    {
+      "session_id": "float-tiny",
+      "cost_usd": 1e-05
+    },
+    {
+      "session_id": "float-huge",
+      "cost_usd": 1e+16
+    },
+    {
+      "session_id": "float-fixed-edge",
+      "cost_usd": 1000000000000000.0
+    },
+    {
+      "session_id": "float-just-under",
+      "cost_usd": 0.0001
+    },
+    {
+      "session_id": "int-big",
+      "message_count": 9223372036854775807
+    },
+    {
+      "session_id": "int-negative",
+      "message_count": -1
+    }
+  ],
+  "result_count": 10,
+  "token_estimate": 131,
+  "budget": 0,
+  "truncated": false
+}

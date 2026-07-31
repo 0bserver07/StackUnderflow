@@ -1,0 +1,25 @@
+{
+  "schema": "stackunderflow.resume/1",
+  "path": "/Users/t/Mes Projets/na\u00efve caf\u00e9",
+  "providers": [
+    {
+      "provider": "claude",
+      "resume": {
+        "command": "claude --resume {session_id}",
+        "scope": "session",
+        "verified": "claude --help on a real install, 2026-07-10"
+      },
+      "sessions": [
+        {
+          "session_id": "cl-home",
+          "first_ts": "2026-05-27T10:00:00Z",
+          "last_ts": "2026-05-27T10:00:00Z",
+          "message_count": 40,
+          "project": "-Users-t",
+          "project_path": null,
+          "resume_command": "claude --resume cl-home"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "sessions",
+  "query": {
+    "path": "/Users/yadkonrad/dev/My Work Projects/year 26",
+    "project": null,
+    "since": null,
+    "limit": 2,
+    "scope": "path"
+  },
+  "results": [
+    {
+      "session_id": "c0ffee00-1111-4222-8333-444455556666",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": null
+    }
+  ],
+  "result_count": 1,
+  "token_estimate": 87,
+  "budget": 2000,
+  "truncated": false
+}

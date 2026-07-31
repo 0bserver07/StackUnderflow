@@ -1,0 +1,38 @@
+{
+  "schema": "stackunderflow.memory/1",
+  "command": "decisions",
+  "query": {
+    "text": "why rsync instead of a second copy",
+    "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "since": null,
+    "limit": 2
+  },
+  "results": [
+    {
+      "session_id": "9f1c2b7e-4a0d-4f52-9d18-6f1a3c8e5b40",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": "\u2026chose rsync --link-dest for the hardlink incrementals: a second full copy costs a disk per week, the hardlink tree costs the delta\u2026"
+    },
+    {
+      "session_id": "1d4e8a06-3c77-4a91-bb2e-70d9e5c1f832",
+      "project_slug": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+      "project_path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+      "provider": "claude",
+      "first_ts": "2026-06-14T09:12:03.114Z",
+      "last_ts": "2026-06-14T11:48:52.507Z",
+      "message_count": 412,
+      "cost_usd": 18.3372105,
+      "snippet": "\u2026decision: keep the LIKE path for `memory decisions` until FTS5 lands \u2014 the rewrite is wave 6, not a hotfix\u2026"
+    }
+  ],
+  "result_count": 2,
+  "token_estimate": 239,
+  "budget": 2000,
+  "truncated": false
+}
