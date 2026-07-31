@@ -237,7 +237,7 @@ impl AnchorDb {
         {
             bail!(
                 "{} is not a directory, so the anchor sidecar {} cannot be created \
-                 (stax-rs creates the sidecar file, never directories — mkdir it, \
+                 (stax creates the sidecar file, never directories — mkdir it, \
                  or point --db / $STAX_ANCHOR_DB at a directory that exists)",
                 parent.display(),
                 path.display()
@@ -503,7 +503,7 @@ impl AnchorDb {
                 .with_context(|| format!("reading user_version of {}", self.path.display()))?;
             if stored > STORAGE_VERSION {
                 bail!(
-                    "{} was written by a newer stax-rs (anchor storage v{stored}, this binary \
+                    "{} was written by a newer stax (anchor storage v{stored}, this binary \
                      understands v{STORAGE_VERSION})",
                     self.path.display()
                 );
@@ -1269,7 +1269,7 @@ mod tests {
         }
 
         let error = AnchorDb::open_or_create(&scratch.db()).expect_err("must refuse");
-        assert!(error.to_string().contains("newer stax-rs"), "{error}");
+        assert!(error.to_string().contains("newer stax"), "{error}");
     }
 
     #[test]

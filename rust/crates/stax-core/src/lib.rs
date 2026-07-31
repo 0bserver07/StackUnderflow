@@ -12,7 +12,7 @@
 //!
 //! Wave 0 ships the read-only half: [`settings::store_path`] resolution, a
 //! strictly read-only [`store::Store`], `PRAGMA user_version`, and per-object row
-//! counts — enough for `stax-rs status` to be checked against Python.
+//! counts — enough for `stax status` to be checked against Python.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -2,8 +2,8 @@
 //!
 //! Charter (`docs/specs/rust-port.md` §3): port `cli.py` — the same command
 //! names, the same flags, the same output shapes, so a script written against
-//! the Python CLI keeps working when `stax-rs` replaces it. Wave 8 owns the long
-//! tail and the `--help`-tree diff; wave 0 ships exactly one command, `status`,
+//! the Python CLI keeps working when `stax` replaces it. Wave 8 owns the long
+//! tail and the `--help`-tree diff; wave 0 ships exactly one command, `store` (né `status` — DIV-025 ruling),
 //! whose entire job is to be checkable against Python on the real store.
 
 #![forbid(unsafe_code)]
@@ -15,7 +15,7 @@ mod discovery;
 mod embeddings;
 mod memory;
 mod resume;
-mod status;
+mod store;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -28,18 +28,18 @@ pub use discovery::{
 };
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
-pub use status::{StatusArgs, render_status, run_status};
+pub use store::{StoreArgs, render_store, run_store};
 
-/// `stax-rs` — the Rust port of StackUnderflow.
+/// `stax` — the Rust port of StackUnderflow.
 #[derive(Debug, Parser)]
-#[command(name = "stax-rs", version, about, long_about = None)]
+#[command(name = "stax", version, about, long_about = None)]
 pub struct Cli {
     /// The command to run.
     #[command(subcommand)]
     pub command: Command,
 }
 
-/// Every command `stax-rs` understands.
+/// Every command `stax` understands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Keyed, append-only campaign state that survives a context rotation.
@@ -69,7 +69,7 @@ pub enum Command {
     /// sessions.
     SearchPastDecisions(PastDecisionsArgs),
     /// Open the store read-only and print its schema version and row counts.
-    Status(StatusArgs),
+    Store(StoreArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -95,7 +95,7 @@ pub fn dispatch(cli: &Cli) -> Result<()> {
         Command::Memory(args) => run_memory(args),
         Command::Resume(args) => run_resume(args),
         Command::SearchPastDecisions(args) => run_past_decisions(args),
-        Command::Status(args) => run_status(args),
+        Command::Store(args) => run_store(args),
     }
 }
 
@@ -111,17 +111,17 @@ mod tests {
     }
 
     #[test]
-    fn status_takes_an_optional_store_path() {
-        let cli = Cli::try_parse_from(["stax-rs", "status"]).expect("bare status parses");
-        let Command::Status(args) = &cli.command else {
-            panic!("expected status");
+    fn store_takes_an_optional_store_path() {
+        let cli = Cli::try_parse_from(["stax", "store"]).expect("bare store parses");
+        let Command::Store(args) = &cli.command else {
+            panic!("expected store");
         };
         assert!(args.store.is_none());
 
-        let cli = Cli::try_parse_from(["stax-rs", "status", "--store", "/data/su/store.db"])
+        let cli = Cli::try_parse_from(["stax", "store", "--store", "/data/su/store.db"])
             .expect("--store parses");
-        let Command::Status(args) = &cli.command else {
-            panic!("expected status");
+        let Command::Store(args) = &cli.command else {
+            panic!("expected store");
         };
         assert_eq!(
             args.store.as_deref(),
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn the_binary_is_named_stax_rs() {
-        assert_eq!(Cli::command().get_name(), "stax-rs");
+    fn the_binary_is_named_stax() {
+        assert_eq!(Cli::command().get_name(), "stax");
     }
 }

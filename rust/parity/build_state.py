@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the byte-diff harness's two store states from the live dataset.
 
-The P0 gate compares `stax-rs` against the Python CLI on the maintainer's
+The P0 gate compares `stax` against the Python CLI on the maintainer's
 REAL store, which means the harness needs the real bytes — but the live
 dataset is read-only for this campaign and the Python CLI *writes* (schema
 migrations on connect, `discovery_telemetry` bumps, and

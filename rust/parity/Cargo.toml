@@ -8,3 +8,14 @@ publish.workspace = true
 [[bin]]
 name = "stax-parity"
 path = "src/main.rs"
+
+# The wave-5 endpoint differ. A second binary rather than a subcommand of the
+# first: it is what `ci.sh` gate 6 runs, and a gate should invoke one thing.
+[[bin]]
+name = "stax-endpoint-parity"
+path = "src/bin/endpoint-parity.rs"
+
+# No HTTP client dependency, deliberately — see `src/http.rs`. A byte-parity
+# differ that reads its evidence through a library which may decompress, follow
+# redirects or normalise headers is measuring the library.
+[dependencies]

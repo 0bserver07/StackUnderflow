@@ -1,4 +1,4 @@
-//! `stax-rs memory ask` — the wave-1 gate demo.
+//! `stax memory ask` — the wave-1 gate demo.
 //!
 //! A port of `cli.py`'s `memory_ask` (`:2597`). The engine lives in
 //! [`stax_core::ask`]; this module is the surface Python's command body is: the
@@ -285,7 +285,7 @@ mod tests {
         assert!(
             failure
                 .stderr
-                .starts_with("Usage: stax-rs memory ask [OPTIONS] QUESTION\n")
+                .starts_with("Usage: stax memory ask [OPTIONS] QUESTION\n")
         );
     }
 

@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "stax-rs"
+name = "stax"
 path = "src/main.rs"
 
 [dependencies]

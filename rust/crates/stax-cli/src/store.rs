@@ -1,4 +1,4 @@
-//! `stax-rs status` — wave 0's runnable proof.
+//! `stax store` — wave 0's runnable proof.
 //!
 //! Opens the store read-only, reads `PRAGMA user_version`, and prints one row
 //! per `sqlite_master` table or view with its `COUNT(*)`, sorted by name. The
@@ -19,20 +19,20 @@ const NAME_WIDTH: usize = 40;
 const KIND_WIDTH: usize = 6;
 const ROWS_WIDTH: usize = 12;
 
-/// Arguments for `stax-rs status`.
+/// Arguments for `stax store`.
 #[derive(Debug, Args)]
-pub struct StatusArgs {
+pub struct StoreArgs {
     /// Store to read. Defaults to `$STACKUNDERFLOW_HOME/store.db`, else
     /// `~/.stackunderflow/store.db`.
     #[arg(long, value_name = "PATH")]
     pub store: Option<PathBuf>,
 }
 
-/// Run `status`, printing the table to stdout.
+/// Run `store`, printing the table to stdout.
 ///
 /// # Errors
 /// When the store is missing or SQLite refuses to read it.
-pub fn run_status(args: &StatusArgs) -> Result<()> {
+pub fn run_store(args: &StoreArgs) -> Result<()> {
     let path = match &args.store {
         Some(path) => path.clone(),
         None => settings::store_path(),
@@ -40,7 +40,7 @@ pub fn run_status(args: &StatusArgs) -> Result<()> {
     let store = Store::open_read_only(&path)?;
     let version = store.schema_version()?;
     let objects = store.object_counts()?;
-    print!("{}", render_status(store.path(), version, &objects));
+    print!("{}", render_store(store.path(), version, &objects));
     Ok(())
 }
 
@@ -49,7 +49,7 @@ pub fn run_status(args: &StatusArgs) -> Result<()> {
 /// Kept separate from the I/O so the exact bytes can be asserted in a test that
 /// needs no database at all.
 #[must_use]
-pub fn render_status(path: &Path, schema_version: i64, objects: &[ObjectCount]) -> String {
+pub fn render_store(path: &Path, schema_version: i64, objects: &[ObjectCount]) -> String {
     let mut out = String::with_capacity(96 + objects.len() * (NAME_WIDTH + 24));
     let _ = writeln!(out, "store: {}", path.display());
     let _ = writeln!(out, "schema: v{schema_version:03}");
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn renders_the_exact_bytes_python_prints() {
-        let rendered = render_status(Path::new("/data/su/store.db"), 30, &sample());
+        let rendered = render_store(Path::new("/data/su/store.db"), 30, &sample());
         let expected = concat!(
             "store: /data/su/store.db\n",
             "schema: v030\n",
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn the_view_is_tagged_as_a_view() {
-        let rendered = render_status(Path::new("/x.db"), 30, &sample());
+        let rendered = render_store(Path::new("/x.db"), 30, &sample());
         let messages = rendered
             .lines()
             .find(|line| line.starts_with("messages "))
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn an_empty_store_still_renders_a_header() {
-        let rendered = render_status(Path::new("/x.db"), 0, &[]);
+        let rendered = render_store(Path::new("/x.db"), 0, &[]);
         assert_eq!(
             rendered,
             concat!(
@@ -144,7 +144,7 @@ mod tests {
         // Python's f-string padding does not truncate either; matching the
         // overflow behavior is what keeps the byte-diff empty on any store.
         let name = "a".repeat(NAME_WIDTH + 5);
-        let rendered = render_status(
+        let rendered = render_store(
             Path::new("/x.db"),
             30,
             &[ObjectCount {

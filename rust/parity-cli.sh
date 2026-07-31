@@ -36,17 +36,18 @@ LIVE_DIR="${STAX_PARITY_LIVE_DIR:-$REPO_ROOT/../stackunderflow-data}"
 STATE_DIR="${STAX_PARITY_STATE_DIR:-$HERE/.parity-state}"
 CASES="${STAX_PARITY_CASES:-$HERE/parity/cases.txt}"
 DIFFS="$STATE_DIR/diffs"
-RS_BIN="${STAX_PARITY_RS_BIN:-$HERE/target/release/stax-rs}"
+RS_BIN="${STAX_PARITY_RS_BIN:-$HERE/target/release/stax}"
 
-# The Rust binary is named `stax-rs` during coexistence (Python owns the `stax`
-# entry point until the wave-10 decommission decision). Click prints the
-# program name into its usage lines, so an otherwise byte-identical parse error
-# differs in exactly that token. Normalising it is the ONE substitution this
-# harness performs, it is applied to the Rust side only, and every case that
-# needed it is counted and reported — a silent normalisation would be the
-# harness lying to the gate.
+# The Rust binary is `stax` (desk ruling 4, 2026-07-31) while the Python CLI
+# still prints `stackunderflow` into its usage lines, so an otherwise
+# byte-identical parse error differs in exactly that token. Normalising it is
+# the ONE substitution this harness performs, applied to the Rust side only,
+# scoped to `Usage:`/`Try '…'` lines (a blanket \bstax\b would rewrite store
+# content that documents the `stax` alias), and every case that needed it is
+# counted and reported — a silent normalisation would be the harness lying to
+# the gate.
 PROGRAM_NAME_PY="stackunderflow"
-PROGRAM_NAME_RS="stax-rs"
+PROGRAM_NAME_RS="stax"
 
 WANT_STATES="fresh fts"
 ONLY=""
@@ -121,8 +122,8 @@ unset STAX_ANCHOR_DB
 
 CASE_TIMEOUT="${STAX_PARITY_TIMEOUT:-180}"
 
-pass=0; fail=0; skipped=0; normalized=0
-failed_ids=()
+pass=0; fail=0; skipped=0; normalized=0; accepted_count=0
+failed_ids=(); accepted_ids=()
 
 resolve_cwd() {
     case "$1" in
@@ -135,7 +136,7 @@ resolve_cwd() {
 
 # ── the Rust-only rows ───────────────────────────────────────────────────────
 #
-# `anchor` and `status` have no Python counterpart (`stackunderflow status` is a
+# `anchor` and `store` have no Python counterpart (DIV-025 ruled: the verb is `store`; `stackunderflow status` is a
 # different command that happens to share the name — see the ledger). They are
 # still gated, as self-checking round-trips: a regression in them is caught
 # here rather than in a wave that assumes them.
@@ -163,13 +164,13 @@ run_rust_only() {
             rm -f "$db"
             return 0
             ;;
-        rust:status)
-            out="$(cd "$cwd" && STACKUNDERFLOW_HOME="$home" "$RS_BIN" status 2>&1)"; rc=$?
+        rust:store)
+            out="$(cd "$cwd" && STACKUNDERFLOW_HOME="$home" "$RS_BIN" store 2>&1)"; rc=$?
             [ $rc -eq 0 ] || { printf '%s\n' "$out" > "$DIFFS/$id.diff"; return 1; }
             # The store the states are built from always has these two.
             case "$out" in
                 *sessions*) ;;
-                *) printf 'status did not list the sessions table:\n%s\n' "$out" > "$DIFFS/$id.diff"; return 1 ;;
+                *) printf 'store did not list the sessions table:\n%s\n' "$out" > "$DIFFS/$id.diff"; return 1 ;;
             esac
             return 0
             ;;
@@ -212,8 +213,17 @@ run_case() {
     local rs_rc=$?
 
     # Program-name normalisation, Rust side only, counted when it fires.
-    sed "s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" "$work/rs.raw" >"$work/rs.out"
-    sed "s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" "$work/rs.raw.err" >"$work/rs.err"
+    # Scoped to the two Click-shaped surfaces that carry the program name
+    # (`Usage:` lines and `Try '…'` hint lines) — a blanket \bstax\b
+    # substitution rewrites real store CONTENT now that the binary shares
+    # its name with the documented `stax` alias (found via a false diff on
+    # A-dec-since-budget0, whose snippet quotes the alias README).
+    sed -e "/^Usage:/s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" \
+        -e "/^Try '/s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" \
+        "$work/rs.raw" >"$work/rs.out"
+    sed -e "/^Usage:/s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" \
+        -e "/^Try '/s/\\b$PROGRAM_NAME_RS\\b/$PROGRAM_NAME_PY/g" \
+        "$work/rs.raw.err" >"$work/rs.err"
     if ! cmp -s "$work/rs.raw" "$work/rs.out" || ! cmp -s "$work/rs.raw.err" "$work/rs.err"; then
         normalized=$((normalized + 1))
     fi
@@ -223,8 +233,26 @@ run_case() {
     cmp -s "$work/py.err" "$work/rs.err" || ok=0
     [ "$py_rc" = "$rs_rc" ] || ok=0
 
+    # Maintainer-ACCEPTED divergences (desk ruling 2, 2026-07-31, DIV-010
+    # residue): the >u64 `--limit` clamp cases stay named here, every run,
+    # by order — they are not silent, and they are not failures.
+    local accepted=0
+    case "$id" in
+        V-dec-limit-huge|V-dec-limit-bad) accepted=1 ;;
+    esac
+
     if [ "$ok" = 1 ]; then
+        if [ "$accepted" = 1 ]; then
+            printf '  NOTE  %-28s maintainer-accepted case now PASSES — re-examine the ruling\n' "$tag"
+        fi
         pass=$((pass + 1))
+        rm -rf "$work"
+        return 0
+    fi
+
+    if [ "$accepted" = 1 ]; then
+        accepted_count=$((accepted_count + 1)); accepted_ids+=("$tag")
+        printf '  ACPT  %-28s diverges as ruled (DIV-010 >u64 clamp)\n' "$tag"
         rm -rf "$work"
         return 0
     fi
@@ -291,10 +319,15 @@ for state in $WANT_STATES; do
     done < <(grep -vE '^\s*#' "$CASES")
 done
 
-total=$((pass + fail))
+total=$((pass + fail + accepted_count))
 printf '\n=== parity tally ===\n'
-printf 'cases: %s   pass: %s   FAIL: %s   skipped: %s\n' "$total" "$pass" "$fail" "$skipped"
+printf 'cases: %s   pass: %s   FAIL: %s   accepted: %s   skipped: %s\n' \
+    "$total" "$pass" "$fail" "$accepted_count" "$skipped"
 printf 'program-name normalisation fired on %s case(s)\n' "$normalized"
+if [ "$accepted_count" -gt 0 ]; then
+    printf '\nmaintainer-accepted divergences (desk ruling 2, DIV-010):\n'
+    printf '  %s\n' "${accepted_ids[@]}"
+fi
 if [ "$fail" -gt 0 ]; then
     printf '\nfailing:\n'
     printf '  %s\n' "${failed_ids[@]}"

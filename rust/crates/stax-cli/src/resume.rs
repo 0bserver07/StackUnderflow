@@ -1,4 +1,4 @@
-//! `stax-rs resume` — every coding agent's session ids under a path (RS-1-019).
+//! `stax resume` — every coding agent's session ids under a path (RS-1-019).
 //!
 //! A port of `cli.py:resume_cmd` (`:6301`–`:6428`) and the store query it calls,
 //! `services/discovery.py:resume_candidates` (`:712`–`:804`). Four behaviors are
@@ -53,7 +53,7 @@ use stax_memory::{ProviderBlock, ResumeEnvelope, ResumeSession, ResumeTemplate};
 
 // ── the command surface ──────────────────────────────────────────────────────
 
-/// `stax-rs resume [PATH]` — session/resume ids for every coding agent under
+/// `stax resume [PATH]` — session/resume ids for every coding agent under
 /// `PATH` (default: the current directory).
 ///
 /// Every `help` string here is Click's, verbatim (`stackunderflow resume
@@ -207,7 +207,7 @@ impl ResumeEnv {
 /// about the bytes while the parity harness swore they agreed). So we walk up
 /// from the working directory, then from the executable, looking for a checkout
 /// that carries the file — which covers both `cargo run` from anywhere in the
-/// tree and `rust/target/release/stax-rs` invoked from an unrelated cwd.
+/// tree and `rust/target/release/stax` invoked from an unrelated cwd.
 ///
 /// Shipping the table with an installed binary is a wave-8 packaging question
 /// (architect decision, wave 2); until then the last resort is the repo-relative
@@ -603,7 +603,7 @@ pub fn render_text(envelope: &ResumeEnvelope) -> String {
 
 // ── the run ──────────────────────────────────────────────────────────────────
 
-/// Run `stax-rs resume …` against the real environment.
+/// Run `stax resume …` against the real environment.
 ///
 /// # Errors
 /// When the environment cannot be read, the capability table cannot be loaded,
@@ -1306,7 +1306,7 @@ mod tests {
             repo.join(CAPABILITIES_RELATIVE_PATH)
         );
         // …and from the executable when the cwd is somewhere unrelated.
-        let exe = repo.join("rust/target/release/stax-rs");
+        let exe = repo.join("rust/target/release/stax");
         assert_eq!(
             resolve_capabilities_path(None, Path::new("/"), Some(&exe)),
             repo.join(CAPABILITIES_RELATIVE_PATH)
@@ -1356,7 +1356,7 @@ mod tests {
     /// `--limit-per-provider 1_000` is not academic: it is the difference
     /// between 12 KB and 442 KB of `resume /` output on the live store.
     fn parse_limit(raw: &str) -> Result<PyInt, clap::error::ErrorKind> {
-        match crate::Cli::try_parse_from(["stax-rs", "resume", "/", "--limit-per-provider", raw]) {
+        match crate::Cli::try_parse_from(["stax", "resume", "/", "--limit-per-provider", raw]) {
             Ok(cli) => {
                 let crate::Command::Resume(args) = cli.command else {
                     panic!("expected resume");
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn repeated_resume_options_are_last_wins() {
         let cli = crate::Cli::try_parse_from([
-            "stax-rs",
+            "stax",
             "resume",
             "/",
             "--limit-per-provider",
@@ -1416,7 +1416,7 @@ mod tests {
         assert!(args.as_json);
         // `-p` really is repeatable on the Python side — it must NOT collapse.
         let cli =
-            crate::Cli::try_parse_from(["stax-rs", "resume", "/", "-p", "claude", "-p", "codex"])
+            crate::Cli::try_parse_from(["stax", "resume", "/", "-p", "claude", "-p", "codex"])
                 .expect("--provider is a list, not a scalar");
         let crate::Command::Resume(args) = cli.command else {
             panic!("expected resume");

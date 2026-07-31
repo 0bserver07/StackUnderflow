@@ -4,7 +4,7 @@
 //!
 //! * **Counts on the real agent homes.** `~/.claude` and `~/.codex` are read
 //!   (never written) by both implementations, and the enumerated session counts
-//!   must agree. This is the wave's demo criterion — `stax-rs scan` counts ==
+//!   must agree. This is the wave's demo criterion — `stax scan` counts ==
 //!   Python's on the real store.
 //! * **Field-level diffs on the checked-in fixture packs.** The same bytes go
 //!   through both parsers and every `Record` field is compared, `raw_json`

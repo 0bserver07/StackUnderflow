@@ -1,4 +1,4 @@
-//! `stax-rs memory {sessions,decisions,worked,file}` — the wave-1 read path.
+//! `stax memory {sessions,decisions,worked,file}` — the wave-1 read path.
 //!
 //! A port of `cli.py`'s `memory` group (`:2382`–`:2595`) and the helpers it
 //! calls: `_memory_options`, `_memory_format`, `_memory_fail`,
@@ -10,7 +10,7 @@
 //! Three properties are the point of the port, and each is load-bearing:
 //!
 //! * **Text output is byte-identical.** Every literal, every double space,
-//!   every `…` (U+2026) is the reference's. `stax-rs memory sessions` diffs
+//!   every `…` (U+2026) is the reference's. `stax memory sessions` diffs
 //!   clean against `stackunderflow memory sessions` on the same store and cwd.
 //! * **JSON goes through the shared contract.** The envelope is
 //!   [`stax_memory`]'s `stackunderflow.memory/1` — same builder, same
@@ -148,7 +148,7 @@ impl MemoryOptions {
     }
 }
 
-/// `stax-rs memory` — ask the local store what past sessions already know.
+/// `stax memory` — ask the local store what past sessions already know.
 #[derive(Debug, Args)]
 pub struct MemoryArgs {
     /// Which question to ask.
@@ -919,7 +919,7 @@ pub(crate) fn memory_fail(
     Output {
         stdout: String::new(),
         stderr: format!(
-            "Usage: stax-rs {usage}\nTry 'stax-rs {} --help' for help.\n\nError: Invalid value for --since: {error}\n",
+            "Usage: stax {usage}\nTry 'stax {} --help' for help.\n\nError: Invalid value for --since: {error}\n",
             usage
                 .split_whitespace()
                 .take(2)
@@ -1410,7 +1410,7 @@ mod tests {
 
     /// Parse a `memory decisions` line and hand back its shared options.
     fn parse(extra: &[&str]) -> Result<MemoryOptions, clap::error::ErrorKind> {
-        let mut argv = vec!["stax-rs", "memory", "decisions", "cache"];
+        let mut argv = vec!["stax", "memory", "decisions", "cache"];
         argv.extend_from_slice(extra);
         match crate::Cli::try_parse_from(argv) {
             Ok(cli) => {

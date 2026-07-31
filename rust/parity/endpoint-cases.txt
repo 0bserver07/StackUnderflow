@@ -1,0 +1,97 @@
+# The endpoint differ's case matrix — `rust/endpoint-parity.sh` reads this file.
+#
+# Format:  <id> | <METHOD> | <path-and-query> | <json body or ->
+#
+#   id      stable; names the dumped bodies under .parity-state/endpoint-diffs/
+#           A LEADING `!` marks a KNOWN-OPEN case: the differ reports it in full
+#           under a loud banner and does NOT fail the gate. Unported endpoints
+#           belong here, in the file, not missing from it — "we know" beats
+#           "nobody looked".
+#   METHOD  GET / POST / PUT / DELETE
+#   target  sent verbatim, query string included; it is not re-encoded
+#   body    JSON, sent as application/json; `-` or empty means no body
+#
+# ORDER IS SIGNIFICANT. `deps.current_log_path` is server state that
+# `POST /api/project-by-dir` writes and every project-scoped GET reads, so the
+# rows run top to bottom against both servers and the state carries. Do not sort
+# this file.
+#
+# Provenance of the row groups:
+#   S-*   the four SPA page routes + the /static mount (RS-5-117..121) — the
+#         wave's oracle: these serve the UNMODIFIED checked-in React bundle
+#   P-*   routes/projects.py (RS-5-095..101)
+#   D-*   routes/data.py (RS-5-066..070)
+#   V-*   validation / error paths — the shapes a happy-path matrix never sees
+
+# ── the React oracle ─────────────────────────────────────────────────────────
+S-root              | GET | /                                  | -
+S-settings          | GET | /settings                          | -
+S-live              | GET | /live                              | -
+S-project-1         | GET | /project/-home-u-repo              | -
+S-project-nested    | GET | /project/a/b/c                     | -
+S-static-index      | GET | /static/react/index.html           | -
+S-static-missing    | GET | /static/react/nope.js              | -
+
+# ── projects: the no-project state, before anything is selected ──────────────
+P-current-none      | GET | /api/project                       | -
+P-recent            | GET | /api/recent-projects               | -
+P-providers         | GET | /api/providers                     | -
+
+# ── /api/projects — the flagship. include_stats is the July wedge (§6b) ──────
+P-list-default      | GET | /api/projects                      | -
+P-list-limit20      | GET | /api/projects?limit=20             | -
+P-list-page2        | GET | /api/projects?limit=20&offset=20   | -
+P-list-past-end     | GET | /api/projects?limit=20&offset=99999 | -
+P-list-stats        | GET | /api/projects?include_stats=true&limit=20 | -
+P-list-stats-page2  | GET | /api/projects?include_stats=true&limit=20&offset=20 | -
+P-list-stats-1      | GET | /api/projects?include_stats=1&limit=5 | -
+P-sort-first-seen   | GET | /api/projects?sort_by=first_seen&limit=20 | -
+P-sort-size         | GET | /api/projects?sort_by=size&limit=20 | -
+P-sort-name         | GET | /api/projects?sort_by=name&limit=20 | -
+P-sort-unknown      | GET | /api/projects?sort_by=nonsense&limit=20 | -
+P-provider-claude   | GET | /api/projects?provider=claude&limit=20 | -
+P-provider-multi    | GET | /api/projects?provider=claude&provider=codex&limit=20 | -
+P-provider-case     | GET | /api/projects?provider=CLAUDE&limit=20 | -
+P-provider-none     | GET | /api/projects?provider=nosuchprovider | -
+P-worktrees-raw     | GET | /api/projects?include_worktrees=true&limit=50 | -
+P-worktrees-stats   | GET | /api/projects?include_worktrees=1&include_stats=1&limit=50 | -
+P-limit-clamp-hi    | GET | /api/projects?limit=999999         | -
+P-limit-clamp-lo    | GET | /api/projects?limit=0              | -
+P-offset-negative   | GET | /api/projects?offset=-5&limit=5    | -
+P-offset-last-wins  | GET | /api/projects?limit=5&offset=1&offset=2 | -
+
+# ── project selection: the state mutation every project-scoped GET needs ─────
+P-by-dir-missing    | POST | /api/project-by-dir               | {}
+P-by-dir-empty      | POST | /api/project-by-dir               | {"dir_name": ""}
+P-by-dir-unknown    | POST | /api/project-by-dir               | {"dir_name": "-no-such-project-anywhere"}
+P-by-dir-traversal  | POST | /api/project-by-dir               | {"dir_name": "../../etc"}
+P-by-dir-known      | POST | /api/project-by-dir               | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+P-current-after     | GET  | /api/project                      | -
+
+# ── /api/stats — needs the full collector pipeline (RS-3-062 / RS-5-066) ─────
+# Ported: not yet. The rows stay so the gap is counted every run.
+!D-stats-default     | GET | /api/stats                        | -
+!D-stats-tz          | GET | /api/stats?timezone_offset=-480   | -
+!D-stats-tz-inverted | GET | /api/stats?timezone_offset=480    | -
+!D-stats-days        | GET | /api/stats?days=7                 | -
+!D-stats-days-zero   | GET | /api/stats?days=0                 | -
+!D-stats-details     | GET | /api/stats?details=true           | -
+!D-stats-include     | GET | /api/stats?include=overview       | -
+!D-stats-include-2   | GET | /api/stats?include=overview&include=models | -
+
+# ── the ensure_ascii proof ───────────────────────────────────────────────────
+# The `cursor` project's display_name is
+#   "cursor (legacy — reingest to split by workspace)"
+# and that em-dash is the whole wave-5 JSON-writer decision in one row: the CLI
+# writer (`json.dumps` default, ensure_ascii=True) would ship `—`, while
+# starlette's JSONResponse ships the three raw UTF-8 bytes. If this case is
+# byte-identical, the port is using the right one of the two writers.
+P-nonascii          | GET | /api/projects?provider=cursor&limit=5 | -
+P-nonascii-stats    | GET | /api/projects?provider=cursor&limit=5&include_stats=1 | -
+
+# ── validation + error shapes ────────────────────────────────────────────────
+V-bad-bool          | GET | /api/projects?include_stats=maybe  | -
+V-bad-int           | GET | /api/projects?limit=abc            | -
+V-unknown-path      | GET | /api/definitely-not-a-route        | -
+V-method-not-allowed | POST | /api/projects                    | {}
+V-spa-method        | POST | /settings                         | {}

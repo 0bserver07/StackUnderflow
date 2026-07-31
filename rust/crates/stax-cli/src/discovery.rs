@@ -612,8 +612,8 @@ fn bad_since(command: &str, usage_args: &str, message: &str) -> Output {
     Output {
         stdout: String::new(),
         stderr: format!(
-            "Usage: stax-rs {command} {usage_args}\n\
-             Try 'stax-rs {command} --help' for help.\n\
+            "Usage: stax {command} {usage_args}\n\
+             Try 'stax {command} --help' for help.\n\
              \n\
              Error: Invalid value for --since: {message}\n"
         ),
@@ -716,7 +716,7 @@ mod tests {
     }
 
     fn parse(argv: &[&str]) -> Result<crate::Command, clap::error::ErrorKind> {
-        let mut all = vec!["stax-rs"];
+        let mut all = vec!["stax"];
         all.extend_from_slice(argv);
         crate::Cli::try_parse_from(all)
             .map(|cli| cli.command)
@@ -828,8 +828,8 @@ mod tests {
         assert!(failure.stdout.is_empty());
         assert_eq!(
             failure.stderr,
-            "Usage: stax-rs find-sessions-in-path [OPTIONS] PATH\n\
-             Try 'stax-rs find-sessions-in-path --help' for help.\n\
+            "Usage: stax find-sessions-in-path [OPTIONS] PATH\n\
+             Try 'stax find-sessions-in-path --help' for help.\n\
              \n\
              Error: Invalid value for --since: Invalid since value 'x'\n"
         );

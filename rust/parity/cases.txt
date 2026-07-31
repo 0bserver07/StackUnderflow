@@ -183,4 +183,4 @@ A-fail-since-bad    | repo | find-failure-modes-for-file /Users/yadkonrad/dev_de
 
 # ── Rust-only commands (round-trip, no Python counterpart) ───────────────────
 rust:anchor-roundtrip  | repo | anchor
-rust:status            | repo | status
+rust:store             | repo | store

@@ -18,7 +18,7 @@
 //!
 //! Measured out-of-process, which is how agents actually call it (16 processes ×
 //! 12 appends of a 256 KB body): **171 of 192 rows landed — 21 appends lost,
-//! 10.9%**, each with `stax-rs: appending anchor "big" to …: database is locked:
+//! 10.9%**, each with `stax: appending anchor "big" to …: database is locked:
 //! Error code 5`. Nine `anchor get` calls failed the same way, so reads are not
 //! isolated from writers either. Reproduce out-of-process with:
 //!
@@ -26,7 +26,7 @@
 //! A=$(mktemp -d); head -c 262144 /dev/urandom | base64 -w0 > "$A/body.txt"
 //! for p in $(seq 1 16); do
 //!   ( for i in $(seq 1 12); do
-//!       rust/target/release/stax-rs anchor --db "$A/c.db" set big --file "$A/body.txt" \
+//!       rust/target/release/stax anchor --db "$A/c.db" set big --file "$A/body.txt" \
 //!         >/dev/null 2>>"$A/err" || echo lost >>"$A/lost"
 //!     done ) &
 //! done; wait

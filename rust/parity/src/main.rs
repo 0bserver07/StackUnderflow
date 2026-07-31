@@ -1,6 +1,6 @@
 //! The `stax-parity` binary — the differ's entry point.
 //!
-//! A stub this wave: wave 0's parity check is run by hand (`stax-rs status`
+//! A stub this wave: wave 0's parity check is run by hand (`stax status`
 //! against the Python reader on the live store, both outputs recorded in
 //! `PERF.md`'s sibling notes). Wave 1 turns that into fixture-driven runs here.
 

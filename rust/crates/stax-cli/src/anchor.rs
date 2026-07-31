@@ -1,11 +1,11 @@
-//! `stax-rs anchor` — the agent-continuity surface (`RS-1-030`..`RS-1-032`).
+//! `stax anchor` — the agent-continuity surface (`RS-1-030`..`RS-1-032`).
 //!
 //! Three verbs over the append-only sidecar in [`stax_core::anchor`]:
 //!
 //! ```text
-//! stax-rs anchor set <key> [<text>…] [--file <path>]   # append; stdin when neither
-//! stax-rs anchor get [<key>] [--json]                  # newest per key, or one key
-//! stax-rs anchor log <key> [--json]                    # one key, oldest → newest
+//! stax anchor set <key> [<text>…] [--file <path>]   # append; stdin when neither
+//! stax anchor get [<key>] [--json]                  # newest per key, or one key
+//! stax anchor log <key> [--json]                    # one key, oldest → newest
 //! ```
 //!
 //! Everything ambient — `$STAX_ANCHOR_DB`, `$CLAUDE_SESSION_ID`, the working
@@ -18,23 +18,23 @@
 //! needs are stated here rather than made:
 //!
 //! ```text
-//! mod anchor;                                                   // beside `mod status;`
+//! mod anchor;                                                   // beside `mod store;`
 //! pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};      // beside the status re-export
 //!
 //! pub enum Command {
 //!     /// Keyed, append-only campaign state that survives a context rotation.
 //!     Anchor(AnchorArgs),
-//!     Status(StatusArgs),
+//!     Store(StoreArgs),
 //! }
 //!
 //! match &cli.command {
 //!     Command::Anchor(args) => run_anchor(args),
-//!     Command::Status(args) => run_status(args),
+//!     Command::Store(args) => run_store(args),
 //! }
 //! ```
 //!
 //! `lib.rs`'s existing `status_takes_an_optional_store_path` test destructures
-//! `Command` irrefutably (`let Command::Status(args) = &cli.command;`); adding a
+//! `Command` irrefutably (`let Command::Store(args) = &cli.command;`); adding a
 //! second variant turns that into a `let … else` or a `match`. Two lines, and
 //! [`stax_core::anchor`] needs `pub mod anchor;` in its own `lib.rs`.
 
@@ -48,7 +48,7 @@ use stax_core::anchor::{
     render_set_receipt, render_text, resolve_db_path,
 };
 
-/// `stax-rs anchor` — keyed, append-only campaign state.
+/// `stax anchor` — keyed, append-only campaign state.
 #[derive(Debug, Args)]
 pub struct AnchorArgs {
     /// Anchor sidecar to use. Defaults to `$STAX_ANCHOR_DB`, else
@@ -75,7 +75,7 @@ pub enum AnchorCommand {
     Log(AnchorLogArgs),
 }
 
-/// Arguments for `stax-rs anchor set`.
+/// Arguments for `stax anchor set`.
 #[derive(Debug, Args)]
 pub struct AnchorSetArgs {
     /// The key to append under — `architect-state`, `wave-state`, …
@@ -94,7 +94,7 @@ pub struct AnchorSetArgs {
     pub file: Option<PathBuf>,
 }
 
-/// Arguments for `stax-rs anchor get`.
+/// Arguments for `stax anchor get`.
 #[derive(Debug, Args)]
 pub struct AnchorGetArgs {
     /// One key. Omit it for every key's newest anchor, key-sorted.
@@ -105,7 +105,7 @@ pub struct AnchorGetArgs {
     pub json: bool,
 }
 
-/// Arguments for `stax-rs anchor log`.
+/// Arguments for `stax anchor log`.
 #[derive(Debug, Args)]
 pub struct AnchorLogArgs {
     /// The key whose history to print.
@@ -116,7 +116,7 @@ pub struct AnchorLogArgs {
     pub json: bool,
 }
 
-/// Run `stax-rs anchor …`.
+/// Run `stax anchor …`.
 ///
 /// # Errors
 /// When the sidecar cannot be opened, the body is empty or unreadable, or a
@@ -264,7 +264,7 @@ mod tests {
 
     /// A standalone parser over [`AnchorArgs`], so the clap surface is pinned
     /// here rather than through `lib.rs` — which this wave's architect owns.
-    /// `stax-rs anchor …` and `anchor …` parse identically below the verb.
+    /// `stax anchor …` and `anchor …` parse identically below the verb.
     #[derive(Debug, Parser)]
     #[command(name = "anchor")]
     struct AnchorCli {
