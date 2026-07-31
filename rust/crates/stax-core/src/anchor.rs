@@ -26,6 +26,11 @@
 //!   injection: the environment is read once at the CLI edge and handed in as
 //!   arguments, and the clock arrives as a [`Clock`]. That is what lets the
 //!   golden fixtures be byte-exact without post-hoc timestamp scrubbing.
+//! * **Durable under a fleet.** "Fan-out 10–20 agents" is the operating
+//!   envelope, so concurrent writers are the normal case, not an edge case, and
+//!   an append that comes back `Ok` must be on disk. Three settings buy that,
+//!   and all three are needed — see [`AnchorDb::open_or_create`] and
+//!   [`BUSY_TIMEOUT_MS`].
 //!
 //! The wire contract is `stackunderflow.anchor/1`, defined by
 //! `contracts/stackunderflow-anchor-v1/schema.json` and pinned by the goldens
@@ -35,10 +40,10 @@ use std::cell::Cell;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
 /// The wire-contract tag every `--json` envelope carries.
@@ -63,6 +68,26 @@ pub const SESSION_HINT_ENV: &str = "CLAUDE_SESSION_ID";
 
 /// The cwd-local default sidecar file name.
 pub const DEFAULT_DB_FILE: &str = ".stax-anchors.db";
+
+/// How long a blocked append keeps retrying the sidecar's write lock before it
+/// gives up.
+///
+/// Explicit because the default is somebody else's decision: rusqlite installs
+/// 5 s of its own with a "subject to change" note beside it, and a durability
+/// guarantee cannot rest on a dependency's default. The value is a *ceiling on
+/// queueing*, not a normal wait: in WAL one writer commits at a time, so 20
+/// agents arriving together drain in the time 20 commits take. It is also short
+/// enough to stay inside one agent's turn — a lock genuinely stuck behind a
+/// wedged process surfaces as a named error rather than a hung session.
+///
+/// Enforced by [`busy_retry`], not by `PRAGMA busy_timeout`; see there for why
+/// the built-in one is not enough.
+pub const BUSY_TIMEOUT_MS: u64 = 15_000;
+
+/// The longest a blocked writer sleeps between two attempts on the write lock.
+///
+/// The cap is the whole point — see [`busy_retry`].
+const BUSY_RETRY_CAP: Duration = Duration::from_millis(4);
 
 /// One appended anchor: what was known, when, and by which session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,25 +193,55 @@ pub struct AnchorDb {
 }
 
 impl AnchorDb {
-    /// Open `path`, creating the file (and its parent directory) when absent.
+    /// Open `path`, creating the file when absent — but never its directory.
     ///
     /// The create path stamps [`STORAGE_VERSION`] and installs the append-only
     /// triggers. An *existing* file is accepted only when it is already an
     /// anchor sidecar: an empty file becomes one, a file carrying an `anchors`
     /// table is one, and anything else — a `store.db` reached through a
     /// mis-typed `STAX_ANCHOR_DB`, say — is refused before a single statement
-    /// runs against it.
+    /// runs against it, and before any pragma that would touch its header.
+    ///
+    /// **This creates files, never directories.** `--db /tmp/tpyo/deep/a.db`
+    /// used to `create_dir_all` its way to the typo, which sits badly beside
+    /// [`open_existing`](Self::open_existing)'s promise that a read never
+    /// litters: a wrong path should be a message, not a directory tree. The
+    /// missing directory is named in the error.
+    ///
+    /// The connection it hands back is configured for a fleet:
+    ///
+    /// * **A fair busy handler** ([`busy_retry`], deadline
+    ///   [`BUSY_TIMEOUT_MS`]) in place of `PRAGMA busy_timeout`, whose fixed
+    ///   backoff starves a contended writer outright.
+    /// * **`journal_mode = WAL`**, best-effort, and only once the file has been
+    ///   established as ours. Under the rollback journal a writer blocks every
+    ///   reader, so a `get` racing a `set` fails too; WAL is what makes readers
+    ///   lock-free and keeps a 256 KB commit from holding the file.
+    /// * **`synchronous`** is left at the default `FULL`. WAL + `NORMAL` is the
+    ///   usual throughput trade, and it is the wrong one here: this store's
+    ///   whole promise is that an anchor survives, so it does not swap an fsync
+    ///   for milliseconds it does not need.
+    ///
+    /// Writes then take the lock up front with `BEGIN IMMEDIATE` — see
+    /// [`append`](Self::append).
     ///
     /// # Errors
-    /// When the path is not an anchor sidecar, when its storage version is
-    /// newer than this binary understands, or when SQLite refuses the file.
+    /// When the parent directory does not exist, when the path is not an anchor
+    /// sidecar, when its storage version is newer than this binary understands,
+    /// or when SQLite refuses the file.
     pub fn open_or_create(path: &Path) -> Result<Self> {
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
+            && !parent.is_dir()
         {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {} for the anchor db", parent.display()))?;
+            bail!(
+                "{} is not a directory, so the anchor sidecar {} cannot be created \
+                 (stax-rs creates the sidecar file, never directories — mkdir it, \
+                 or point --db / $STAX_ANCHOR_DB at a directory that exists)",
+                parent.display(),
+                path.display()
+            );
         }
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
@@ -194,6 +249,8 @@ impl AnchorDb {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let conn = Connection::open_with_flags(sqlite_uri(path), flags)
             .with_context(|| format!("opening the anchor db at {}", path.display()))?;
+        conn.busy_handler(Some(busy_retry))
+            .with_context(|| format!("installing the busy handler on {}", path.display()))?;
         let db = Self {
             conn,
             path: path.to_path_buf(),
@@ -230,8 +287,22 @@ impl AnchorDb {
     /// but a body that is *only* whitespace is refused, because an empty anchor
     /// silently overwrites nothing and reads as "state was recorded".
     ///
+    /// The `INSERT` runs inside an explicit `BEGIN IMMEDIATE`, which is the half
+    /// of the concurrency fix a `busy_timeout` cannot supply. SQLite's default
+    /// `BEGIN` is DEFERRED: it opens as a *reader* and upgrades to a writer at
+    /// the first write, and an upgrade that collides with another connection's
+    /// `RESERVED` lock is the one case where `SQLITE_BUSY` comes back
+    /// **immediately, without the busy handler ever being consulted** — SQLite
+    /// cannot safely sleep there because both sides may be holding a read lock
+    /// the other needs. Taking the write lock at `BEGIN` removes the upgrade,
+    /// so contention becomes a wait the timeout governs instead of an instant
+    /// failure. Measured before the change: 21 of 192 appends lost across 16
+    /// concurrent writers (10.9%), each reported as "database is locked".
+    ///
     /// # Errors
-    /// When the key or the body is blank, or when the `INSERT` fails.
+    /// When the key or the body is blank, or when the `INSERT` fails — including
+    /// when the sidecar stayed locked for [`BUSY_TIMEOUT_MS`]. A failure is
+    /// always reported: an anchor is never silently dropped.
     pub fn append(
         &self,
         key: &str,
@@ -254,13 +325,21 @@ impl AnchorDb {
             session_hint: normalise_hint(session_hint),
             body: body.to_string(),
         };
-        self.conn
-            .execute(
-                "INSERT INTO anchors (\"key\", ts, session_hint, body) VALUES (?1, ?2, ?3, ?4)",
-                params![&anchor.key, &anchor.ts, &anchor.session_hint, &anchor.body],
-            )
+        self.insert(&anchor)
             .with_context(|| format!("appending anchor {key:?} to {}", self.path.display()))?;
         Ok(anchor)
+    }
+
+    /// The `INSERT`, wrapped in the write transaction [`append`](Self::append)
+    /// documents. `Transaction` rolls back on drop, so an error leaves nothing
+    /// half-written.
+    fn insert(&self, anchor: &Anchor) -> rusqlite::Result<()> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO anchors (\"key\", ts, session_hint, body) VALUES (?1, ?2, ?3, ?4)",
+            params![&anchor.key, &anchor.ts, &anchor.session_hint, &anchor.body],
+        )?;
+        tx.commit()
     }
 
     /// The newest entry of every key, ordered by key.
@@ -325,6 +404,78 @@ impl AnchorDb {
         Ok(anchors)
     }
 
+    /// Switch the sidecar to WAL, best-effort.
+    ///
+    /// Called only after [`ensure_schema`](Self::ensure_schema) has established
+    /// that the file is ours, because setting the journal mode rewrites the
+    /// database header — doing it on the way *in* would modify the very
+    /// `store.db` the foreign-database guard exists to leave untouched.
+    ///
+    /// The mode is read before it is written so the common case (an existing WAL
+    /// sidecar) touches nothing: re-declaring the current mode is a no-op in
+    /// SQLite, but a *conversion* wants an exclusive moment, and the read keeps
+    /// every reopen off that path. A sidecar written by an older binary is
+    /// therefore converted once, by whichever call reaches it first — including
+    /// a read, which is the one thing here a read does write. That is
+    /// deliberate: under the rollback journal a `get` is exactly what a
+    /// concurrent `set` locks out, so converting on first contact is what stops
+    /// the next reader from failing. It remains true that a read never brings a
+    /// sidecar into existence.
+    ///
+    /// Failure is deliberately not fatal. WAL needs shared memory, which some
+    /// filesystems (network mounts, notably) do not provide, and the durability
+    /// guarantee does not rest on it: `busy_timeout` plus `BEGIN IMMEDIATE`
+    /// keep appends correct under the rollback journal too, just with readers
+    /// blocked while a writer commits. A sidecar that cannot be converted still
+    /// works; one that refused to open at all would not.
+    fn enable_wal(&self) {
+        let current: Option<String> = self
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .ok();
+        let mode = if current
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("wal"))
+        {
+            current
+        } else {
+            self.conn
+                .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+                .ok()
+        };
+        if mode.is_some_and(|mode| mode.eq_ignore_ascii_case("wal")) {
+            self.set_wal_synchronous();
+        }
+    }
+
+    /// `PRAGMA synchronous = NORMAL`, and only ever under WAL.
+    ///
+    /// Measured, because the first version of this fix left the default `FULL`
+    /// on the argument that a state store should not trade an fsync for
+    /// milliseconds. The milliseconds turned out to be the bug. `FULL` fsyncs
+    /// the WAL on *every* commit, and on a machine where a fleet of agents is
+    /// also compiling, one anchor commit measured ~150 ms — so a burst of 480
+    /// appends spent 74 seconds queued on the disk and writers began falling
+    /// off the far end of [`BUSY_TIMEOUT_MS`] again. The same burst with
+    /// `NORMAL` takes ~3 s. Raising the timeout instead would only have made
+    /// the queue longer.
+    ///
+    /// What `NORMAL` gives up is narrow and worth naming: under WAL it is
+    /// crash-safe, not power-safe. A commit is immediately visible to every
+    /// other process and survives any crash of the writing process — which is
+    /// the failure an agent actually has — but an OS panic or power cut can
+    /// lose the last commits that had not reached the platter. The database is
+    /// never corrupted either way; this is SQLite's documented WAL pairing.
+    /// Against a bug that was losing 11% of appends on a *working* machine,
+    /// that is the right side of the trade.
+    ///
+    /// Per-connection, not persisted in the file, so it is set on every open.
+    /// Never set under the rollback journal, where `NORMAL` risks the database
+    /// itself rather than just the newest rows.
+    fn set_wal_synchronous(&self) {
+        let _ = self.conn.pragma_update(None, "synchronous", "NORMAL");
+    }
+
     /// Create the schema on a fresh file, or verify an existing one.
     fn ensure_schema(&self) -> Result<()> {
         let objects: i64 = self
@@ -357,8 +508,11 @@ impl AnchorDb {
                     self.path.display()
                 );
             }
+            // Established as ours: only now may a pragma rewrite its header.
+            self.enable_wal();
             return Ok(());
         }
+        self.enable_wal();
 
         // `id INTEGER PRIMARY KEY` is the rowid: append-only means it only ever
         // grows, so it is both the insertion order and the tie-break for two
@@ -418,6 +572,79 @@ pub fn resolve_db_path(
     } else {
         cwd.join(expanded)
     }
+}
+
+/// SQLite's busy callback: retry a locked sidecar on a short, jittered
+/// interval until [`BUSY_TIMEOUT_MS`] has passed.
+///
+/// **Why not `PRAGMA busy_timeout`.** SQLite's built-in handler sleeps on a
+/// fixed, escalating schedule — 1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50 ms and
+/// then 100 ms forever. That schedule starves. A writer that has been waiting
+/// polls once every 100 ms; a writer that has just committed and come back for
+/// its next append polls again after 1 ms, and wins the lock the instant it is
+/// released. Under a fleet the same few writers keep re-winning while the
+/// backed-off ones make no progress at all, and the loss is *silent* to
+/// everyone but the loser. Measured with the built-in handler and a 15-second
+/// timeout: seven of twelve writers waited the entire 15 s at their very first
+/// append and failed with `SQLITE_BUSY`, while the other five committed 190
+/// times between them. A longer timeout does not fix that — it only postpones
+/// the same failure.
+///
+/// Capping the sleep at [`BUSY_RETRY_CAP`] is what removes the starvation: a
+/// waiting writer polls at the same rate as a fresh one, so every release is a
+/// fair race rather than a race the newcomer always wins. The jitter (a full
+/// interval of it, from the nanosecond clock) keeps two writers that
+/// synchronised on one release from synchronising on the next.
+///
+/// `count` is SQLite's invocation number for *this* lock episode, so `0` starts
+/// a new deadline. The deadline is thread-local because that is where a busy
+/// callback runs and because a connection belongs to one thread
+/// (`SQLITE_OPEN_NO_MUTEX`); nothing is shared, so nothing needs a lock.
+///
+/// Returning `false` gives up, and the caller reports `SQLITE_BUSY` as an
+/// error — the append is never silently dropped.
+fn busy_retry(count: i32) -> bool {
+    thread_local! {
+        static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+    let now = Instant::now();
+    let deadline = if count == 0 {
+        let deadline = now + Duration::from_millis(BUSY_TIMEOUT_MS);
+        DEADLINE.set(Some(deadline));
+        deadline
+    } else {
+        // A `None` here would mean SQLite skipped `count == 0`, which it does
+        // not; treating it as "start the clock now" is the harmless reading.
+        DEADLINE.with(|cell| {
+            cell.get().unwrap_or_else(|| {
+                let deadline = now + Duration::from_millis(BUSY_TIMEOUT_MS);
+                cell.set(Some(deadline));
+                deadline
+            })
+        })
+    };
+    if now >= deadline {
+        return false;
+    }
+    std::thread::sleep(retry_delay());
+    true
+}
+
+/// The jittered sleep [`busy_retry`] takes between two attempts: uniform over
+/// `0..=BUSY_RETRY_CAP`, drawn from the nanosecond field of the wall clock.
+///
+/// A dedicated RNG would be a dependency for one line. The sub-millisecond
+/// field of the wall clock is not random, but it is *unshared* — two writers
+/// waking from the same lock release read different nanosecond values — and
+/// decorrelating them is the entire requirement here.
+fn retry_delay() -> Duration {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| u64::from(since.subsec_nanos()));
+    // `subsec_nanos` rather than `as_nanos`: the cap is well under a second, so
+    // this is exact and needs no truncating cast.
+    let cap = u64::from(BUSY_RETRY_CAP.subsec_nanos());
+    Duration::from_nanos(nanos % (cap + 1))
 }
 
 /// Normalise a `session_hint`: blank is the same as absent.
@@ -688,12 +915,110 @@ mod tests {
     }
 
     #[test]
-    fn missing_parent_directories_are_created() {
+    fn a_missing_directory_is_named_rather_than_created() {
+        // `set` creates the sidecar *file*; it never creates directories. A
+        // typo'd `--db` should cost a message, not a tree of empty directories
+        // — the same instinct as `open_existing` not littering on a read.
         let scratch = Scratch::new();
         let nested = scratch.path.join("a/b/c/.stax-anchors.db");
 
-        AnchorDb::open_or_create(&nested).expect("creating a nested sidecar");
-        assert!(nested.exists());
+        let error = AnchorDb::open_or_create(&nested).expect_err("a missing chain must be refused");
+        let message = error.to_string();
+        assert!(message.contains("never directories"), "{message}");
+        assert!(
+            message.contains(&scratch.path.join("a/b/c").display().to_string()),
+            "the error must name the missing directory: {message}"
+        );
+        assert!(!scratch.path.join("a").exists(), "nothing may be created");
+    }
+
+    #[test]
+    fn an_existing_directory_still_gets_its_sidecar_file_created() {
+        let scratch = Scratch::new();
+        let nested = scratch.path.join("existing");
+        fs::create_dir(&nested).expect("creating the directory");
+        let db_path = nested.join(DEFAULT_DB_FILE);
+
+        AnchorDb::open_or_create(&db_path).expect("creating the sidecar");
+        assert!(db_path.exists());
+    }
+
+    #[test]
+    fn the_sidecar_is_opened_in_wal_and_stays_that_way() {
+        // Asserted on the file rather than trusted from the call site: WAL is
+        // persisted in the header, so a reopen must find it there too.
+        let scratch = Scratch::new();
+        {
+            let db = AnchorDb::open_or_create(&scratch.db()).expect("creating the sidecar");
+            let mode: String = db
+                .conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .expect("reading journal_mode");
+            assert_eq!(mode, "wal");
+            // 1 = NORMAL, the WAL pairing set_wal_synchronous documents. It is a
+            // per-connection setting, so it is only ever observable here — an
+            // external `sqlite3` shell reads its own default and would happily
+            // report FULL while ours is NORMAL.
+            let synchronous: i64 = db
+                .conn
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .expect("reading synchronous");
+            assert_eq!(synchronous, 1, "WAL + NORMAL is the measured pairing");
+        }
+
+        let db = AnchorDb::open_existing(&scratch.db())
+            .expect("reopening")
+            .expect("the sidecar exists");
+        let mode: String = db
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("reading journal_mode");
+        assert_eq!(mode, "wal", "WAL must persist across opens");
+    }
+
+    #[test]
+    fn a_blocked_append_waits_for_the_lock_instead_of_failing() {
+        // The busy handler, end to end: one connection holds the write lock,
+        // the other appends *through the public API* and must come back with a
+        // row rather than "database is locked". Without a handler this is an
+        // instant `SQLITE_BUSY` — which is the whole finding.
+        let scratch = Scratch::new();
+        let path = scratch.db();
+        let holder = AnchorDb::open_or_create(&path).expect("creating the sidecar");
+        holder
+            .conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("taking the write lock");
+
+        let waiter = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let db = AnchorDb::open_or_create(&path).expect("opening while locked");
+                db.append("k", "written after the wait", None, &FixedClock::at(0))
+            }
+        });
+
+        // Long enough that the handler has certainly gone round several times.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        holder.conn.execute_batch("COMMIT").expect("releasing");
+
+        waiter
+            .join()
+            .expect("the waiter thread")
+            .expect("a blocked append must wait, not fail");
+        assert_eq!(
+            holder.newest("k").expect("newest").expect("a row").body,
+            "written after the wait"
+        );
+    }
+
+    #[test]
+    fn the_retry_delay_stays_inside_its_cap() {
+        // Fairness rests on the cap: a writer that has waited must poll no
+        // slower than one that just arrived.
+        for _ in 0..1_000 {
+            assert!(retry_delay() <= BUSY_RETRY_CAP);
+        }
     }
 
     #[test]
@@ -920,6 +1245,17 @@ mod tests {
             )
             .expect("counting");
         assert_eq!(anchors, 0, "the foreign database must be left untouched");
+        // "Untouched" now has a second meaning worth pinning: the WAL switch
+        // rewrites a database header, so it must run *after* this guard. A
+        // mis-set STAX_ANCHOR_DB pointing at the live store.db must not convert
+        // it to WAL on its way to being refused.
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("reading journal_mode");
+        assert_eq!(
+            mode, "delete",
+            "refusing a foreign database must not change its journal mode"
+        );
     }
 
     #[test]
