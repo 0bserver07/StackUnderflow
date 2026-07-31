@@ -81,6 +81,12 @@ D-stats-days-zero   | GET | /api/stats?days=0                 | -
 D-stats-details     | GET | /api/stats?details=true           | -
 D-stats-include     | GET | /api/stats?include=overview       | -
 D-stats-include-2   | GET | /api/stats?include=overview&include=models | -
+# The 422 shape. Added by batch C after `DD-bad-int` / `MSG-tz-bad` caught the
+# identical bug in the sibling handlers: no D-stats row had ever sent an
+# uncoercible value, so `/api/stats` shipped `{"detail":"days"}` where FastAPI
+# ships pydantic's structured list. Fixed and covered in the same pass.
+D-stats-bad-int     | GET | /api/stats?days=abc               | -
+D-stats-bad-bool    | GET | /api/stats?details=maybe          | -
 
 # ── the ensure_ascii proof ───────────────────────────────────────────────────
 # The `cursor` project's display_name is
@@ -409,3 +415,1097 @@ B-put-missing       | PUT | /api/bookmarks/no-such-bookmark      | {"notes": "x"
 !A-graph            | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
 !A-graph-missing    | GET | /api/agent-teams/no-such-session     | -
 !A-transcript       | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | -
+
+# ═══ BATCH C — the service-layer remainder ═══════════════════════════════════
+#
+# Every row below runs AFTER `P-by-dir-known`, so a project is selected and the
+# `log_path`-defaulting routes resolve to it. Each member's sidecar file
+# (`parity/endpoint-cases-c-<name>.txt`) opens with its own copy of that
+# selection row so it can be run standalone with `--only`; the copies are
+# stripped here, where the shared file already selects earlier.
+#
+#   X-*             routes/export.py          (RS-5-073)
+#   OPT-/PRE-/CMD-  routes/optimize.py        (RS-5-074..076)
+#   PL-*            routes/plan.py            (RS-5-090)
+#   CMP-*           routes/compare.py         (RS-5-059)
+#   Y-*             routes/yield_route.py     (RS-5-116)
+#   CB-*            routes/context_budget.py  (RS-5-060)
+#   CR-*            routes/context_replay.py  (RS-5-061)
+#   DD-/MSG-/MS-    routes/data.py            (RS-5-067..069)
+#
+# `POST /api/refresh` (RS-5-070) is ported and has NO ROW, here or anywhere. It
+# re-runs ingest — it writes the store every row above reads — and a `!` row
+# still ISSUES the request (DIV-059). Its procedure is `rust/REFRESH-DIFFER.md`,
+# on a throwaway state copy with its own ports.
+
+# ── from parity/endpoint-cases-c-export.txt ─────────────────────────
+# BATCH C / export — the case matrix for `GET /api/export` (RS-5-073).
+#
+# Same row format as `parity/endpoint-cases.txt`, whose header documents it:
+#
+#   <id> | <METHOD> | <path-and-query> | <json body or ->
+#
+# A leading `!` marks a KNOWN-OPEN case: reported in full under a loud banner,
+# never fatal. Every row below is a read-only GET; nothing here writes.
+#
+# Run it with batch C's own ports (A owns :8096/:8097 defaults):
+#
+#   STAX_ENDPOINT_CASES=rust/parity/endpoint-cases-c-export.txt \
+#   rust/endpoint-parity.sh
+#
+# :8095 is the maintainer's live server. Never bind it.
+#
+# NOTE on the id prefix: batch B's `routes/search.py` rows also use `X-`. The
+# two sets were checked and do not collide — B's are `X-stats`, `X-basic`,
+# `X-page*`, `X-filter-*`, `X-operators`, `X-quote`, `X-multi-word`,
+# `X-bad-int`; these are all `X-csv-*`, `X-json-*` or a validation name none of
+# those uses. The only row shared with the merged matrix is `P-by-dir-known`,
+# which the integrator strips.
+#
+# ── ORDER ────────────────────────────────────────────────────────────────────
+#
+# `deps.current_log_path` is server state, so the file opens with the selection
+# row every merged matrix needs. `/api/export` itself does NOT read it — every
+# scope it uses comes from the query string — but the row is here so this file
+# runs standalone in the same state the shared matrix establishes. The
+# integrator strips it when merging (it already runs earlier there).
+#
+# ── SIDE EFFECTS: none, and that was checked rather than assumed ─────────────
+#
+# `routes/export.py` opens its own connection and calls `schema.apply(conn)` on
+# every request — a MIGRATION runner. On `.parity-state/fresh` it is a no-op:
+# `PRAGMA user_version` is 30 and the highest migration in both trees is
+# `v030_live_indexes.sql`, so `_discover()` yields nothing and nothing is
+# written. Measured on the harness store before these rows were written. If the
+# home is ever repointed at a store behind on migrations, the FIRST request
+# from the Python side migrates it and the Rust side then reads a store the
+# reference just changed — see DIV-132 before moving this file to a new home.
+#
+# ── WHAT CAN BE GREEN, AND WHAT CANNOT ───────────────────────────────────────
+#
+# Only two of the four period names are stable within a calendar day:
+#
+#   period=today  -> scope spec `today`   midnight..23:59:59, no microseconds  STABLE
+#   period=all    -> scope spec `all`     unbounded                            STABLE
+#   period=week   -> scope spec `7days`   now - 7d, CARRIES THE MICROSECOND    rolling
+#   period=month  -> scope spec `30days`  now - 30d, CARRIES THE MICROSECOND   rolling
+#   (no period)   -> the rollup: today + 7days + 30days, plus a `generated`
+#                    wall-clock stamp IN THE BODY                             rolling
+#
+# `period=month` does NOT reach `scope.parse_period("month")` (the calendar
+# month) — `EXPORT_PERIOD_MAP` maps it to `30days`. So this endpoint has no
+# calendar-month window at all, and `month` is as rolling as `week` is.
+#
+# The rolling bounds land in the JSON payload as `since` / `until`, so a
+# `format=json` row on `week` / `month` / the rollup can NEVER be byte-equal:
+# two servers, two microsecond samples. Those rows carry `!`. The CSV renderer
+# does not print the bounds, so the same windows diff cleanly there — with the
+# same residual risk `CD-prov-week` carries in the shared file: a message
+# landing inside the few-millisecond gap between the two clock reads is a real
+# (if rare) divergence, not noise.
+#
+# ── COST, which is why the shapes below are scoped the way they are ──────────
+#
+# `deep` is `fmt == "json"`, and the deep pass runs the WHOLE aggregator
+# pipeline once per in-scope project. `format=json` with no project filter over
+# `period=all` would run it for ~300 projects — the same class of accident
+# `!X-reindex` was (DIV-078). Every JSON row below is therefore bounded, either
+# by `period=today` (one project has messages today on this snapshot) or by an
+# explicit `project=`. The CSV rows are pure aggregate SQL and are safe
+# unbounded; `X-csv-all` sweeps 383,580 messages four times and takes seconds,
+# which is inside the differ's 300 s timeout with room to spare.
+#
+# Fixtures, measured on `.parity-state/fresh`:
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow   claude, 1,279 messages
+#   -Users-yadkonrad-dev-dev-year26-jun26-worldcup             claude, 32 messages
+#   providers present: claude, codex, cursor, gemini, grok, antigravity, …
+
+
+# ── CSV, the cheap window: every query-parameter branch ──────────────────────
+X-csv-today         | GET | /api/export?format=csv&period=today | -
+X-csv-today-prov    | GET | /api/export?format=csv&period=today&provider=claude | -
+X-csv-prov-none     | GET | /api/export?format=csv&period=today&provider=nosuchprovider | -
+# `if provider:` — the EMPTY string is falsy and must filter nothing, rather
+# than becoming `WHERE projects.provider = ''` and emptying the export.
+X-csv-prov-blank    | GET | /api/export?format=csv&period=today&provider= | -
+X-csv-project       | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+X-csv-project-multi | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+X-csv-project-none  | GET | /api/export?format=csv&period=today&project=-no-such-project-anywhere | -
+X-csv-exclude       | GET | /api/export?format=csv&period=today&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+# include AND exclude naming the same slug: exclude is applied second and wins.
+X-csv-both-filters  | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── CSV, the full sweep and the rolling windows ──────────────────────────────
+# The flagship: four unbounded passes over the whole messages table, every
+# project, every model, priced through the primed price book (DIV-056).
+X-csv-all           | GET | /api/export?format=csv&period=all | -
+# DIV-131's provider pooling, on a slug that really does exist under three
+# providers here (claude / codex / antigravity). The `daily` rows keep them
+# apart on `(day, provider, slug)`; the per-project roll keys on the SLUG alone,
+# so the single `projects` entry reports the first-seen provider with the counts
+# summed across all three. If the port had keyed that map on `(provider, slug)`
+# — the obvious "fix" — this row is where it would show.
+X-csv-multiprov     | GET | /api/export?format=csv&period=all&project=-Users-yadkonrad-dev-dev-year26-feb26-chimera | -
+# Rolling instants. The CSV body does not render `since`/`until`, so these are
+# expected GREEN — a red here means a message landed in the clock gap.
+X-csv-week          | GET | /api/export?format=csv&period=week | -
+X-csv-month         | GET | /api/export?format=csv&period=month | -
+# No `period` at all: the today + 7d + 30d rollup. `generated` is in the JSON
+# payload but NOT in the CSV rendering, so this one can be green too.
+X-csv-rollup        | GET | /api/export?format=csv | -
+
+# ── JSON: the pretty, ensure_ascii=True body and the deep breakdowns ─────────
+# This is the writer proof for this endpoint. `render_export_json` is
+# `json.dumps(payload, indent=2)` — the CLI writer — so a non-ASCII project
+# name ships ESCAPED here while `/api/projects` ships it raw. If this row is
+# byte-identical the port picked the right one of the two writers.
+X-json-today        | GET | /api/export?format=json&period=today | -
+X-json-project      | GET | /api/export?format=json&period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+X-json-small-proj   | GET | /api/export?format=json&period=all&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+# Zero candidates: the deep pass produces four empty lists and the daily /
+# projects / models sections are empty too. The `totals` block is the literal's
+# int/float mix (`cost_usd: 0.0`, everything else `0`) — DIV-057's split.
+X-json-miss         | GET | /api/export?format=json&period=all&project=-no-such-project-anywhere | -
+# `?format=csv&format=json` — starlette's scalar rule takes the LAST value, so
+# this is a JSON export. The intuitive "first wins" would fail here.
+X-json-last-wins    | GET | /api/export?format=csv&format=json&period=today | -
+
+# ── JSON on a rolling window: reported every run, never green ────────────────
+# `since` / `until` carry the microsecond of each server's own clock read, so
+# these two are structurally undiffable. Safe to execute (read-only, and both
+# are project-scoped so the deep pass runs once per window, not 300 times).
+!X-json-week        | GET | /api/export?format=json&period=week&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+# The rollup additionally embeds `generated`, a full ISO instant.
+!X-json-rollup      | GET | /api/export?format=json&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+
+# ── validation: the 422 and the two 400 shapes ───────────────────────────────
+# `format` is `Query(...)`, i.e. REQUIRED — an absent one is pydantic's
+# `missing` entry, not a 400.
+X-no-format         | GET | /api/export | -
+X-no-format-period  | GET | /api/export?period=today | -
+# `?format=` is PRESENT, so it passes the required check and then fails the
+# allow-list: a 400 with a `detail` STRING, not a 422 with a detail LIST.
+X-empty-format      | GET | /api/export?format= | -
+X-bad-format        | GET | /api/export?format=xml | -
+# The detail embeds `sorted({...})` through repr: `['csv', 'json']`, single
+# quotes, space after the comma.
+X-bad-format-case   | GET | /api/export?format=CSV | -
+# `if period is not None and period not in _VALID_PERIODS` — `?period=` is not
+# None, so the empty string reaches the allow-list and 400s.
+X-empty-period      | GET | /api/export?format=csv&period= | -
+X-bad-period        | GET | /api/export?format=csv&period=fortnight | -
+# The scope vocabulary is NOT the export vocabulary: `7days` is a valid
+# `parse_period` spec and an invalid `?period=`.
+X-scope-period      | GET | /api/export?format=csv&period=7days | -
+X-bad-period-case   | GET | /api/export?format=csv&period=Today | -
+# Both invalid: `format` is checked FIRST, so the format message wins.
+X-both-invalid      | GET | /api/export?format=xml&period=fortnight | -
+
+# ── method ──────────────────────────────────────────────────────────────────
+X-method            | POST | /api/export?format=csv | {}
+
+# ── from parity/endpoint-cases-c-optimize.txt ─────────────────────────
+# Batch C / `optimize` — endpoint differ cases for `routes/optimize.py`.
+#
+# Format is `rust/parity/endpoint-cases.txt`'s, read that file's header first.
+# The integrator merges these into the shared file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ── ORDER IS SIGNIFICANT, and here it is significant TWICE ───────────────────
+#
+# The usual reason applies (`deps.current_log_path` is server state). The second
+# reason is specific to this module: `/api/optimize` returns `"cache": "hit"` or
+# `"cache": "miss"` **in the response body**, so the in-process memo is an
+# answer-changer and the rows below are a scripted hit/miss sequence, not a set.
+# Both servers start cold and read the same file top to bottom, so they agree —
+# but reordering, deleting or re-running a single row changes the expected
+# bytes of every later row with the same cache key. See DIV-111.
+#
+# Cache key = (period, sorted(project), sorted(exclude)) + store.db's mtime_ns.
+#
+# ── the rolling-window caveat ────────────────────────────────────────────────
+#
+# `7days` / `30days` bound on `now`, so the two servers compute bounds a few
+# milliseconds apart and a message inside that gap is a real (if rare)
+# divergence — the same property `CD-prov-week` already carries. It bites at
+# most ONCE per cache key here, because every later request on that key is
+# served from the memo. The `force` row is deliberately on `period=all`, whose
+# bounds are `None` on both sides, so the one row that recomputes on purpose is
+# the one row with nothing to drift.
+#
+# ── LAW 7 ────────────────────────────────────────────────────────────────────
+#
+# `/api/optimize` writes nothing: the detectors only stat/read under
+# `~/.claude`, the pricing engine only reads `models.toml`, and the memo is
+# process memory. Verified against the sources, not the docstring (DIV-118).
+#
+# `/api/optimize/prescriptions` reads the same `~/.claude` CLAUDE.md files the
+# bloat detector already scanned and writes nothing;
+# `/api/optimize/claudemd-preview` is a pure function of the request body — no
+# filesystem read at all. Both are case-row-safe; both have rows below.
+
+
+# ── validation, first: these never reach the cache and never write to it ─────
+OPT-bad-period      | GET | /api/optimize?period=week           | -
+OPT-empty-period    | GET | /api/optimize?period=               | -
+OPT-period-case     | GET | /api/optimize?period=30Days         | -
+OPT-bad-force       | GET | /api/optimize?force=maybe           | -
+
+# ── the default key (30days, (), ()) — miss, then two hits ──────────────────
+# `period=30days` is the DECLARED default, so the third row is the same cache
+# key as the first two and must come back "hit" on both servers.
+OPT-default         | GET | /api/optimize                       | -
+OPT-default-again   | GET | /api/optimize                       | -
+OPT-period-30days   | GET | /api/optimize?period=30days         | -
+# starlette takes the LAST occurrence of a scalar, so this is still 30days.
+OPT-period-last     | GET | /api/optimize?period=today&period=30days | -
+
+# ── the calendar-stable periods, one fresh key each ─────────────────────────
+OPT-today           | GET | /api/optimize?period=today          | -
+OPT-7days           | GET | /api/optimize?period=7days          | -
+OPT-month           | GET | /api/optimize?period=month          | -
+
+# ── period=all: miss, hit, then the force bypass and its consequence ────────
+# `force=true` skips the READ and still writes back, so OPT-all-after-force is
+# a hit on the FORCED payload. The force row sits at the end of its key group
+# precisely so it cannot poison a row that expects the pre-force value.
+OPT-all             | GET | /api/optimize?period=all            | -
+OPT-all-again       | GET | /api/optimize?period=all            | -
+OPT-all-force       | GET | /api/optimize?period=all&force=true | -
+OPT-all-after-force | GET | /api/optimize?period=all            | -
+# `force=false` is the default and takes the cached value.
+OPT-all-force-false | GET | /api/optimize?period=all&force=false | -
+
+# ── project / exclude scoping, all on the stable `all` window ───────────────
+OPT-project-self    | GET | /api/optimize?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+OPT-project-unknown | GET | /api/optimize?period=all&project=-no-such-project-anywhere | -
+OPT-exclude-self    | GET | /api/optimize?period=all&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+OPT-both-filters    | GET | /api/optimize?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&exclude=-no-such-project-anywhere | -
+
+# ── the sorted-key collision: `?project=b&project=a` == `?project=a&project=b`
+# `tuple(sorted(project))` means the SECOND of these is a cache HIT on the
+# first, even though the query strings differ. That is the single most
+# surprising thing about this endpoint's cache and it gets its own pair.
+OPT-multi-ba        | GET | /api/optimize?period=all&project=zzz-b&project=aaa-a | -
+OPT-multi-ab        | GET | /api/optimize?period=all&project=aaa-a&project=zzz-b | -
+
+# ── the empty-result end of the range ───────────────────────────────────────
+# Every filter matches nothing: empty `waste`, empty mart-backed detectors, and
+# `total_waste_usd` renders as whatever the FILESYSTEM detectors leave behind
+# (they ignore the store entirely — DIV-116).
+OPT-scope-empty     | GET | /api/optimize?period=today&project=-no-such-project-anywhere | -
+
+
+# ── GET /api/optimize/prescriptions ─────────────────────────────────────────
+# No cache here — every call recomputes, so these rows are order-independent
+# among themselves. They DO depend on the project selection above: with no
+# `?project=`, the slug falls back to `deps.current_log_path`'s basename, which
+# `P-by-dir-known` set. `?project=` with an unknown slug resolves to an empty
+# project-id list, which is "matched nothing", NOT "the whole store".
+PRE-bad-period      | GET | /api/optimize/prescriptions?period=week | -
+PRE-default         | GET | /api/optimize/prescriptions          | -
+PRE-all             | GET | /api/optimize/prescriptions?period=all | -
+PRE-today           | GET | /api/optimize/prescriptions?period=today | -
+PRE-month           | GET | /api/optimize/prescriptions?period=month | -
+PRE-project-self    | GET | /api/optimize/prescriptions?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+PRE-project-unknown | GET | /api/optimize/prescriptions?period=all&project=-no-such-project-anywhere | -
+# An EMPTY `?project=` is falsy in Python and falls back to the active project,
+# exactly as if the parameter were absent.
+PRE-project-empty   | GET | /api/optimize/prescriptions?period=all&project= | -
+
+# ── POST /api/optimize/claudemd-preview ─────────────────────────────────────
+# A pure function of the body: no filesystem, no store write, no cache. Every
+# row here is independent of every other row in the file.
+CMD-clean           | POST | /api/optimize/claudemd-preview | {"text": "# Title\n\nA short paragraph that is here once.\n"}
+CMD-comments        | POST | /api/optimize/claudemd-preview | {"text": "# Title\n\n<!-- author note\nspanning lines -->\n\nBody text goes here and is long enough to matter for the dedupe rule check.\n\n\n\n\nTail.\n"}
+CMD-dupes           | POST | /api/optimize/claudemd-preview | {"text": "# T\n\nA duplicated paragraph long enough to pass the sixty character floor easily.\n\nA duplicated paragraph long enough to pass the sixty character floor easily.\n\nEnd.\n"}
+CMD-empty-text      | POST | /api/optimize/claudemd-preview | {"text": ""}
+CMD-label           | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "file_label": "repo/CLAUDE.md"}
+CMD-sessions        | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": 250}
+# Lax coercion: a numeric string, a whole float and `true` are all valid ints.
+CMD-sessions-str    | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": " 5 "}
+CMD-sessions-float  | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": 5.0}
+CMD-sessions-true   | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": true}
+# An unknown key is ignored, not rejected.
+CMD-extra-key       | POST | /api/optimize/claudemd-preview | {"text": "# T\n", "nope": 1}
+
+# ── the 422 shapes, each measured against the reference before it was written
+CMD-missing-text    | POST | /api/optimize/claudemd-preview | {}
+CMD-text-int        | POST | /api/optimize/claudemd-preview | {"text": 3}
+CMD-text-null       | POST | /api/optimize/claudemd-preview | {"text": null}
+CMD-label-int       | POST | /api/optimize/claudemd-preview | {"text": "x", "file_label": 3}
+CMD-sessions-zero   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 0}
+CMD-sessions-false  | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": false}
+CMD-sessions-huge   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 100001}
+CMD-sessions-abc    | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": "abc"}
+CMD-sessions-frac   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 5.5}
+CMD-sessions-list   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": []}
+CMD-all-bad         | POST | /api/optimize/claudemd-preview | {"sessions_per_month": "z", "file_label": 2, "text": 1}
+CMD-not-an-object   | POST | /api/optimize/claudemd-preview | []
+
+# ── deliberately ABSENT rows, with the reason ───────────────────────────────
+#
+# * **malformed JSON.** pydantic reports
+#   `{"type":"json_invalid","loc":["body",<byte offset>],"ctx":{"error":<parser
+#   message>}}`, and both the offset and the message come from pydantic-core's
+#   own parser. The port emits a fixed `offset 0 / "Expecting value"` shape,
+#   which is only verified for leading garbage. Recorded as DIV-119 rather
+#   than asserted here — no row claims a shape that was not measured.
+# * **the 413 branch.** It needs a body over 2 MB, which does not belong in a
+#   line-oriented case file. Covered by a unit test on the rendered error
+#   instead (`the_oversize_guard_is_the_413_and_it_counts_bytes`).
+# * **an empty request body.** The differ's `-` means "send no body at all",
+#   which also drops the `content-type`; FastAPI's answer then depends on the
+#   client's framing rather than on the port. Covered by a unit test
+#   (`an_empty_body_and_a_non_object_body_fail_differently`).
+
+# ── from parity/endpoint-cases-c-plan.txt ─────────────────────────
+# Batch C / member `plan` — case rows for `GET /api/plan` (RS-5-090).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# `/api/plan` takes NO query parameters — it is a pure function of
+# `config.json`, `store.db` and the clock — so the matrix is thin by nature.
+# What it can still prove is the null-plan payload byte for byte, the two
+# router fallbacks, and that the endpoint is genuinely side-effect free.
+#
+# Side effects: NONE. Every row below is a GET or an unclaimed method on
+# `/api/plan`. The handler opens the store read-write (that is what
+# `store/db.py::connect` does on both sides) but issues only SELECTs; the
+# Python side additionally runs `schema.apply`, which is idempotent DDL the
+# harness store already satisfies. Nothing under `$STACKUNDERFLOW_HOME` is
+# written. Law 7 is satisfied.
+#
+# COVERAGE GAP, stated up front (see DIV-c-plan.md): the harness home's
+# `config.json` carries no `plan_name` / `plan_monthly_usd`, so `PL-plan`
+# exercises the NULL branch only. The spend rollup, the billing window, the
+# burn projector and the currency conversion are covered by unit tests, not by
+# this matrix. Setting a plan is a home mutation, not a case row.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── the endpoint ─────────────────────────────────────────────────────────────
+# The happy path. On the harness home this is the no-plan payload:
+#   {"plan":null,"usage":null,"projection":null,"currency":{...}}
+# `currency` is stamped even in the null branch, and `rate_from_usd` must render
+# `1.0` and not `1` — a one-byte difference the pyjson writer is the only thing
+# guarding.
+PL-plan             | GET | /api/plan                          | -
+
+# Repeat immediately. Python memoises the spend rollup (`_SPEND_CACHE`) and the
+# port does not (DIV-091), so this row is the cheapest available proof that the
+# memo cannot change the answer within one store revision. It is also the row
+# that would catch a first-call-only side effect.
+PL-plan-repeat      | GET | /api/plan                          | -
+
+# `/api/plan` is not project-scoped — it has no `_require_project()` guard — so
+# it must answer identically whether or not a project has been selected. This
+# row runs AFTER the selection above; a divergence here would mean one of the
+# two servers is leaking `deps.current_log_path` into a global rollup.
+PL-plan-any-project | GET | /api/plan                          | -
+
+# ── error / fallback shapes ──────────────────────────────────────────────────
+# The route is GET-only, so FastAPI's router raises HTTPException(405) and the
+# installed handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's
+# native 405 is an empty body with no content-type; `crate::json` restores
+# starlette's. Body is `-` because a 405 is decided before the body is read.
+PL-plan-post        | POST | /api/plan                         | -
+PL-plan-put         | PUT  | /api/plan                         | -
+PL-plan-delete      | DELETE | /api/plan                       | -
+
+# Neighbouring paths nothing claims — FastAPI's `{"detail":"Not Found"}`, not
+# starlette's plain-text default. `/api/plans` (plural) is the typo a client
+# actually makes; the trailing slash is the one a proxy adds.
+PL-plan-plural      | GET | /api/plans                         | -
+# `/api/plan/` (trailing slash) is starlette's `redirect_slashes`: it answers
+# 307 with a `location` header, and axum 0.8 removed the equivalent. This is an
+# APP-LEVEL gap — it applies to EVERY one of the 93 endpoints, not to plan —
+# so the row is known-open and the fix (a `NormalizePathLayer` in `lib.rs`, or
+# 93 duplicate routes) is the architect's to place. DIV-133.
+!PL-plan-slash       | GET | /api/plan/                         | -
+PL-plan-subpath     | GET | /api/plan/status                   | -
+
+# A query string on a parameter-less endpoint is ignored, not rejected: neither
+# FastAPI nor axum validates unknown query keys, so this must be byte-identical
+# to `PL-plan`. It is here because "and then someone adds a parameter" is how a
+# 422 quietly appears on a surface that never had one.
+PL-plan-junk-query  | GET | /api/plan?nonsense=1&days=7        | -
+
+# ── from parity/endpoint-cases-c-compare.txt ─────────────────────────
+# BATCH C / compare — `GET /api/compare` (RS-5-059).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. This is a
+# SIDECAR file; the integrator merges it into the shared matrix and strips the
+# leading `P-by-dir-known` row, which already runs earlier there.
+#
+# ── READ THIS BEFORE WONDERING WHY THE 200s ARE ALL `!` ──────────────────────
+#
+# The payload is `{"period": …, "models": [...], "generated": time.time()}`.
+# `generated` is a wall-clock float, read *after* the query runs, and the differ
+# compares BODY BYTES with no field masking. So every 200 from this endpoint is
+# a guaranteed divergence on one field, in every run, forever — not a port
+# defect and not something a port can fix. Every 200 row below is therefore a
+# `!` (known-open): reported under the banner, never fatal.
+#
+# That would leave the endpoint with no evidence at all, so the evidence was
+# produced out of band instead. With `generated` pinned to the same value on
+# both sides, `build_compare_payload` was run against
+# `.parity-state/fresh/store.db` (the differ's own corpus, opened read-only) for
+# fourteen argument combinations — both codepaths, both filters, the case-fold,
+# the misses — and every one rendered BYTE-IDENTICAL to the Python. Method,
+# script and the one seam that broke it are in `DIV-c-compare.md` (DIV-085).
+#
+# The two things that WOULD have to be true for these rows to go green:
+#   * the differ learns to mask a named field per case, or
+#   * `pyserver.py` pins `time.time()` — which its own docstring forbids
+#     ("NOT patched, on purpose: anything that changes a RESPONSE").
+# Neither is this batch's file to edit. Flagged, not decided.
+#
+# The 4xx/405 rows below carry no `generated` at all and ARE deterministic, so
+# they are plain rows and they do gate.
+#
+# Side effects: none. Every codepath here is `SELECT`-only. Python additionally
+# runs `schema.apply(conn)` per request, which is a `PRAGMA user_version` read
+# and an immediate return on a current store (DIV-087) — the differ boots the
+# Python server first, which has already applied it. No row writes. DIV-059 is
+# satisfied.
+
+# ── project selection (stripped on merge; here so the file stands alone) ─────
+
+# ── the four periods ─────────────────────────────────────────────────────────
+# `month` is the default and is stable within a calendar month; `today` is
+# stable within a calendar day; `all` is unbounded. `week` is the odd one —
+# `PERIOD_MAP` maps it to `7days`, a ROLLING instant with microseconds, so the
+# two servers compute bounds a few milliseconds apart and a message inside that
+# gap is a second, real divergence on top of `generated`. Same property
+# `CD-prov-week` already carries in the shared file, same reason.
+!CMP-default        | GET | /api/compare                       | -
+!CMP-month          | GET | /api/compare?period=month          | -
+!CMP-today          | GET | /api/compare?period=today          | -
+!CMP-all            | GET | /api/compare?period=all            | -
+!CMP-week           | GET | /api/compare?period=week           | -
+
+# ── the period allow-list: 400s, and they are byte-deterministic ─────────────
+# `_VALID_PERIODS` is a TUPLE and the detail is `', '.join(_VALID_PERIODS)`, so
+# the message reads `today, week, month, all` — declaration order, NOT sorted.
+# `services/compare.py::_resolve_scope` raises the same sentence for the same
+# four aliases with `sorted(PERIOD_MAP)` instead (`all, month, today, week`);
+# the route's 400 is what makes that second spelling unreachable over HTTP.
+# `7days` is the sharpest case: it is a perfectly valid *scope* spec and still a
+# 400 here, because the route validates the ALIAS layer.
+CMP-bad-period      | GET | /api/compare?period=nonsense       | -
+CMP-bad-7days       | GET | /api/compare?period=7days          | -
+CMP-bad-30days      | GET | /api/compare?period=30days         | -
+CMP-bad-empty       | GET | /api/compare?period=               | -
+CMP-bad-case        | GET | /api/compare?period=Month          | -
+CMP-bad-space       | GET | /api/compare?period=%20month       | -
+# Scalar query parameters take the LAST occurrence (starlette builds
+# `QueryParams._dict` by comprehension), so this 400s on `nonsense` and not on
+# the valid `today` that precedes it.
+CMP-bad-last-wins   | GET | /api/compare?period=today&period=nonsense | -
+
+# ── provider: a scalar filter, and it does not behave like the project one ───
+# `LOWER(provider) = ?` against a lowered parameter on the mart path, so
+# `CLAUDE` matches — while the fallback path compares `projects.provider = ?`
+# raw and the same spelling matches nothing there. Both spellings are here.
+!CMP-prov-claude    | GET | /api/compare?provider=claude       | -
+!CMP-prov-case      | GET | /api/compare?provider=CLAUDE       | -
+!CMP-prov-codex     | GET | /api/compare?period=all&provider=codex | -
+!CMP-prov-miss      | GET | /api/compare?provider=nosuchprovider | -
+# `?provider=` is the empty string, NOT an absent parameter, and the mart path
+# tests it two different ways in two adjacent functions: `if provider_filter:`
+# (falsy — filters no session rows) and `if provider_filter is not None:`
+# (true — prunes the model list to models that HAVE a session row). DIV-086.
+!CMP-prov-empty     | GET | /api/compare?provider=             | -
+!CMP-prov-last-wins | GET | /api/compare?provider=codex&provider=claude | -
+
+# ── project: repeatable, and it switches the whole implementation ────────────
+# `project_filter is None` is the mart fast-path's gate. One `project=` — even a
+# slug that matches nothing — drops the request onto the raw `messages` join and
+# re-prices every assistant message through the cost engine, because
+# `model_day_mart` carries no `project_id`. These rows are the only ones in the
+# file that exercise the pricing seam (DIV-056), which is why the miss case is
+# here too: it proves the fallback returns `[]` rather than falling back again.
+!CMP-proj-1         | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-all       | GET | /api/compare?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-today     | GET | /api/compare?period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-multi     | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-home-u-nope | -
+!CMP-proj-miss      | GET | /api/compare?project=-no-such-project-anywhere | -
+!CMP-proj-prov      | GET | /api/compare?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=claude | -
+!CMP-proj-prov-empty | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider= | -
+
+# ── method + unknown-parameter shapes ────────────────────────────────────────
+# Deterministic: no body from the handler at all.
+CMP-method          | POST | /api/compare                      | {}
+CMP-method-put      | PUT  | /api/compare                      | {}
+# An unknown query parameter is ignored, not rejected — FastAPI does not reject
+# extras on a query signature. This one 200s, so it is `!` like its siblings.
+!CMP-unknown-param  | GET | /api/compare?nonsense=1            | -
+
+# ── from parity/endpoint-cases-c-yield.txt ─────────────────────────
+# Batch C / member `yield` — cases for GET /api/yield (RS-5-116).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. Ids are
+# prefixed `Y-`. ORDER IS SIGNIFICANT; do not sort this file.
+#
+# ── LAW 7 clearance ──────────────────────────────────────────────────────────
+#
+# `/api/yield` shells out to git. Every invocation is READ-ONLY —
+# `rev-parse --git-dir`, `log`, `rev-list` — and the endpoint writes no file, no
+# store row and no cache. The full audit is DIV-095 in `parity/DIV-c-yield.md`.
+# That is why these rows exist at all: an endpoint that wrote anything would get
+# NO row, `!` marker or not (DIV-059, DIV-078).
+#
+# ── What can legitimately differ, and is not a port defect ───────────────────
+#
+# The payload is a function of the MACHINE's git working trees, not only of the
+# store. Read DIV-095 before filing a divergence here. In short:
+#
+#  * a commit landing in any indexed `cwd` between the reference request and the
+#    port request moves `follow_commit_sha` / `_msg` / `_age_hours` and can flip
+#    `classification`. So can a rebase (reachability from HEAD). This worktree
+#    is itself one of the indexed repos.
+#  * `week` / `7days` / `30days` are ROLLING instants — `parse_period` reads the
+#    clock, so the two servers compute bounds milliseconds apart and a session
+#    inside that gap is in one payload and not the other. Same property
+#    `CD-prov-week` already carries. `today`, `month` and `all` are stable
+#    within a calendar day.
+#  * `Y-all` is the expensive row: 1,310 sessions / 186 distinct cwds (22 of
+#    which exist on this host and reach git) on the harness store, measured at
+#    ~8 s for the bulk cwd query alone. It fits inside the differ's 300 s
+#    per-case timeout with room, but if it ever does not, dropping THIS row
+#    loses nothing the other period rows do not already cover.
+
+# Select a project so `deps.current_log_path` is set. The integrator strips this
+# row when merging — it already runs earlier in the shared file. `/api/yield`
+# itself is global and does not read the current project, but the shared file's
+# ordering contract is the contract.
+
+# ── the happy path and every period branch ───────────────────────────────────
+# `Y-today` is the empty case on the harness store (0 sessions started today),
+# which is the one that proves the summary ships `"total_cost":0.0` — a FLOAT.
+# There is no `sum()` in `yield_tracker.py`; the cost fields are seeded with the
+# literal `0.0` and stepped with `+=`, so an int `0` here would be a divergence
+# in the OTHER direction. DIV-096.
+Y-today             | GET | /api/yield?period=today            | -
+Y-default           | GET | /api/yield                         | -
+Y-month             | GET | /api/yield?period=month            | -
+Y-week              | GET | /api/yield?period=week             | -
+Y-7days             | GET | /api/yield?period=7days            | -
+Y-30days            | GET | /api/yield?period=30days           | -
+Y-all               | GET | /api/yield?period=all              | -
+
+# `week` and `7days` normalise to the SAME scope inside the tracker, but the
+# body echoes the raw `period` string — so these two must differ in exactly one
+# field and agree in every other. Both rows are here for that reason.
+
+# ── the project filter (a repeatable query parameter) ────────────────────────
+Y-project           | GET | /api/yield?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+Y-project-multi     | GET | /api/yield?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+# A slug nothing matches: the empty-entries shape again, this time reached
+# through the SQL `IN (…)` rather than through an empty window.
+Y-project-miss      | GET | /api/yield?period=month&project=-no-such-project-anywhere | -
+# The filter narrows a period that WOULD have had rows — `jan26` has no July
+# sessions, so this must come back empty while `Y-month` does not.
+Y-project-narrows   | GET | /api/yield?period=month&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# ── validation: every 400 shape ──────────────────────────────────────────────
+# The detail joins `_VALID_PERIODS` in TUPLE order, so `week` and `all` sit in
+# the middle: "Valid: today, week, month, all, 7days, 30days". `routes/cost.py`'s
+# sibling message IS sorted; these are not copy-pasteable.
+Y-bad-period        | GET | /api/yield?period=nonsense         | -
+# `?period=` is the EMPTY string, not an absent parameter — it fails the
+# allow-list rather than falling back to `month`.
+Y-empty-period      | GET | /api/yield?period=                 | -
+# `parse_period`'s own vocabulary is not this route's: `yesterday` is rejected
+# here even though a reader might expect the scope parser to be the gate.
+Y-unknown-period    | GET | /api/yield?period=yesterday        | -
+# Case sensitivity: the allow-list is exact, so `Month` is a 400.
+Y-period-case       | GET | /api/yield?period=Month            | -
+# starlette resolves a repeated SCALAR to the LAST occurrence, so this is
+# `month` and a 200 — not `all`, and not a 422.
+Y-period-last-wins  | GET | /api/yield?period=all&period=month | -
+# An unknown query parameter is ignored by FastAPI, not rejected.
+Y-unknown-param     | GET | /api/yield?period=today&nope=1     | -
+
+# ── from parity/endpoint-cases-c-ctxbudget.txt ─────────────────────────
+# Batch C / ctxbudget — `GET /api/context-budget` (RS-5-060).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. The integrator
+# folds these rows into that file and strips the leading `P-by-dir-known`, which
+# already runs earlier there.
+#
+# ── What these rows prove ────────────────────────────────────────────────────
+#
+# The endpoint has THREE answer shapes and the case list covers all three:
+#
+#   * no `project`                     → the global budget
+#   * a slug the store does not know   → 404 `Unknown project slug: <slug>`
+#   * a slug it DOES know whose on-disk path is NULL/empty/gone
+#                                      → 200, the GLOBAL shape, not a 404
+#
+# The fourth shape — a known slug with a live directory, which is the only one
+# that emits `memory:project_CLAUDE.md` and the project agent/MCP slices —
+# CANNOT be exercised here: every one of the 335 `projects` rows in
+# `.parity-state/fresh/store.db` has `path IS NULL`, and populating one would be
+# a write to the shared store. It is covered by unit tests in
+# `routes/context_budget.rs` and `services/context_budget.rs` instead. Recorded
+# as a coverage gap, not papered over.
+#
+# ── Side effects: none from the port, one from the reference ─────────────────
+#
+# LAW 7 audit. The port does no writes at all. The reference calls
+# `schema.apply(conn)` per request, which is the migration ladder — a no-op on
+# any store a server has already booted against (and the harness boots Python
+# first for exactly this reason). No file, cache or store row is written by any
+# row below. `schema.apply` is not ported: DIV-102.
+#
+# ── The one hazard the integrator must know about: DIV-103 ──────────────────
+#
+# This endpoint reads the maintainer's REAL `~` — `~/.claude/CLAUDE.md`,
+# `~/.claude.json`, `~/.claude/skills/*/SKILL.md`, `~/.claude/agents/*.md`. Both
+# servers inherit the same `$HOME` from `endpoint-parity.sh`, so they read the
+# same files; but `~/.claude.json` is rewritten by any Claude Code session
+# running on the machine, and the two servers read it a few milliseconds apart.
+# A rewrite landing inside that window changes the `mcp:*` slices — or, if the
+# reader catches a truncated file, removes them entirely — and the differ will
+# report a divergence that is not one. Rows are left UNMARKED (a `!` would hide
+# a real regression forever), so if `CB-*` fails on the `mcp:` slices alone,
+# re-run before believing it.
+
+
+# ── the global branch: no `project` at all ───────────────────────────────────
+CB-global           | GET | /api/context-budget | -
+
+# ── a known slug — 200 with the GLOBAL shape, because `path IS NULL` ─────────
+CB-known-slug       | GET | /api/context-budget?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# DIV-101's row: this slug names FOUR provider rows (claude, codex, antigravity,
+# grok) and `get_project` is a `fetchone` with no ORDER BY, so exactly one of
+# them decides the answer. Both sides must pick the same one.
+CB-multi-provider   | GET | /api/context-budget?project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# A non-claude provider's slug, to prove the branch is provider-blind.
+CB-gemini-slug      | GET | /api/context-budget?project=stackunderflow | -
+
+# ── the 404 branch, and the shapes that reach it ─────────────────────────────
+CB-slug-unknown     | GET | /api/context-budget?project=no-such-project-anywhere | -
+# `?project=` is the EMPTY STRING, not `None` — it is a slug lookup that misses,
+# so the detail string ends in a space. A port that treated it as "absent" would
+# answer 200 here.
+CB-slug-empty       | GET | /api/context-budget?project= | -
+# The slug is never joined to a path; traversal is just a miss.
+CB-slug-traversal   | GET | /api/context-budget?project=../../etc/passwd | -
+# Percent-decoding happens before the lookup, so this is the SAME query as
+# CB-known-slug and must answer identically.
+CB-slug-encoded     | GET | /api/context-budget?project=%2Dmedia%2Dtmos%2Dbumblebe%2Ddev%2Ddev%2Dyear26%2Djul26%2DStackUnderflow | -
+# starlette scalars take the LAST occurrence, so this 404s on `nope` even though
+# a valid slug came first. First-wins would answer 200.
+CB-slug-last-wins   | GET | /api/context-budget?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=nope | -
+
+# ── the shapes a happy-path matrix never sees ────────────────────────────────
+# An undeclared query parameter is ignored, not a 422.
+CB-extra-param      | GET | /api/context-budget?project=nope&details=1&limit=abc | -
+# GET-only path: FastAPI's 405, `{"detail":"Method Not Allowed"}`.
+CB-method-post      | POST | /api/context-budget | -
+
+# ── from parity/endpoint-cases-c-ctxreplay.txt ─────────────────────────
+# Batch C / ctxreplay — `routes/context_replay.py` (RS-5-061).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ORDER IS SIGNIFICANT. `deps.current_log_path` is server state, and this
+# endpoint's fence reads it whenever no `?project=` / `?log_path=` is given, so
+# the project must be selected before the first CR-* row runs.
+#
+# SIDE EFFECTS: none. Every row is a GET that only reads. Two things that look
+# like writes are not:
+#   * Python's handler calls `schema.apply(conn)` per request — a MIGRATION.
+#     On `.parity-state/fresh` (`PRAGMA user_version` = 30, the newest
+#     migration is v030) it iterates zero migrations and writes nothing. The
+#     Rust port does not call it at all (DIV-106).
+#   * Python memoises the built timeline in a process-local dict
+#     (`_CONTEXT_CACHE`). No other endpoint reads it and it never touches disk,
+#     so it cannot leak into another case the way DIV-059's pricing cache did.
+#     Not ported — DIV-105.
+#
+# Session ids below are real rows in `.parity-state/fresh`:
+#   04a86c63-… project 314 (-media-…-StackUnderflow), 3 messages, seq 2369/3036/3576
+#   44b8f238-… project 314, 1276 messages, seq 1285 … 5832062
+#   3cf184ca-… project  16 (-Users-…-chimera--worktrees-all-issues), 68 messages
+# `seq` is NOT per-session-sequential — it is a global-ish counter — which is
+# why the cutoffs are the values they are and not 1/2/3.
+
+
+# ── the happy path, and every `at` branch ────────────────────────────────────
+CR-full           | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+CR-at-mid         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036 | -
+CR-at-first       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=2369 | -
+# Below every seq: zero events, and `total_tokens` must be the int `0`.
+CR-at-below       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=2368 | -
+CR-at-zero        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=0 | -
+CR-at-negative    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=-1 | -
+CR-at-past-end    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=99999999 | -
+# starlette keeps the LAST occurrence of a scalar query key, not the first.
+CR-at-repeated    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3576&at=3036 | -
+# `%2B` is a literal `+`; pydantic and `i64::from_str` both accept it.
+CR-at-plus        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%2B3036 | -
+# A bare `+` decodes to a space; pydantic strips before parsing.
+CR-at-spaced      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=+3036+ | -
+
+# ── the heavy session: 1276 messages, every raw_json parsed ──────────────────
+# The real payload the scrubber drags across, and the only row that exercises
+# the preview truncation, the tool-label table and the `\uXXXX` token
+# accounting at volume.
+CR-big-full       | GET | /api/context-replay/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+CR-big-at         | GET | /api/context-replay/44b8f238-3609-4445-97a9-37a5a99f1c9a?at=3153599 | -
+
+# ── the miss: advisory, never a 404 ─────────────────────────────────────────
+CR-unknown        | GET | /api/context-replay/no-such-session-at-all | -
+CR-unknown-at     | GET | /api/context-replay/no-such-session-at-all?at=5 | -
+# A path parameter that needs percent-decoding, on a session that cannot exist.
+CR-unknown-utf8   | GET | /api/context-replay/caf%C3%A9 | -
+# Starlette's `str` converter stops at `/`, so this matches no route at all and
+# is FastAPI's `{"detail":"Not Found"}` — the port must 404 the same way rather
+# than matching an empty `session_id`.
+CR-no-segment     | GET | /api/context-replay/ | -
+
+# ── the cross-project fence ─────────────────────────────────────────────────
+# No `?project=` / `?log_path=`, so the scope is the current project (set by
+# the row at the top). A session in ANOTHER project is fenced to the empty
+# shape plus the warning — never that project's transcript.
+CR-fence-current  | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5 | -
+# An explicit `?project=` overrides the current project, and now the SAME
+# session is in scope and serves its full timeline.
+CR-scope-explicit | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5?project=-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# …which fences the StackUnderflow session in the same breath.
+CR-fence-project  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# A slug naming no project is the EMPTY scope `[]`, which fences everything —
+# distinct from "no scope", which fences nothing. Getting these two confused is
+# the whole reason the resolver returns `list | None`.
+CR-scope-nomatch  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-no-such-project-anywhere | -
+# A blank / whitespace `?project=` is FALSY and falls through to the next leg
+# (here: the current project), so this must equal CR-full.
+CR-scope-blank    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project= | -
+CR-scope-space    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=%20 | -
+# `?log_path=`'s BASENAME is the slug; the directory part is ignored.
+CR-log-path       | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5?log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+CR-log-path-fence | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# Precedence: an explicit `project` beats `log_path` beats the current project.
+CR-scope-both     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# A trailing slash on `log_path`: `PurePath(...).name` ignores it.
+CR-log-path-slash | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?log_path=/anywhere/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow/ | -
+
+# ── validation: the only non-200 this endpoint can produce ──────────────────
+# `at: int | None` — FastAPI's own 422, raised before the handler body runs.
+CR-bad-at         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=abc | -
+CR-empty-at       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at= | -
+CR-at-fractional  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=5.5 | -
+CR-at-bool        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=true | -
+
+# ── KNOWN OPEN — DIV-107, the two `int` coercions `qs::opt_int` does not do ──
+# Both rows are safe to execute (plain GETs, no writes); the `!` only softens
+# the verdict. Python answers 200 for each; the port answers 422.
+#   at=3036.0  pydantic accepts an INTEGRAL float string for an `int` field.
+#   at=1e21-ish  Python ints are arbitrary precision; `i64` is not, and the
+#                echoed `at_seq` could not be rendered even if it parsed.
+# Both live in the SHARED `crate::qs` helper, not in this module, so the fix is
+# the architect's to place. Measured on fastapi 0.141.1 / pydantic 2.13.4.
+!CR-at-float      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036.0 | -
+!CR-at-bignum     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=10000000000000000000000 | -
+
+# ── method coverage ─────────────────────────────────────────────────────────
+# A known path with an unclaimed method is FastAPI's 405 JSON, not starlette's
+# plain text. `crate::json::method_not_allowed` already handles this; the row
+# exists because a router that mounts only `get` is one `any()` away from a
+# silent 200 on a POST.
+CR-post           | POST | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {}
+
+# ── from parity/endpoint-cases-c-data.txt ─────────────────────────
+# BATCH C — routes/data.py's remaining endpoints (RS-5-067..069).
+#
+# Merged into `endpoint-cases.txt` by the integrator; the leading
+# `P-by-dir-known` row below is stripped there, because the shared file already
+# selects a project earlier and the ordering is load-bearing.
+#
+#   DD-*  /api/dashboard-data      (RS-5-067)
+#   MSG-* /api/messages            (RS-5-068)
+#   MS-*  /api/messages/summary    (RS-5-069)
+#
+# `POST /api/refresh` (RS-5-070) has NO ROW HERE AND NEVER WILL. It re-runs the
+# ingest pass — it writes to the store every other row in this file reads — and
+# a `!` known-open row would still ISSUE the request (DIV-059). Its own
+# procedure is `rust/REFRESH-DIFFER.md`, on a throwaway state copy.
+
+
+# ── /api/dashboard-data ──────────────────────────────────────────────────────
+# Both timezone signs, for the same §6b divergence-5 reason the D-stats rows
+# carry them: the React callers send minutes WEST where the backend wants EAST,
+# and the port must inherit that faithfully. Note this endpoint does NOT clamp
+# the offset the way /api/stats does (DIV-124) — DD-tz-absurd is the row that
+# proves the missing clamp is inherited rather than quietly added.
+DD-default          | GET | /api/dashboard-data                | -
+DD-tz               | GET | /api/dashboard-data?timezone_offset=-480 | -
+DD-tz-inverted      | GET | /api/dashboard-data?timezone_offset=480 | -
+DD-tz-absurd        | GET | /api/dashboard-data?timezone_offset=99999 | -
+DD-provider-claude  | GET | /api/dashboard-data?provider=claude | -
+DD-provider-multi   | GET | /api/dashboard-data?provider=claude&provider=codex | -
+DD-provider-case    | GET | /api/dashboard-data?provider=CLAUDE | -
+# The provider-excluded early return: a DIFFERENT body shape (four-key
+# messages_page, empty statistics, a `filtered` flag), not an empty normal one.
+DD-provider-none    | GET | /api/dashboard-data?provider=nosuchprovider | -
+# An all-blank filter list leaves the filter UNSET, which is not the same as an
+# empty one — this must behave like DD-default, not like DD-provider-none.
+DD-provider-blank   | GET | /api/dashboard-data?provider=%20   | -
+DD-model            | GET | /api/dashboard-data?model=claude-opus-4-5-20251101 | -
+DD-model-none       | GET | /api/dashboard-data?model=nosuchmodel | -
+DD-model-case       | GET | /api/dashboard-data?model=CLAUDE-OPUS-4-5-20251101 | -
+DD-bad-int          | GET | /api/dashboard-data?timezone_offset=abc | -
+
+# ── /api/messages ────────────────────────────────────────────────────────────
+MSG-default         | GET | /api/messages                      | -
+MSG-page2           | GET | /api/messages?page=2&per_page=5    | -
+MSG-per-page        | GET | /api/messages?per_page=5           | -
+MSG-per-page-hi     | GET | /api/messages?per_page=99999       | -
+MSG-per-page-lo     | GET | /api/messages?per_page=0           | -
+MSG-page-negative   | GET | /api/messages?page=-3&per_page=5   | -
+MSG-page-past-end   | GET | /api/messages?page=99999&per_page=5 | -
+# The legacy `?limit=` alias, and the bug in its guard: the test is against the
+# DEFAULT per_page value, so an EXPLICIT `per_page=100` is indistinguishable
+# from no per_page at all and `limit` wins. Both rows are here so the pair
+# pins the behaviour rather than one row pinning half of it.
+MSG-limit-alias     | GET | /api/messages?limit=7              | -
+MSG-limit-vs-100    | GET | /api/messages?limit=7&per_page=100 | -
+MSG-limit-vs-5      | GET | /api/messages?limit=7&per_page=5   | -
+MSG-provider-none   | GET | /api/messages?provider=nosuchprovider | -
+MSG-provider-claude | GET | /api/messages?provider=claude&per_page=5 | -
+MSG-model           | GET | /api/messages?model=claude-opus-4-5-20251101&per_page=5 | -
+MSG-model-none      | GET | /api/messages?model=nosuchmodel    | -
+# `timezone_offset` is declared, coerced, and then never read — so a bad value
+# is a 422 even though the parameter changes nothing.
+MSG-tz-bad          | GET | /api/messages?timezone_offset=abc  | -
+
+# ── /api/messages/summary ────────────────────────────────────────────────────
+# No parameters at all. The mart gate decides the body SHAPE (the mart path
+# adds `total_sessions`; the legacy path omits it), so this one row exercises
+# whichever path the harness store is in — and the two servers must agree on
+# which that is, which is itself the assertion.
+MS-summary          | GET | /api/messages/summary              | -
+
+# ── batch D (cfg/webhooks/sync/whatif/static_analysis/meta_agent) — merged from endpoint-cases-d.txt at integration ──
+# BATCH D's endpoint case matrix — the unclaimed remainder.
+#
+# Same row format as `endpoint-cases.txt`, which is batch C's this round:
+#
+#   <id> | <METHOD> | <path-and-query> | <json body or ->
+#
+# A LEADING `!` marks a KNOWN-OPEN case: reported in full under a loud banner,
+# never fatal. Unported endpoints belong HERE, in the file — "we know" beats
+# "nobody looked".
+#
+# Run it with batch D's ports (C owns :8096/:8097; :8095 is the maintainer's
+# live server and is never bound from anywhere):
+#
+#   STAX_ENDPOINT_CASES=rust/parity/endpoint-cases-d.txt \
+#   STAX_ENDPOINT_RS_PORT=8098 STAX_ENDPOINT_PY_PORT=8099 \
+#   STAX_ENDPOINT_DIFFS=rust/.parity-state/endpoint-diffs-d \
+#   STAX_ENDPOINT_LOGS=rust/.parity-state/endpoint-logs-d \
+#   rust/endpoint-parity.sh
+#
+# ── THE SIDE-EFFECT RULE, AND THE ONE THIS FILE ADDS ─────────────────────────
+#
+# `!` softens the VERDICT, never the REQUEST (DIV-059/078). Every row below is
+# safe to execute on the shared home. Batch D found a second requirement:
+#
+#   A `!` row must also be able to TERMINATE.
+#
+# `Verdict::Error` — what the differ books when a socket read times out — is
+# NOT downgraded by `!`, and `Tally::exit_code` ranks it ABOVE a divergence, at
+# exit 2. An SSE body never ends, so a row for `GET /api/live/stream` would
+# fail the whole run as a harness error and take every other row's verdict with
+# it. It is therefore absent, and what WAS verified about it is written down in
+# `rust/parity/SSE-PROBE-d.md` (DIV-136) rather than guessed at.
+#
+# Three more endpoints are deliberately absent for the older rule:
+#   POST /api/etl/backfill          rebuilds the marts on the shared home
+#   POST /api/patterns/dismiss      writes a governance file OUTSIDE the home
+#   POST /api/worktrees/attribute   writes the store
+# All three are recorded in their modules' doc tables and in the ledger.
+#
+# ── ORDER IS SIGNIFICANT ─────────────────────────────────────────────────────
+#
+# The `G-*` writer block MUTATES `config.json`, which both servers share. The
+# differ runs Python then Rust for each case in turn, and `settings._save` is
+# idempotent, so each row writes the same bytes twice. The block is ordered to
+# self-clean and is LAST in the file, after every row that reads a setting or a
+# price — an alias is global and `compute_cost` consults it, so an alias left
+# set would silently reprice `WI-whatif-*`.
+#
+# `POST /api/cfg/currency`'s SUCCESS leg is not a row at any position: it
+# persists a `currency` key nothing in the API can remove, and any value but
+# USD walks into DIV-052. Its two 400 legs are here.
+#
+# Fixtures this file names, all measured on `.parity-state/fresh`:
+#   37c6275a-ff92-4da8-916d-9097b6da1cc9   the ONE static_analysis_findings row
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow   claude, 2 sessions
+#
+# ID PREFIXES: `P-`, `Q-` and `Y-` are ALREADY TAKEN in `endpoint-cases.txt`
+# (projects, qa, yield_route). An id names the dumped body under
+# `.parity-state/endpoint-diffs*/`, so a collision after the architect merges
+# these rows would silently overwrite one batch's evidence with another's.
+# D's groups are therefore SY- / WI- / QL- / PT-, none of which appear there.
+#
+# Group provenance:
+#   K-*  routes/cfg.py             (RS-5-050..055)
+#   SY-* routes/sync.py            (RS-5-108/109)
+#   WI-* routes/whatif.py         (RS-5-113)
+#   SA-* routes/static_analysis.py (RS-5-107)
+#   MA-* routes/meta_agent.py      (RS-5-077/078)
+#   H-*  routes/webhooks.py        (RS-5-110..112)
+#   E-*  routes/etl.py             (RS-5-071)       — all known-open
+#   PB-* routes/playback.py        (RS-5-091..093)  — all known-open
+#   LV-* routes/live.py            (RS-5-075)       — known-open
+#   QL-* routes/quality.py         (RS-5-102/103)   — all known-open
+#   F-*  routes/forks.py           (RS-5-074)       — all known-open
+#   BM-* routes/benchmark.py       (RS-5-045/046)   — all known-open
+#   PT-* routes/patterns.py        (RS-5-088)       — all known-open
+#   W-*  routes/worktrees.py       (RS-5-114)       — known-open
+# ── cfg: the read surface ────────────────────────────────────────────────────
+# `GET /api/cfg` is 22 settings in `class Settings`'s declaration order, each
+# resolved env -> file -> default. The shared home's `config.json` carries
+# `auto_browser: false`, so this row also proves the FILE leg, not just defaults.
+K-cfg               | GET | /api/cfg                          | -
+K-currencies        | GET | /api/cfg/currencies               | -
+K-aliases           | GET | /api/cfg/model-aliases            | -
+# ── cfg: the validation legs (no writes reach disk on any of these) ──────────
+K-cur-empty-body    | POST | /api/cfg/currency                | {}
+K-cur-null          | POST | /api/cfg/currency                | {"code": null}
+K-cur-blank         | POST | /api/cfg/currency                | {"code": "   "}
+K-cur-not-string    | POST | /api/cfg/currency                | {"code": 3}
+K-cur-bad-shape     | POST | /api/cfg/currency                | {"code": "EURO"}
+K-cur-bad-short     | POST | /api/cfg/currency                | {"code": "e"}
+# `code` is falsy, so `or` falls through to `currency` — and THAT is validated.
+K-cur-fallthrough   | POST | /api/cfg/currency                | {"code": "", "currency": "NOPE"}
+K-alias-no-from     | POST | /api/cfg/model-aliases           | {"to": "claude-opus-4-8"}
+K-alias-blank-from  | POST | /api/cfg/model-aliases           | {"from": "  ", "to": "x"}
+K-alias-no-to       | POST | /api/cfg/model-aliases           | {"from": "proxy/x"}
+K-alias-blank-to    | POST | /api/cfg/model-aliases           | {"from": "proxy/x", "to": ""}
+K-alias-del-none    | DELETE | /api/cfg/model-aliases         | -
+K-alias-del-empty   | DELETE | /api/cfg/model-aliases?from=   | -
+# 404 with Python's `repr()` of the key — the quoting rule is the byte contract.
+K-alias-del-missing | DELETE | /api/cfg/model-aliases?from=no-such-alias | -
+# ── static analysis: the ported read ─────────────────────────────────────────
+# The store holds exactly ONE findings row, and it is the interesting shape: a
+# `file_created_in_session` lint_count finding with a NULL `pre_value` and a
+# NULL `delta`. So `avg_delta` is null, `_classify_delta` returns "unknown", and
+# the metric reports `files: 1` with improved/regressed/neutral all zero — the
+# case a summary written from the happy path would get wrong.
+SA-session-real     | GET | /api/static-analysis/session/37c6275a-ff92-4da8-916d-9097b6da1cc9 | -
+# An unanalyzed session is 200 with empty findings, NOT a 404.
+SA-session-unknown  | GET | /api/static-analysis/session/no-such-session-anywhere | -
+SA-session-empty    | GET | /api/static-analysis/session/    | -
+# ── meta-agent: the constant ─────────────────────────────────────────────────
+# 15 tool schemas, ~15 KB, byte-for-byte. This row IS the tripwire for the
+# embedded catalogue drifting from `services/meta_agent.py`.
+MA-tools            | GET | /api/meta-agent/tools             | -
+# DIV-138: the chat endpoint is an NDJSON stream against a live LLM. Rust 404s;
+# Python rejects on validation BEFORE it opens a socket, so both rows are safe.
+!MA-chat-empty      | POST | /api/meta-agent/chat             | {}
+!MA-chat-no-model   | POST | /api/meta-agent/chat             | {"messages": [{"role": "user", "content": "hi"}]}
+# ── webhooks: the opt-in gate ────────────────────────────────────────────────
+# No secret is exported into either server, so all three return 503 before the
+# body is read, before it is parsed, and before anything touches the store.
+# That is the whole point of the row: it proves the gate fires first.
+H-github-503        | POST | /api/webhooks/github             | {"zen": "x"}
+H-gitlab-503        | POST | /api/webhooks/gitlab             | {"object_kind": "ping"}
+H-ci-503            | POST | /api/webhooks/ci                 | {"id": 1}
+# ── sync: the default leg is deterministic; the merged one carries a clock ───
+SY-overview-default  | GET | /api/sync/overview                | -
+SY-overview-scope    | GET | /api/sync/overview?scope=this-device | -
+# Anything that is not exactly `all-devices` takes the stub path.
+SY-overview-nonsense | GET | /api/sync/overview?scope=nonsense | -
+SY-overview-blank    | GET | /api/sync/overview?scope=         | -
+# `?scope=` twice: starlette's QueryParams takes the LAST occurrence, so this
+# is the stub leg, not the merged one.
+SY-overview-last-wins | GET | /api/sync/overview?scope=all-devices&scope=this-device | -
+# DIV-133: `/api/sync/status` rebuilds every shard through `serialize.py` (227
+# lines) and stamps `scanned_at`. Read-only, so it is safe to execute.
+!SY-status           | GET | /api/sync/status                  | -
+# The merged roll-up. Every field agrees; `generated_at` cannot, and the diff
+# offset in the report is the evidence that everything before it did.
+!SY-overview-all     | GET | /api/sync/overview?scope=all-devices | -
+# ── whatif: the pricing-seam flagship ────────────────────────────────────────
+# Whole-store scope (no project selected yet in this file), so these reprice the
+# entire token volume against 10 candidates. A 2% rate difference between the
+# manifest and the primed `price_book` shows up here first (DIV-056).
+WI-whatif-all        | GET | /api/whatif                       | -
+WI-whatif-project    | GET | /api/whatif?log_path=/x/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+WI-whatif-unknown    | GET | /api/whatif?log_path=/x/-no-such-project-anywhere | -
+# An empty `log_path` is falsy and falls back to the (unset) current project.
+WI-whatif-blank      | GET | /api/whatif?log_path=             | -
+# ── the deferred modules, each reported every run ────────────────────────────
+# DIV-139: `etl/status.py::assemble_status` is 566 lines. Read-only.
+!E-etl-status       | GET | /api/etl/status                   | -
+# DIV-140: 1,678 lines of playback/playback_fs/risk service. All read-only.
+!PB-session         | GET | /api/playback/no-such-session     | -
+!PB-session-real    | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+!PB-project         | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!PB-project-unknown | GET | /api/playback/project/-no-such-project-anywhere | -
+!PB-fs-no-at        | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs | -
+# DIV-141: `services/live.py` is 581 lines AND the payload stamps `burn.ts`.
+!LV-stats           | GET | /api/live/stats                   | -
+!LV-stats-tz        | GET | /api/live/stats?timezone_offset=-480 | -
+# `/api/live/stream` has NO ROW — see this file's header and SSE-PROBE-d.md.
+# DIV-135: a GET that calls Ollama and writes the store. The UNKNOWN-session id
+# is the only one either side may be asked for: the 404 fires before the grader.
+!QL-quality-missing  | GET  | /api/static-analysis/session/no-such-session-anywhere/quality | -
+!QL-grade-missing    | POST | /api/static-analysis/session/no-such-session-anywhere/grade   | -
+# DIV-142: `reports/forks.py` is 534 lines + a process-wide memo. Read-only.
+!F-forks            | GET | /api/forks                        | -
+!F-forks-week       | GET | /api/forks?period=week            | -
+!F-forks-bad-period | GET | /api/forks?period=nonsense        | -
+# DIV-143: `reports/benchmark.py` is 1,033 lines. Read-only.
+!BM-benchmark       | GET | /api/benchmark                    | -
+!BM-bad-period      | GET | /api/benchmark?period=nonsense    | -
+!BM-recommend       | GET | /api/benchmark/recommend?intent=build | -
+!BM-recommend-blank | GET | /api/benchmark/recommend?intent=  | -
+# DIV-144: `reports/patterns.py` is 1,097 lines. The dismiss WRITER has no row.
+!PT-patterns         | GET | /api/patterns                     | -
+!PT-patterns-window  | GET | /api/patterns?since=7d            | -
+!PT-bad-since        | GET | /api/patterns?since=nonsense      | -
+# DIV-145: `services/worktrees.py` shells out to git and stamps `scanned_at`.
+# The attribute WRITER has no row.
+!W-worktrees        | GET | /api/worktrees                    | -
+# ── cfg: the WRITER block. LAST in the file, and it self-cleans. ─────────────
+#
+# `POST` sets one alias, `DELETE` removes it. `settings._save` is
+# `json.dumps(data, indent=2)` — the CLI writer — so each row writes the same
+# bytes on both sides and the pair leaves `config.json` holding
+# `"model_aliases": {}`, which IS the declared default. Stated exactly because
+# "restores the file byte for byte" would be the convenient claim and is false:
+# one key remains, holding the default, identically on both servers.
+#
+# Nothing below this line reads a price or a setting. Never reorder past here,
+# and never leave the POST as the last row.
+G-alias-set         | POST   | /api/cfg/model-aliases         | {"from": "parity/d-proxy", "to": "claude-opus-4-8"}
+G-alias-set-again   | POST   | /api/cfg/model-aliases         | {"from": "parity/d-proxy", "to": "claude-opus-4-8"}
+G-alias-read        | GET    | /api/cfg/model-aliases         | -
+G-alias-in-cfg      | GET    | /api/cfg                       | -
+# DIV-146, measured on this file's first run: `!` because the endpoint is a
+# NON-IDEMPOTENT writer, and the differ runs Python then Rust against ONE shared
+# home. Python's DELETE removes the alias and answers `{"aliases":{}}`; Rust
+# then asks to remove an alias that is already gone and correctly answers its
+# 404. Both are right. No ordering fixes it — the second server can never see
+# the state the first one consumed — so a writer must be IDEMPOTENT to hold a
+# green row here, exactly as a stream must be able to terminate (DIV-136).
+# `G-alias-set` above IS idempotent, which is why it is green.
+#
+# The cleanup still happens: Python's leg does the removal, Rust's is a no-op,
+# and the two rows below prove the end state agrees on both servers.
+!G-alias-del        | DELETE | /api/cfg/model-aliases?from=parity/d-proxy | -
+G-alias-del-again   | DELETE | /api/cfg/model-aliases?from=parity/d-proxy | -
+G-alias-clean       | GET    | /api/cfg/model-aliases         | -

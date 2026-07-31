@@ -1,0 +1,80 @@
+# Batch C / ctxbudget — `GET /api/context-budget` (RS-5-060).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. The integrator
+# folds these rows into that file and strips the leading `P-by-dir-known`, which
+# already runs earlier there.
+#
+# ── What these rows prove ────────────────────────────────────────────────────
+#
+# The endpoint has THREE answer shapes and the case list covers all three:
+#
+#   * no `project`                     → the global budget
+#   * a slug the store does not know   → 404 `Unknown project slug: <slug>`
+#   * a slug it DOES know whose on-disk path is NULL/empty/gone
+#                                      → 200, the GLOBAL shape, not a 404
+#
+# The fourth shape — a known slug with a live directory, which is the only one
+# that emits `memory:project_CLAUDE.md` and the project agent/MCP slices —
+# CANNOT be exercised here: every one of the 335 `projects` rows in
+# `.parity-state/fresh/store.db` has `path IS NULL`, and populating one would be
+# a write to the shared store. It is covered by unit tests in
+# `routes/context_budget.rs` and `services/context_budget.rs` instead. Recorded
+# as a coverage gap, not papered over.
+#
+# ── Side effects: none from the port, one from the reference ─────────────────
+#
+# LAW 7 audit. The port does no writes at all. The reference calls
+# `schema.apply(conn)` per request, which is the migration ladder — a no-op on
+# any store a server has already booted against (and the harness boots Python
+# first for exactly this reason). No file, cache or store row is written by any
+# row below. `schema.apply` is not ported: DIV-102.
+#
+# ── The one hazard the integrator must know about: DIV-103 ──────────────────
+#
+# This endpoint reads the maintainer's REAL `~` — `~/.claude/CLAUDE.md`,
+# `~/.claude.json`, `~/.claude/skills/*/SKILL.md`, `~/.claude/agents/*.md`. Both
+# servers inherit the same `$HOME` from `endpoint-parity.sh`, so they read the
+# same files; but `~/.claude.json` is rewritten by any Claude Code session
+# running on the machine, and the two servers read it a few milliseconds apart.
+# A rewrite landing inside that window changes the `mcp:*` slices — or, if the
+# reader catches a truncated file, removes them entirely — and the differ will
+# report a divergence that is not one. Rows are left UNMARKED (a `!` would hide
+# a real regression forever), so if `CB-*` fails on the `mcp:` slices alone,
+# re-run before believing it.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the global branch: no `project` at all ───────────────────────────────────
+CB-global           | GET | /api/context-budget | -
+
+# ── a known slug — 200 with the GLOBAL shape, because `path IS NULL` ─────────
+CB-known-slug       | GET | /api/context-budget?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# DIV-101's row: this slug names FOUR provider rows (claude, codex, antigravity,
+# grok) and `get_project` is a `fetchone` with no ORDER BY, so exactly one of
+# them decides the answer. Both sides must pick the same one.
+CB-multi-provider   | GET | /api/context-budget?project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# A non-claude provider's slug, to prove the branch is provider-blind.
+CB-gemini-slug      | GET | /api/context-budget?project=stackunderflow | -
+
+# ── the 404 branch, and the shapes that reach it ─────────────────────────────
+CB-slug-unknown     | GET | /api/context-budget?project=no-such-project-anywhere | -
+# `?project=` is the EMPTY STRING, not `None` — it is a slug lookup that misses,
+# so the detail string ends in a space. A port that treated it as "absent" would
+# answer 200 here.
+CB-slug-empty       | GET | /api/context-budget?project= | -
+# The slug is never joined to a path; traversal is just a miss.
+CB-slug-traversal   | GET | /api/context-budget?project=../../etc/passwd | -
+# Percent-decoding happens before the lookup, so this is the SAME query as
+# CB-known-slug and must answer identically.
+CB-slug-encoded     | GET | /api/context-budget?project=%2Dmedia%2Dtmos%2Dbumblebe%2Ddev%2Ddev%2Dyear26%2Djul26%2DStackUnderflow | -
+# starlette scalars take the LAST occurrence, so this 404s on `nope` even though
+# a valid slug came first. First-wins would answer 200.
+CB-slug-last-wins   | GET | /api/context-budget?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=nope | -
+
+# ── the shapes a happy-path matrix never sees ────────────────────────────────
+# An undeclared query parameter is ignored, not a 422.
+CB-extra-param      | GET | /api/context-budget?project=nope&details=1&limit=abc | -
+# GET-only path: FastAPI's 405, `{"detail":"Method Not Allowed"}`.
+CB-method-post      | POST | /api/context-budget | -

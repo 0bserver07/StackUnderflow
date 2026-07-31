@@ -1,0 +1,70 @@
+# BATCH C — routes/data.py's remaining endpoints (RS-5-067..069).
+#
+# Merged into `endpoint-cases.txt` by the integrator; the leading
+# `P-by-dir-known` row below is stripped there, because the shared file already
+# selects a project earlier and the ordering is load-bearing.
+#
+#   DD-*  /api/dashboard-data      (RS-5-067)
+#   MSG-* /api/messages            (RS-5-068)
+#   MS-*  /api/messages/summary    (RS-5-069)
+#
+# `POST /api/refresh` (RS-5-070) has NO ROW HERE AND NEVER WILL. It re-runs the
+# ingest pass — it writes to the store every other row in this file reads — and
+# a `!` known-open row would still ISSUE the request (DIV-059). Its own
+# procedure is `rust/REFRESH-DIFFER.md`, on a throwaway state copy.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── /api/dashboard-data ──────────────────────────────────────────────────────
+# Both timezone signs, for the same §6b divergence-5 reason the D-stats rows
+# carry them: the React callers send minutes WEST where the backend wants EAST,
+# and the port must inherit that faithfully. Note this endpoint does NOT clamp
+# the offset the way /api/stats does (DIV-124) — DD-tz-absurd is the row that
+# proves the missing clamp is inherited rather than quietly added.
+DD-default          | GET | /api/dashboard-data                | -
+DD-tz               | GET | /api/dashboard-data?timezone_offset=-480 | -
+DD-tz-inverted      | GET | /api/dashboard-data?timezone_offset=480 | -
+DD-tz-absurd        | GET | /api/dashboard-data?timezone_offset=99999 | -
+DD-provider-claude  | GET | /api/dashboard-data?provider=claude | -
+DD-provider-multi   | GET | /api/dashboard-data?provider=claude&provider=codex | -
+DD-provider-case    | GET | /api/dashboard-data?provider=CLAUDE | -
+# The provider-excluded early return: a DIFFERENT body shape (four-key
+# messages_page, empty statistics, a `filtered` flag), not an empty normal one.
+DD-provider-none    | GET | /api/dashboard-data?provider=nosuchprovider | -
+# An all-blank filter list leaves the filter UNSET, which is not the same as an
+# empty one — this must behave like DD-default, not like DD-provider-none.
+DD-provider-blank   | GET | /api/dashboard-data?provider=%20   | -
+DD-model            | GET | /api/dashboard-data?model=claude-opus-4-5-20251101 | -
+DD-model-none       | GET | /api/dashboard-data?model=nosuchmodel | -
+DD-model-case       | GET | /api/dashboard-data?model=CLAUDE-OPUS-4-5-20251101 | -
+DD-bad-int          | GET | /api/dashboard-data?timezone_offset=abc | -
+
+# ── /api/messages ────────────────────────────────────────────────────────────
+MSG-default         | GET | /api/messages                      | -
+MSG-page2           | GET | /api/messages?page=2&per_page=5    | -
+MSG-per-page        | GET | /api/messages?per_page=5           | -
+MSG-per-page-hi     | GET | /api/messages?per_page=99999       | -
+MSG-per-page-lo     | GET | /api/messages?per_page=0           | -
+MSG-page-negative   | GET | /api/messages?page=-3&per_page=5   | -
+MSG-page-past-end   | GET | /api/messages?page=99999&per_page=5 | -
+# The legacy `?limit=` alias, and the bug in its guard: the test is against the
+# DEFAULT per_page value, so an EXPLICIT `per_page=100` is indistinguishable
+# from no per_page at all and `limit` wins. Both rows are here so the pair
+# pins the behaviour rather than one row pinning half of it.
+MSG-limit-alias     | GET | /api/messages?limit=7              | -
+MSG-limit-vs-100    | GET | /api/messages?limit=7&per_page=100 | -
+MSG-limit-vs-5      | GET | /api/messages?limit=7&per_page=5   | -
+MSG-provider-none   | GET | /api/messages?provider=nosuchprovider | -
+MSG-provider-claude | GET | /api/messages?provider=claude&per_page=5 | -
+MSG-model           | GET | /api/messages?model=claude-opus-4-5-20251101&per_page=5 | -
+MSG-model-none      | GET | /api/messages?model=nosuchmodel    | -
+# `timezone_offset` is declared, coerced, and then never read — so a bad value
+# is a 422 even though the parameter changes nothing.
+MSG-tz-bad          | GET | /api/messages?timezone_offset=abc  | -
+
+# ── /api/messages/summary ────────────────────────────────────────────────────
+# No parameters at all. The mart gate decides the body SHAPE (the mart path
+# adds `total_sessions`; the legacy path omits it), so this one row exercises
+# whichever path the harness store is in — and the two servers must agree on
+# which that is, which is itself the assertion.
+MS-summary          | GET | /api/messages/summary              | -

@@ -1,0 +1,85 @@
+# Batch C / member `yield` — cases for GET /api/yield (RS-5-116).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. Ids are
+# prefixed `Y-`. ORDER IS SIGNIFICANT; do not sort this file.
+#
+# ── LAW 7 clearance ──────────────────────────────────────────────────────────
+#
+# `/api/yield` shells out to git. Every invocation is READ-ONLY —
+# `rev-parse --git-dir`, `log`, `rev-list` — and the endpoint writes no file, no
+# store row and no cache. The full audit is DIV-095 in `parity/DIV-c-yield.md`.
+# That is why these rows exist at all: an endpoint that wrote anything would get
+# NO row, `!` marker or not (DIV-059, DIV-078).
+#
+# ── What can legitimately differ, and is not a port defect ───────────────────
+#
+# The payload is a function of the MACHINE's git working trees, not only of the
+# store. Read DIV-095 before filing a divergence here. In short:
+#
+#  * a commit landing in any indexed `cwd` between the reference request and the
+#    port request moves `follow_commit_sha` / `_msg` / `_age_hours` and can flip
+#    `classification`. So can a rebase (reachability from HEAD). This worktree
+#    is itself one of the indexed repos.
+#  * `week` / `7days` / `30days` are ROLLING instants — `parse_period` reads the
+#    clock, so the two servers compute bounds milliseconds apart and a session
+#    inside that gap is in one payload and not the other. Same property
+#    `CD-prov-week` already carries. `today`, `month` and `all` are stable
+#    within a calendar day.
+#  * `Y-all` is the expensive row: 1,310 sessions / 186 distinct cwds (22 of
+#    which exist on this host and reach git) on the harness store, measured at
+#    ~8 s for the bulk cwd query alone. It fits inside the differ's 300 s
+#    per-case timeout with room, but if it ever does not, dropping THIS row
+#    loses nothing the other period rows do not already cover.
+
+# Select a project so `deps.current_log_path` is set. The integrator strips this
+# row when merging — it already runs earlier in the shared file. `/api/yield`
+# itself is global and does not read the current project, but the shared file's
+# ordering contract is the contract.
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the happy path and every period branch ───────────────────────────────────
+# `Y-today` is the empty case on the harness store (0 sessions started today),
+# which is the one that proves the summary ships `"total_cost":0.0` — a FLOAT.
+# There is no `sum()` in `yield_tracker.py`; the cost fields are seeded with the
+# literal `0.0` and stepped with `+=`, so an int `0` here would be a divergence
+# in the OTHER direction. DIV-096.
+Y-today             | GET | /api/yield?period=today            | -
+Y-default           | GET | /api/yield                         | -
+Y-month             | GET | /api/yield?period=month            | -
+Y-week              | GET | /api/yield?period=week             | -
+Y-7days             | GET | /api/yield?period=7days            | -
+Y-30days            | GET | /api/yield?period=30days           | -
+Y-all               | GET | /api/yield?period=all              | -
+
+# `week` and `7days` normalise to the SAME scope inside the tracker, but the
+# body echoes the raw `period` string — so these two must differ in exactly one
+# field and agree in every other. Both rows are here for that reason.
+
+# ── the project filter (a repeatable query parameter) ────────────────────────
+Y-project           | GET | /api/yield?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+Y-project-multi     | GET | /api/yield?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+# A slug nothing matches: the empty-entries shape again, this time reached
+# through the SQL `IN (…)` rather than through an empty window.
+Y-project-miss      | GET | /api/yield?period=month&project=-no-such-project-anywhere | -
+# The filter narrows a period that WOULD have had rows — `jan26` has no July
+# sessions, so this must come back empty while `Y-month` does not.
+Y-project-narrows   | GET | /api/yield?period=month&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# ── validation: every 400 shape ──────────────────────────────────────────────
+# The detail joins `_VALID_PERIODS` in TUPLE order, so `week` and `all` sit in
+# the middle: "Valid: today, week, month, all, 7days, 30days". `routes/cost.py`'s
+# sibling message IS sorted; these are not copy-pasteable.
+Y-bad-period        | GET | /api/yield?period=nonsense         | -
+# `?period=` is the EMPTY string, not an absent parameter — it fails the
+# allow-list rather than falling back to `month`.
+Y-empty-period      | GET | /api/yield?period=                 | -
+# `parse_period`'s own vocabulary is not this route's: `yesterday` is rejected
+# here even though a reader might expect the scope parser to be the gate.
+Y-unknown-period    | GET | /api/yield?period=yesterday        | -
+# Case sensitivity: the allow-list is exact, so `Month` is a 400.
+Y-period-case       | GET | /api/yield?period=Month            | -
+# starlette resolves a repeated SCALAR to the LAST occurrence, so this is
+# `month` and a 200 — not `all`, and not a 422.
+Y-period-last-wins  | GET | /api/yield?period=all&period=month | -
+# An unknown query parameter is ignored by FastAPI, not rejected.
+Y-unknown-param     | GET | /api/yield?period=today&nope=1     | -

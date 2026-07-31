@@ -1,0 +1,110 @@
+# BATCH C / compare — `GET /api/compare` (RS-5-059).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. This is a
+# SIDECAR file; the integrator merges it into the shared matrix and strips the
+# leading `P-by-dir-known` row, which already runs earlier there.
+#
+# ── READ THIS BEFORE WONDERING WHY THE 200s ARE ALL `!` ──────────────────────
+#
+# The payload is `{"period": …, "models": [...], "generated": time.time()}`.
+# `generated` is a wall-clock float, read *after* the query runs, and the differ
+# compares BODY BYTES with no field masking. So every 200 from this endpoint is
+# a guaranteed divergence on one field, in every run, forever — not a port
+# defect and not something a port can fix. Every 200 row below is therefore a
+# `!` (known-open): reported under the banner, never fatal.
+#
+# That would leave the endpoint with no evidence at all, so the evidence was
+# produced out of band instead. With `generated` pinned to the same value on
+# both sides, `build_compare_payload` was run against
+# `.parity-state/fresh/store.db` (the differ's own corpus, opened read-only) for
+# fourteen argument combinations — both codepaths, both filters, the case-fold,
+# the misses — and every one rendered BYTE-IDENTICAL to the Python. Method,
+# script and the one seam that broke it are in `DIV-c-compare.md` (DIV-085).
+#
+# The two things that WOULD have to be true for these rows to go green:
+#   * the differ learns to mask a named field per case, or
+#   * `pyserver.py` pins `time.time()` — which its own docstring forbids
+#     ("NOT patched, on purpose: anything that changes a RESPONSE").
+# Neither is this batch's file to edit. Flagged, not decided.
+#
+# The 4xx/405 rows below carry no `generated` at all and ARE deterministic, so
+# they are plain rows and they do gate.
+#
+# Side effects: none. Every codepath here is `SELECT`-only. Python additionally
+# runs `schema.apply(conn)` per request, which is a `PRAGMA user_version` read
+# and an immediate return on a current store (DIV-087) — the differ boots the
+# Python server first, which has already applied it. No row writes. DIV-059 is
+# satisfied.
+
+# ── project selection (stripped on merge; here so the file stands alone) ─────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the four periods ─────────────────────────────────────────────────────────
+# `month` is the default and is stable within a calendar month; `today` is
+# stable within a calendar day; `all` is unbounded. `week` is the odd one —
+# `PERIOD_MAP` maps it to `7days`, a ROLLING instant with microseconds, so the
+# two servers compute bounds a few milliseconds apart and a message inside that
+# gap is a second, real divergence on top of `generated`. Same property
+# `CD-prov-week` already carries in the shared file, same reason.
+!CMP-default        | GET | /api/compare                       | -
+!CMP-month          | GET | /api/compare?period=month          | -
+!CMP-today          | GET | /api/compare?period=today          | -
+!CMP-all            | GET | /api/compare?period=all            | -
+!CMP-week           | GET | /api/compare?period=week           | -
+
+# ── the period allow-list: 400s, and they are byte-deterministic ─────────────
+# `_VALID_PERIODS` is a TUPLE and the detail is `', '.join(_VALID_PERIODS)`, so
+# the message reads `today, week, month, all` — declaration order, NOT sorted.
+# `services/compare.py::_resolve_scope` raises the same sentence for the same
+# four aliases with `sorted(PERIOD_MAP)` instead (`all, month, today, week`);
+# the route's 400 is what makes that second spelling unreachable over HTTP.
+# `7days` is the sharpest case: it is a perfectly valid *scope* spec and still a
+# 400 here, because the route validates the ALIAS layer.
+CMP-bad-period      | GET | /api/compare?period=nonsense       | -
+CMP-bad-7days       | GET | /api/compare?period=7days          | -
+CMP-bad-30days      | GET | /api/compare?period=30days         | -
+CMP-bad-empty       | GET | /api/compare?period=               | -
+CMP-bad-case        | GET | /api/compare?period=Month          | -
+CMP-bad-space       | GET | /api/compare?period=%20month       | -
+# Scalar query parameters take the LAST occurrence (starlette builds
+# `QueryParams._dict` by comprehension), so this 400s on `nonsense` and not on
+# the valid `today` that precedes it.
+CMP-bad-last-wins   | GET | /api/compare?period=today&period=nonsense | -
+
+# ── provider: a scalar filter, and it does not behave like the project one ───
+# `LOWER(provider) = ?` against a lowered parameter on the mart path, so
+# `CLAUDE` matches — while the fallback path compares `projects.provider = ?`
+# raw and the same spelling matches nothing there. Both spellings are here.
+!CMP-prov-claude    | GET | /api/compare?provider=claude       | -
+!CMP-prov-case      | GET | /api/compare?provider=CLAUDE       | -
+!CMP-prov-codex     | GET | /api/compare?period=all&provider=codex | -
+!CMP-prov-miss      | GET | /api/compare?provider=nosuchprovider | -
+# `?provider=` is the empty string, NOT an absent parameter, and the mart path
+# tests it two different ways in two adjacent functions: `if provider_filter:`
+# (falsy — filters no session rows) and `if provider_filter is not None:`
+# (true — prunes the model list to models that HAVE a session row). DIV-086.
+!CMP-prov-empty     | GET | /api/compare?provider=             | -
+!CMP-prov-last-wins | GET | /api/compare?provider=codex&provider=claude | -
+
+# ── project: repeatable, and it switches the whole implementation ────────────
+# `project_filter is None` is the mart fast-path's gate. One `project=` — even a
+# slug that matches nothing — drops the request onto the raw `messages` join and
+# re-prices every assistant message through the cost engine, because
+# `model_day_mart` carries no `project_id`. These rows are the only ones in the
+# file that exercise the pricing seam (DIV-056), which is why the miss case is
+# here too: it proves the fallback returns `[]` rather than falling back again.
+!CMP-proj-1         | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-all       | GET | /api/compare?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-today     | GET | /api/compare?period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+!CMP-proj-multi     | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-home-u-nope | -
+!CMP-proj-miss      | GET | /api/compare?project=-no-such-project-anywhere | -
+!CMP-proj-prov      | GET | /api/compare?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider=claude | -
+!CMP-proj-prov-empty | GET | /api/compare?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&provider= | -
+
+# ── method + unknown-parameter shapes ────────────────────────────────────────
+# Deterministic: no body from the handler at all.
+CMP-method          | POST | /api/compare                      | {}
+CMP-method-put      | PUT  | /api/compare                      | {}
+# An unknown query parameter is ignored, not rejected — FastAPI does not reject
+# extras on a query signature. This one 200s, so it is `!` like its siblings.
+!CMP-unknown-param  | GET | /api/compare?nonsense=1            | -

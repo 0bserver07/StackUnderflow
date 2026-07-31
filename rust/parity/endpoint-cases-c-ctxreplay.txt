@@ -1,0 +1,113 @@
+# Batch C / ctxreplay — `routes/context_replay.py` (RS-5-061).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ORDER IS SIGNIFICANT. `deps.current_log_path` is server state, and this
+# endpoint's fence reads it whenever no `?project=` / `?log_path=` is given, so
+# the project must be selected before the first CR-* row runs.
+#
+# SIDE EFFECTS: none. Every row is a GET that only reads. Two things that look
+# like writes are not:
+#   * Python's handler calls `schema.apply(conn)` per request — a MIGRATION.
+#     On `.parity-state/fresh` (`PRAGMA user_version` = 30, the newest
+#     migration is v030) it iterates zero migrations and writes nothing. The
+#     Rust port does not call it at all (DIV-106).
+#   * Python memoises the built timeline in a process-local dict
+#     (`_CONTEXT_CACHE`). No other endpoint reads it and it never touches disk,
+#     so it cannot leak into another case the way DIV-059's pricing cache did.
+#     Not ported — DIV-105.
+#
+# Session ids below are real rows in `.parity-state/fresh`:
+#   04a86c63-… project 314 (-media-…-StackUnderflow), 3 messages, seq 2369/3036/3576
+#   44b8f238-… project 314, 1276 messages, seq 1285 … 5832062
+#   3cf184ca-… project  16 (-Users-…-chimera--worktrees-all-issues), 68 messages
+# `seq` is NOT per-session-sequential — it is a global-ish counter — which is
+# why the cutoffs are the values they are and not 1/2/3.
+
+P-by-dir-known    | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the happy path, and every `at` branch ────────────────────────────────────
+CR-full           | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+CR-at-mid         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036 | -
+CR-at-first       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=2369 | -
+# Below every seq: zero events, and `total_tokens` must be the int `0`.
+CR-at-below       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=2368 | -
+CR-at-zero        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=0 | -
+CR-at-negative    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=-1 | -
+CR-at-past-end    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=99999999 | -
+# starlette keeps the LAST occurrence of a scalar query key, not the first.
+CR-at-repeated    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3576&at=3036 | -
+# `%2B` is a literal `+`; pydantic and `i64::from_str` both accept it.
+CR-at-plus        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%2B3036 | -
+# A bare `+` decodes to a space; pydantic strips before parsing.
+CR-at-spaced      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=+3036+ | -
+
+# ── the heavy session: 1276 messages, every raw_json parsed ──────────────────
+# The real payload the scrubber drags across, and the only row that exercises
+# the preview truncation, the tool-label table and the `\uXXXX` token
+# accounting at volume.
+CR-big-full       | GET | /api/context-replay/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+CR-big-at         | GET | /api/context-replay/44b8f238-3609-4445-97a9-37a5a99f1c9a?at=3153599 | -
+
+# ── the miss: advisory, never a 404 ─────────────────────────────────────────
+CR-unknown        | GET | /api/context-replay/no-such-session-at-all | -
+CR-unknown-at     | GET | /api/context-replay/no-such-session-at-all?at=5 | -
+# A path parameter that needs percent-decoding, on a session that cannot exist.
+CR-unknown-utf8   | GET | /api/context-replay/caf%C3%A9 | -
+# Starlette's `str` converter stops at `/`, so this matches no route at all and
+# is FastAPI's `{"detail":"Not Found"}` — the port must 404 the same way rather
+# than matching an empty `session_id`.
+CR-no-segment     | GET | /api/context-replay/ | -
+
+# ── the cross-project fence ─────────────────────────────────────────────────
+# No `?project=` / `?log_path=`, so the scope is the current project (set by
+# the row at the top). A session in ANOTHER project is fenced to the empty
+# shape plus the warning — never that project's transcript.
+CR-fence-current  | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5 | -
+# An explicit `?project=` overrides the current project, and now the SAME
+# session is in scope and serves its full timeline.
+CR-scope-explicit | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5?project=-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# …which fences the StackUnderflow session in the same breath.
+CR-fence-project  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# A slug naming no project is the EMPTY scope `[]`, which fences everything —
+# distinct from "no scope", which fences nothing. Getting these two confused is
+# the whole reason the resolver returns `list | None`.
+CR-scope-nomatch  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-no-such-project-anywhere | -
+# A blank / whitespace `?project=` is FALSY and falls through to the next leg
+# (here: the current project), so this must equal CR-full.
+CR-scope-blank    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project= | -
+CR-scope-space    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=%20 | -
+# `?log_path=`'s BASENAME is the slug; the directory part is ignored.
+CR-log-path       | GET | /api/context-replay/3cf184ca-83e0-4c6c-8f8a-9b49bcfc89e5?log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+CR-log-path-fence | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# Precedence: an explicit `project` beats `log_path` beats the current project.
+CR-scope-both     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&log_path=/anywhere/-Users-yadkonrad-dev-dev-year26-feb26-chimera--worktrees-all-issues | -
+# A trailing slash on `log_path`: `PurePath(...).name` ignores it.
+CR-log-path-slash | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?log_path=/anywhere/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow/ | -
+
+# ── validation: the only non-200 this endpoint can produce ──────────────────
+# `at: int | None` — FastAPI's own 422, raised before the handler body runs.
+CR-bad-at         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=abc | -
+CR-empty-at       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at= | -
+CR-at-fractional  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=5.5 | -
+CR-at-bool        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=true | -
+
+# ── KNOWN OPEN — DIV-107, the two `int` coercions `qs::opt_int` does not do ──
+# Both rows are safe to execute (plain GETs, no writes); the `!` only softens
+# the verdict. Python answers 200 for each; the port answers 422.
+#   at=3036.0  pydantic accepts an INTEGRAL float string for an `int` field.
+#   at=1e21-ish  Python ints are arbitrary precision; `i64` is not, and the
+#                echoed `at_seq` could not be rendered even if it parsed.
+# Both live in the SHARED `crate::qs` helper, not in this module, so the fix is
+# the architect's to place. Measured on fastapi 0.141.1 / pydantic 2.13.4.
+!CR-at-float      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036.0 | -
+!CR-at-bignum     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=10000000000000000000000 | -
+
+# ── method coverage ─────────────────────────────────────────────────────────
+# A known path with an unclaimed method is FastAPI's 405 JSON, not starlette's
+# plain text. `crate::json::method_not_allowed` already handles this; the row
+# exists because a router that mounts only `get` is one `any()` away from a
+# silent 200 on a POST.
+CR-post           | POST | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {}

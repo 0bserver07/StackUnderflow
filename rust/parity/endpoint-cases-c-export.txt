@@ -1,0 +1,165 @@
+# BATCH C / export — the case matrix for `GET /api/export` (RS-5-073).
+#
+# Same row format as `parity/endpoint-cases.txt`, whose header documents it:
+#
+#   <id> | <METHOD> | <path-and-query> | <json body or ->
+#
+# A leading `!` marks a KNOWN-OPEN case: reported in full under a loud banner,
+# never fatal. Every row below is a read-only GET; nothing here writes.
+#
+# Run it with batch C's own ports (A owns :8096/:8097 defaults):
+#
+#   STAX_ENDPOINT_CASES=rust/parity/endpoint-cases-c-export.txt \
+#   rust/endpoint-parity.sh
+#
+# :8095 is the maintainer's live server. Never bind it.
+#
+# NOTE on the id prefix: batch B's `routes/search.py` rows also use `X-`. The
+# two sets were checked and do not collide — B's are `X-stats`, `X-basic`,
+# `X-page*`, `X-filter-*`, `X-operators`, `X-quote`, `X-multi-word`,
+# `X-bad-int`; these are all `X-csv-*`, `X-json-*` or a validation name none of
+# those uses. The only row shared with the merged matrix is `P-by-dir-known`,
+# which the integrator strips.
+#
+# ── ORDER ────────────────────────────────────────────────────────────────────
+#
+# `deps.current_log_path` is server state, so the file opens with the selection
+# row every merged matrix needs. `/api/export` itself does NOT read it — every
+# scope it uses comes from the query string — but the row is here so this file
+# runs standalone in the same state the shared matrix establishes. The
+# integrator strips it when merging (it already runs earlier there).
+#
+# ── SIDE EFFECTS: none, and that was checked rather than assumed ─────────────
+#
+# `routes/export.py` opens its own connection and calls `schema.apply(conn)` on
+# every request — a MIGRATION runner. On `.parity-state/fresh` it is a no-op:
+# `PRAGMA user_version` is 30 and the highest migration in both trees is
+# `v030_live_indexes.sql`, so `_discover()` yields nothing and nothing is
+# written. Measured on the harness store before these rows were written. If the
+# home is ever repointed at a store behind on migrations, the FIRST request
+# from the Python side migrates it and the Rust side then reads a store the
+# reference just changed — see DIV-132 before moving this file to a new home.
+#
+# ── WHAT CAN BE GREEN, AND WHAT CANNOT ───────────────────────────────────────
+#
+# Only two of the four period names are stable within a calendar day:
+#
+#   period=today  -> scope spec `today`   midnight..23:59:59, no microseconds  STABLE
+#   period=all    -> scope spec `all`     unbounded                            STABLE
+#   period=week   -> scope spec `7days`   now - 7d, CARRIES THE MICROSECOND    rolling
+#   period=month  -> scope spec `30days`  now - 30d, CARRIES THE MICROSECOND   rolling
+#   (no period)   -> the rollup: today + 7days + 30days, plus a `generated`
+#                    wall-clock stamp IN THE BODY                             rolling
+#
+# `period=month` does NOT reach `scope.parse_period("month")` (the calendar
+# month) — `EXPORT_PERIOD_MAP` maps it to `30days`. So this endpoint has no
+# calendar-month window at all, and `month` is as rolling as `week` is.
+#
+# The rolling bounds land in the JSON payload as `since` / `until`, so a
+# `format=json` row on `week` / `month` / the rollup can NEVER be byte-equal:
+# two servers, two microsecond samples. Those rows carry `!`. The CSV renderer
+# does not print the bounds, so the same windows diff cleanly there — with the
+# same residual risk `CD-prov-week` carries in the shared file: a message
+# landing inside the few-millisecond gap between the two clock reads is a real
+# (if rare) divergence, not noise.
+#
+# ── COST, which is why the shapes below are scoped the way they are ──────────
+#
+# `deep` is `fmt == "json"`, and the deep pass runs the WHOLE aggregator
+# pipeline once per in-scope project. `format=json` with no project filter over
+# `period=all` would run it for ~300 projects — the same class of accident
+# `!X-reindex` was (DIV-078). Every JSON row below is therefore bounded, either
+# by `period=today` (one project has messages today on this snapshot) or by an
+# explicit `project=`. The CSV rows are pure aggregate SQL and are safe
+# unbounded; `X-csv-all` sweeps 383,580 messages four times and takes seconds,
+# which is inside the differ's 300 s timeout with room to spare.
+#
+# Fixtures, measured on `.parity-state/fresh`:
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow   claude, 1,279 messages
+#   -Users-yadkonrad-dev-dev-year26-jun26-worldcup             claude, 32 messages
+#   providers present: claude, codex, cursor, gemini, grok, antigravity, …
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── CSV, the cheap window: every query-parameter branch ──────────────────────
+X-csv-today         | GET | /api/export?format=csv&period=today | -
+X-csv-today-prov    | GET | /api/export?format=csv&period=today&provider=claude | -
+X-csv-prov-none     | GET | /api/export?format=csv&period=today&provider=nosuchprovider | -
+# `if provider:` — the EMPTY string is falsy and must filter nothing, rather
+# than becoming `WHERE projects.provider = ''` and emptying the export.
+X-csv-prov-blank    | GET | /api/export?format=csv&period=today&provider= | -
+X-csv-project       | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+X-csv-project-multi | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+X-csv-project-none  | GET | /api/export?format=csv&period=today&project=-no-such-project-anywhere | -
+X-csv-exclude       | GET | /api/export?format=csv&period=today&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+# include AND exclude naming the same slug: exclude is applied second and wins.
+X-csv-both-filters  | GET | /api/export?format=csv&period=today&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── CSV, the full sweep and the rolling windows ──────────────────────────────
+# The flagship: four unbounded passes over the whole messages table, every
+# project, every model, priced through the primed price book (DIV-056).
+X-csv-all           | GET | /api/export?format=csv&period=all | -
+# DIV-131's provider pooling, on a slug that really does exist under three
+# providers here (claude / codex / antigravity). The `daily` rows keep them
+# apart on `(day, provider, slug)`; the per-project roll keys on the SLUG alone,
+# so the single `projects` entry reports the first-seen provider with the counts
+# summed across all three. If the port had keyed that map on `(provider, slug)`
+# — the obvious "fix" — this row is where it would show.
+X-csv-multiprov     | GET | /api/export?format=csv&period=all&project=-Users-yadkonrad-dev-dev-year26-feb26-chimera | -
+# Rolling instants. The CSV body does not render `since`/`until`, so these are
+# expected GREEN — a red here means a message landed in the clock gap.
+X-csv-week          | GET | /api/export?format=csv&period=week | -
+X-csv-month         | GET | /api/export?format=csv&period=month | -
+# No `period` at all: the today + 7d + 30d rollup. `generated` is in the JSON
+# payload but NOT in the CSV rendering, so this one can be green too.
+X-csv-rollup        | GET | /api/export?format=csv | -
+
+# ── JSON: the pretty, ensure_ascii=True body and the deep breakdowns ─────────
+# This is the writer proof for this endpoint. `render_export_json` is
+# `json.dumps(payload, indent=2)` — the CLI writer — so a non-ASCII project
+# name ships ESCAPED here while `/api/projects` ships it raw. If this row is
+# byte-identical the port picked the right one of the two writers.
+X-json-today        | GET | /api/export?format=json&period=today | -
+X-json-project      | GET | /api/export?format=json&period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+X-json-small-proj   | GET | /api/export?format=json&period=all&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+# Zero candidates: the deep pass produces four empty lists and the daily /
+# projects / models sections are empty too. The `totals` block is the literal's
+# int/float mix (`cost_usd: 0.0`, everything else `0`) — DIV-057's split.
+X-json-miss         | GET | /api/export?format=json&period=all&project=-no-such-project-anywhere | -
+# `?format=csv&format=json` — starlette's scalar rule takes the LAST value, so
+# this is a JSON export. The intuitive "first wins" would fail here.
+X-json-last-wins    | GET | /api/export?format=csv&format=json&period=today | -
+
+# ── JSON on a rolling window: reported every run, never green ────────────────
+# `since` / `until` carry the microsecond of each server's own clock read, so
+# these two are structurally undiffable. Safe to execute (read-only, and both
+# are project-scoped so the deep pass runs once per window, not 300 times).
+!X-json-week        | GET | /api/export?format=json&period=week&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+# The rollup additionally embeds `generated`, a full ISO instant.
+!X-json-rollup      | GET | /api/export?format=json&project=-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+
+# ── validation: the 422 and the two 400 shapes ───────────────────────────────
+# `format` is `Query(...)`, i.e. REQUIRED — an absent one is pydantic's
+# `missing` entry, not a 400.
+X-no-format         | GET | /api/export | -
+X-no-format-period  | GET | /api/export?period=today | -
+# `?format=` is PRESENT, so it passes the required check and then fails the
+# allow-list: a 400 with a `detail` STRING, not a 422 with a detail LIST.
+X-empty-format      | GET | /api/export?format= | -
+X-bad-format        | GET | /api/export?format=xml | -
+# The detail embeds `sorted({...})` through repr: `['csv', 'json']`, single
+# quotes, space after the comma.
+X-bad-format-case   | GET | /api/export?format=CSV | -
+# `if period is not None and period not in _VALID_PERIODS` — `?period=` is not
+# None, so the empty string reaches the allow-list and 400s.
+X-empty-period      | GET | /api/export?format=csv&period= | -
+X-bad-period        | GET | /api/export?format=csv&period=fortnight | -
+# The scope vocabulary is NOT the export vocabulary: `7days` is a valid
+# `parse_period` spec and an invalid `?period=`.
+X-scope-period      | GET | /api/export?format=csv&period=7days | -
+X-bad-period-case   | GET | /api/export?format=csv&period=Today | -
+# Both invalid: `format` is checked FIRST, so the format message wins.
+X-both-invalid      | GET | /api/export?format=xml&period=fortnight | -
+
+# ── method ──────────────────────────────────────────────────────────────────
+X-method            | POST | /api/export?format=csv | {}

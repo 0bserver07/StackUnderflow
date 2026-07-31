@@ -40,6 +40,7 @@ pub mod json;
 pub mod pricing;
 pub mod qs;
 pub mod routes;
+pub mod services;
 pub mod spa;
 pub mod state;
 

@@ -28,6 +28,14 @@ rusqlite = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }
 stax-core = { workspace = true }
+# DEVIATION (batch C, documented): `POST /api/refresh` re-runs the ingest pass,
+# and `ingest::run_ingest` takes the adapter registry — `routes/data.py` gets it
+# from `stackunderflow.adapters.registered()`. `stax-etl` depends on
+# `stax-adapters` but does not re-export `registry::registered`, so there is no
+# way to reach it without naming the crate. This adds no new third-party code
+# and no new workspace member: `stax-adapters` is already in the lock as a
+# transitive dependency of `stax-etl`. The workspace `Cargo.toml` is untouched.
+stax-adapters = { path = "../stax-adapters" }
 stax-etl = { path = "../stax-etl" }
 stax-memory = { path = "../stax-memory" }
 # `ServiceExt::map_response` — the one-line layer that restores starlette's

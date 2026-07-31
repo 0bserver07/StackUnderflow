@@ -1,0 +1,68 @@
+# Batch C / member `plan` — case rows for `GET /api/plan` (RS-5-090).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# `/api/plan` takes NO query parameters — it is a pure function of
+# `config.json`, `store.db` and the clock — so the matrix is thin by nature.
+# What it can still prove is the null-plan payload byte for byte, the two
+# router fallbacks, and that the endpoint is genuinely side-effect free.
+#
+# Side effects: NONE. Every row below is a GET or an unclaimed method on
+# `/api/plan`. The handler opens the store read-write (that is what
+# `store/db.py::connect` does on both sides) but issues only SELECTs; the
+# Python side additionally runs `schema.apply`, which is idempotent DDL the
+# harness store already satisfies. Nothing under `$STACKUNDERFLOW_HOME` is
+# written. Law 7 is satisfied.
+#
+# COVERAGE GAP, stated up front (see DIV-c-plan.md): the harness home's
+# `config.json` carries no `plan_name` / `plan_monthly_usd`, so `PL-plan`
+# exercises the NULL branch only. The spend rollup, the billing window, the
+# burn projector and the currency conversion are covered by unit tests, not by
+# this matrix. Setting a plan is a home mutation, not a case row.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the endpoint ─────────────────────────────────────────────────────────────
+# The happy path. On the harness home this is the no-plan payload:
+#   {"plan":null,"usage":null,"projection":null,"currency":{...}}
+# `currency` is stamped even in the null branch, and `rate_from_usd` must render
+# `1.0` and not `1` — a one-byte difference the pyjson writer is the only thing
+# guarding.
+PL-plan             | GET | /api/plan                          | -
+
+# Repeat immediately. Python memoises the spend rollup (`_SPEND_CACHE`) and the
+# port does not (DIV-091), so this row is the cheapest available proof that the
+# memo cannot change the answer within one store revision. It is also the row
+# that would catch a first-call-only side effect.
+PL-plan-repeat      | GET | /api/plan                          | -
+
+# `/api/plan` is not project-scoped — it has no `_require_project()` guard — so
+# it must answer identically whether or not a project has been selected. This
+# row runs AFTER the selection above; a divergence here would mean one of the
+# two servers is leaking `deps.current_log_path` into a global rollup.
+PL-plan-any-project | GET | /api/plan                          | -
+
+# ── error / fallback shapes ──────────────────────────────────────────────────
+# The route is GET-only, so FastAPI's router raises HTTPException(405) and the
+# installed handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's
+# native 405 is an empty body with no content-type; `crate::json` restores
+# starlette's. Body is `-` because a 405 is decided before the body is read.
+PL-plan-post        | POST | /api/plan                         | -
+PL-plan-put         | PUT  | /api/plan                         | -
+PL-plan-delete      | DELETE | /api/plan                       | -
+
+# Neighbouring paths nothing claims — FastAPI's `{"detail":"Not Found"}`, not
+# starlette's plain-text default. `/api/plans` (plural) is the typo a client
+# actually makes; the trailing slash is the one a proxy adds.
+PL-plan-plural      | GET | /api/plans                         | -
+PL-plan-slash       | GET | /api/plan/                         | -
+PL-plan-subpath     | GET | /api/plan/status                   | -
+
+# A query string on a parameter-less endpoint is ignored, not rejected: neither
+# FastAPI nor axum validates unknown query keys, so this must be byte-identical
+# to `PL-plan`. It is here because "and then someone adds a parameter" is how a
+# 422 quietly appears on a surface that never had one.
+PL-plan-junk-query  | GET | /api/plan?nonsense=1&days=7        | -

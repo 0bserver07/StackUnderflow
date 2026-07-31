@@ -1,0 +1,154 @@
+# Batch C / `optimize` — endpoint differ cases for `routes/optimize.py`.
+#
+# Format is `rust/parity/endpoint-cases.txt`'s, read that file's header first.
+# The integrator merges these into the shared file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ── ORDER IS SIGNIFICANT, and here it is significant TWICE ───────────────────
+#
+# The usual reason applies (`deps.current_log_path` is server state). The second
+# reason is specific to this module: `/api/optimize` returns `"cache": "hit"` or
+# `"cache": "miss"` **in the response body**, so the in-process memo is an
+# answer-changer and the rows below are a scripted hit/miss sequence, not a set.
+# Both servers start cold and read the same file top to bottom, so they agree —
+# but reordering, deleting or re-running a single row changes the expected
+# bytes of every later row with the same cache key. See DIV-111.
+#
+# Cache key = (period, sorted(project), sorted(exclude)) + store.db's mtime_ns.
+#
+# ── the rolling-window caveat ────────────────────────────────────────────────
+#
+# `7days` / `30days` bound on `now`, so the two servers compute bounds a few
+# milliseconds apart and a message inside that gap is a real (if rare)
+# divergence — the same property `CD-prov-week` already carries. It bites at
+# most ONCE per cache key here, because every later request on that key is
+# served from the memo. The `force` row is deliberately on `period=all`, whose
+# bounds are `None` on both sides, so the one row that recomputes on purpose is
+# the one row with nothing to drift.
+#
+# ── LAW 7 ────────────────────────────────────────────────────────────────────
+#
+# `/api/optimize` writes nothing: the detectors only stat/read under
+# `~/.claude`, the pricing engine only reads `models.toml`, and the memo is
+# process memory. Verified against the sources, not the docstring (DIV-118).
+#
+# `/api/optimize/prescriptions` reads the same `~/.claude` CLAUDE.md files the
+# bloat detector already scanned and writes nothing;
+# `/api/optimize/claudemd-preview` is a pure function of the request body — no
+# filesystem read at all. Both are case-row-safe; both have rows below.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── validation, first: these never reach the cache and never write to it ─────
+OPT-bad-period      | GET | /api/optimize?period=week           | -
+OPT-empty-period    | GET | /api/optimize?period=               | -
+OPT-period-case     | GET | /api/optimize?period=30Days         | -
+OPT-bad-force       | GET | /api/optimize?force=maybe           | -
+
+# ── the default key (30days, (), ()) — miss, then two hits ──────────────────
+# `period=30days` is the DECLARED default, so the third row is the same cache
+# key as the first two and must come back "hit" on both servers.
+OPT-default         | GET | /api/optimize                       | -
+OPT-default-again   | GET | /api/optimize                       | -
+OPT-period-30days   | GET | /api/optimize?period=30days         | -
+# starlette takes the LAST occurrence of a scalar, so this is still 30days.
+OPT-period-last     | GET | /api/optimize?period=today&period=30days | -
+
+# ── the calendar-stable periods, one fresh key each ─────────────────────────
+OPT-today           | GET | /api/optimize?period=today          | -
+OPT-7days           | GET | /api/optimize?period=7days          | -
+OPT-month           | GET | /api/optimize?period=month          | -
+
+# ── period=all: miss, hit, then the force bypass and its consequence ────────
+# `force=true` skips the READ and still writes back, so OPT-all-after-force is
+# a hit on the FORCED payload. The force row sits at the end of its key group
+# precisely so it cannot poison a row that expects the pre-force value.
+OPT-all             | GET | /api/optimize?period=all            | -
+OPT-all-again       | GET | /api/optimize?period=all            | -
+OPT-all-force       | GET | /api/optimize?period=all&force=true | -
+OPT-all-after-force | GET | /api/optimize?period=all            | -
+# `force=false` is the default and takes the cached value.
+OPT-all-force-false | GET | /api/optimize?period=all&force=false | -
+
+# ── project / exclude scoping, all on the stable `all` window ───────────────
+OPT-project-self    | GET | /api/optimize?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+OPT-project-unknown | GET | /api/optimize?period=all&project=-no-such-project-anywhere | -
+OPT-exclude-self    | GET | /api/optimize?period=all&exclude=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+OPT-both-filters    | GET | /api/optimize?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow&exclude=-no-such-project-anywhere | -
+
+# ── the sorted-key collision: `?project=b&project=a` == `?project=a&project=b`
+# `tuple(sorted(project))` means the SECOND of these is a cache HIT on the
+# first, even though the query strings differ. That is the single most
+# surprising thing about this endpoint's cache and it gets its own pair.
+OPT-multi-ba        | GET | /api/optimize?period=all&project=zzz-b&project=aaa-a | -
+OPT-multi-ab        | GET | /api/optimize?period=all&project=aaa-a&project=zzz-b | -
+
+# ── the empty-result end of the range ───────────────────────────────────────
+# Every filter matches nothing: empty `waste`, empty mart-backed detectors, and
+# `total_waste_usd` renders as whatever the FILESYSTEM detectors leave behind
+# (they ignore the store entirely — DIV-116).
+OPT-scope-empty     | GET | /api/optimize?period=today&project=-no-such-project-anywhere | -
+
+
+# ── GET /api/optimize/prescriptions ─────────────────────────────────────────
+# No cache here — every call recomputes, so these rows are order-independent
+# among themselves. They DO depend on the project selection above: with no
+# `?project=`, the slug falls back to `deps.current_log_path`'s basename, which
+# `P-by-dir-known` set. `?project=` with an unknown slug resolves to an empty
+# project-id list, which is "matched nothing", NOT "the whole store".
+PRE-bad-period      | GET | /api/optimize/prescriptions?period=week | -
+PRE-default         | GET | /api/optimize/prescriptions          | -
+PRE-all             | GET | /api/optimize/prescriptions?period=all | -
+PRE-today           | GET | /api/optimize/prescriptions?period=today | -
+PRE-month           | GET | /api/optimize/prescriptions?period=month | -
+PRE-project-self    | GET | /api/optimize/prescriptions?period=all&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+PRE-project-unknown | GET | /api/optimize/prescriptions?period=all&project=-no-such-project-anywhere | -
+# An EMPTY `?project=` is falsy in Python and falls back to the active project,
+# exactly as if the parameter were absent.
+PRE-project-empty   | GET | /api/optimize/prescriptions?period=all&project= | -
+
+# ── POST /api/optimize/claudemd-preview ─────────────────────────────────────
+# A pure function of the body: no filesystem, no store write, no cache. Every
+# row here is independent of every other row in the file.
+CMD-clean           | POST | /api/optimize/claudemd-preview | {"text": "# Title\n\nA short paragraph that is here once.\n"}
+CMD-comments        | POST | /api/optimize/claudemd-preview | {"text": "# Title\n\n<!-- author note\nspanning lines -->\n\nBody text goes here and is long enough to matter for the dedupe rule check.\n\n\n\n\nTail.\n"}
+CMD-dupes           | POST | /api/optimize/claudemd-preview | {"text": "# T\n\nA duplicated paragraph long enough to pass the sixty character floor easily.\n\nA duplicated paragraph long enough to pass the sixty character floor easily.\n\nEnd.\n"}
+CMD-empty-text      | POST | /api/optimize/claudemd-preview | {"text": ""}
+CMD-label           | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "file_label": "repo/CLAUDE.md"}
+CMD-sessions        | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": 250}
+# Lax coercion: a numeric string, a whole float and `true` are all valid ints.
+CMD-sessions-str    | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": " 5 "}
+CMD-sessions-float  | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": 5.0}
+CMD-sessions-true   | POST | /api/optimize/claudemd-preview | {"text": "# T\n\n<!-- x -->\n", "sessions_per_month": true}
+# An unknown key is ignored, not rejected.
+CMD-extra-key       | POST | /api/optimize/claudemd-preview | {"text": "# T\n", "nope": 1}
+
+# ── the 422 shapes, each measured against the reference before it was written
+CMD-missing-text    | POST | /api/optimize/claudemd-preview | {}
+CMD-text-int        | POST | /api/optimize/claudemd-preview | {"text": 3}
+CMD-text-null       | POST | /api/optimize/claudemd-preview | {"text": null}
+CMD-label-int       | POST | /api/optimize/claudemd-preview | {"text": "x", "file_label": 3}
+CMD-sessions-zero   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 0}
+CMD-sessions-false  | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": false}
+CMD-sessions-huge   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 100001}
+CMD-sessions-abc    | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": "abc"}
+CMD-sessions-frac   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": 5.5}
+CMD-sessions-list   | POST | /api/optimize/claudemd-preview | {"text": "x", "sessions_per_month": []}
+CMD-all-bad         | POST | /api/optimize/claudemd-preview | {"sessions_per_month": "z", "file_label": 2, "text": 1}
+CMD-not-an-object   | POST | /api/optimize/claudemd-preview | []
+
+# ── deliberately ABSENT rows, with the reason ───────────────────────────────
+#
+# * **malformed JSON.** pydantic reports
+#   `{"type":"json_invalid","loc":["body",<byte offset>],"ctx":{"error":<parser
+#   message>}}`, and both the offset and the message come from pydantic-core's
+#   own parser. The port emits a fixed `offset 0 / "Expecting value"` shape,
+#   which is only verified for leading garbage. Recorded as DIV-119 rather
+#   than asserted here — no row claims a shape that was not measured.
+# * **the 413 branch.** It needs a body over 2 MB, which does not belong in a
+#   line-oriented case file. Covered by a unit test on the rendered error
+#   instead (`the_oversize_guard_is_the_413_and_it_counts_bytes`).
+# * **an empty request body.** The differ's `-` means "send no body at all",
+#   which also drops the `content-type`; FastAPI's answer then depends on the
+#   client's framing rather than on the port. Covered by a unit test
+#   (`an_empty_body_and_a_non_object_body_fail_differently`).
