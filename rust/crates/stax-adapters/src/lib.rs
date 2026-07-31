@@ -34,19 +34,58 @@
 //!   [`base::SourceAdapter::watch_paths`] (watcher) and
 //!   [`base::SourceAdapter::source_roots`] (backup), matching Python's
 //!   `getattr`-discovered optional protocol members.
+//!
+//! ## Wave 2, batch 2
+//!
+//! The stamp-out. Nine more providers — [`antigravity`], [`continue_ext`],
+//! [`copilot`], [`droid`], [`kiro`], [`openclaw`], [`opencode`], [`pi`] — plus
+//! [`custom_import`], which is infrastructure rather than an adapter and is
+//! deliberately absent from the registry.
+//!
+//! Three support modules landed with them, each because the alternative was
+//! copying the same Python helper into four Rust files:
+//!
+//! * [`pytime`] — `datetime.fromtimestamp` / `fromisoformat` / `now`, the other
+//!   Python builtin these adapters lean on. Its `Clock` is injected, never read
+//!   from a frozen global: three adapters fall back to *now* for an unparseable
+//!   timestamp, and that value cannot be diffed against Python.
+//! * [`walk`] — `pathlib` directory walking with Python's ordering. The
+//!   recursive globs sort by path *string*, which `PathBuf: Ord` does not.
+//! * [`blocks`] — the content-block vocabulary `pi`, `openclaw` and `droid`
+//!   share verbatim.
+//! * [`sqlite`] — read-only access with `sqlite3`'s value semantics, for the
+//!   database-kind providers.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod antigravity;
 pub mod base;
+pub mod blocks;
 pub mod capabilities;
 pub mod claude;
+pub mod cline;
 pub mod codex;
+pub mod continue_ext;
 pub mod contract;
+pub mod copilot;
+pub mod cursor;
+pub mod custom_import;
+pub mod droid;
 pub mod dump;
+pub mod gemini;
+pub mod grok;
 pub mod jsonl;
+pub mod kiro;
+pub mod openclaw;
+pub mod opencode;
+pub mod pi;
+pub mod pytime;
 pub mod pyval;
+pub mod qwen;
 pub mod registry;
+pub mod sqlite;
+pub mod walk;
 
 pub use base::{Record, SessionRef, SourceAdapter, SourceKind, Speed};
 pub use capabilities::Capabilities;

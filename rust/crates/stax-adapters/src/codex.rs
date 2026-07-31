@@ -117,7 +117,7 @@ impl CodexAdapter {
         if stripped.is_empty() {
             return None;
         }
-        let obj: Value = serde_json::from_slice(stripped).ok()?;
+        let obj: Value = jsonl::parse_json(stripped)?;
         let map = obj.as_object()?;
         if map.get("type").and_then(Value::as_str) == Some("session_meta") {
             if !map.get("payload").is_some_and(Value::is_object) {
@@ -155,7 +155,7 @@ impl CodexAdapter {
             if !contains(line, br#""turn_context""#) && !contains(line, br#""session_meta""#) {
                 continue;
             }
-            let Ok(event) = serde_json::from_slice::<Value>(line) else {
+            let Some(event) = jsonl::parse_json(line) else {
                 continue;
             };
             let Some(map) = event.as_object() else {
@@ -350,7 +350,7 @@ impl SourceAdapter for CodexAdapter {
                 continue;
             }
             // LOG: python debug-logs "Skipping malformed JSON line in %s".
-            let Ok(event) = serde_json::from_slice::<Value>(stripped) else {
+            let Some(event) = jsonl::parse_json(stripped) else {
                 continue;
             };
             // Valid JSON that is not an object cannot be a rollout event.

@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::base::{Record, SessionRef, SourceAdapter, Speed, stat_ref_fields};
-use crate::jsonl::{JsonlLines, py_bytes_strip};
+use crate::jsonl::{JsonlLines, parse_json, py_bytes_strip};
 use crate::pyval;
 
 /// The provider key.
@@ -273,7 +273,7 @@ impl ClaudeAdapter {
             if stripped.is_empty() {
                 continue;
             }
-            let Ok(obj) = serde_json::from_slice::<Value>(stripped) else {
+            let Some(obj) = parse_json(stripped) else {
                 continue;
             };
             // A syntactically-valid JSON line that is not an object (bare list /
@@ -300,7 +300,7 @@ impl ClaudeAdapter {
             if stripped.is_empty() {
                 continue;
             }
-            let Ok(obj) = serde_json::from_slice::<Value>(stripped) else {
+            let Some(obj) = parse_json(stripped) else {
                 continue;
             };
             let Some(map) = obj.as_object() else { continue };

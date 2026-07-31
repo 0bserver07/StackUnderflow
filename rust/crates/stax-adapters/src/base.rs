@@ -19,15 +19,67 @@
 //! which *is* the backup command's fallback, expressed once instead of at each
 //! call site.
 //!
-//! `content_hash_id` (`base.py:12`) is deliberately **not** ported yet: its only
-//! caller is the content-addressed custom history-source importer
-//! (`adapters/custom_import.py`, item RS-2-005), it needs a BLAKE2b dependency,
-//! and porting an unused hash function invites a silent id divergence nobody
-//! would notice until an import. It lands with its caller.
+//! [`content_hash_id`] (`base.py:12`) landed **with its caller**, the
+//! content-addressed custom history-source importer ([`crate::custom_import`],
+//! item RS-2-005). It was held back on purpose: it needs a BLAKE2b dependency,
+//! and an unused hash function can diverge silently for as long as nobody
+//! imports anything.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+
+/// A deterministic id derived from the *content* of `parts`
+/// (`base.py:content_hash_id`).
+///
+/// Two imports of identical content — same machine or not — produce the same
+/// id. That is what a content-addressed import needs: the store's integer
+/// primary keys are machine-local and cannot be merged across machines, but a
+/// stable content hash can, and a re-import maps back onto the same id instead
+/// of duplicating the row.
+///
+/// The digest is order- and boundary-sensitive, by construction:
+///
+/// * the **part count** is bound in first, so a trailing `None` cannot alias a
+///   shorter argument list;
+/// * each part is **length-prefixed** before it is folded in, so `("a", "bc")`
+///   and `("ab", "c")` can never collide;
+/// * `None` hashes as the sentinel `\0NULL\0`, which is distinct from the empty
+///   string.
+///
+/// `prefix` (a provider or source tag) is prepended verbatim so ids minted in
+/// different namespaces stay visibly distinct. `length` truncates the hex
+/// digest; the default 32 hex chars is 128 bits, ample against accidental
+/// collision at any realistic import volume.
+///
+/// The hash is `hashlib.blake2b(digest_size=32)` — BLAKE2b with a 256-bit
+/// output, *not* BLAKE2s — and this port is byte-for-byte identical to
+/// CPython's, pinned by the tests below and by
+/// `tests/stackunderflow/adapters/test_content_hash_id.py` on the other side.
+#[must_use]
+pub fn content_hash_id(parts: &[Option<String>], prefix: &str, length: usize) -> String {
+    let mut state = blake2b_simd::Params::new().hash_length(32).to_state();
+    // Bind the arity up front.
+    state.update(parts.len().to_string().as_bytes());
+    state.update(b"\x1e");
+    for part in parts {
+        let token: &[u8] = match part {
+            None => b"\x00NULL\x00",
+            Some(text) => text.as_bytes(),
+        };
+        // Length-prefix each token so adjacent tokens cannot be re-partitioned
+        // into the same byte stream.
+        state.update(token.len().to_string().as_bytes());
+        state.update(b"\x1f");
+        state.update(token);
+    }
+    let digest = state.finalize().to_hex();
+    let take = length.max(1).min(digest.len());
+    format!("{prefix}{}", &digest[..take])
+}
+
+/// The `length` default `content_hash_id` carries in Python.
+pub const CONTENT_HASH_LENGTH: usize = 32;
 
 /// Storage mode for resumable reads (`base.py:75`).
 ///
@@ -287,9 +339,143 @@ pub fn stat_ref_fields(path: &Path) -> Option<(f64, u64)> {
     Some((mtime_seconds(&meta), meta.len()))
 }
 
+/// The user's home directory — `Path.home()`.
+///
+/// One home for the deprecation allow: every adapter that defaults a source
+/// root off `~` needs it, and `std::env::home_dir` is the platform-correct
+/// answer on the 1.97.1 pin (stax-core's settings module carries the same
+/// allow). `None` means "no home", and each caller decides what that costs it.
+#[must_use]
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    #[allow(
+        deprecated,
+        reason = "std::env::home_dir is the platform-correct answer on the \
+        1.97.1 pin; stax-core's settings module carries the same allow"
+    )]
+    std::env::home_dir()
+}
+
+/// `Path.iterdir()`, sorted — the deterministic directory walk every
+/// file-backed adapter needs.
+///
+/// Python iterates `readdir` order, which is neither sorted nor reproducible
+/// across filesystems; sorting yields the same *set* in a stable order (see the
+/// order-only divergence note on [`crate::claude::ClaudeAdapter::enumerate`]).
+/// An unreadable directory is an empty walk, never an error — the enumerate
+/// contract.
+#[must_use]
+pub(crate) fn read_dir_sorted(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    paths
+}
+
+/// `Path.glob("*<suffix>")`, sorted.
+///
+/// pathlib's `glob` — unlike `glob.glob` — does **not** hide dotfiles, so
+/// neither does this.
+#[must_use]
+pub(crate) fn glob_suffix(dir: &Path, suffix: &str) -> Vec<PathBuf> {
+    read_dir_sorted(dir)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(suffix))
+        })
+        .collect()
+}
+
+/// Sub-directories of `root`, sorted — `sorted(p for p in root.iterdir() if p.is_dir())`.
+#[must_use]
+pub(crate) fn child_dirs(root: &Path) -> Vec<PathBuf> {
+    read_dir_sorted(root)
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// `Path.name` — the final component, as a `String`.
+#[must_use]
+pub(crate) fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `Path.stem` — the final component with its last suffix removed.
+#[must_use]
+pub(crate) fn file_stem(path: &Path) -> String {
+    path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `content_hash_id("a", "b", …)` with every part a string.
+    fn hash_of(parts: &[&str]) -> String {
+        let owned: Vec<Option<String>> = parts.iter().map(|p| Some((*p).to_string())).collect();
+        content_hash_id(&owned, "", CONTENT_HASH_LENGTH)
+    }
+
+    #[test]
+    fn content_hash_matches_cpythons_hashlib_byte_for_byte() {
+        // Every literal below is `stackunderflow.adapters.base.content_hash_id`
+        // run under the campaign's interpreter — the point of the helper is
+        // that two machines agree, so an independently-derived value is the
+        // only assertion worth making.
+        assert_eq!(
+            hash_of(&["custom", "src", "sess", "0", "message", "user", "hi"]),
+            "49dde4cdaa1d204e16513f3bd2f499cc"
+        );
+        assert_eq!(
+            content_hash_id(&[], "", CONTENT_HASH_LENGTH),
+            "0a7bbd2a12a849f5edbda7eec62f4b39",
+            "the arity is bound even when there are no parts"
+        );
+        assert_eq!(
+            content_hash_id(&[None], "", CONTENT_HASH_LENGTH),
+            "eca2ae0949920e29272387f5e9c428fb"
+        );
+        assert_eq!(hash_of(&[""]), "d76f984a07c5a2a14dc76668757203bd");
+    }
+
+    #[test]
+    fn the_digest_is_order_and_boundary_sensitive() {
+        // ("a", "bc") must never hash the same as ("ab", "c").
+        assert_eq!(hash_of(&["a", "bc"]), "2ce771b8712332f9c02d8dfb7e833953");
+        assert_eq!(hash_of(&["ab", "c"]), "96d3d642d821bb5dc228d0686f9e7729");
+        assert_ne!(hash_of(&["a", "b"]), hash_of(&["b", "a"]));
+        // None is distinct from the empty string, and a trailing None cannot
+        // alias a shorter argument list.
+        assert_ne!(content_hash_id(&[None], "", 32), hash_of(&[""]));
+        assert_ne!(
+            hash_of(&["a"]),
+            content_hash_id(&[Some("a".to_string()), None], "", 32)
+        );
+    }
+
+    #[test]
+    fn prefix_and_length_behave_as_documented() {
+        let full = hash_of(&["x"]);
+        assert_eq!(
+            content_hash_id(&[Some("x".to_string())], "c-", CONTENT_HASH_LENGTH),
+            format!("c-{full}")
+        );
+        let short = content_hash_id(&[Some("x".to_string())], "", 8);
+        assert_eq!(short, "5440cc73");
+        assert!(full.starts_with(&short));
+        // A nonsensical length still yields at least one hex char.
+        assert_eq!(content_hash_id(&[Some("x".to_string())], "", 0), "5");
+        assert!(full.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
 
     #[test]
     fn wire_spellings_match_the_python_literals() {

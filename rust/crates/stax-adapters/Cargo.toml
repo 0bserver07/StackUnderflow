@@ -7,6 +7,26 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# BLAKE2b-256, for `base::content_hash_id` — `hashlib.blake2b(digest_size=32)`
+# in `adapters/base.py:42`. Its only caller is the content-addressed history
+# importer (`custom_import`), which is why the function was deferred until that
+# adapter landed rather than shipping an unused hash nobody would notice
+# diverging.
+#
+# Crate choice, measured rather than assumed: `blake2b_simd` adds **three**
+# entries to the shared Cargo.lock (arrayref, arrayvec, constant_time_eq) where
+# RustCrypto's `blake2` adds eight (digest, block-buffer, crypto-common,
+# generic-array, typenum, subtle, version_check). A many-agent campaign shares
+# one lock; three is the price worth paying. Byte-for-byte agreement with
+# CPython's hashlib is pinned by `content_hash_id`'s tests.
+blake2b_simd = "1.0.4"
+# Database-kind sources (Cursor's `state.vscdb`, and the other VS Code-family
+# key/value stores behind it) read SQLite directly, so the workspace's rusqlite
+# is a plain dependency here — deliberately NOT behind a crate feature, because
+# cargo's feature unification would then let one member's build decide whether
+# another member's `cursor` adapter exists at all. `bundled` comes from the
+# workspace pin; the connection is opened read-only and never written to.
+rusqlite.workspace = true
 # Inherited so this crate can never disagree with the workspace about the two
 # features that are load-bearing here:
 #
@@ -21,7 +41,24 @@ anyhow.workspace = true
 #   of 55,587 on the maintainer's live `~/.claude` — small enough to miss, large
 #   enough to break a byte-parity gate. (Wave 1's golden runner hit the same
 #   thing independently; the feature is declared at the workspace root.)
-serde_json = { workspace = true }
+#
+# `unbounded_depth` is added HERE rather than at the workspace root because this
+# is the only crate that may use it. It gates one method,
+# `Deserializer::disable_recursion_limit`, and changes nothing by itself: the
+# flag lives on the Deserializer instance and defaults to off, so `from_slice`
+# and `from_str` keep their 128-container limit everywhere else in the
+# workspace. That matters — stax-memory's `pyjson` limit is a *recorded*
+# divergence with an adversarial test pinning it, and this must not move it.
+# `jsonl::parse_json` opts in per line, and only after a byte scan has bounded
+# the depth; see the ceiling measurement in `jsonl::MAX_JSON_DEPTH`. Features
+# are not recorded in Cargo.lock, so this adds no lock churn for the fleet.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
+
+[dev-dependencies]
+# The integration tests build a synthetic `state.vscdb` for the Cursor parity
+# proof, and an integration test binary only sees dev-dependencies — a regular
+# dependency of the library is not in scope for `tests/*.rs`.
+rusqlite.workspace = true
 
 # The parity harness: enumerate counts on the real agent homes (read-only) and
 # record dumps over the checked-in fixture packs, both diffable against

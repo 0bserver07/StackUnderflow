@@ -22,10 +22,23 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use stax_adapters::antigravity::AntigravityAdapter;
 use stax_adapters::base::SourceAdapter;
 use stax_adapters::claude::ClaudeAdapter;
+use stax_adapters::cline::{ClineFamilyAdapter, Variant};
 use stax_adapters::codex::CodexAdapter;
+use stax_adapters::continue_ext::ContinueAdapter;
+use stax_adapters::copilot::CopilotAdapter;
+use stax_adapters::cursor::CursorAdapter;
+use stax_adapters::droid::DroidAdapter;
 use stax_adapters::dump;
+use stax_adapters::gemini::GeminiAdapter;
+use stax_adapters::grok::GrokAdapter;
+use stax_adapters::kiro::KiroAdapter;
+use stax_adapters::openclaw::OpenClawAdapter;
+use stax_adapters::opencode::OpenCodeAdapter;
+use stax_adapters::pi::PiAdapter;
+use stax_adapters::qwen::QwenAdapter;
 
 const USAGE: &str = "\
 usage: stax-adapter-parity <verb> [provider] [options]
@@ -39,6 +52,23 @@ verbs:
 options:
   --claude-home <path>      inject Claude Code's config home (default: live env)
   --codex-root <path>       inject the Codex rollout root (default: live env)
+  --cline-root <path>       inject the Cline tasks root (default: live env)
+  --kilocode-root <path>    inject the KiloCode tasks root (default: live env)
+  --roocode-root <path>     inject the Roo Code tasks root (default: live env)
+  --cursor-db <path>        inject Cursor's state.vscdb (default: live env)
+  --gemini-root <path>      inject the Gemini projects root (default: live env)
+  --grok-root <path>        inject the Grok sessions root (default: live env)
+  --qwen-root <path>        inject the Qwen projects root (default: live env)
+  --antigravity-home <path> inject Antigravity's ~/.gemini (default: live env)
+  --continue-root <path>    inject the Continue root (default: live env)
+  --copilot-legacy <path>   inject Copilot's session-state root (default: live env)
+  --copilot-vscode <path>   inject Copilot's workspaceStorage root (default: live env)
+  --droid-root <path>       inject the Droid sessions root (default: live env)
+  --kiro-root <path>        inject Kiro's globalStorage root (default: live env)
+  --openclaw-base <path>    inject one OpenClaw agents base (default: all four)
+  --opencode-root <path>    inject the OpenCode data dir (default: live env)
+  --pi-root <path>          inject the Pi sessions root (default: live env)
+  --omp-root <path>         inject the OMP sessions root (default: live env)
   --capabilities <path>     the capabilities.json to load (default: $STACKUNDERFLOW_CAPABILITIES,
                             else <cwd>/stackunderflow/adapters/capabilities.json)
   --since-offset <n>        resume watermark for `records` (default: 0)
@@ -52,7 +82,20 @@ fn main() -> ExitCode {
     // times what the parse itself needs.
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    match run(&args, &mut out) {
+    let result = run(&args, &mut out);
+    // The one drop this harness cannot show as a diff: a line nested deeper
+    // than `jsonl::MAX_JSON_DEPTH` is refused by orjson too, so *both* sides
+    // omit the record and the outputs still match. Silence there is how the
+    // 128-level ceiling went unnoticed in the first place. Stderr, so a
+    // byte-comparison of stdout is unaffected.
+    let skipped = stax_adapters::jsonl::deep_json_skips();
+    if skipped > 0 {
+        eprintln!(
+            "stax-adapter-parity: {skipped} line(s) skipped for nesting deeper than {} containers",
+            stax_adapters::jsonl::MAX_JSON_DEPTH
+        );
+    }
+    match result {
         Ok(()) => match out.flush() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -75,9 +118,165 @@ fn line(out: &mut dyn Write, text: &str) -> Result<(), String> {
 struct Options {
     claude_home: Option<PathBuf>,
     codex_root: Option<PathBuf>,
+    cline_root: Option<PathBuf>,
+    kilocode_root: Option<PathBuf>,
+    roocode_root: Option<PathBuf>,
+    cursor_db: Option<PathBuf>,
+    gemini_root: Option<PathBuf>,
+    grok_root: Option<PathBuf>,
+    qwen_root: Option<PathBuf>,
+    antigravity_home: Option<PathBuf>,
+    continue_root: Option<PathBuf>,
+    copilot_legacy: Option<PathBuf>,
+    copilot_vscode: Option<PathBuf>,
+    droid_root: Option<PathBuf>,
+    kiro_root: Option<PathBuf>,
+    openclaw_base: Option<PathBuf>,
+    opencode_root: Option<PathBuf>,
+    pi_root: Option<PathBuf>,
+    omp_root: Option<PathBuf>,
     capabilities: Option<PathBuf>,
     since_offset: i64,
     session: Option<String>,
+}
+
+/// One adapter per provider key, in the registry's order — the same list, in
+/// the same order, that `parity/python_reference.py` builds.
+fn adapters(options: &Options) -> Vec<(&'static str, Box<dyn SourceAdapter>)> {
+    let cline = |variant: Variant, root: &Option<PathBuf>| -> Box<dyn SourceAdapter> {
+        root.clone().map_or_else(
+            || Box::new(ClineFamilyAdapter::new(variant)) as Box<dyn SourceAdapter>,
+            |root| Box::new(ClineFamilyAdapter::with_tasks_root(variant, root)),
+        )
+    };
+    vec![
+        (
+            "antigravity",
+            options.antigravity_home.clone().map_or_else(
+                || Box::new(AntigravityAdapter::new()) as Box<dyn SourceAdapter>,
+                |home| Box::new(AntigravityAdapter::with_gemini_home(home)),
+            ),
+        ),
+        (
+            "claude",
+            options.claude_home.clone().map_or_else(
+                || Box::new(ClaudeAdapter::new()) as Box<dyn SourceAdapter>,
+                |home| Box::new(ClaudeAdapter::with_env(Some(home.into_os_string()), None)),
+            ),
+        ),
+        ("cline", cline(Variant::Cline, &options.cline_root)),
+        ("kilocode", cline(Variant::KiloCode, &options.kilocode_root)),
+        ("roocode", cline(Variant::RooCode, &options.roocode_root)),
+        (
+            "codex",
+            options.codex_root.clone().map_or_else(
+                || Box::new(CodexAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(CodexAdapter::with_sessions_root(root)),
+            ),
+        ),
+        (
+            "continue",
+            options.continue_root.clone().map_or_else(
+                || Box::new(ContinueAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(ContinueAdapter::with_root(root)),
+            ),
+        ),
+        (
+            // Copilot takes two roots, and injecting only one would silently
+            // scan the developer's real tree for the other.
+            "copilot",
+            match (&options.copilot_legacy, &options.copilot_vscode) {
+                (None, None) => Box::new(CopilotAdapter::new()) as Box<dyn SourceAdapter>,
+                (legacy, vscode) => Box::new(CopilotAdapter::with_roots(
+                    legacy
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("/nonexistent")),
+                    vscode
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("/nonexistent")),
+                )),
+            },
+        ),
+        (
+            "cursor",
+            options.cursor_db.clone().map_or_else(
+                || Box::new(CursorAdapter::new()) as Box<dyn SourceAdapter>,
+                |path| Box::new(CursorAdapter::with_vscdb_path(path)),
+            ),
+        ),
+        (
+            "droid",
+            options.droid_root.clone().map_or_else(
+                || Box::new(DroidAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(DroidAdapter::with_sessions_root(root)),
+            ),
+        ),
+        (
+            "gemini",
+            options.gemini_root.clone().map_or_else(
+                || Box::new(GeminiAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(GeminiAdapter::with_projects_root(root)),
+            ),
+        ),
+        (
+            "grok",
+            options.grok_root.clone().map_or_else(
+                || Box::new(GrokAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(GrokAdapter::with_sessions_root(root)),
+            ),
+        ),
+        (
+            "kiro",
+            options.kiro_root.clone().map_or_else(
+                || Box::new(KiroAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(KiroAdapter::with_storage_root(root)),
+            ),
+        ),
+        (
+            "openclaw",
+            options.openclaw_base.clone().map_or_else(
+                || Box::new(OpenClawAdapter::new()) as Box<dyn SourceAdapter>,
+                |base| Box::new(OpenClawAdapter::with_bases(vec![base])),
+            ),
+        ),
+        (
+            "opencode",
+            options.opencode_root.clone().map_or_else(
+                || Box::new(OpenCodeAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(OpenCodeAdapter::with_data_dir(root)),
+            ),
+        ),
+        (
+            // The label is not decoration: it prefixes `project_slug`, so a
+            // root injected as "pi" and one injected as "omp" enumerate to
+            // different slugs from identical bytes.
+            "pi",
+            match pi_roots(options) {
+                roots if roots.is_empty() => Box::new(PiAdapter::new()) as Box<dyn SourceAdapter>,
+                roots => Box::new(PiAdapter::with_roots(roots)),
+            },
+        ),
+        (
+            "qwen",
+            options.qwen_root.clone().map_or_else(
+                || Box::new(QwenAdapter::new()) as Box<dyn SourceAdapter>,
+                |root| Box::new(QwenAdapter::with_projects_root(root)),
+            ),
+        ),
+    ]
+}
+
+/// The injected `(root, label)` pairs for the Pi/OMP adapter, in the order the
+/// Python reference builds them.
+fn pi_roots(options: &Options) -> Vec<(PathBuf, String)> {
+    let mut roots = Vec::new();
+    if let Some(root) = &options.pi_root {
+        roots.push((root.clone(), "pi".to_string()));
+    }
+    if let Some(root) = &options.omp_root {
+        roots.push((root.clone(), "omp".to_string()));
+    }
+    roots
 }
 
 fn run(args: &[String], out: &mut dyn Write) -> Result<(), String> {
@@ -85,17 +284,7 @@ fn run(args: &[String], out: &mut dyn Write) -> Result<(), String> {
         return Err("no verb given".to_string());
     };
     let (positional, options) = parse_options(&args[1..])?;
-
-    let claude = options
-        .claude_home
-        .clone()
-        .map_or_else(ClaudeAdapter::new, |home| {
-            ClaudeAdapter::with_env(Some(home.into_os_string()), None)
-        });
-    let codex = options
-        .codex_root
-        .clone()
-        .map_or_else(CodexAdapter::new, CodexAdapter::with_sessions_root);
+    let adapters = adapters(&options);
 
     match verb.as_str() {
         "capabilities" => {
@@ -114,18 +303,20 @@ fn run(args: &[String], out: &mut dyn Write) -> Result<(), String> {
             Ok(())
         }
         "counts" => {
-            line(out, &format!("claude\t{}", claude.enumerate().len()))?;
-            line(out, &format!("codex\t{}", codex.enumerate().len()))
+            for (name, adapter) in &adapters {
+                line(out, &format!("{name}\t{}", adapter.enumerate().len()))?;
+            }
+            Ok(())
         }
         "refs" | "records" => {
             let provider = positional
                 .first()
                 .ok_or_else(|| format!("`{verb}` needs a provider"))?;
-            let adapter: &dyn SourceAdapter = match provider.as_str() {
-                "claude" => &claude,
-                "codex" => &codex,
-                other => return Err(format!("unknown provider {other:?}")),
-            };
+            let adapter = adapters
+                .iter()
+                .find(|(name, _)| name == provider)
+                .map(|(_, adapter)| adapter.as_ref())
+                .ok_or_else(|| format!("unknown provider {provider:?}"))?;
             let mut refs = adapter.enumerate();
             dump::sort_refs(&mut refs);
             if let Some(wanted) = &options.session {
@@ -161,6 +352,23 @@ fn parse_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
     let mut options = Options {
         claude_home: None,
         codex_root: None,
+        cline_root: None,
+        kilocode_root: None,
+        roocode_root: None,
+        cursor_db: None,
+        gemini_root: None,
+        grok_root: None,
+        qwen_root: None,
+        antigravity_home: None,
+        continue_root: None,
+        copilot_legacy: None,
+        copilot_vscode: None,
+        droid_root: None,
+        kiro_root: None,
+        openclaw_base: None,
+        opencode_root: None,
+        pi_root: None,
+        omp_root: None,
         capabilities: None,
         since_offset: 0,
         session: None,
@@ -175,6 +383,23 @@ fn parse_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
         match arg.as_str() {
             "--claude-home" => options.claude_home = Some(PathBuf::from(value()?)),
             "--codex-root" => options.codex_root = Some(PathBuf::from(value()?)),
+            "--cline-root" => options.cline_root = Some(PathBuf::from(value()?)),
+            "--kilocode-root" => options.kilocode_root = Some(PathBuf::from(value()?)),
+            "--roocode-root" => options.roocode_root = Some(PathBuf::from(value()?)),
+            "--cursor-db" => options.cursor_db = Some(PathBuf::from(value()?)),
+            "--gemini-root" => options.gemini_root = Some(PathBuf::from(value()?)),
+            "--grok-root" => options.grok_root = Some(PathBuf::from(value()?)),
+            "--qwen-root" => options.qwen_root = Some(PathBuf::from(value()?)),
+            "--antigravity-home" => options.antigravity_home = Some(PathBuf::from(value()?)),
+            "--continue-root" => options.continue_root = Some(PathBuf::from(value()?)),
+            "--copilot-legacy" => options.copilot_legacy = Some(PathBuf::from(value()?)),
+            "--copilot-vscode" => options.copilot_vscode = Some(PathBuf::from(value()?)),
+            "--droid-root" => options.droid_root = Some(PathBuf::from(value()?)),
+            "--kiro-root" => options.kiro_root = Some(PathBuf::from(value()?)),
+            "--openclaw-base" => options.openclaw_base = Some(PathBuf::from(value()?)),
+            "--opencode-root" => options.opencode_root = Some(PathBuf::from(value()?)),
+            "--pi-root" => options.pi_root = Some(PathBuf::from(value()?)),
+            "--omp-root" => options.omp_root = Some(PathBuf::from(value()?)),
             "--capabilities" => options.capabilities = Some(PathBuf::from(value()?)),
             "--since-offset" => {
                 options.since_offset = value()?

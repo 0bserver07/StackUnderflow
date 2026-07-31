@@ -19,6 +19,23 @@ Verbs and options mirror the binary exactly:
     capabilities               one line per `capabilities.json` row, as loaded
     --claude-home <path>       injected as CLAUDE_CONFIG_DIR
     --codex-root <path>        injected as CodexAdapter(sessions_root=...)
+    --cline-root <path>        injected as ClineAdapter(tasks_root=...)
+    --kilocode-root <path>     injected as KiloCodeAdapter(tasks_root=...)
+    --roocode-root <path>      injected as RooCodeAdapter(tasks_root=...)
+    --cursor-db <path>         injected as CursorAdapter(vscdb_path=...)
+    --gemini-root <path>       injected as GeminiAdapter(projects_root=...)
+    --grok-root <path>         injected as GrokAdapter(sessions_root=...)
+    --qwen-root <path>         injected as QwenAdapter(projects_root=...)
+    --antigravity-home <path>  injected as AntigravityAdapter(gemini_home=...)
+    --continue-root <path>     injected as ContinueAdapter(root=...)
+    --copilot-legacy <path>    injected as CopilotAdapter(legacy_root=...)
+    --copilot-vscode <path>    injected as CopilotAdapter(vscode_workspace_storage=...)
+    --droid-root <path>        injected as DroidAdapter(sessions_root=...)
+    --kiro-root <path>         injected as KiroAdapter(storage_root=...)
+    --openclaw-base <path>     injected as OpenClawAdapter(base_dirs=[...])
+    --opencode-root <path>     injected as OpenCodeAdapter(data_dir=...)
+    --pi-root <path>           injected as PiAdapter(roots=[(..., "pi")])
+    --omp-root <path>          the OMP half of the same PiAdapter
     --since-offset <n>         resume watermark for `records`
     --session <id>             restrict `records` to one session id
 
@@ -31,26 +48,120 @@ import argparse
 import json
 import os
 import sys
+import tempfile
+
+
+# The providers `counts` reports, in the registry's order — mirrored exactly by
+# the Rust binary, so the two `counts` outputs are diffable line for line.
+_COUNT_PROVIDERS = (
+    "antigravity",
+    "claude",
+    "cline",
+    "kilocode",
+    "roocode",
+    "codex",
+    "continue",
+    "copilot",
+    "cursor",
+    "droid",
+    "gemini",
+    "grok",
+    "kiro",
+    "openclaw",
+    "opencode",
+    "pi",
+    "qwen",
+)
 
 
 def _adapters(args: argparse.Namespace):
-    """Build both adapters with the roots the caller injected."""
+    """Build every adapter with the roots the caller injected."""
+    import pathlib
+
     if args.claude_home:
         # The adapter reads CLAUDE_CONFIG_DIR inside `_claude_home()` on every
         # call, so setting it here is the same injection the Rust side does
         # through `ClaudeAdapter::with_env`.
         os.environ["CLAUDE_CONFIG_DIR"] = args.claude_home
+    if args.cursor_db:
+        # The Cursor adapter writes a fingerprint cache under `app_dir()` on
+        # every full read. Redirect the whole data directory into a throwaway
+        # so a parity run never touches the developer's real cache — the Rust
+        # port has no cache at all (see the DIVERGENCE note in `cursor.rs`).
+        os.environ.setdefault(
+            "STACKUNDERFLOW_HOME", tempfile.mkdtemp(prefix="stax-parity-home-")
+        )
 
+    from stackunderflow.adapters.antigravity import AntigravityAdapter
     from stackunderflow.adapters.claude import ClaudeAdapter
-    from stackunderflow.adapters.codex import CodexAdapter
-
-    claude = ClaudeAdapter()
-    codex = (
-        CodexAdapter(sessions_root=__import__("pathlib").Path(args.codex_root))
-        if args.codex_root
-        else CodexAdapter()
+    from stackunderflow.adapters.cline import (
+        ClineAdapter,
+        KiloCodeAdapter,
+        RooCodeAdapter,
     )
-    return {"claude": claude, "codex": codex}
+    from stackunderflow.adapters.codex import CodexAdapter
+    from stackunderflow.adapters.continue_adapter import ContinueAdapter
+    from stackunderflow.adapters.copilot import CopilotAdapter
+    from stackunderflow.adapters.cursor import CursorAdapter
+    from stackunderflow.adapters.droid import DroidAdapter
+    from stackunderflow.adapters.gemini import GeminiAdapter
+    from stackunderflow.adapters.grok import GrokAdapter
+    from stackunderflow.adapters.kiro import KiroAdapter
+    from stackunderflow.adapters.openclaw import OpenClawAdapter
+    from stackunderflow.adapters.opencode import OpenCodeAdapter
+    from stackunderflow.adapters.pi import PiAdapter
+    from stackunderflow.adapters.qwen import QwenAdapter
+
+    def _path(value):
+        return pathlib.Path(value) if value else None
+
+    def _pi_roots():
+        """`(root, label)` pairs, only for the roots the caller injected.
+
+        Passing `roots=None` would scan the developer's real `~/.pi` and
+        `~/.omp`; passing an explicit list — even an empty one — keeps a parity
+        run hermetic. The labels are the adapter's own, and they matter: they
+        prefix `project_slug`.
+        """
+        pairs = []
+        if args.pi_root:
+            pairs.append((pathlib.Path(args.pi_root), "pi"))
+        if args.omp_root:
+            pairs.append((pathlib.Path(args.omp_root), "omp"))
+        return pairs or None
+
+    return {
+        "antigravity": (
+            AntigravityAdapter(gemini_home=_path(args.antigravity_home))
+            if args.antigravity_home
+            else AntigravityAdapter()
+        ),
+        "claude": ClaudeAdapter(),
+        "cline": ClineAdapter(tasks_root=_path(args.cline_root)),
+        "kilocode": KiloCodeAdapter(tasks_root=_path(args.kilocode_root)),
+        "roocode": RooCodeAdapter(tasks_root=_path(args.roocode_root)),
+        "codex": (
+            CodexAdapter(sessions_root=pathlib.Path(args.codex_root))
+            if args.codex_root
+            else CodexAdapter()
+        ),
+        "continue": ContinueAdapter(root=_path(args.continue_root)),
+        "copilot": CopilotAdapter(
+            legacy_root=_path(args.copilot_legacy),
+            vscode_workspace_storage=_path(args.copilot_vscode),
+        ),
+        "cursor": CursorAdapter(vscdb_path=_path(args.cursor_db)),
+        "droid": DroidAdapter(sessions_root=_path(args.droid_root)),
+        "gemini": GeminiAdapter(projects_root=_path(args.gemini_root)),
+        "grok": GrokAdapter(sessions_root=_path(args.grok_root)),
+        "kiro": KiroAdapter(storage_root=_path(args.kiro_root)),
+        "openclaw": OpenClawAdapter(
+            base_dirs=[pathlib.Path(args.openclaw_base)] if args.openclaw_base else None
+        ),
+        "opencode": OpenCodeAdapter(data_dir=_path(args.opencode_root)),
+        "pi": PiAdapter(roots=_pi_roots()),
+        "qwen": QwenAdapter(projects_root=_path(args.qwen_root)),
+    }
 
 
 def _dumps(obj) -> str:
@@ -141,6 +252,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument("provider", nargs="?")
     parser.add_argument("--claude-home")
     parser.add_argument("--codex-root")
+    parser.add_argument("--cline-root")
+    parser.add_argument("--kilocode-root")
+    parser.add_argument("--roocode-root")
+    parser.add_argument("--cursor-db")
+    parser.add_argument("--gemini-root")
+    parser.add_argument("--grok-root")
+    parser.add_argument("--qwen-root")
+    parser.add_argument("--antigravity-home")
+    parser.add_argument("--continue-root")
+    parser.add_argument("--copilot-legacy")
+    parser.add_argument("--copilot-vscode")
+    parser.add_argument("--droid-root")
+    parser.add_argument("--kiro-root")
+    parser.add_argument("--openclaw-base")
+    parser.add_argument("--opencode-root")
+    parser.add_argument("--pi-root")
+    parser.add_argument("--omp-root")
     parser.add_argument("--since-offset", type=int, default=0)
     parser.add_argument("--session")
     args = parser.parse_args(argv)
@@ -153,7 +281,7 @@ def main(argv: list[str]) -> int:
     adapters = _adapters(args)
 
     if args.verb == "counts":
-        for name in ("claude", "codex"):
+        for name in _COUNT_PROVIDERS:
             sys.stdout.write(f"{name}\t{sum(1 for _ in adapters[name].enumerate())}\n")
         return 0
 

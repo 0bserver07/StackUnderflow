@@ -253,6 +253,86 @@ pub fn epoch_ms_to_iso(ts_ms: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{frac}+00:00")
 }
 
+/// Epoch-*seconds* (a float) → ISO 8601 UTC, or `None` when out of range.
+///
+/// `datetime.fromtimestamp(t, tz=UTC).isoformat()` — the exact float path, as
+/// opposed to [`epoch_ms_to_iso`]'s integer arithmetic. Three adapters need it
+/// because their sources store a float, or a millisecond count Python divides by
+/// `1000` *before* the conversion: `cline.py:_ts_to_iso` (`millis / 1000.0`),
+/// `cursor.py:_normalize_timestamp` (`float(raw) / 1000.0`), and
+/// `grok.py:_session_timestamp` (`ms / 1000` and the ref's `st_mtime`).
+///
+/// The microsecond field is CPython's, bit-for-bit: `modf` splits the double,
+/// the fraction is scaled by 1e6 and rounded **half-to-even**, and a carry moves
+/// a whole second (`pytime_double_to_denominator`, `_PyTime_RoundHalfEven`).
+/// Rounding half-up here would land 1 µs away on inputs like `1.0000005`.
+///
+/// `None` is the `(OverflowError, OSError, ValueError)` branch every caller
+/// already catches: NaN, an infinity, a second count past `time_t`, or a year
+/// outside `1..=9999`.
+#[must_use]
+pub fn epoch_seconds_to_iso(seconds: f64) -> Option<String> {
+    // datetime.fromtimestamp(nan) raises ValueError, (±inf) OverflowError.
+    if !seconds.is_finite() {
+        return None;
+    }
+    let mut whole = seconds.trunc();
+    // `modf`'s fractional part keeps the sign, as `f64::fract` does.
+    let mut micros = round_half_even(seconds.fract() * 1e6);
+    if micros >= 1e6 {
+        micros -= 1e6;
+        whole += 1.0;
+    } else if micros < 0.0 {
+        micros += 1e6;
+        whole -= 1.0;
+    }
+    // `pytime_double_to_time_t` overflows before the year check can run.
+    if !(-9.2e18..=9.2e18).contains(&whole) {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "both values are range-checked above; micros is 0..1e6"
+    )]
+    iso_from_epoch_parts(whole as i64, micros as i64)
+}
+
+/// C's `round()` (half away from zero) corrected to half-to-even, which is what
+/// CPython's `_PyTime_RoundHalfEven` does with the same two lines.
+fn round_half_even(x: f64) -> f64 {
+    let rounded = x.round();
+    if (x - rounded).abs() == 0.5 {
+        2.0 * (x / 2.0).round()
+    } else {
+        rounded
+    }
+}
+
+/// `(epoch seconds, microseconds)` → `datetime.isoformat()` in UTC.
+///
+/// The shared tail of [`epoch_ms_to_iso`] and [`epoch_seconds_to_iso`]: the
+/// fractional part is omitted when the microsecond field is zero, exactly as
+/// `isoformat()` does, and a year outside `1..=9999` is the `ValueError` branch.
+fn iso_from_epoch_parts(seconds: i64, micros: i64) -> Option<String> {
+    let days = seconds.div_euclid(86_400);
+    let secs_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    let hour = secs_of_day / 3600;
+    let minute = (secs_of_day % 3600) / 60;
+    let second = secs_of_day % 60;
+    let frac = if micros == 0 {
+        String::new()
+    } else {
+        format!(".{micros:06}")
+    };
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{frac}+00:00"
+    ))
+}
+
 /// Days since the Unix epoch → `(year, month, day)`.
 ///
 /// Howard Hinnant's `civil_from_days`, the same algorithm CPython's
@@ -416,6 +496,42 @@ mod tests {
         assert_eq!(epoch_ms_to_iso(-1000), "1969-12-31T23:59:59+00:00");
         // Out of datetime's year range → the ValueError branch.
         assert_eq!(epoch_ms_to_iso(i64::MAX), "");
+    }
+
+    #[test]
+    fn epoch_seconds_to_iso_matches_cpythons_float_path() {
+        // The three shapes the cline / cursor / grok adapters feed it.
+        assert_eq!(
+            epoch_seconds_to_iso(1_704_067_200.0).as_deref(),
+            Some("2024-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            epoch_seconds_to_iso(1_745_596_800_000.0 / 1000.0).as_deref(),
+            Some("2025-04-25T16:00:00+00:00")
+        );
+        assert_eq!(
+            epoch_seconds_to_iso(1_704_067_200_123.0 / 1000.0).as_deref(),
+            Some("2024-01-01T00:00:00.123000+00:00")
+        );
+        // Sub-microsecond input: half-to-even, not half-up.
+        assert_eq!(
+            epoch_seconds_to_iso(0.000_000_5).as_deref(),
+            Some("1970-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            epoch_seconds_to_iso(0.000_001_5).as_deref(),
+            Some("1970-01-01T00:00:00.000002+00:00")
+        );
+        // Negative fractions carry a whole second backwards.
+        assert_eq!(
+            epoch_seconds_to_iso(-0.5).as_deref(),
+            Some("1969-12-31T23:59:59.500000+00:00")
+        );
+        // The (OverflowError, OSError, ValueError) branch.
+        assert_eq!(epoch_seconds_to_iso(f64::NAN), None);
+        assert_eq!(epoch_seconds_to_iso(f64::INFINITY), None);
+        assert_eq!(epoch_seconds_to_iso(1e300), None);
+        assert_eq!(epoch_seconds_to_iso(1e30), None);
     }
 
     #[test]
