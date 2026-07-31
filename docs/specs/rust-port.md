@@ -12,6 +12,12 @@ parity proven against the Python implementation — never asserted.
 
 ## 1. What is being ported (measured inventory, 2026-07-31)
 
+> **Superseded by the live count:** `rust/TASKS-RS.md`'s header table is
+> the authority (wave-0 recount found 34 route modules not 12, 29
+> migrations not 26 — two of them Python data migrations — 82+22 CLI
+> leaves/groups, 504 items total). The table below is the founding
+> estimate, kept for provenance.
+
 | Surface | Size |
 |---|---|
 | Python total | **221 files / 76,925 lines** |
