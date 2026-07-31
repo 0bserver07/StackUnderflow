@@ -67,6 +67,39 @@ pub fn dumps_compact<T: Serialize + ?Sized>(value: &T) -> String {
     dump(value, Layout::Compact)
 }
 
+/// Serialize like starlette's `JSONResponse.render` — the **HTTP** body writer.
+///
+/// This is *not* [`dumps_compact`]. The two differ in exactly one flag and it is
+/// load-bearing for wave 5:
+///
+/// ```text
+/// CLI  (cli_helpers/agent_output.py)  json.dumps(obj, indent=2)                       → ensure_ascii=True
+/// HTTP (starlette JSONResponse)       json.dumps(obj, ensure_ascii=False,
+///                                                allow_nan=False, indent=None,
+///                                                separators=(",", ":"))               → ensure_ascii=False
+/// ```
+///
+/// So a response body carrying `…` ships the three raw UTF-8 bytes `E2 80 A6`,
+/// where the same value on stdout ships the seven ASCII bytes `…`. Using the
+/// CLI writer for HTTP would diverge on the first non-ASCII project name — and
+/// project names on the maintainer's store are full of them.
+///
+/// `allow_nan=False` makes CPython *raise* on a non-finite float rather than
+/// write `NaN`. Unreachable through [`serde_json::Value`] (`Number::from_f64`
+/// rejects non-finite), so this writer keeps [`python_float_repr`]'s
+/// `allow_nan=True` spelling for a hand-built `f64` instead of panicking: a
+/// visible `NaN` in a diff beats a 500 nobody can attribute.
+///
+/// No trailing newline — starlette writes the body exactly as rendered.
+///
+/// # Panics
+///
+/// See [`dumps_pretty`].
+#[must_use]
+pub fn dumps_http<T: Serialize + ?Sized>(value: &T) -> String {
+    dump_styled(value, Layout::Compact, EnsureAscii::No)
+}
+
 /// The `chars/4 + 1` token estimate of `agent_output.estimate_tokens`.
 ///
 /// Python measures `len()` of the compact `json.dumps` string in *characters*;
@@ -83,26 +116,48 @@ enum Layout {
     Indent2,
 }
 
+/// CPython's `ensure_ascii` flag, as a type rather than a bare `bool`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnsureAscii {
+    /// `json.dumps` default: every codepoint outside `0x20..=0x7E` is `\uXXXX`.
+    Yes,
+    /// starlette's `JSONResponse`: raw UTF-8 through, DEL included.
+    No,
+}
+
 fn dump<T: Serialize + ?Sized>(value: &T, layout: Layout) -> String {
+    dump_styled(value, layout, EnsureAscii::Yes)
+}
+
+fn dump_styled<T: Serialize + ?Sized>(
+    value: &T,
+    layout: Layout,
+    ensure_ascii: EnsureAscii,
+) -> String {
     let mut out = Vec::new();
-    let mut ser = serde_json::Serializer::with_formatter(&mut out, PythonFormatter::new(layout));
+    let mut ser = serde_json::Serializer::with_formatter(
+        &mut out,
+        PythonFormatter::new(layout, ensure_ascii),
+    );
     value
         .serialize(&mut ser)
         .expect("serializing a JSON-native value to a Vec cannot fail");
-    String::from_utf8(out).expect("the formatter only ever writes ASCII-safe UTF-8")
+    String::from_utf8(out).expect("the formatter only ever writes valid UTF-8")
 }
 
 /// A [`Formatter`] that writes what CPython's `json` module writes.
 struct PythonFormatter {
     layout: Layout,
+    ensure_ascii: EnsureAscii,
     depth: usize,
     has_value: bool,
 }
 
 impl PythonFormatter {
-    fn new(layout: Layout) -> Self {
+    fn new(layout: Layout, ensure_ascii: EnsureAscii) -> Self {
         Self {
             layout,
+            ensure_ascii,
             depth: 0,
             has_value: false,
         }
@@ -136,6 +191,13 @@ impl Formatter for PythonFormatter {
     where
         W: ?Sized + std::io::Write,
     {
+        // `ensure_ascii=False` (starlette's HTTP body writer): CPython's
+        // `py_encode_basestring` escapes only `"`, `\` and C0 — all of which
+        // serde_json has already routed through `write_char_escape` — so every
+        // fragment that reaches here goes out verbatim, DEL included.
+        if self.ensure_ascii == EnsureAscii::No {
+            return writer.write_all(fragment.as_bytes());
+        }
         if fragment.is_ascii() && !fragment.as_bytes().contains(&0x7F) {
             return writer.write_all(fragment.as_bytes());
         }
@@ -731,5 +793,53 @@ mod tests {
             dumps_compact(&loads("[0,0.0,-0.0]").expect("valid")),
             "[0,0.0,-0.0]"
         );
+    }
+
+    // ── the HTTP writer (starlette JSONResponse.render) ────────────────────
+
+    #[test]
+    fn http_writer_does_not_escape_non_ascii() {
+        // The divergence wave 5 exists to not ship: the SAME value renders
+        // differently on stdout and on the wire.
+        //   json.dumps({"n": "café…"})                      -> {"n": "caf\u00e9\u2026"}
+        //   json.dumps({"n": "café…"}, ensure_ascii=False)  -> {"n": "café…"}
+        let value = loads(r#"{"n":"caf\u00e9\u2026"}"#).expect("valid");
+        assert_eq!(dumps_compact(&value), r#"{"n":"caf\u00e9\u2026"}"#);
+        assert_eq!(dumps_http(&value), "{\"n\":\"café…\"}");
+    }
+
+    #[test]
+    fn http_writer_passes_del_through_but_still_escapes_c0() {
+        // CPython's `py_encode_basestring` (the ensure_ascii=False path) escapes
+        // `"`, `\` and `0x00..=0x1F` only. DEL is NOT in that set — the ascii
+        // encoder's `0x20 <= c <= 0x7E` window is what catches it.
+        let value = loads(r#"["\u007f","\u0001","a\"b\\c","\n"]"#).expect("valid");
+        assert_eq!(
+            dumps_compact(&value),
+            r#"["\u007f","\u0001","a\"b\\c","\n"]"#
+        );
+        assert_eq!(
+            dumps_http(&value),
+            "[\"\u{7f}\",\"\\u0001\",\"a\\\"b\\\\c\",\"\\n\"]"
+        );
+    }
+
+    #[test]
+    fn http_writer_keeps_compact_separators_and_python_floats() {
+        // `separators=(",", ":")` — no spaces anywhere — and the float
+        // presentation stays CPython's (`1e+16`, not ryu's `1e16`).
+        let value = loads(r#"{"a":[1,2.5,1e16,1e-5],"b":{"c":null,"d":true}}"#).expect("valid");
+        assert_eq!(
+            dumps_http(&value),
+            r#"{"a":[1,2.5,1e+16,1e-05],"b":{"c":null,"d":true}}"#
+        );
+    }
+
+    #[test]
+    fn http_writer_preserves_key_insertion_order() {
+        // The whole byte-parity claim rests on this: the payload dicts the
+        // routes build are ordered, and `preserve_order` keeps them that way.
+        let value = loads(r#"{"z":1,"a":2,"m":3}"#).expect("valid");
+        assert_eq!(dumps_http(&value), r#"{"z":1,"a":2,"m":3}"#);
     }
 }

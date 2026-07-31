@@ -125,10 +125,7 @@ fn read_headers(reader: &mut impl BufRead) -> std::io::Result<Vec<(String, Strin
     }
 }
 
-fn read_body(
-    reader: &mut impl BufRead,
-    headers: &[(String, String)],
-) -> std::io::Result<Vec<u8>> {
+fn read_body(reader: &mut impl BufRead, headers: &[(String, String)]) -> std::io::Result<Vec<u8>> {
     let find = |name: &str| {
         headers
             .iter()

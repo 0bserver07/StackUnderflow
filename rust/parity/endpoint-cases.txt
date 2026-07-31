@@ -69,15 +69,18 @@ P-by-dir-known      | POST | /api/project-by-dir               | {"dir_name": "-
 P-current-after     | GET  | /api/project                      | -
 
 # ── /api/stats — needs the full collector pipeline (RS-3-062 / RS-5-066) ─────
-# Ported: not yet. The rows stay so the gap is counted every run.
-!D-stats-default     | GET | /api/stats                        | -
-!D-stats-tz          | GET | /api/stats?timezone_offset=-480   | -
-!D-stats-tz-inverted | GET | /api/stats?timezone_offset=480    | -
-!D-stats-days        | GET | /api/stats?days=7                 | -
-!D-stats-days-zero   | GET | /api/stats?days=0                 | -
-!D-stats-details     | GET | /api/stats?details=true           | -
-!D-stats-include     | GET | /api/stats?include=overview       | -
-!D-stats-include-2   | GET | /api/stats?include=overview&include=models | -
+# Ported: YES, once RS-3-062 (aggregator.summarise) landed. Both timezone signs
+# are here on purpose — §6b divergence 5 says the port must inherit the React
+# callers' sign-inverted offset faithfully, so a case that only sent the correct
+# sign would never have proved it.
+D-stats-default     | GET | /api/stats                        | -
+D-stats-tz          | GET | /api/stats?timezone_offset=-480   | -
+D-stats-tz-inverted | GET | /api/stats?timezone_offset=480    | -
+D-stats-days        | GET | /api/stats?days=7                 | -
+D-stats-days-zero   | GET | /api/stats?days=0                 | -
+D-stats-details     | GET | /api/stats?details=true           | -
+D-stats-include     | GET | /api/stats?include=overview       | -
+D-stats-include-2   | GET | /api/stats?include=overview&include=models | -
 
 # ── the ensure_ascii proof ───────────────────────────────────────────────────
 # The `cursor` project's display_name is

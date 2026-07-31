@@ -4,3 +4,52 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+# The dashboard binary. Named for what it is; the CLI binary lives in
+# `stax-cli` and this crate never shells out to it.
+[[bin]]
+name = "stax-server"
+path = "src/bin/stax-server.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+# 0.8 is the current line and the one whose `{param}` / `{*wildcard}` path
+# syntax maps cleanly onto FastAPI's `{param}` / `{param:path}`. 0.7's
+# `:param` / `*wildcard` spelling would have made every ported path a
+# transliteration instead of a copy.
+axum = { version = "0.8.9", default-features = false, features = [
+    "http1",
+    "query",
+    "tokio",
+    "tower-log",
+] }
+clap = { workspace = true }
+rusqlite = { workspace = true }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { workspace = true }
+stax-core = { workspace = true }
+stax-etl = { path = "../stax-etl" }
+stax-memory = { path = "../stax-memory" }
+# `ServiceExt::map_response` — the one-line layer that restores starlette's
+# `; charset=utf-8` on `text/*` static responses.
+tower = { version = "0.5.2", features = ["util"] }
+tokio = { version = "1.52.3", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+] }
+# `fs` only: `ServeDir` is the `StaticFiles` mount, and nothing else in this
+# crate wants a middleware stack Python does not have.
+tower-http = { version = "0.6.7", features = ["fs"] }
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+] }
+# `ServiceExt::oneshot` — drive the router in-process, so the unit tests need
+# no port and can never collide with the reserved :8095 / :8096.
+tower = { version = "0.5.2", features = ["util"] }

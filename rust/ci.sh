@@ -26,8 +26,19 @@
 #                            STAX_INGEST_REAL_PROJECTS=N to widen it to N of the
 #                            maintainer's real ~/.claude projects, which is what
 #                            the wave gate itself was run at.
+#   6. Endpoint parity     — gate 4's bargain for HTTP: boot BOTH servers
+#                            against one shared STACKUNDERFLOW_HOME, walk
+#                            parity/endpoint-cases.txt in order, diff status +
+#                            content-type + BODY BYTES. Case-file driven, so an
+#                            endpoint batch adds rows rather than editing the
+#                            gate. Rows whose id starts `!` are KNOWN-OPEN: the
+#                            differ prints them in full and does not fail on
+#                            them, which is how an unported endpoint stays
+#                            visible instead of absent. Skipped only where the
+#                            Python venv or the harness state is missing —
+#                            loudly, like gate 4.
 #
-# Usage:  rust/ci.sh                (runs all six)
+# Usage:  rust/ci.sh                (runs all seven)
 #         rust/ci.sh --skip-parity  (gates 0-3 only; boxes without the venv)
 # Exit:   first failing gate's status.
 set -euo pipefail
@@ -61,25 +72,35 @@ gate() {
 # tree while its Cargo.lock entry was committed, so five commits in a row failed
 # to compile from a clean checkout while every in-tree run stayed green. The
 # working tree's opinion of itself is not evidence.
-echo "=== gate 0/6  clean-checkout build (git archive HEAD) ==="
+#
+# The extraction set is `rust/` plus everything the crates read AT BUILD TIME.
+# `stackunderflow/data/` is in it because `stax-etl`'s stats layer embeds the
+# rate card with `include_str!("../../../../../stackunderflow/data/models.toml")`
+# — reading the same file the reference reads rather than transcribing it (spec
+# §2.4), which is right, and which puts a compile-time dependency outside
+# `rust/`. Reproduced 2026-07-31 by extracting without it:
+#   error: couldn't read …/stackunderflow/data/models.toml (os error 2)
+# If another crate ever `include_str!`s outside `rust/`, its path goes here too.
+echo "=== gate 0/7  clean-checkout build (git archive HEAD) ==="
 _cc_tmp="$(mktemp -d)"
-( cd "$(git rev-parse --show-toplevel)" && git archive HEAD rust/ contracts/ ) | tar -x -C "$_cc_tmp"
+( cd "$(git rev-parse --show-toplevel)" \
+    && git archive HEAD rust/ contracts/ stackunderflow/data/ ) | tar -x -C "$_cc_tmp"
 ( cd "$_cc_tmp/rust" && cargo check --workspace --quiet ) \
     || { echo "GATE 0 FAILED: HEAD does not build from a clean checkout"; rm -rf "$_cc_tmp"; exit 1; }
 rm -rf "$_cc_tmp"
 echo "    clean checkout builds"
 
-gate "gate 1/6  cargo fmt --check" cargo fmt --check
-gate "gate 2/6  cargo clippy --workspace --all-targets -- -D warnings" \
+gate "gate 1/7  cargo fmt --check" cargo fmt --check
+gate "gate 2/7  cargo clippy --workspace --all-targets -- -D warnings" \
     cargo clippy --workspace --all-targets -- -D warnings
-gate "gate 3/6  cargo test --workspace" cargo test --workspace
+gate "gate 3/7  cargo test --workspace" cargo test --workspace
 
 # Gate 4 — the P0 gate. It is last because it is the slowest and because a
 # workspace that does not compile cannot be diffed; it is not optional because
 # every gate above it can be green while the shipped binary answers a question
 # differently from the tool it replaces. That is exactly what happened: 39 of
 # 188 cases diverged on the populated-FTS store while gates 0-3 were green.
-printf '\n=== gate 4/6  CLI byte-parity vs the Python CLI ===\n'
+printf '\n=== gate 4/7  CLI byte-parity vs the Python CLI ===\n'
 if [ "$SKIP_PARITY" = 1 ]; then
     echo '  !!  GATE 4 SKIPPED by --skip-parity.'
     echo '  !!  Drop-in parity is UNVERIFIED for this run. The only sanctioned'
@@ -115,7 +136,7 @@ fi
 # Gate 5 — the wave-4 ingest gate. Cheap in its default shape because the
 # fixture corpus is 1 MB; the value is that the writer, the watermarks and the
 # per-record normalize hook cannot regress silently between here and wave 10.
-printf '\n=== gate 5/6  ingest parity (full-row, scratch home) ===\n'
+printf '\n=== gate 5/7  ingest parity (full-row, scratch home) ===\n'
 if [ "$SKIP_PARITY" = 1 ]; then
     echo '  !!  GATE 5 SKIPPED by --skip-parity (it needs the Python venv too).'
 else
@@ -133,6 +154,41 @@ else
         *)
             echo
             echo "GATE 5 FAILED: the ingest layer does not reproduce Python's rows."
+            exit 1
+            ;;
+    esac
+fi
+
+# Gate 6 — the wave-5 HTTP gate. Last because it is the only one that binds
+# ports and boots two servers, and because a workspace that fails gate 3 has
+# nothing worth serving. It exists for the same reason gate 4 does: every gate
+# above it can be green while the shipped server answers a request differently
+# from the one it replaces, and a dashboard is a *byte* contract — key order,
+# float presentation and `ensure_ascii` are all invisible to a parsed compare.
+printf '\n=== gate 6/7  endpoint byte-parity vs the Python server ===\n'
+if [ "$SKIP_PARITY" = 1 ]; then
+    echo '  !!  GATE 6 SKIPPED by --skip-parity.'
+    echo '  !!  HTTP parity is UNVERIFIED for this run. The React bundle is the'
+    echo '  !!  oracle and it has not been pointed at this build; a green ci.sh'
+    echo '  !!  here does NOT mean the dashboard works against the port.'
+else
+    set +e
+    ./endpoint-parity.sh
+    _endpoint_rc=$?
+    set -e
+    case "$_endpoint_rc" in
+        0) : ;;
+        2)
+            echo
+            echo '  !!  GATE 6 COULD NOT RUN (setup): see the message above.'
+            echo '  !!  Build the state once with: rust/parity-cli.sh --build-state'
+            echo '  !!  Re-run with --skip-parity only if this box genuinely has'
+            echo '  !!  no Python venv — HTTP parity is UNVERIFIED either way.'
+            exit 2
+            ;;
+        *)
+            echo
+            echo "GATE 6 FAILED: the server does not reproduce the reference's bytes."
             exit 1
             ;;
     esac

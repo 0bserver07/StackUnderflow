@@ -76,7 +76,7 @@ pub fn command_analysis(ds: &EnrichedDataset) -> CommandAnalysis {
 
         let key = interaction_key(r);
         let (tc, steps) = match ix_lut.get(key.as_str()) {
-            Some(ix) => (ix.tool_count as i64, ix.responses as i64),
+            Some(ix) => (ix.tool_count as i64, ix.assistant_steps as i64),
             None => scan_forward(&ordered, i),
         };
 

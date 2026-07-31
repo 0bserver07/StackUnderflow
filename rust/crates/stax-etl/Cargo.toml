@@ -110,3 +110,10 @@ path = "src/bin/mart_parity.rs"
 [[bin]]
 name = "stax-ingest-parity"
 path = "src/bin/ingest_parity.rs"
+
+# The wave-5 stats gate: dump `get_project_stats`' statistics payload for one
+# project, block by block, in `json.dumps(..., separators=(",", ":"))` form so
+# `rust/parity/stats_parity.py` produces a byte-comparable directory.
+[[bin]]
+name = "stax-stats-parity"
+path = "src/bin/stats_parity.rs"
