@@ -113,7 +113,7 @@ gate() {
 echo "=== gate 0/7  clean-checkout build (git archive HEAD) ==="
 _cc_tmp="$(mktemp -d)"
 ( cd "$(git rev-parse --show-toplevel)" \
-    && git archive HEAD rust/ contracts/ stackunderflow/data/ ) | tar -x -C "$_cc_tmp"
+    && git archive HEAD rust/ contracts/ stackunderflow/data/ stackunderflow/store/migrations/ ) | tar -x -C "$_cc_tmp"
 ( cd "$_cc_tmp/rust" && cargo check --workspace --quiet ) \
     || { echo "GATE 0 FAILED: HEAD does not build from a clean checkout"; rm -rf "$_cc_tmp"; exit 1; }
 rm -rf "$_cc_tmp"
