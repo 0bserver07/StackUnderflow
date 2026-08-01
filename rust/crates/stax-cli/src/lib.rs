@@ -17,8 +17,6 @@ mod cfg;
 mod click;
 mod discovery;
 mod embeddings;
-mod guide;
-mod hooks;
 mod memory;
 mod resume;
 pub mod settings;
@@ -41,8 +39,6 @@ pub use discovery::{
     ActionWorkedArgs, FailureModesArgs, InPathArgs, PastDecisionsArgs, TouchingFileArgs,
     run_action_worked, run_failure_modes, run_in_path, run_past_decisions, run_touching_file,
 };
-pub use guide::{GuideArgs, GuideVerb, run_guide};
-pub use hooks::{HooksArgs, HooksVerb, run_hooks};
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
 pub use status::{StatusArgs, run_status};
@@ -120,10 +116,6 @@ pub enum Command {
     /// filtered out. Pair with ``find-failure-modes-for-file`` to see where
     /// an edit went wrong.
     FindSessionsWhereActionWorked(ActionWorkedArgs),
-    /// Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md.
-    Guide(GuideArgs),
-    /// Manage opt-in Claude Code lifecycle hooks (hybrid capture).
-    Hooks(HooksArgs),
     /// Ask the local store what past sessions already know.
     ///
     /// ``memory`` is the agent-facing namespace: one set of commands, one
@@ -193,8 +185,6 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::FindSessionsWhereActionWorked(args) => {
             run_action_worked(args).map(|()| ExitCode::SUCCESS)?
         }
-        Command::Guide(args) => run_guide(args)?.emit(),
-        Command::Hooks(args) => run_hooks(args)?.emit(),
         Command::Memory(args) => run_memory(args).map(|()| ExitCode::SUCCESS)?,
         Command::Resume(args) => run_resume(args).map(|()| ExitCode::SUCCESS)?,
         Command::SearchPastDecisions(args) => {
