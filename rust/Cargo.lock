@@ -1884,14 +1884,16 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "regex",
  "rusqlite",
  "serde_json",
+ "sha2 0.10.9",
  "stax-adapters",
  "stax-core",
  "stax-etl",
  "stax-hooks",
  "stax-memory",
- "stax-server",
+ "stax-reports",
  "stax-sync",
 ]
 
@@ -1939,12 +1941,26 @@ name = "stax-parity"
 version = "0.0.0"
 
 [[package]]
+name = "stax-reports"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde_json",
+ "stax-adapters",
+ "stax-core",
+ "stax-etl",
+ "stax-memory",
+]
+
+[[package]]
 name = "stax-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "futures-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1952,6 +1968,7 @@ dependencies = [
  "stax-core",
  "stax-etl",
  "stax-memory",
+ "stax-reports",
  "stax-sync",
  "tokio",
  "tower",
@@ -1975,6 +1992,16 @@ dependencies = [
 [[package]]
 name = "stax-wasm"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sqlite-wasm-rs",
+ "stax-core",
+ "stax-memory",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "strsim"

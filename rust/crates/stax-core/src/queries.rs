@@ -913,6 +913,8 @@ impl Limit {
 /// 2024 and this workspace forbids `unsafe`, so nothing here reads a global).
 pub mod pytime {
     use std::fmt::Write as _;
+    // wasm32 has no clock; `now_micros` is injected there instead (see below).
+    #[cfg(not(target_arch = "wasm32"))]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use anyhow::{Result, bail};
@@ -922,12 +924,50 @@ pub mod pytime {
 
     /// `datetime.now(UTC)` as microseconds since the epoch.
     #[must_use]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn now_micros() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| {
                 i64::try_from(elapsed.as_micros()).unwrap_or(i64::MAX)
             })
+    }
+
+    /// The clock the host injected — `wasm32-unknown-unknown` has none of its own.
+    ///
+    /// **WAVE 9, and it is a real platform limit, not a preference.** On
+    /// `wasm32-unknown-unknown` `std::time::SystemTime::now()` does not return an
+    /// error, it **panics** ("time not implemented on this platform"), and
+    /// [`parse_since`] evaluates `now_micros()` *eagerly* — as an argument —
+    /// even for `since = None`. So every discovery query, `--since` or not,
+    /// aborted the module until this existed. The injected value is written once
+    /// by [`set_now_micros`] before the first query, from JS's `Date.now()`.
+    ///
+    /// Zero until set, which reads as 1970: a `--since 7d` would then resolve to
+    /// a 1969 lower bound and match everything. That is the *safe* direction for
+    /// a read-only browser demo (it over-includes rather than silently hiding
+    /// rows), and `crates/stax-wasm/src/js.rs` sets the clock in its constructor
+    /// so the window never opens in practice.
+    #[must_use]
+    #[cfg(target_arch = "wasm32")]
+    pub fn now_micros() -> i64 {
+        WASM_NOW_MICROS.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The host's clock, in microseconds since the epoch.
+    #[cfg(target_arch = "wasm32")]
+    static WASM_NOW_MICROS: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+
+    /// Tell the wasm build what time it is (`Date.now() * 1000`).
+    ///
+    /// An atomic rather than a parameter because the call site is seven levels
+    /// down inside queries whose signatures are the parity contract — widening
+    /// them to carry a clock would change the native surface to serve the
+    /// browser, which is exactly backwards. Native builds do not have this
+    /// function at all, so nothing on the gated path can call it.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_now_micros(micros: i64) {
+        WASM_NOW_MICROS.store(micros, core::sync::atomic::Ordering::Relaxed);
     }
 
     /// `datetime.fromisoformat(...).isoformat()` for an aware UTC datetime.

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  The pitch is "nothing leaves this tab", so the page enforces it rather than
+  claiming it. `connect-src 'none'` means fetch/XHR/WebSocket/beacon are all
+  refused by the browser itself — if a future edit added an upload, the page
+  would break loudly instead of quietly phoning home. `default-src 'none'`
+  means no images, fonts or frames from anywhere either; the only things
+  allowed are this page's own scripts (`'self'`, plus `'wasm-unsafe-eval'`,
+  which is what compiling WebAssembly is called in CSP) and its inline style.
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; connect-src 'none'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>staxtrace — query your store.db in this tab</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --edge: #30363d; --ink: #e6edf3;
+    --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--mono);
+    padding: 32px 20px 80px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 6px; font-weight: 600; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); margin: 0 0 24px; font-size: 13px; }
+  .sub b { color: var(--good); font-weight: 600; }
+  #drop {
+    border: 1px dashed var(--edge); border-radius: 10px; padding: 34px 20px;
+    text-align: center; background: var(--panel); cursor: pointer;
+  }
+  #drop.hot { border-color: var(--accent); background: #1b2430; }
+  #drop p { margin: 6px 0; }
+  #drop .hint { color: var(--dim); font-size: 12px; }
+  /* Visually hidden rather than `display: none`: a `display: none` file input
+     is not interactable, and WebDriver (rust/demo/smoke.py) then cannot hand
+     the page a file. Clicking the drop zone still opens the picker. */
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0; }
+  label { color: var(--dim); font-size: 12px; }
+  input[type=text], input[type=number], select {
+    background: #0b0f14; color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 7px 9px; font: 13px var(--mono);
+  }
+  input[type=text] { min-width: 260px; flex: 1; }
+  button {
+    background: #21262d; color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 7px 13px; font: 13px var(--mono); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+          padding: 14px 16px; margin: 12px 0; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: var(--accent); font-weight: 600; }
+  .meta { color: var(--dim); font-size: 12px; }
+  .hit { border-top: 1px solid var(--edge); padding: 10px 0 2px; }
+  .hit:first-of-type { border-top: 0; }
+  .hit .id { color: var(--ink); }
+  .hit .facts { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .hit .snip { color: #c9d1d9; font-size: 12.5px; margin-top: 6px;
+               border-left: 2px solid var(--edge); padding-left: 9px; white-space: pre-wrap; }
+  pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word;
+        color: var(--dim); font-size: 12px; max-height: 320px; overflow: auto; }
+  .err { color: var(--warn); }
+  footer { color: var(--dim); font-size: 12px; margin-top: 30px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>staxtrace — <span>your store.db, queried in this tab</span></h1>
+  <p class="sub">
+    The same Rust query core the <code>stax</code> CLI runs, compiled to WebAssembly.
+    Drop your <code>~/.stackunderflow/store.db</code> below and it is read
+    <b>inside this page</b> — this document declares <code>connect-src 'none'</code>,
+    so the browser will not let it send anything anywhere, to us or to anyone.
+  </p>
+
+  <div id="drop" tabindex="0" role="button" aria-label="choose a store.db">
+    <p><strong>Drop <code>store.db</code> here</strong> — or click to choose</p>
+    <p class="hint">nothing is uploaded · nothing is written · the file is opened read-only</p>
+  </div>
+  <input type="file" id="file" accept=".db,application/vnd.sqlite3,application/octet-stream" />
+
+  <div id="status" class="card" hidden></div>
+
+  <div id="console" hidden>
+    <div class="row">
+      <button data-verb="decisions" class="on">decisions</button>
+      <button data-verb="file">file</button>
+      <button data-verb="worked">worked</button>
+      <button data-verb="sessions">sessions</button>
+      <button data-verb="store">store</button>
+    </div>
+    <div class="row">
+      <input type="text" id="arg" placeholder="a topic, e.g. caching" />
+      <button id="run">run</button>
+    </div>
+    <div class="row">
+      <label>project <input type="text" id="project" placeholder="(every project)" style="min-width:180px" /></label>
+      <label>since <input type="text" id="since" placeholder="7d" style="min-width:80px" /></label>
+      <label>limit <input type="number" id="limit" value="20" min="-1" style="width:80px" /></label>
+      <label>budget <input type="number" id="budget" value="2000" min="0" style="width:100px" /></label>
+      <label><input type="checkbox" id="isfile" /> target is a file</label>
+    </div>
+    <div id="out"></div>
+  </div>
+
+  <footer>
+    Built by <code>rust/demo/build.sh</code> from <code>crates/stax-wasm</code>.
+    The same artifact is diffed against the native CLI by
+    <code>rust/wasm-differ.sh</code>, byte for byte, on the same store.
+  </footer>
+</main>
+
+<script src="./csp-watch.js"></script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

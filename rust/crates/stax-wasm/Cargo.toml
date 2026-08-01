@@ -4,3 +4,40 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+# `cdylib` is the wasm artifact; `rlib` keeps the crate testable natively, which
+# is where the query layer is actually gated (`cargo test -p stax-wasm`). Both
+# targets build the SAME `verbs` module — that is the point of the split.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+# The workspace spec carries `features = ["bundled"]`, and it is INERT on
+# wasm32: rusqlite 0.40 declares `libsqlite3-sys` as an *optional* dependency
+# under `cfg(all(target_family = "wasm", target_os = "unknown"))` and the
+# `bundled` feature only forwards through `libsqlite3-sys?/…` (the `?` means
+# "if that optional dep is enabled"). Nothing enables it on wasm32, so the
+# default `ffi-sqlite-wasm-rs` feature supplies the FFI instead and the C
+# amalgamation that `bundled` would have compiled is never reached. Verified by
+# building, not by reading: the wasm32 artifact links `sqlite-wasm-rs` and no
+# `libsqlite3-sys` build script runs. This is why wave 9 needed NO workspace
+# manifest change and no target table in `stax-core`.
+rusqlite.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json.workspace = true
+# The whole reason this crate is small: the queries ARE stax-core's, byte for
+# byte, SQL shape for SQL shape (§6b), and the envelope IS stax-memory's
+# contract writer. Only the verb assembly is re-expressed here — see the
+# module doc of `verbs.rs` and DIV-333.
+stax-core.workspace = true
+stax-memory = { path = "../stax-memory" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The SQLite build for `wasm32-unknown-unknown`: sqlite3.c compiled with
+# `SQLITE_OS_OTHER` + a musl shim, plus an in-memory VFS. rusqlite links it
+# through its own `ffi-sqlite-wasm-rs` feature; this crate depends on it
+# directly for `MemVfsUtil`, the byte-import path. Pinned to the version
+# rusqlite 0.40.1 resolves against.
+sqlite-wasm-rs = "0.5.5"
+wasm-bindgen = "0.2.126"
