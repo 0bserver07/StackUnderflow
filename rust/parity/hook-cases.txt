@@ -1,0 +1,125 @@
+# The hook differ's corpus — one recorded hook invocation per line.
+#
+# Every line is one fire of `hooks run <id>` with a recorded stdin payload, run
+# by BOTH implementations against their own copy of the same store state, and
+# compared on stdout bytes, stderr bytes, exit code, the `captured_events` rows
+# each one wrote, and the governance JSON each one left behind.
+#
+# Columns, TAB-separated:
+#
+#   id        the case name; `!` prefix = KNOWN-OPEN (reported, does not fail)
+#   hook_id   the argument to `hooks run`
+#   flags     `-` or `capture` (adds --capture-content)
+#   env       `-` or `K=V,K=V` — extra environment for BOTH sides
+#   stdin     the payload, verbatim on one line; `-` means empty stdin
+#
+# The payloads are the shapes Claude Code actually pipes (`hook_event_name`,
+# `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_response`, `prompt`,
+# `trigger`, `stop_hook_active`), plus the malformed ones the reference's own
+# tests cover, plus the payload shapes that pick out a specific branch of the
+# heuristics — a bool exit code, a float exit code, `"--5"`, a stopword-only
+# prompt, a notebook path, a non-dict `tool_input`.
+#
+# The store state is `parity/build_hook_state.py`'s synthetic home. It is
+# synthetic on purpose: the maintainer's real `tools_json` is a names-only
+# array, so `find_failure_modes_for_file` matches nothing on it and four of the
+# nine hooks would be compared only in their silent branch. See that file's
+# docstring.
+
+# ── capture: PostToolUse ────────────────────────────────────────────────────
+C-post-fail-exit2	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"npm install"},"tool_response":{"exit_code":2,"stderr":"npm ERR! network timeout\nnpm ERR! see log","stdout":""}}
+C-post-fail-error-string	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"hook-parity-session-0002","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"error":"  ModuleNotFoundError: No module named 'stax9'\ntraceback follows  "}}
+C-post-success	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"exit_code":0,"stdout":"all good"}}
+C-post-bool-exit	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-bool","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"exit_code":true}}
+C-post-float-exit	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-float","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"exit_code":1.0}}
+C-post-string-exit	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-str","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"returncode":" -3 "}}
+C-post-double-sign	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-abort","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"exit_code":"--5"}}
+C-post-list-is-error	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-list","cwd":"/tmp/stax/hook/parity/proj","tool_response":[{"type":"text","text":"fine"},{"is_error":true,"text":"boom"}]}
+C-post-success-false	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-succ","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"success":false,"message":"denied"}}
+C-post-dup-keys-case	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-dup","cwd":"/tmp/stax/hook/parity/proj","tool_response":{"Code":7,"code":0}}
+C-post-no-cwd	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-nocwd","tool_response":{"exit_code":9}}
+C-post-unknown-project	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"s-unknown","cwd":"/nowhere/at/all","tool_response":{"exit_code":9}}
+C-post-capture-content	stackunderflow-post-tool-use	capture	-	{"hook_event_name":"PostToolUse","session_id":"s-cc","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"echo hi"},"tool_response":{"exit_code":3,"stderr":"secret — with an em dash"}}
+
+# ── capture: UserPromptSubmit ───────────────────────────────────────────────
+C-prompt-opener	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","prompt":"no, do it the other way"}
+C-prompt-opener-exact	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p2","cwd":"/tmp/stax/hook/parity/proj","prompt":"  stop  "}
+C-prompt-phrase	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p3","cwd":"/tmp/stax/hook/parity/proj","prompt":"well, not what i wanted at all"}
+C-prompt-rollback	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p4","cwd":"/tmp/stax/hook/parity/proj","prompt":"could you ROLL BACK the migration"}
+C-prompt-not-correction	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p5","cwd":"/tmp/stax/hook/parity/proj","prompt":"I have no idea how this works"}
+C-prompt-nobody	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p6","cwd":"/tmp/stax/hook/parity/proj","prompt":"nobody knows why now"}
+C-prompt-unicode	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p7","cwd":"/tmp/stax/hook/parity/proj","prompt":"no ❤❤❤ 日本語"}
+C-prompt-nonstring	stackunderflow-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p8","cwd":"/tmp/stax/hook/parity/proj","prompt":42}
+C-prompt-capture-content	stackunderflow-user-prompt	capture	-	{"hook_event_name":"UserPromptSubmit","session_id":"s-p9","cwd":"/tmp/stax/hook/parity/proj","prompt":"undo that change, please"}
+
+# ── capture: Stop / PreCompact (the session-totals read) ────────────────────
+C-stop-known	stackunderflow-stop	-	-	{"hook_event_name":"Stop","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","stop_hook_active":false}
+C-stop-known-zero-cost	stackunderflow-stop	-	-	{"hook_event_name":"Stop","session_id":"hook-parity-session-0002","cwd":"/tmp/stax/hook/parity/proj","stop_hook_active":true}
+C-stop-unknown-session	stackunderflow-stop	-	-	{"hook_event_name":"Stop","session_id":"not-in-the-store","cwd":"/tmp/stax/hook/parity/proj"}
+C-stop-no-session	stackunderflow-stop	-	-	{"hook_event_name":"Stop","cwd":"/tmp/stax/hook/parity/proj"}
+C-stop-empty-session	stackunderflow-stop	-	-	{"hook_event_name":"Stop","session_id":"","cwd":"/tmp/stax/hook/parity/proj"}
+C-precompact-manual	stackunderflow-pre-compact	-	-	{"hook_event_name":"PreCompact","session_id":"hook-parity-session-0003","cwd":"/tmp/stax/hook/parity/proj","trigger":"manual"}
+C-precompact-null-trigger	stackunderflow-pre-compact	-	-	{"hook_event_name":"PreCompact","session_id":"hook-parity-session-0004","cwd":"/tmp/stax/hook/parity/proj","trigger":null}
+
+# ── injection: SessionStart ─────────────────────────────────────────────────
+I-start-known	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","source":"startup"}
+I-start-subdir	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","cwd":"/tmp/stax/hook/parity/proj/services/deep/nested"}
+I-start-unknown	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","cwd":"/nowhere/at/all"}
+I-start-missing-cwd	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","session_id":"x"}
+I-start-nonstring-cwd	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","cwd":123}
+I-start-empty-cwd	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","cwd":""}
+I-start-weights	stackunderflow-inject-session-start	-	STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS=0.0,0.0,1.0	{"hook_event_name":"SessionStart","cwd":"/tmp/stax/hook/parity/proj"}
+
+# ── injection: UserPromptSubmit ─────────────────────────────────────────────
+I-prompt-hit	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"fix the cache lookup in services/discovery.py please"}
+I-prompt-identifier	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"what did we decide about STACKUNDERFLOW_HOME resolution"}
+I-prompt-stopwords	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"please update the tests"}
+I-prompt-empty	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"   "}
+I-prompt-nonstring	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":["a"]}
+I-prompt-no-cwd	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","prompt":"fix the cache lookup in services/discovery.py"}
+I-prompt-other-project	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/somewhere/else","prompt":"fix the cache lookup in services/discovery.py"}
+I-prompt-long	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv wwww xxxx yyyy zzzz aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv wwww xxxx yyyy zzzz aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv wwww xxxx yyyy zzzz services/discovery.py"}
+
+# ── injection: PreToolUse ───────────────────────────────────────────────────
+I-pretool-risky	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py","old_string":"a","new_string":"b"}}
+I-pretool-clean	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Write","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/README.md","content":"x"}}
+I-pretool-unknown	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/nowhere/at/all.py"}}
+I-pretool-notebook-key	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+I-pretool-key-order	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"path":"/nowhere/second.py","file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+I-pretool-nonstring-input	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":"not-a-dict"}
+I-pretool-blank-path	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"   "}}
+I-pretool-missing	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","tool_name":"Edit"}
+
+# ── active recall (spawns `stackunderflow memory file --json`) ──────────────
+R-edit-risky	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+R-edit-clean	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Write","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/README.md","content":"x"}}
+R-bash-paths	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"python /tmp/stax/hook/parity/proj/services/discovery.py --flag=conf/app.toml"}}
+R-bash-no-paths	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"ls -la"}}
+R-bash-unbalanced	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"echo 'unbalanced /tmp/stax/hook/parity/proj/services/discovery.py"}}
+R-no-tool-input	stackunderflow-pretool-recall	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit"}
+R-tiny-deadline	stackunderflow-pretool-recall	-	STACKUNDERFLOW_RECALL_TIMEOUT=0.001	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+R-bad-deadline	stackunderflow-pretool-recall	-	STACKUNDERFLOW_RECALL_TIMEOUT=not-a-number	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+R-killswitch	stackunderflow-pretool-recall	-	STACKUNDERFLOW_PROACTIVE_DISABLED=1	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+R-governed-cluster	stackunderflow-pretool-recall	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1	{"hook_event_name":"PreToolUse","session_id":"gov-1","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"cd /tmp && npm install --save-dev foo"}}
+R-governed-cluster-miss	stackunderflow-pretool-recall	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1	{"hook_event_name":"PreToolUse","session_id":"gov-2","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"pytest -q"}}
+R-governed-file-risk	stackunderflow-pretool-recall	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1	{"hook_event_name":"PreToolUse","session_id":"gov-3","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py"}}
+
+# ── proactive nudge (PostToolUse) ───────────────────────────────────────────
+N-default-off	stackunderflow-posttool-nudge	-	-	{"hook_event_name":"PostToolUse","session_id":"n-1","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'"}}
+N-killswitch	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_DISABLED=1,STACKUNDERFLOW_PROACTIVE_ENABLED=1	{"hook_event_name":"PostToolUse","session_id":"n-2","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'"}}
+N-governed-default-types	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1	{"hook_event_name":"PostToolUse","session_id":"n-3","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'"}}
+N-governed-hit	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-4","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'\n  at line 3"}}
+N-governed-hit-variant	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-5","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"is_error":true,"content":[{"type":"text","text":"ModuleNotFoundError: No module named 'stax42'"}]}}
+N-governed-clean	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-6","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stdout":"fine"}}
+N-governed-unknown-sig	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-7","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"stderr":"some error nobody has ever seen"}}
+N-governed-not-bash	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-8","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'"}}
+N-governed-no-cwd	stackunderflow-posttool-nudge	-	STACKUNDERFLOW_PROACTIVE_ENABLED=1,STACKUNDERFLOW_PROACTIVE_TYPES=error-signature	{"hook_event_name":"PostToolUse","session_id":"n-9","tool_name":"Bash","tool_response":{"stderr":"ModuleNotFoundError: No module named 'stax9'"}}
+
+# ── dispatch + malformed stdin ──────────────────────────────────────────────
+M-empty-stdin	stackunderflow-stop	-	-	-
+M-blank-stdin	stackunderflow-inject-session-start	-	-	{}
+M-garbage-stdin	stackunderflow-inject-session-start	-	-	not json at all
+M-array-stdin	stackunderflow-inject-session-start	-	-	["not","a","dict"]
+M-scalar-stdin	stackunderflow-post-tool-use	-	-	42
+M-unknown-id	stackunderflow-not-a-hook	-	-	{"cwd":"/tmp/stax/hook/parity/proj"}
+M-bare-id	not-even-ours	-	-	{"cwd":"/tmp/stax/hook/parity/proj"}

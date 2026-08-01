@@ -4,3 +4,55 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+# The hook entry point Claude Code spawns. Its argv shape is the Python CLI's —
+# `hooks run <id> [--capture-content]` — because the whole point of the crate is
+# that a `settings.json` entry can be re-pointed at it without editing the
+# entry. A separate binary rather than a `stax` subcommand: `stax-cli` links the
+# adapters, the envelope contracts and clap, and a hook pays for what it links
+# at every spawn. Wave 8 adds the `stax hooks` verb group for humans; THIS is
+# the one that runs on the agent's critical path.
+[[bin]]
+name = "stax-hooks"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+# LOCK ADDITION, documented per the campaign's anti-drift rule.
+#
+# Twelve of the reference's decisions are regular expressions and every one of
+# them changes an answer: `templates._HOOK_COMMAND_RE` decides whether an entry
+# in a user's `settings.json` is OURS (a wrong answer deletes someone else's
+# hook), `handlers._CORRECTION_PHRASES` decides whether a prompt becomes a
+# `correction` row, `inject._TOKEN_RE` picks the single token a `LIKE` query is
+# built from, and `patterns._normalise_{command,signature}` produce the CACHE
+# KEYS the nudge cache is looked up by — a normaliser that differs by one
+# character is a silent permanent miss.
+#
+# Hand-rolling those is precisely where a port drifts, so the dependency is the
+# cheaper risk. `regex 1.13.1` is what the shared lock resolved to; it adds
+# exactly FOUR entries to `Cargo.lock` — `regex`, `regex-automata`,
+# `regex-syntax`, `aho-corasick`. `memchr` was already in the lock (notify pulls
+# it), so the fleet's shared lock grows by four, not five; verified with
+# `git diff rust/Cargo.lock | grep '^+name'`.
+# Semantics line up with CPython's `re` on everything used here: leftmost-first
+# (Perl preference order, so the lazy `[^|&;]*?` behaves identically), and
+# Unicode-aware `\b` / `\d` / `\s`, which is `re`'s default on `str`. No
+# look-around appears in any of the reference's patterns, which is what makes
+# this crate possible at all.
+#
+# Every pattern is behind a `LazyLock`: a `SessionStart` fire compiles the two
+# it needs and never pays for the other ten.
+regex = "1.12"
+# The capture hooks WRITE (`captured_events`) — that is their entire purpose —
+# so this crate needs a read-WRITE handle, which `stax_core::store::Store` does
+# not and must not hand out. Same plain-dependency ruling as `stax-etl`: no
+# feature gate, because feature unification would let another member's build
+# decide whether the capture path exists.
+rusqlite.workspace = true
+# The store, `settings::app_dir`, the three discovery queries the injection
+# hooks run, and — load-bearing — `queries::pyjson`, whose Python int/float
+# split IS the failure heuristic (`isinstance(v, int) and v != 0` is False for
+# `1.0`) and whose `dumps_default` is byte-for-byte `json.dumps(obj)`, which is
+# what every hook writes to stdout.
+stax-core.workspace = true

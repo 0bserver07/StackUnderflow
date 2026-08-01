@@ -38,6 +38,24 @@
 #                            Python venv or the harness state is missing —
 #                            loudly, like gate 4.
 #
+# NOT a gate, on purpose — the per-wave differs that are too slow to run per
+# commit. Each is a standalone script with the same case-file shape and the same
+# exit codes; run them at a wave boundary, not in this loop:
+#
+#   rust/ingest-tail-proof.sh   the live-tail latency measurement (wave 4)
+#   rust/hooks-parity.sh        the hook surface, all nine ids (wave 6) —
+#                               80 recorded invocations diffed on stdout bytes,
+#                               stderr, exit code, the `captured_events` rows
+#                               each side wrote and the governance JSON each
+#                               side left behind. 36.7 s measured, because 80 of
+#                               its 160 process starts are CPython at ~190 ms
+#                               and nine of them spawn a SECOND CPython (the
+#                               recall hook shells `memory file --json`). The
+#                               threshold for wiring a differ in here was 10 s;
+#                               this is 3.7x over it, so it stays out and
+#                               `cargo test -p stax-hooks` (75 tests, 0.02 s)
+#                               carries the per-commit half.
+#
 # Usage:  rust/ci.sh                (runs all seven)
 #         rust/ci.sh --skip-parity  (gates 0-3 only; boxes without the venv)
 # Exit:   first failing gate's status.
