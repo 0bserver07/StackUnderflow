@@ -15,11 +15,26 @@ mod backup;
 mod cache;
 mod cfg;
 mod click;
+mod clickx;
 mod discovery;
+mod docs;
 mod embeddings;
+mod guide;
+mod hooks;
+mod init;
 mod memory;
+pub mod mode_rec;
+mod plan;
+mod pyclock;
+mod recommend;
+mod reports;
 mod resume;
 pub mod settings;
+pub mod skill_rec;
+pub mod skill_synth;
+mod skills;
+mod spend;
+mod start;
 mod status;
 mod store;
 mod sync;
@@ -31,7 +46,10 @@ use clap::{Parser, Subcommand};
 
 pub use anchor::{AnchorArgs, AnchorCommand, run_anchor};
 pub use ask::{hybrid_env_from_process, run_ask};
-pub use backup::{BackupArgs, BackupVerb, run_backup};
+pub use backup::{
+    BackupArgs, BackupVerb, create_rsync_argv, cron_line, darwin_plist, launchctl_argv,
+    restore_rsync_argv, run_backup, sanitise_label,
+};
 pub use cache::{ClearCacheArgs, run_clear_cache};
 pub use cfg::{CfgArgs, CfgVerb, ConfigArgs, ConfigVerb, ModelAliasVerb, run_cfg, run_config};
 pub use click::{Output, UsageError};
@@ -39,8 +57,27 @@ pub use discovery::{
     ActionWorkedArgs, FailureModesArgs, InPathArgs, PastDecisionsArgs, TouchingFileArgs,
     run_action_worked, run_failure_modes, run_in_path, run_past_decisions, run_touching_file,
 };
+pub use docs::{DocsArgs, DocsVerb, render_markdown, run_docs, run_docs_with};
+pub use guide::{GuideArgs, GuideVerb, run_guide};
+pub use hooks::{HooksArgs, HooksVerb, run_hooks};
+pub use init::{
+    InitArgs, SkillsReport, default_skills_dest, install_static_skills, render_report, run_init,
+    shipped_skills_source_dir,
+};
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
+pub use plan::{PlanArgs, PlanSetArgs, PlanVerb, ThresholdsVerb, format_money, run_plan};
+pub use recommend::{ModeArgs, RecommendArgs, RecommendSkillsArgs, RecommendVerb, run_recommend};
+pub use reports::{IngestFlags, PeriodArgs, ReportArgs, run_month, run_report, run_today};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
+pub use skills::{
+    CleanArgs, GenerateArgs, ListArgs, SkillsArgs, SkillsEnv, SkillsVerb, run_skills,
+    run_skills_with,
+};
+pub use spend::{ContextBudgetArgs, YieldArgs, run_context_budget, run_yield};
+pub use start::{
+    StartArgs, dashboard_url, exposure_warning, is_loopback, resolve_host, resolve_port, run_start,
+    run_start_with,
+};
 pub use status::{StatusArgs, run_status};
 pub use store::{StoreArgs, render_store, run_store};
 pub use sync::{SyncArgs, SyncInitArgs, SyncJsonArgs, SyncVerb, run_sync};
@@ -84,6 +121,8 @@ pub enum Command {
     /// would be the only text in the tree the reference does not have.
     #[command(hide = true, about = "", long_about = None)]
     Config(ConfigArgs),
+    /// Read StackUnderflow's own docs, offline from the installed package.
+    Docs(DocsArgs),
     /// List sessions where editing FILE led to a follow-up correction.
     ///
     /// Surfaces the sessions where a past edit to FILE was followed by the
@@ -116,6 +155,16 @@ pub enum Command {
     /// filtered out. Pair with ``find-failure-modes-for-file`` to see where
     /// an edit went wrong.
     FindSessionsWhereActionWorked(ActionWorkedArgs),
+    /// Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md.
+    Guide(GuideArgs),
+    /// Manage opt-in Claude Code lifecycle hooks (hybrid capture).
+    Hooks(HooksArgs),
+    /// Start the dashboard (alias for ``start``).
+    ///
+    /// With ``--install-skills``, copies the three shipped Claude Code
+    /// ``SKILL.md`` files into ``~/.claude/skills/`` (or ``--skills-dest``)
+    /// before starting the dashboard. See ``docs/skills.md``.
+    Init(InitArgs),
     /// Ask the local store what past sessions already know.
     ///
     /// ``memory`` is the agent-facing namespace: one set of commands, one
@@ -128,6 +177,20 @@ pub enum Command {
     /// defaults to the current directory's project when StackUnderflow
     /// recognises it, so these commands Just Work when run inside a repo.
     Memory(MemoryArgs),
+    /// Estimate the per-session context tax (system prompt + MCP + skills + memory).
+    #[command(name = "context-budget")]
+    ContextBudget(ContextBudgetArgs),
+    /// This month's usage.
+    Month(PeriodArgs),
+    /// Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom).
+    Plan(PlanArgs),
+    /// Proactive recommendations mined from your local session store.
+    ///
+    /// Recommendations are read-only — accepting one is always a separate
+    /// explicit step (e.g. ``stackunderflow skills generate --pattern <id>``).
+    Recommend(RecommendArgs),
+    /// Dashboard-style summary over a date range.
+    Report(ReportArgs),
     /// Session/resume ids for every coding agent under PATH (default: cwd).
     ///
     /// Groups recent sessions by provider and renders each agent's real resume
@@ -141,6 +204,13 @@ pub enum Command {
     /// Substring-search QUERY across past message content; return matching
     /// sessions.
     SearchPastDecisions(PastDecisionsArgs),
+    /// Generate / list / clean project-specific Claude Code skills.
+    ///
+    /// These are mined from your local session store — never from CLAUDE.md
+    /// or memory — and are always project-scoped unless you ask otherwise.
+    Skills(SkillsArgs),
+    /// Launch the StackUnderflow dashboard.
+    Start(StartArgs),
     /// Compact one-liner: today + month cost and message counts.
     Status(StatusArgs),
     /// Open the store read-only and print its schema version and row counts.
@@ -148,6 +218,11 @@ pub enum Command {
     /// Encrypted, bring-your-own-bucket backup of your analytics aggregates
     /// (opt-in).
     Sync(SyncArgs),
+    /// Today's usage.
+    Today(PeriodArgs),
+    /// Yield analysis: productive vs reverted vs abandoned sessions.
+    #[command(name = "yield")]
+    Yield(YieldArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -175,6 +250,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Cfg(args) => run_cfg(args)?.emit(),
         Command::ClearCache(args) => run_clear_cache(args)?.emit(),
         Command::Config(args) => run_config(args)?.emit(),
+        Command::Docs(args) => run_docs(args)?.emit(),
         Command::FindFailureModesForFile(args) => {
             run_failure_modes(args).map(|()| ExitCode::SUCCESS)?
         }
@@ -185,14 +261,26 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::FindSessionsWhereActionWorked(args) => {
             run_action_worked(args).map(|()| ExitCode::SUCCESS)?
         }
+        Command::Guide(args) => run_guide(args)?.emit(),
+        Command::Hooks(args) => run_hooks(args)?.emit(),
+        Command::Init(args) => run_init(args)?.emit(),
         Command::Memory(args) => run_memory(args).map(|()| ExitCode::SUCCESS)?,
+        Command::ContextBudget(args) => run_context_budget(args)?.emit(),
+        Command::Month(args) => run_month(args)?.emit(),
+        Command::Plan(args) => run_plan(args)?.emit(),
+        Command::Recommend(args) => run_recommend(args)?.emit(),
+        Command::Report(args) => run_report(args)?.emit(),
         Command::Resume(args) => run_resume(args).map(|()| ExitCode::SUCCESS)?,
         Command::SearchPastDecisions(args) => {
             run_past_decisions(args).map(|()| ExitCode::SUCCESS)?
         }
+        Command::Skills(args) => run_skills(args)?.emit(),
+        Command::Start(args) => run_start(args)?.emit(),
         Command::Status(args) => run_status(args)?.emit(),
         Command::Store(args) => run_store(args).map(|()| ExitCode::SUCCESS)?,
         Command::Sync(args) => run_sync(args).map(|()| ExitCode::SUCCESS)?,
+        Command::Today(args) => run_today(args)?.emit(),
+        Command::Yield(args) => run_yield(args)?.emit(),
     };
     Ok(code)
 }

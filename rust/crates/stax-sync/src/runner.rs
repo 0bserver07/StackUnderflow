@@ -963,14 +963,23 @@ pub fn run_pull(
     )
 }
 
-/// `store.db.connect` — read-write, creating the file if missing, standard PRAGMAs.
+/// `cli.py::_open_store` — `db.connect` **plus** `schema.apply(conn)`.
 ///
-/// NOTE what is missing relative to `cli.py::_open_store`: `schema.apply(conn)`.
-/// The migration runner is RS-0-011..055 and still open, so this port cannot
-/// create the v028/v029 sync tables on a store that lacks them. DIV-216.
+/// **DIV-216 is closed here** (wave 7). The divergence was that this function
+/// used to be `db.connect` alone: on a store that predates v028 Python would
+/// create the `sync_identity` / `sync_outbox` / `sync_cursors` tables and this
+/// port would raise `no such table`. The ledger recorded it rather than guarding
+/// it — a `table_exists` guard would have made "sync is off" indistinguishable
+/// from "your schema is behind" — and it stayed open until
+/// [`stax_core::schema::apply`] existed. It now does, so the self-heal is a call,
+/// not a workaround.
+///
+/// The order matters and is Python's: the three pragmas are set on the fresh
+/// connection *before* the migrations run, so `foreign_keys = ON` is in force for
+/// v008's `usage_events` rebuild exactly as it is on the Python side.
 ///
 /// # Errors
-/// Any I/O or SQLite failure opening the store.
+/// Any I/O or SQLite failure opening the store, or a migration failure.
 pub fn open_store(store_path: &std::path::Path) -> rusqlite::Result<Connection> {
     if let Some(parent) = store_path.parent() {
         std::fs::create_dir_all(parent)
@@ -980,6 +989,7 @@ pub fn open_store(store_path: &std::path::Path) -> rusqlite::Result<Connection> 
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    stax_core::schema::apply(&conn)?;
     Ok(conn)
 }
 
@@ -1090,6 +1100,66 @@ mod tests {
 
     fn identity_encryptor(plaintext: &[u8]) -> Result<Vec<u8>, String> {
         Ok(plaintext.to_vec())
+    }
+
+    /// DIV-216's closure proof: `open_store` self-heals a store whose schema
+    /// predates the sync tables, exactly as `cli.py::_open_store` does.
+    ///
+    /// The two halves are separate claims. A *missing file* proves the create
+    /// path; a store deliberately parked at **v27** — the last version before
+    /// `sync_identity` exists — proves the upgrade path, which is the one a real
+    /// user hits and the one the ledger entry was actually about.
+    #[test]
+    fn open_store_applies_the_schema_so_sync_tables_exist() {
+        let dir = std::env::temp_dir().join(format!("stax-sync-div216-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+
+        let fresh = dir.join("nested").join("store.db");
+        {
+            let conn = open_store(&fresh).expect("a missing store is created and migrated");
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .expect("user_version");
+            assert_eq!(version, stax_core::schema::CURRENT_VERSION);
+            for table in ["sync_identity", "sync_outbox", "sync_cursors"] {
+                let found: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [table],
+                        |row| row.get(0),
+                    )
+                    .expect("count");
+                assert_eq!(found, 1, "{table} is missing — DIV-216 would still be open");
+            }
+        }
+
+        let behind = dir.join("behind.db");
+        {
+            // Park it at v27: the sync schema arrives at v028/v029.
+            let conn = rusqlite::Connection::open(&behind).expect("open");
+            stax_core::schema::apply_upto(&conn, 27, &stax_core::schema::Hooks::default())
+                .expect("v27");
+            let missing: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sync_identity'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("count");
+            assert_eq!(
+                missing, 0,
+                "the precondition is a store without sync tables"
+            );
+        }
+        {
+            let conn = open_store(&behind).expect("a v27 store is migrated forward");
+            assert!(
+                status(&conn).is_ok(),
+                "`sync status` used to fail here with `no such table: sync_identity`"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A store with the sync schema and two tiny marts, and nothing else.

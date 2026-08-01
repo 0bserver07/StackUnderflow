@@ -4,8 +4,14 @@
 # Builds ONE fixture tree, copies it into two scratch homes with identical
 # freshly-migrated stores, runs `run_ingest` over each — Python's from the venv,
 # Rust's from `stax-ingest-parity` — and diffs projects / sessions / messages /
-# usage_events / ingest_log **full-row**. The store IS the contract, so the
-# comparison is of rows, not of counts.
+# usage_events / ingest_log / agent_teams / commit_session_link **full-row**.
+# The store IS the contract, so the comparison is of rows, not of counts.
+#
+# The last three of those are the post-ingest hook's: `sessions`' four team
+# columns, `agent_teams`, and `commit_session_link`. They joined the diff when
+# DIV-042 closed (the hook body — `claude_teams.materialize_team_metadata` +
+# `link_commits_to_sessions` — was a stub through waves 4-6). Nothing is
+# excluded from `sessions` any more.
 #
 #   rust/ingest-parity.sh [--keep]
 #
@@ -65,6 +71,113 @@ if [ "$REAL_PROJECTS" -gt 0 ] && [ -d "$HOME/.claude/projects" ]; then
     done < <(du -s "$HOME"/.claude/projects/*/ 2>/dev/null \
              | sort -n | awk -v n="$REAL_PROJECTS" 'NR>2 && NR<=n+2 {print $2}')
 fi
+# ── 1b. the agent-teams corpus ───────────────────────────────────────────────
+#
+# WHY THIS IS SYNTHESISED AND NOT SAMPLED. The four `sessions` team columns +
+# `agent_teams` are written by the post-ingest hook, and on this machine every
+# team-tagged session lives in ONE project — the 377 MB `-Users-yadkonrad-…
+# jan26-StackUnderflow`, the largest of the 29. So `STAX_INGEST_REAL_PROJECTS`
+# has to reach 29 before a single team column is non-NULL, and every cheaper run
+# of this gate would compare four columns of NULL against four columns of NULL
+# and call it identical. That is the campaign's own lesson stated twice already
+# (wave 6: "a differ passing first-try on an untested constant is dead corpus";
+# wave 5: "a differ that under-reads agrees by accident"), so the small legs get
+# a corpus that crosses every branch the hook has:
+#
+#   config path      `teams/gate-team/config.json` → discover_teams
+#   jsonl path       a TeamCreate/Agent transcript → discover_teams_from_jsonl,
+#                    whose `config_json` is a SYNTHESISED `json.dumps` and is
+#                    therefore the one byte contract with no reference file
+#   Explore skip     an `Agent` block the reference refuses to make a member of
+#   linker step 1    the config's `leadSessionId`            → role=lead
+#   linker step 2    a session whose first record has `teamName`/`agentId`
+#   spawn prompt     …whose member has NO prompt, so it falls to the TASK's
+#                    `description` (discover_tasks + the owner match)
+#   linker step 2.5  a worker whose first user text matches BUILDER_RE
+#   linker step 3    a sidechain session whose `parentUuid` is a uuid of the
+#                    lead — the fixpoint path
+#   discover_tasks   `.lock` / `.highwatermark` / `notes.txt` / broken JSON,
+#                    all of which must be skipped, and numeric-vs-stem ids
+CLAUDE_PROJECT="$TREE/.claude/projects/-Users-test-dev-ai-music"
+TEAM_CWD="/Users/test/dev/ai-music"
+LEAD_SID="10000000-0000-4000-8000-000000000001"
+JSONL_LEAD_SID="10000000-0000-4000-8000-000000000005"
+
+# A user record. $1 file stem/session id, $2 uuid, $3 parentUuid (or null),
+# $4 isSidechain, $5 the message text, $6 extra top-level JSON (may be empty).
+team_user_record() {
+    printf '{"parentUuid":%s,"isSidechain":%s,"userType":"external","cwd":"%s",' \
+        "$3" "$4" "$TEAM_CWD"
+    printf '"sessionId":"%s","version":"1.0.17","type":"user","uuid":"%s",' "$1" "$2"
+    printf '"timestamp":"2026-04-01T00:00:00.000Z"%s,' "$6"
+    printf '"message":{"role":"user","content":[{"type":"text","text":"%s"}]}}\n' "$5"
+}
+
+# The lead's own transcript — two records, so it owns two uuids.
+{
+    team_user_record "$LEAD_SID" "u-lead-1" null false "kick off the team" ""
+    team_user_record "$LEAD_SID" "u-lead-2" '"u-lead-1"' false "second turn" ""
+} > "$CLAUDE_PROJECT/$LEAD_SID.jsonl"
+
+# Linker step 2: `teamName` + `agentId` on the FIRST record, which is the only
+# record `_build_hints_for_projects` peeks at.
+team_user_record "10000000-0000-4000-8000-000000000002" "u-w1-1" null false \
+    "starting work" ',"teamName":"gate-team","agentId":"w1@gate-team"' \
+    > "$CLAUDE_PROJECT/10000000-0000-4000-8000-000000000002.jsonl"
+
+# Linker step 2.5: BUILDER_RE over the first user text. The backticks are the
+# pattern's own delimiters and have to survive the heredoc-free quoting above.
+team_user_record "10000000-0000-4000-8000-000000000003" "u-w2-1" null false \
+    "You are \`w2\` on \`gate-team\`. Do the thing." "" \
+    > "$CLAUDE_PROJECT/10000000-0000-4000-8000-000000000003.jsonl"
+
+# Linker step 3: a sidechain whose parent uuid belongs to the lead.
+team_user_record "10000000-0000-4000-8000-000000000004" "u-sc-1" '"u-lead-2"' true \
+    "sub-sub work" "" \
+    > "$CLAUDE_PROJECT/10000000-0000-4000-8000-000000000004.jsonl"
+
+# The jsonl-fallback team: TeamCreate + two Agents, one of them an Explore that
+# must NOT become a member.
+{
+    team_user_record "$JSONL_LEAD_SID" "u-jl-1" null false "build me a team" ""
+    printf '{"parentUuid":"u-jl-1","isSidechain":false,"cwd":"%s","sessionId":"%s",' \
+        "$TEAM_CWD" "$JSONL_LEAD_SID"
+    printf '"type":"assistant","uuid":"u-jl-2","timestamp":"2026-04-01T00:01:02.345Z",'
+    printf '"message":{"role":"assistant","model":"claude-opus-4-6","content":['
+    printf '{"type":"tool_use","id":"t1","name":"TeamCreate","input":{"team_name":"jsonl-team","description":"reconstructed from the transcript"}},'
+    printf '{"type":"tool_use","id":"t2","name":"Agent","input":{"team_name":"jsonl-team","name":"w9","subagent_type":"general-purpose","prompt":"the w9 spawn prompt"}},'
+    printf '{"type":"tool_use","id":"t3","name":"Agent","input":{"team_name":"jsonl-team","name":"scout","subagent_type":"Explore","prompt":"never a member"}}'
+    printf ']}}\n'
+} > "$CLAUDE_PROJECT/$JSONL_LEAD_SID.jsonl"
+
+mkdir -p "$TREE/.claude/teams/gate-team" "$TREE/.claude/tasks/gate-team"
+# `inboxes`-only directories are what the implicit `default` team looks like —
+# the reference skips them for having no config.json.
+mkdir -p "$TREE/.claude/teams/default/inboxes"
+cat > "$TREE/.claude/teams/gate-team/config.json" <<CONFIGEOF
+{
+  "leadAgentId": "lead@gate-team",
+  "leadSessionId": "$LEAD_SID",
+  "description": "the gate's team — em dash included on purpose",
+  "createdAt": 1700000000123,
+  "members": [
+    {"agentId": "lead@gate-team", "name": "team-lead", "agentType": "team-lead",
+     "model": "claude-opus-4-6", "cwd": "$TEAM_CWD"},
+    {"agentId": "w1@gate-team", "cwd": "$TEAM_CWD"},
+    {"agentId": "w2@gate-team", "name": "w2", "cwd": "$TEAM_CWD",
+     "prompt": "the w2 spawn prompt"}
+  ]
+}
+CONFIGEOF
+printf '{"id":1,"owner":"w1","subject":"s","description":"the task description"}\n' \
+    > "$TREE/.claude/tasks/gate-team/1.json"
+printf '{"id":10,"owner":"nobody","subject":"later","description":"unowned"}\n' \
+    > "$TREE/.claude/tasks/gate-team/10.json"
+printf '{ broken\n' > "$TREE/.claude/tasks/gate-team/2.json"
+printf 'not json at all\n' > "$TREE/.claude/tasks/gate-team/notes.txt"
+printf 'lock\n' > "$TREE/.claude/tasks/gate-team/.lock"
+printf '3\n' > "$TREE/.claude/tasks/gate-team/.highwatermark"
+
 FIXTURE_FILES="$(find "$TREE" -name '*.jsonl' | wc -l)"
 FIXTURE_BYTES="$(du -sb "$TREE" | cut -f1)"
 echo "fixtures   files=$FIXTURE_FILES bytes=$FIXTURE_BYTES"
@@ -151,19 +264,29 @@ canonicalise_homes() {
 canonicalise_homes "$WORK/dump-py"
 canonicalise_homes "$WORK/dump-rs"
 
-# The deferred-hook gap, reported rather than hidden. `sessions.team_id` and its
-# three siblings come from `claude_teams.materialize_team_metadata` (RS-2-004,
-# wave 2, OPEN), which the wave-4 PostIngestHook stubs — so the columns are
-# excluded from the diff above and counted here instead.
+# The post-ingest hook's own count. `sessions.team_id` and its three siblings
+# come from `claude_teams.materialize_team_metadata` (RS-2-004) via
+# `ClaudeAdapter.materialize_metadata`. Until DIV-042 closed, the port stubbed
+# that hook and the four columns were EXCLUDED from the `sessions` diff below
+# with the gap counted here instead (41 sessions of 162 on the 1 GB corpus,
+# against 0 in the port). The exclusion is gone: the columns are diffed, and
+# these two numbers have to match — a hook that stopped running would collapse
+# this line even if the row diff were somehow satisfied.
 echo
-echo "=== deferred hook (RS-2-004 claude_teams, DIV-042) ==="
+echo "=== post-ingest hook — team metadata (RS-2-004, DIV-042 CLOSED) ==="
 printf '  python  %s\n' "$(grep sessions_with_team_metadata "$WORK/dump-py/deferred_hook.txt" | tr -d '\t' | sed 's/sessions_with_team_metadata/sessions with team metadata: /')"
 printf '  rust    %s\n' "$(grep sessions_with_team_metadata "$WORK/dump-rs/deferred_hook.txt" | tr -d '\t' | sed 's/sessions_with_team_metadata/sessions with team metadata: /')"
+PY_TEAMED="$(awk -F'\t' '/sessions_with_team_metadata/ {print $2}' "$WORK/dump-py/deferred_hook.txt")"
+RS_TEAMED="$(awk -F'\t' '/sessions_with_team_metadata/ {print $2}' "$WORK/dump-rs/deferred_hook.txt")"
 
 echo
 echo "=== per-table diff ==="
 STATUS=0
-for table in projects sessions messages usage_events ingest_log; do
+if [ "$PY_TEAMED" != "$RS_TEAMED" ]; then
+    echo "  team metadata  py=$PY_TEAMED rs=$RS_TEAMED  DIVERGENT (DIV-042 regressed)"
+    STATUS=1
+fi
+for table in projects sessions messages usage_events ingest_log agent_teams commit_session_link; do
     py="$WORK/dump-py/$table.tsv"
     rs="$WORK/dump-rs/$table.tsv"
     py_rows=$(( $(wc -l < "$py") - 1 ))
@@ -201,7 +324,7 @@ run_scoped "$WORK/home-rs" "$BIN" ingest "$WORK/home-rs" | sed 's/^/  rust  /'
 "$BIN" dump "$WORK/home-rs/.stackunderflow/store.db" "$WORK/dump-rs2" >/dev/null
 canonicalise_homes "$WORK/dump-py2"
 canonicalise_homes "$WORK/dump-rs2"
-for table in projects sessions messages usage_events ingest_log; do
+for table in projects sessions messages usage_events ingest_log agent_teams commit_session_link; do
     for side in py rs; do
         if ! diff -q "$WORK/dump-$side/$table.tsv" "$WORK/dump-${side}2/$table.tsv" >/dev/null; then
             echo "  $side $table CHANGED on the second pass — not idempotent"

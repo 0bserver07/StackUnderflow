@@ -31,19 +31,18 @@ stax-memory = { path = "../stax-memory" }
 # manifest, and the reason `stax-hooks` is still a SEPARATE binary (a hook pays
 # for what it links at every spawn; a human-run CLI verb does not).
 stax-sync = { path = "../stax-sync" }
-# WAVE 8 — `status` prices and aggregates through the SAME functions the HTTP
-# surface does. `stax_server::services` is where wave-5 batch C deliberately put
-# the `reports/*.py` + `services/*.py` layer, and its module doc names this wave
-# as the reason: "wave 8 ports the CLI verbs, finds no shared home, and writes a
-# second copy that drifts". A second `build_report` in this crate is exactly the
-# fork that split exists to prevent, so the CLI takes the dependency.
+# WAVE 8 — the spend/report verbs price and aggregate through the SAME functions
+# the HTTP surface does. A second `build_report` in this crate is exactly the
+# fork the wave-5 service split exists to prevent.
 #
-# DEVIATION, recorded: the CLI binary now links `axum` / `tokio` transitively
-# and never serves a byte. `lto = true` strips the dead code from the shipped
-# binary, but the *build* is heavier. The clean fix is a `stax-reports` crate
-# both `stax-cli` and `stax-server` depend on; that is a tranche-3 refactor
-# touching another wave's files, and it is filed rather than done here.
-stax-server = { path = "../stax-server" }
+# TRANCHE 3 CLOSED TRANCHE 1'S DEVIATION. This line used to read
+# `stax-server = { path = "../stax-server" }`, and the comment above it recorded
+# the cost honestly: "the CLI binary now links `axum` / `tokio` transitively and
+# never serves a byte … the clean fix is a `stax-reports` crate both `stax-cli`
+# and `stax-server` depend on; that is a tranche-3 refactor". This is that
+# tranche and this is that crate. `stax-cli`'s dependency graph no longer
+# contains axum, tokio, tower, tower-http or hyper.
+stax-reports = { path = "../stax-reports" }
 # `build_report`'s pre-backfill fallback path re-derives cost, and the CLI's
 # engine is the MANIFEST one (`cli.py` never calls `use_price_book_store`).
 stax-etl = { path = "../stax-etl" }
@@ -53,3 +52,34 @@ stax-etl = { path = "../stax-etl" }
 # The standalone `stax-hooks` BINARY stays the hot path Claude Code spawns;
 # this dependency is what makes the human-facing verbs exist at all.
 stax-hooks = { path = "../stax-hooks" }
+# WAVE 7 — `stax start` adds NO dependency, deliberately.
+#
+# The reference boots uvicorn in-process on a daemon thread, and the obvious
+# port would be `stax-server` + `axum` + `tokio` here. That is exactly the edge
+# tranche 3 spent a crate (`stax-reports`) removing: "`stax-cli`'s dependency
+# graph no longer contains axum, tokio, tower, tower-http or hyper." Re-adding
+# it for one verb would undo that in the same wave it landed.
+#
+# So `start` SPAWNS the `stax-server` binary — the wave-5 deliverable, already
+# built and already shipped alongside `stax` — and waits on it, the same
+# separate-binary shape `stax-hooks` has for the same reason. Recorded as
+# DIV-308; the observable bytes are unchanged, the process tree is not.
+# `rusqlite` (already above, with `backup`) covers `start`'s other wave-7 job:
+# the FastAPI lifespan's synchronous half, `db.connect` + `schema.apply`.
+# WAVE 8 TRANCHE 4 — the skills / docs / recommend family.
+#
+# `regex`: `skill_synth`'s five detectors are regex-driven (the negation-cue
+# alternation, `_PATH_LIKE`, `_ENV_ASSIGN`, `_VOLATILE_LINE`) and
+# `mode_recommender._FILE_MENTION_RE` counts file-shaped tokens in a prompt.
+# Hand-rolling that alternation would be a bug farm on a matching rule the
+# output depends on. Same version `stax-hooks` already pins.
+regex = "1.12"
+# `sha2`: `pattern_id` is `sha256(signature).hexdigest()[:16]` and it is written
+# into every generated SKILL.md's frontmatter, so it is an output, not an
+# implementation detail. Already in the lock via `stax-sync`.
+#
+# `md5` is NOT here: `mode_recommender.hash_features` needs it, no md5 crate is
+# vendored, and the campaign builds offline — so it is implemented in
+# `mode_rec::md5` against the RFC vectors plus a digest captured from the
+# reference CLI.
+sha2 = "0.10.9"

@@ -116,6 +116,25 @@ fn exit_1() -> ! {
     std::process::exit(1);
 }
 
+/// [`exit_1`], with the store connection **closed first**.
+///
+/// `std::process::exit` does not run destructors, so a live `rusqlite`
+/// connection is never closed and SQLite leaves `store.db-wal` / `store.db-shm`
+/// behind — where CPython's `conn.close()` checkpoints the WAL and removes
+/// both. It is a real, diffable artifact difference and not a cosmetic one: a
+/// later reader sees a store whose WAL was never folded in.
+///
+/// Measured, not theorised — `T-sync-push-off` and `T-sync-pull-off` failed on
+/// exactly those two files while stdout (82 B) and the exit code (1) matched on
+/// both sides, which is the class of divergence a stdout-only diff cannot see.
+/// The success paths already said `drop(conn)`; these early exits are the ones
+/// that did not, so every `exit_1` reached with a live connection goes through
+/// here and the ownership transfer makes forgetting it a compile error.
+fn exit_1_closing(conn: rusqlite::Connection) -> ! {
+    drop(conn);
+    exit_1();
+}
+
 /// Run `stax sync …`.
 ///
 /// # Errors
@@ -193,21 +212,21 @@ fn run_push(store_path: &std::path::Path, state_dir: &std::path::Path) -> Result
     let conn = runner::open_store(store_path)?;
     if !runner::is_enabled(&conn)? {
         println!("{NOT_CONFIGURED}");
-        exit_1();
+        exit_1_closing(conn);
     }
     // The dependency check happens HERE, not before opening the store, because
     // whether the bucket dependency is needed depends on the configured scheme.
     let identity = runner::load_identity(&conn)?;
     if !missing_deps(true, identity.as_ref().map(|id| id.bucket_url.as_str())).is_empty() {
         println!("{SYNC_INSTALL_HINT}");
-        exit_1();
+        exit_1_closing(conn);
     }
     let sources = SecretSources::from_process();
     let result = match runner::run_push(&conn, state_dir, &sources, None) {
         Ok(result) => result,
         Err(err) => {
             println!("  sync push failed: {err}");
-            exit_1();
+            exit_1_closing(conn);
         }
     };
     drop(conn);
@@ -238,19 +257,19 @@ fn run_pull(
     let conn = runner::open_store(store_path)?;
     if !runner::is_enabled(&conn)? {
         println!("{NOT_CONFIGURED}");
-        exit_1();
+        exit_1_closing(conn);
     }
     let identity = runner::load_identity(&conn)?;
     if !missing_deps(true, identity.as_ref().map(|id| id.bucket_url.as_str())).is_empty() {
         println!("{SYNC_INSTALL_HINT}");
-        exit_1();
+        exit_1_closing(conn);
     }
     let sources = SecretSources::from_process();
     let result = match runner::run_pull(&conn, state_dir, &sources, None) {
         Ok(result) => result,
         Err(err) => {
             println!("  sync pull failed: {err}");
-            exit_1();
+            exit_1_closing(conn);
         }
     };
     drop(conn);
@@ -316,7 +335,7 @@ fn run_init(
         println!("  Re-running will NOT change the key. To replace it, back up the");
         println!("  current key first, then re-run with --force (this destroys access");
         println!("  to any data already encrypted under the old key).");
-        exit_1();
+        exit_1_closing(conn);
     }
 
     let identity = keys::generate_identity();

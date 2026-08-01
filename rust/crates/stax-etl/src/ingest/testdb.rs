@@ -48,7 +48,37 @@ const INGEST_SCHEMA: &str = r"
         message_count INTEGER NOT NULL DEFAULT 0,
         first_ts      TEXT,
         last_ts       TEXT,
+        -- v013's four ALTER-added columns. The writer never binds them; the
+        -- post-ingest hook (`ingest::teams`) is the only thing that does, and
+        -- without them here that hook's tests would run against a store shape
+        -- no real machine has.
+        team_id               TEXT,
+        spawned_by_session_id TEXT,
+        spawn_prompt          TEXT,
+        agent_role            TEXT,
         UNIQUE (project_id, session_id));
+
+    -- v019. The hook's second call (`ingest::outcomes`) reads it in the
+    -- `NOT IN (SELECT …)` guard of its very first statement, so its absence is
+    -- not a missing feature but a failed hook.
+    CREATE TABLE commit_session_link (
+        id           INTEGER PRIMARY KEY,
+        session_id   TEXT NOT NULL,
+        commit_sha   TEXT NOT NULL,
+        repo_slug    TEXT NOT NULL,
+        committed_at TEXT NOT NULL,
+        UNIQUE (session_id, commit_sha));
+
+    -- v013's other half. `PRIMARY KEY` on `team_id` is what makes the hook's
+    -- `ON CONFLICT(team_id)` upsert an upsert.
+    CREATE TABLE agent_teams (
+        team_id          TEXT PRIMARY KEY,
+        project_id       INTEGER NOT NULL REFERENCES projects(id),
+        created_ts       TEXT NOT NULL,
+        description      TEXT,
+        lead_session_id  TEXT,
+        config_json      TEXT NOT NULL);
+    CREATE INDEX idx_agent_teams_project ON agent_teams(project_id);
 
     CREATE TABLE usage_events (
         id                  INTEGER PRIMARY KEY,

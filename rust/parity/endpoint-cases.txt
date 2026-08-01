@@ -1416,8 +1416,12 @@ SY-overview-blank    | GET | /api/sync/overview?scope=         | -
 # `?scope=` twice: starlette's QueryParams takes the LAST occurrence, so this
 # is the stub leg, not the merged one.
 SY-overview-last-wins | GET | /api/sync/overview?scope=all-devices&scope=this-device | -
-# DIV-133: `/api/sync/status` rebuilds every shard through `serialize.py` (227
-# lines) and stamps `scanned_at`. Read-only, so it is safe to execute.
+# DIV-133 CLOSED (wave 6). `/api/sync/status` rebuilds every shard through
+# `serialize.py` (227 lines) — batch D deferred it for exactly that reason, and
+# `stax-sync` now owns that port with a differ of its own. What remains is the
+# `scanned_at = datetime.now(UTC)` stamp, so this stays a `!` row whose diff can
+# only ever be the timestamp: 537 bytes vs 537 bytes, first difference at byte
+# 524. Read-only, so it is safe to execute.
 !SY-status           | GET | /api/sync/status                  | -
 # The merged roll-up. Every field agrees; `generated_at` cannot, and the diff
 # offset in the report is the evidence that everything before it did.

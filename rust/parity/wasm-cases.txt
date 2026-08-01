@@ -1,0 +1,61 @@
+# wave-9 CLI-vs-wasm cases — three TAB-separated fields:
+#
+#   id <TAB> the native `stax` argv <TAB> the wasm request JSON
+#
+# Both sides are written out in full, on purpose. A case file that described
+# the query once and had the harness *translate* it into two invocations would
+# be a third implementation sitting between the two under test, and the wave-8
+# lesson ("a differ that under-reads agrees by accident") applies twice as hard
+# when one side is a JSON API and the other is argv.
+#
+# Placeholders the harness substitutes (and nothing else):
+#   @NOW@        epoch seconds, one value for the whole run
+#   @CWD@        the directory the native CLI is run from
+#   @STOREPATH@  the store the native CLI opens, for the `store` verb's header
+#
+# The wasm side always passes `now_epoch` and `cwd` explicitly because a browser
+# has neither. Every options block that omits `weights`/`budget_default` is
+# taking this crate's defaults, which are the reference's defaults
+# (0.5,0.2,0.3 and 2000) — a case that set them would be testing the harness.
+
+# ── memory decisions ─────────────────────────────────────────────────────────
+W-dec-cache	memory decisions "cache" --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-parity	memory decisions "parity" --json	{"verb":"decisions","query":"parity","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-miss	memory decisions "zzqqxx-no-such-token" --json	{"verb":"decisions","query":"zzqqxx-no-such-token","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-phrase	memory decisions "context budget" --json	{"verb":"decisions","query":"context budget","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-unicode	memory decisions "em—dash" --json	{"verb":"decisions","query":"em—dash","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-nointent	memory decisions "***" --json	{"verb":"decisions","query":"***","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-dec-allprojects	memory decisions "cache" --project "" --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":""}}
+W-dec-project	memory decisions "wasm" --project "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow" --json	{"verb":"decisions","query":"wasm","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}}
+W-dec-since	memory decisions "cache" --project "" --since 7d --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","since":"7d"}}
+W-dec-badsince	memory decisions "cache" --since "not-a-date" --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"not-a-date"}}
+W-dec-limit1	memory decisions "cache" --project "" --limit 1 --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","limit":1}}
+W-dec-budget0	memory decisions "cache" --project "" --context-budget 0 --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","context_budget":0}}
+W-dec-budget50	memory decisions "cache" --project "" --context-budget 50 --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","context_budget":50}}
+
+# ── memory file ──────────────────────────────────────────────────────────────
+W-file-cli	memory file "stackunderflow/cli.py" --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-file-queries	memory file "stackunderflow/store/queries.py" --json	{"verb":"file","path":"stackunderflow/store/queries.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-file-miss	memory file "no/such/file/anywhere.rs" --json	{"verb":"file","path":"no/such/file/anywhere.rs","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-file-limit3	memory file "stackunderflow/cli.py" --limit 3 --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","limit":3}}
+W-file-since	memory file "stackunderflow/cli.py" --since 30d --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"30d"}}
+W-file-badsince	memory file "stackunderflow/cli.py" --since "@@@" --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"@@@"}}
+
+# ── memory worked ────────────────────────────────────────────────────────────
+W-worked-pytest	memory worked "pytest" --json	{"verb":"worked","action":"pytest","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-worked-cargo	memory worked "cargo test" --project "" --json	{"verb":"worked","action":"cargo test","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":""}}
+W-worked-miss	memory worked "zzqqxx-no-such-token" --json	{"verb":"worked","action":"zzqqxx-no-such-token","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-worked-nointent	memory worked "!!!" --json	{"verb":"worked","action":"!!!","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-worked-budget40	memory worked "pytest" --project "" --context-budget 40 --json	{"verb":"worked","action":"pytest","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","context_budget":40}}
+
+# ── memory sessions ──────────────────────────────────────────────────────────
+W-sess-cwd	memory sessions --json	{"verb":"sessions","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false}}
+W-sess-path	memory sessions "/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow" --json	{"verb":"sessions","path":"/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false}}
+W-sess-file	memory sessions "@CWD@/parity-cli.sh" --json	{"verb":"sessions","path":"@CWD@/parity-cli.sh","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":true}}
+W-sess-limit2	memory sessions "/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow" --limit 2 --json	{"verb":"sessions","path":"/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false,"limit":2}}
+W-sess-project	memory sessions --project "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow" --json	{"verb":"sessions","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false,"project":"-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}}
+W-sess-budget60	memory sessions "/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow" --context-budget 60 --json	{"verb":"sessions","path":"/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false,"context_budget":60}}
+W-sess-badsince	memory sessions "/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow" --since "13z" --json	{"verb":"sessions","path":"/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow","options":{"now_epoch":@NOW@,"cwd":"@CWD@","is_file":false,"since":"13z"}}
+
+# ── store ────────────────────────────────────────────────────────────────────
+W-store	store	{"verb":"store","options":{"store_label":"@STOREPATH@"}}

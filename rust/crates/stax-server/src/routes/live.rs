@@ -3,7 +3,7 @@
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
 //! | `RS-5-075` | `GET` | `/api/live/stats ` | `/api/live/stats`  | **ported** — row stays `!`, see below |
-//! | `RS-5-076` | `GET` | `/api/live/stream` | — | **BLOCKED** — see "the missing crate" |
+//! | `RS-5-076` | `GET` | `/api/live/stream` | `/api/live/stream` | **MOUNTED** (DIV-320) — no case row, ever |
 //!
 //! # `/api/live/stats` — ported, and the row still cannot go green
 //!
@@ -52,53 +52,62 @@
 //!   [`internal_server_error`] — this is the one response in the module that is
 //!   NOT JSON, and an `HttpError` would have rendered `{"detail": …}` instead.
 //!
-//! # `/api/live/stream` — the port is written; the mount is blocked
+//! # `/api/live/stream` — MOUNTED (DIV-320 closes DIV-165)
 //!
-//! **An SSE response body cannot be constructed in this crate without a
-//! `Cargo.toml` change, which batch E's fence forbids.** Verified, not
-//! reasoned:
+//! Batch E left this path 404ing and named the reason: no route into a
+//! streaming body could be *spelled*, because every constructor's bound lives
+//! in a crate `stax-server` did not depend on (`E0463` on `http_body`,
+//! `futures_core`, `tokio_stream`). The architect's answer is **one manifest
+//! line, `futures-core = "0.3.33"`, and zero new lock entries** — `axum-core`
+//! already depends on `futures-core "0.3"`, so the version was resolved before
+//! this batch existed and `Cargo.lock` does not move. The manifest carries the
+//! measurement and the three alternatives that were rejected.
 //!
-//! ```text
-//! error[E0463]: can't find crate for `http_body`
-//! error[E0463]: can't find crate for `futures_core`
-//! error[E0463]: can't find crate for `tokio_stream`
-//! ```
+//! With `Stream` nameable, the body is [`Body::from_stream`] over a nine-line
+//! wrapper around a `tokio::sync::mpsc::Receiver` ([`FrameStream`]) — no second
+//! encoder. `axum::response::sse::Event` was deliberately NOT used: it would
+//! re-derive the frame layout, and [`format_sse`]'s bytes are already pinned to
+//! a recording of the running reference. One encoder, one thing to keep true.
 //!
-//! Every route into a streaming body needs one of those three names:
+//! The pieces, and which line of `_stream_loop` each one is:
 //!
-//! * `axum::body::Body::from_stream` takes `S: futures_core::TryStream`;
-//! * `axum::response::sse::Sse::new` takes `S: TryStream<Ok = Event>` — the
-//!   `sse` module is ungated in axum 0.8.9, so the *type* is reachable and the
-//!   *argument* is not;
-//! * `axum::body::Body::new` takes `B: http_body::Body`, and implementing that
-//!   trait means writing `poll_frame`'s signature, which names
-//!   `http_body::Frame`. `axum::body` re-exports the trait
-//!   (`pub use http_body::Body as HttpBody`) and nothing else from the crate;
-//!   grepping axum, axum-core, tower and tower-http finds no re-export of
-//!   `Frame` or of any `Stream`.
+//! * [`format_sse`] / [`stream_id`] — the wire format and the resume id;
+//! * [`ready_frame`] — the connect handshake;
+//! * [`stream_cycle`] — one whole iteration of the loop body (watermark
+//!   advance, `MAX_PER_CYCLE` skip-ahead, the burn decision's *consequences*);
+//! * [`stream_loop`] — the parts that need a clock and a socket: the seed read,
+//!   the burn cadence, the sliced sleep, and the disconnect.
 //!
-//! So the deliverable here is the *port minus the plumbing*: [`format_sse`] and
-//! [`stream_id`] encode the wire format, [`ready_frame`] builds the handshake,
-//! and [`stream_cycle`] is one whole iteration of `_stream_loop`'s body —
-//! watermark advance, `MAX_PER_CYCLE` skip-ahead, burn cadence and all —
-//! returning the frames it would have yielded. All four are tested in-process
-//! against the bytes batch D recorded off the running Python server. What is
-//! missing is the ~15 lines that pump those strings into a socket, and the
-//! one-line dependency that would let them be written. **Handed to the
-//! architect**; it is a workspace-manifest decision, not a member's.
+//! The response's four headers are Python's three `headers={…}` entries plus
+//! the one a port gets wrong: `content-type: text/event-stream; charset=utf-8`,
+//! because starlette's `Response.init_headers` appends the charset to every
+//! `text/*` media type — the same rule `spa::add_text_charset` restores for
+//! `/static`, and the opposite of the bare `application/json` every JSON route
+//! sends. axum's own `Sse` would have sent it bare.
 //!
-//! Note also that even with the dependency, `/api/live/stream` gets **no case
-//! row, ever** — DIV-136 stands unchanged. `!` suppresses `Verdict::Divergent`,
-//! not `Verdict::Error`, and a body that never ends times out both sockets and
-//! exits 2. The comparison lives in `parity/SSE-PROBE-d.md` instead.
+//! **`/api/live/stream` still gets no case row, ever** — DIV-136 is unchanged
+//! and mounting does not soften it. `!` suppresses `Verdict::Divergent`, not
+//! `Verdict::Error`; a body that never ends times out both sockets and exits 2.
+//! The comparison lives in `parity/SSE-PROBE-d.md` (batch D + E) and
+//! `parity/SSE-PROBE-mount.md` (this batch: status and header byte-checks, two
+//! frames each side, cadence, non-termination, and client-drop on both sides).
+
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use futures_core::Stream;
 use serde_json::{Map, Value};
+use stax_core::queries::pytime;
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::json::{JsonBody, validation_422};
 use crate::qs::Query;
@@ -127,11 +136,11 @@ pub const DISCONNECT_POLL_INTERVAL_SECONDS: f64 = 0.1;
 
 /// Mount this module's endpoints onto `router`.
 ///
-/// `/api/live/stream` is absent for the reason in the module docs — a dark
-/// surface the ledger names beats a half-lit one nobody can reason about
-/// (the `!A-*` / DIV-082 ruling).
+/// Both of `routes/live.py`'s endpoints, in its `@router.get` order.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
-    router.route("/api/live/stats", get(get_live_stats))
+    router
+        .route("/api/live/stats", get(get_live_stats))
+        .route("/api/live/stream", get(get_live_stream))
 }
 
 // ── GET /api/live/stats ──────────────────────────────────────────────────────
@@ -289,11 +298,29 @@ pub struct Watermarks {
     pub tool_call_id: i64,
 }
 
+/// What one cycle produced — see [`stream_cycle`].
+#[derive(Debug, Clone)]
+pub struct Cycle {
+    /// The SSE frames, in emission order: `event`s, then `tool_call`s, then at
+    /// most one `burn_tick`.
+    pub frames: Vec<String>,
+    /// Where the two watermarks stand afterwards.
+    pub watermarks: Watermarks,
+    /// Whether a `burn_tick` actually went out.
+    ///
+    /// Not the same question as `do_burn`. Python sets `last_burn_at =
+    /// loop.time()` **inside** `if burn is not None`, so a cycle whose read
+    /// raised does not reset the cadence and the next cycle tries again
+    /// immediately. Returning the fact keeps that visible instead of leaving
+    /// the caller to infer it from an empty `frames`.
+    pub burned: bool,
+}
+
 /// One iteration of `_stream_loop`'s body: the frames it yields and the
 /// watermarks it leaves behind.
 ///
-/// This is the whole port of the loop except the socket. `do_burn` is the
-/// caller's `last_burn_at is None or (loop.time() - last_burn_at) >=
+/// This is the whole port of the loop's body. `do_burn` is
+/// [`stream_loop`]'s `last_burn_at is None or (loop.time() - last_burn_at) >=
 /// burn_interval` decision, hoisted out so the cadence can be driven
 /// deterministically in a test instead of by a monotonic clock.
 ///
@@ -314,7 +341,7 @@ pub fn stream_cycle(
     do_burn: bool,
     tz_offset: i64,
     burn_cache: &mut live_svc::BurnCache,
-) -> (Vec<String>, Watermarks) {
+) -> Cycle {
     // `try: … except Exception: new_events = []; new_tools = []; burn = None`.
     // The whole read block is one `try`, so a failure in EITHER reader (or in
     // the burn) drops ALL THREE for the cycle — not just the one that raised.
@@ -361,6 +388,7 @@ pub fn stream_cycle(
             Some(&stream_id(marks.event_id, marks.tool_call_id)),
         ));
     }
+    let burned = burn.is_some();
     if let Some(burn) = burn {
         let mut payload = Map::new();
         payload.insert("type".to_owned(), Value::from("burn_tick"));
@@ -371,7 +399,169 @@ pub fn stream_cycle(
         // contract batch D recorded off the wire.
         frames.push(format_sse("burn_tick", &Value::Object(payload), None));
     }
-    (frames, marks)
+    Cycle {
+        frames,
+        watermarks: marks,
+        burned,
+    }
+}
+
+// ── GET /api/live/stream — the mount ─────────────────────────────────────────
+
+/// The body half of `StreamingResponse`: a `Stream` over frames the loop sends.
+///
+/// Nine lines instead of a dependency. `tokio_stream::wrappers::ReceiverStream`
+/// is exactly this and would have cost a lock entry;
+/// [`mpsc::Receiver::poll_recv`] is public and does the work.
+///
+/// `Infallible` is the error type because the loop never yields an error frame
+/// — Python's generator either yields a `str` or returns, and a returned
+/// generator is a clean end-of-body on both sides.
+struct FrameStream {
+    /// Fed by [`stream_loop`]; dropped when the client goes away, which is how
+    /// the loop learns to stop.
+    rx: mpsc::Receiver<String>,
+}
+
+impl Stream for FrameStream {
+    type Item = Result<String, Infallible>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().rx.poll_recv(cx).map(|frame| frame.map(Ok))
+    }
+}
+
+/// `GET /api/live/stream` — the SSE stream for the live tab.
+///
+/// `timezone_offset` is validated the same way `/api/live/stats` validates it,
+/// and for the same reason: FastAPI coerces the query parameter **before** the
+/// handler runs, so an uncoercible value never reaches `StreamingResponse` and
+/// the client gets the pydantic `422` list rather than a stream. Measured on the
+/// reference; `parity/SSE-PROBE-mount.md` carries the bytes.
+///
+/// Everything after that point is a `200` — including the failures. starlette
+/// sends `http.response.start` before it pulls the first chunk out of the
+/// generator, so a store that cannot be opened produces headers and then an
+/// empty body, never a `500`.
+async fn get_live_stream(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query::parse(raw.as_deref().unwrap_or_default());
+    let timezone_offset = match query.int_or("timezone_offset", 0) {
+        Ok(value) => value,
+        Err(err) => return validation_422(&err).into_response(),
+    };
+
+    // Capacity 1 is tokio's minimum. It is also the closest reachable point to
+    // an async generator, which is lazy to zero: the loop may sit one frame
+    // ahead of the socket where Python sits none. Recorded as DIV-322 — it is
+    // invisible while the client keeps up, and this stream emits three frames
+    // per six seconds.
+    let (tx, rx) = mpsc::channel::<String>(1);
+    tokio::spawn(stream_loop(state, timezone_offset, tx));
+
+    (
+        [
+            // `headers={…}` — the route's own three, in the dict's order.
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+            (
+                HeaderName::from_static("x-accel-buffering"),
+                HeaderValue::from_static("no"),
+            ),
+            (header::CONNECTION, HeaderValue::from_static("keep-alive")),
+            // …and `media_type` AFTER starlette's `init_headers` appended the
+            // charset every `text/*` response gets. axum's own `Sse` sends this
+            // bare; that one byte-run is the whole reason it is not used.
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            ),
+        ],
+        Body::from_stream(FrameStream { rx }),
+    )
+        .into_response()
+}
+
+/// `_stream_loop` — everything in the generator that needs a clock or a socket.
+///
+/// Runs as a detached task, so its lifetime is the body's: dropping the response
+/// body drops the [`FrameStream`], which closes the channel, which ends this
+/// loop. That is the port of `await request.is_disconnected()`, and it is the
+/// *whole* disconnect story — there is no other exit but the client's.
+///
+/// Deliberately NOT on `spawn_blocking`, even though it does SQLite reads:
+/// `_stream_loop` is an `async def` generator and starlette iterates it on the
+/// event loop, so the reference blocks its loop for the duration of every cycle
+/// read too. The one place Python *does* hand off is `/api/live/stats`
+/// (`run_in_threadpool`), and [`get_live_stats`] mirrors that.
+async fn stream_loop(state: AppState, tz_offset: i64, tx: mpsc::Sender<String>) {
+    // `conn = _open_conn()`, before the first yield. If it raises, Python's
+    // generator raises on first `anext` — after `http.response.start` has gone
+    // out, so the client already has a 200 and simply sees the body end.
+    let Ok(conn) = state.connect() else { return };
+    let (Ok(seed_event_id), Ok(seed_tool_id)) = (
+        live_svc::max_event_id(&conn),
+        live_svc::max_tool_call_id(&conn),
+    ) else {
+        return;
+    };
+
+    // The clock is read AFTER the two seed queries, exactly where Python reads
+    // it — that ordering is why `ready.ts` trails the connect by the seed
+    // read's duration rather than leading it.
+    let ready = ready_frame(
+        seed_event_id,
+        seed_tool_id,
+        &pytime::isoformat_utc(pytime::now_micros()),
+    );
+    if tx.send(ready).await.is_err() {
+        return;
+    }
+
+    let mut marks = Watermarks {
+        event_id: seed_event_id,
+        tool_call_id: seed_tool_id,
+    };
+    let mut burn_cache = live_svc::BurnCache::default();
+    // `None` forces an immediate `burn_tick` on cycle 0 — the sentinel Python
+    // uses because a literal zero was clock-dependent (a freshly booted host
+    // has `loop.time() < burn_interval` and silently skipped the first tick).
+    // `Option<Instant>` cannot have that bug, and it is still the shape.
+    let mut last_burn_at: Option<Instant> = None;
+    let burn_interval = Duration::from_secs_f64(BURN_INTERVAL_SECONDS);
+
+    loop {
+        // `if await request.is_disconnected(): return` at the top of the cycle.
+        if tx.is_closed() {
+            return;
+        }
+
+        let now_iso = pytime::isoformat_utc(pytime::now_micros());
+        let do_burn = last_burn_at.is_none_or(|at| at.elapsed() >= burn_interval);
+        let cycle = stream_cycle(&conn, marks, &now_iso, do_burn, tz_offset, &mut burn_cache);
+        marks = cycle.watermarks;
+        for frame in cycle.frames {
+            if tx.send(frame).await.is_err() {
+                return;
+            }
+        }
+        if cycle.burned {
+            last_burn_at = Some(Instant::now());
+        }
+
+        // The disconnect-aware sleep, sliced exactly as Python slices it. The
+        // slicing is NOT redundant here even though `closed()` wakes instantly:
+        // twenty timer round-trips per cycle are what put the measured tick
+        // cadence at 6.03 s rather than a clean 6.00, and the port reproduces
+        // the drift because the recording is of the drift.
+        let mut slept = 0.0_f64;
+        while slept < POLL_INTERVAL_SECONDS {
+            let chunk = DISCONNECT_POLL_INTERVAL_SECONDS.min(POLL_INTERVAL_SECONDS - slept);
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_secs_f64(chunk)) => {}
+                () = tx.closed() => return,
+            }
+            slept += chunk;
+        }
+    }
 }
 
 /// `{"type": …, "ts": row.get("ts") or now, "payload": row}`.
@@ -491,7 +681,11 @@ mod tests {
     fn a_cycle_emits_events_then_tools_and_advances_both_watermarks() {
         let conn = stream_fixture();
         let mut cache = live_svc::BurnCache::default();
-        let (frames, marks) = stream_cycle(
+        let Cycle {
+            frames,
+            watermarks: marks,
+            burned,
+        } = stream_cycle(
             &conn,
             Watermarks {
                 event_id: 0,
@@ -502,6 +696,7 @@ mod tests {
             0,
             &mut cache,
         );
+        assert!(!burned, "do_burn was false");
         assert_eq!(frames.len(), 3);
         assert!(frames[0].starts_with("event: event\nid: 1:0\n"));
         assert!(frames[1].starts_with("event: event\nid: 2:0\n"));
@@ -526,7 +721,11 @@ mod tests {
     fn a_cycle_at_the_watermark_emits_nothing_at_all() {
         let conn = stream_fixture();
         let mut cache = live_svc::BurnCache::default();
-        let (frames, marks) = stream_cycle(
+        let Cycle {
+            frames,
+            watermarks: marks,
+            ..
+        } = stream_cycle(
             &conn,
             Watermarks {
                 event_id: 2,
@@ -551,7 +750,7 @@ mod tests {
     fn the_burn_tick_carries_no_id_and_stamps_the_burns_own_clock() {
         let conn = stream_fixture();
         let mut cache = live_svc::BurnCache::default();
-        let (frames, _) = stream_cycle(
+        let cycle = stream_cycle(
             &conn,
             Watermarks {
                 event_id: 2,
@@ -562,6 +761,8 @@ mod tests {
             0,
             &mut cache,
         );
+        let frames = cycle.frames;
+        assert!(cycle.burned, "the tick went out, so the cadence resets");
         assert_eq!(frames.len(), 1);
         let tick = &frames[0];
         assert!(tick.starts_with("event: burn_tick\ndata: "));
@@ -589,7 +790,7 @@ mod tests {
             event_id: 5,
             tool_call_id: 9,
         };
-        let (frames, marks) = stream_cycle(
+        let cycle = stream_cycle(
             &conn,
             start,
             "2026-07-31T12:00:00+00:00",
@@ -599,8 +800,11 @@ mod tests {
         );
         // `tz_offset = i64::MIN` raises inside `rolling_burn`; Python's
         // `except Exception` swallows it and sets `burn = None`.
-        assert!(frames.is_empty());
-        assert_eq!(marks, start);
+        assert!(cycle.frames.is_empty());
+        assert_eq!(cycle.watermarks, start);
+        // …and because no tick went out, `last_burn_at` must NOT move: the next
+        // cycle retries immediately instead of waiting out another interval.
+        assert!(!cycle.burned);
     }
 
     // ── the HTTP surface ────────────────────────────────────────────────────
@@ -714,20 +918,142 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
     }
 
-    #[tokio::test]
-    async fn the_stream_path_is_absent_rather_than_half_mounted() {
-        // The blocked endpoint 404s from the router, exactly as it did while
-        // the whole module was deferred. Recorded as a test so "blocked" is a
-        // measured state and not a comment.
+    // ── the mounted stream ──────────────────────────────────────────────────
+
+    /// Open the stream and hand back the response plus a pinned data stream.
+    ///
+    /// `oneshot` returns as soon as the HEAD is ready, which is the property
+    /// being asserted: the reference sends `http.response.start` before it pulls
+    /// the generator's first chunk, so a client has the header block before the
+    /// first frame exists.
+    async fn open_stream(
+        uri: &str,
+    ) -> (
+        Response,
+        Pin<Box<dyn Stream<Item = Result<axum::body::Bytes, axum::Error>> + Send>>,
+    ) {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/live/stream")
+                    .uri(uri)
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let (parts, body) = response.into_parts();
+        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = Box::pin(body.into_data_stream());
+        (Response::from_parts(parts, Body::empty()), stream)
+    }
+
+    /// Pull exactly one chunk. Each `tx.send` is one frame, so a chunk is a
+    /// frame — there is no coalescing on this side of the socket.
+    async fn next_frame(
+        stream: &mut Pin<Box<dyn Stream<Item = Result<axum::body::Bytes, axum::Error>> + Send>>,
+    ) -> String {
+        let chunk = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx))
+            .await
+            .expect("a frame")
+            .expect("no body error");
+        String::from_utf8(chunk.to_vec()).expect("utf-8")
+    }
+
+    #[tokio::test]
+    async fn the_stream_answers_200_with_starlettes_four_headers() {
+        let (response, _stream) = open_stream("/api/live/stream").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        // The three from `headers={…}` …
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(headers["x-accel-buffering"], "no");
+        assert_eq!(headers[header::CONNECTION], "keep-alive");
+        // …and the one a port gets wrong. NOT the bare `text/event-stream`
+        // axum's `Sse` would have sent.
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "text/event-stream; charset=utf-8"
+        );
+        // A stream has no length. `transfer-encoding` is hyper's to add at the
+        // socket, not the handler's — it is absent from the `Response` here and
+        // present on the wire, which `parity/SSE-PROBE-mount.md` records.
+        assert!(!headers.contains_key(header::CONTENT_LENGTH));
+    }
+
+    #[tokio::test]
+    async fn the_first_two_frames_are_ready_then_an_immediate_burn_tick() {
+        let (_response, mut stream) = open_stream("/api/live/stream").await;
+
+        let first = next_frame(&mut stream).await;
+        assert!(first.starts_with("event: ready\nid: 0:0\ndata: {\"type\": \"ready\", \"ts\": \""));
+        assert!(first.contains("\"watermarks\": {\"event_id\": 0, \"tool_call_id\": 0}"));
+        assert!(first.contains("\"watcher\": {\"running\": \"unknown\"}"));
+        assert!(first.contains("\"burn_interval_seconds\": 5.0"));
+        assert!(first.ends_with("}}\n\n"));
+
+        // The second frame arrives WITHOUT a five-second wait — `last_burn_at`
+        // starts at the `None` sentinel precisely so cycle 0 burns. A port that
+        // waited out the interval first would hang this test.
+        let second = tokio::time::timeout(Duration::from_secs(2), next_frame(&mut stream))
+            .await
+            .expect("the first burn_tick is immediate, not one interval late");
+        assert!(second.starts_with("event: burn_tick\ndata: "));
+        assert!(!second.contains("\nid: "));
+        assert!(second.contains("\"window_minutes\": 5"));
+    }
+
+    #[tokio::test]
+    async fn an_uncoercible_offset_is_a_422_and_never_a_stream() {
+        // FastAPI coerces before the handler runs, so this never reaches
+        // `StreamingResponse` — the client gets JSON, not `text/event-stream`.
+        let (response, _stream) = open_stream("/api/live/stream?timezone_offset=abc").await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_body_ends_the_loop_rather_than_leaking_it() {
+        // The disconnect path, in-process. The socket-level half — FD reclaim
+        // on a real `curl` kill, both implementations — is in
+        // `parity/SSE-PROBE-mount.md`; this is the part a gate can run.
+        let state = AppState::new(
+            std::path::PathBuf::from(":memory:"),
+            std::path::PathBuf::from("."),
+            crate::state::Config::default(),
+        );
+        let (tx, mut rx) = mpsc::channel::<String>(1);
+        let loop_task = tokio::spawn(stream_loop(state, 0, tx));
+
+        assert!(
+            rx.recv()
+                .await
+                .expect("ready")
+                .starts_with("event: ready\n")
+        );
+        // Drop the receiver mid-sleep: the loop is inside its 100 ms slices and
+        // must break out of the `select!`, not wait out the poll interval.
+        drop(rx);
+        tokio::time::timeout(Duration::from_millis(500), loop_task)
+            .await
+            .expect("the loop noticed the drop")
+            .expect("no panic");
+    }
+
+    #[tokio::test]
+    async fn the_stream_does_not_terminate_on_its_own() {
+        // The observation DIV-136 rests on, asserted rather than described: two
+        // frames out, and the third is still pending a whole poll interval
+        // later — never `None`, which is what a finished body would yield.
+        let (_response, mut stream) = open_stream("/api/live/stream").await;
+        let _ready = next_frame(&mut stream).await;
+        let _tick = next_frame(&mut stream).await;
+        let third = tokio::time::timeout(
+            Duration::from_millis(1_500),
+            std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)),
+        )
+        .await;
+        assert!(
+            third.is_err(),
+            "the body must still be open, not closed and not finished"
+        );
     }
 }

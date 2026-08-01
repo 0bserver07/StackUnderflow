@@ -173,11 +173,9 @@ fn get_project(conn: &Connection, slug: &str) -> rusqlite::Result<Option<Option<
 /// at all resolves `/`, where the `~/.claude` probes simply miss and every
 /// slice comes back zero.
 fn home_dir() -> PathBuf {
-    #[allow(
-        deprecated,
-        reason = "matches stax_core::settings — the platform-correct answer on the pinned toolchain"
-    )]
-    std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+    // WAVE 8 TRANCHE 3: moved to `stax_reports::context_budget::os_home` so the
+    // CLI's `context-budget` verb resolves home the same way this route does.
+    crate::services::context_budget::os_home()
 }
 
 #[cfg(test)]

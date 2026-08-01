@@ -4,23 +4,27 @@
 //! the name could be given back to the Python verb it belongs to: a compact
 //! one-liner carrying today's and this month's spend. Twelve lines of `cli.py`
 //! sitting on top of three ported modules —
-//! [`stax_server::services::scope::parse_period`],
-//! [`stax_server::services::aggregate::build_report`] and
+//! [`stax_reports::scope::parse_period`],
+//! [`stax_reports::aggregate::build_report`] and
 //! `reports/render.py::render_status_line`.
 //!
-//! # Why the CLI depends on `stax-server`
+//! # Why the CLI depends on `stax-reports`
 //!
-//! `stax_server::services` is where wave 5 batch C deliberately put the
-//! `reports/*.py` + `services/*.py` layer, and its module doc says why in as
-//! many words: "`/api/compare` and `stackunderflow compare` share
-//! `services/compare.py` … Transliterating that logic into the route module
-//! would fork it: wave 8 ports the CLI verbs, finds no shared home, and writes
-//! a second copy that drifts." This is that wave, and this is the seam being
-//! used as designed. The alternative — a second `build_report` in `stax-cli` —
-//! is exactly the fork the split was built to prevent. Recorded as a deviation
-//! (the CLI binary now links `axum`/`tokio` transitively even though it never
-//! serves); the clean fix is a `stax-reports` crate both depend on, and that is
-//! a tranche-3 refactor, not a tranche-1 one.
+//! Wave 5 batch C deliberately put the `reports/*.py` + `services/*.py` layer in
+//! one place, and its module doc said why in as many words: "`/api/compare` and
+//! `stackunderflow compare` share `services/compare.py` … Transliterating that
+//! logic into the route module would fork it: wave 8 ports the CLI verbs, finds
+//! no shared home, and writes a second copy that drifts." This is that wave, and
+//! this is the seam being used as designed. The alternative — a second
+//! `build_report` in `stax-cli` — is exactly the fork the split was built to
+//! prevent.
+//!
+//! Tranche 1 could only reach that layer through `stax-server`, and recorded the
+//! cost as a deviation: the CLI binary linked `axum`/`tokio` transitively and
+//! never served a byte. **Tranche 3 closed it** — the layer is now
+//! [`stax_reports`], a crate with no HTTP and no runtime, and `stax-server` and
+//! `stax-cli` are peers that both consume it. The functions are the same
+//! functions; only the address changed.
 //!
 //! # Pricing: the manifest, never the price book
 //!
@@ -28,7 +32,7 @@
 //! before serving; **`cli.py` does not**. So a CLI process prices from
 //! `data/models.toml` and a server process prices from the `price_book` table
 //! (the RS-3-082 seam). [`engine_for_cli`] therefore builds the manifest engine
-//! directly rather than reusing `stax_server::pricing::engine`, which reads the
+//! directly rather than reusing `stax_reports::pricing::engine`, which reads the
 //! table. On the maintainer's store this is unreachable — `usage_events` is
 //! populated, so `build_report` takes the mart path and never prices anything —
 //! but "unreachable today" is how a 2% mispricing gets shipped (law 2 /
@@ -54,8 +58,8 @@ use rusqlite::Connection;
 use stax_core::queries::pytime;
 use stax_core::store::Store;
 use stax_etl::pricing::costs::PricingEngine;
-use stax_server::services::aggregate::{Report, build_report};
-use stax_server::services::scope::{Instant, parse_period};
+use stax_reports::aggregate::{Report, build_report};
+use stax_reports::scope::{Instant, parse_period};
 
 use crate::click::Output;
 
@@ -276,7 +280,7 @@ pub fn resolve_package_dir(
 mod tests {
     use std::ffi::OsStr;
 
-    use stax_server::services::aggregate::ProjectRow;
+    use stax_reports::aggregate::ProjectRow;
 
     use super::*;
 

@@ -22,5 +22,6 @@ pub mod api;
 pub mod ask;
 pub mod lexical;
 pub mod queries;
+pub mod schema;
 pub mod settings;
 pub mod store;

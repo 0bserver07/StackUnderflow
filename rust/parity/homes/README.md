@@ -17,6 +17,12 @@ the "no `config.json`", "no `backups/`", "no cursor cache" branches.
 | `cfg-wrongtypes` | the defensive coercion: a non-dict `model_aliases` and a non-list `plan_alert_thresholds` fall back, a non-int `port` does **not** |
 | `cursor-cache` | `clear-cache`'s three-line branch (the file exists and is removed) |
 | `backup-tree` | two backups, one complete and one missing every artifact, a `.hidden` directory that `pathlib.rglob` still counts, and a stray file that inflates `backup list`'s count but not its listing |
+| `skills-corpus` | the wave-8 tranche-4 miner corpus: 17 sessions whose `raw_json` carries real `tool_use` blocks, built to cross each `skill_synth` threshold by ONE (6 sessions for a 5-session detector, 5 for both correction detectors, 6-of-11 edit sessions against a 50% floor) plus `session_mart` rows in two price tiers for `recommend mode`. Built by `parity/build_skills_state.py`; the store is settled so `schema.apply` is a byte no-op |
+| `skills-installed` | an on-disk `.claude/skills/` with all five shapes `skills list` / `clean` must tell apart: ours-and-old, ours-and-future-dated, ours-with-no-stamp, `auto-`-prefixed-but-hand-authored, and marked-but-not-`auto-`-prefixed |
+| `skills-both` | `skills-corpus` plus a skills tree whose directory NAMES collide with what the corpus mines — the only way to reach `updated` (+ its `.bak`), `skipped-user-authored`, the `<name>-<hash6>` collision suffix, and `recommend skills`' already-installed filter |
 
 Keep these small and text-only: they are committed, they are copied twice per
 case per state, and their byte sizes are load-bearing (`backup list` prints MB).
+The two `skills-*` seeds carrying a store are the exception at ~530 KB each —
+`skill_synth` reads `raw_json` and needs a real schema underneath it, and the
+alternative (mining the shared state) is a writer running against fleet state.

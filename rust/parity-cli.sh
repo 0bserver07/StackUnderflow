@@ -22,6 +22,21 @@
 # case. That is how a WRITER (`cfg set`, `clear-cache`) can be gated without one
 # run poisoning the next.
 #
+# Tranche 2 adds one token to that mechanism: a cwd of `home` means "run inside
+# the case-local home", and it additionally exports `HOME` there. The installers
+# need it — `hooks install --scope project` writes into the *git root of the
+# cwd* and `--scope user` into `$HOME/.claude`, so with `repo` as the cwd a row
+# would write into this worktree on every run, and with the ambient `$HOME` it
+# would write into the maintainer's real `~/.claude`. Neither is acceptable, and
+# neither is skipping the proof. The scoping is deliberate: `HOME` is exported
+# only for rows that asked for it by naming `home` as their cwd, so the 404-row
+# baseline sees no change at all.
+#
+# Both runs also get stdin from /dev/null. `backup restore` prompts through
+# `click.confirm` and `hooks run` reads its payload from stdin — inheriting the
+# harness's stdin would make those rows depend on whether ci.sh was started from
+# a terminal.
+#
 # Usage
 #   rust/parity-cli.sh                    # both states, the whole matrix
 #   rust/parity-cli.sh --state fts        # one state
@@ -170,6 +185,44 @@ resolve_cwd() {
 # resulting tree fails the case exactly like a stdout difference would.
 HOMES="$HERE/parity/homes"
 
+# The installers (`hooks install|uninstall|repair`, `guide install|uninstall`)
+# write `<name>.bak.<utc-ts>` before mutating, and the two implementations run
+# seconds apart — so the backup's *name* carries a clock the harness itself
+# introduced, while its *contents* are the thing under test. This renames the
+# stamp to a fixed token in BOTH trees before the diff, which keeps the content
+# comparison exact, keeps a missing or extra backup a failure, and is counted
+# and reported every run rather than applied silently. Scoped to the one
+# filename shape that justified it — nothing else is touched.
+backup_stamps_normalized=0
+# The same clock reaches STDOUT: `hooks install|uninstall` and `guide install`
+# print the path of the backup they wrote ("  backup written: …"), so a row
+# whose two runs straddle a second boundary diverges on a clock the HARNESS
+# introduced rather than on behaviour. Found exactly that way —
+# `T-hooks-uninst-inst` failed at 545 B vs 545 B, `…T221517Z` vs `…T221518Z`,
+# which is also why it is a latent flake on every installer row that prints a
+# path, not a property of that one case.
+#
+# Applied to BOTH sides, unlike the program-name substitution: neither clock
+# reading is the authoritative one. The stamp FORMAT stays fully under test,
+# because this rewrites only text that ALREADY matches the reference's exact
+# shape — a port emitting `.bak.2026-08-01T22:15:18Z` does not match, is not
+# rewritten, and still fails the diff. Scoped to that one filename shape, and
+# counted and reported every run.
+stdout_stamps_normalized=0
+normalise_backup_stamps() {
+    local dir="$1" path base
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        base="$(basename "$path")"
+        # `<name>.bak.YYYYmmddTHHMMSSZ` and the `.N` collision suffixes.
+        local fixed
+        fixed="$(printf '%s' "$base" | sed -E 's/\.bak\.[0-9]{8}T[0-9]{6}Z/.bak.STAMP/')"
+        [ "$fixed" = "$base" ] && continue
+        mv "$path" "$(dirname "$path")/$fixed" 2>/dev/null && \
+            backup_stamps_normalized=$((backup_stamps_normalized + 1))
+    done < <(find "$dir" -name '*.bak.*Z' -o -name '*.bak.*Z.[0-9]*' 2>/dev/null)
+}
+
 seed_home() {
     local dest="$1" seed="$2"
     mkdir -p "$dest" || return 1
@@ -246,10 +299,19 @@ run_case() {
         *) echo "parity-cli: case $id has an unknown home spec '$home_spec'" >&2; return 1 ;;
     esac
 
-    local cwd; cwd="$(resolve_cwd "$cwd_token")"
-
-    if [ ! -d "$cwd" ]; then
-        skipped=$((skipped + 1)); printf '  SKIP  %-28s (no cwd %s)\n' "$tag" "$cwd"; return 0
+    # `home` resolves only after the case-local home exists, so its resolution
+    # is deferred; every other token resolves (and is existence-checked) now.
+    local cwd=""
+    if [ "$cwd_token" = "home" ]; then
+        if [ -z "$home_spec" ]; then
+            echo "parity-cli: case $id uses cwd 'home' without a @home spec" >&2
+            fail=$((fail + 1)); failed_ids+=("$tag"); return 1
+        fi
+    else
+        cwd="$(resolve_cwd "$cwd_token")"
+        if [ ! -d "$cwd" ]; then
+            skipped=$((skipped + 1)); printf '  SKIP  %-28s (no cwd %s)\n' "$tag" "$cwd"; return 0
+        fi
     fi
 
     case "$id" in
@@ -280,9 +342,18 @@ run_case() {
     fi
     local run_home="$home"
     [ -n "$home_spec" ] && run_home="$case_home"
+    # `home` as the cwd: run inside the case-local home, and make `$HOME` point
+    # at it too, so `Path.home()`-rooted writers stay inside the diffed tree.
+    # Passed through `env` rather than as a shell assignment prefix: a prefix has
+    # to be a literal word, and an expanded `HOME=…` is parsed as a COMMAND.
+    local run_env=()
+    if [ "$cwd_token" = "home" ]; then
+        cwd="$case_home"
+        run_env=(HOME="$case_home")
+    fi
 
-    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" timeout "$CASE_TIMEOUT" \
-        "$PY_BIN" "$@" >"$work/py.out" 2>"$work/py.err" )
+    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" env "${run_env[@]}" timeout "$CASE_TIMEOUT" \
+        "$PY_BIN" "$@" >"$work/py.out" 2>"$work/py.err" </dev/null )
     local py_rc=$?
     local py_home="$run_home" rs_home="$run_home"
     if [ -n "$home_spec" ]; then
@@ -294,8 +365,8 @@ run_case() {
             rm -rf "$work"; return 1
         fi
     fi
-    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" timeout "$CASE_TIMEOUT" \
-        "$RS_BIN" "$@" >"$work/rs.raw" 2>"$work/rs.raw.err" )
+    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" env "${run_env[@]}" timeout "$CASE_TIMEOUT" \
+        "$RS_BIN" "$@" >"$work/rs.raw" 2>"$work/rs.raw.err" </dev/null )
     local rs_rc=$?
     [ -n "$home_spec" ] && mv "$case_home" "$rs_home"
 
@@ -315,6 +386,17 @@ run_case() {
         normalized=$((normalized + 1))
     fi
 
+    # Installer backup-stamp normalisation on the printed paths — both sides,
+    # counted (see the note by `normalise_backup_stamps`).
+    local stamped=0 stream
+    for stream in "$work/py.out" "$work/py.err" "$work/rs.out" "$work/rs.err"; do
+        [ -f "$stream" ] || continue
+        sed -E 's/\.bak\.[0-9]{8}T[0-9]{6}Z/.bak.STAMP/g' "$stream" >"$stream.stamped"
+        cmp -s "$stream" "$stream.stamped" || stamped=1
+        mv "$stream.stamped" "$stream"
+    done
+    [ "$stamped" = 1 ] && stdout_stamps_normalized=$((stdout_stamps_normalized + 1))
+
     local ok=1
     cmp -s "$work/py.out" "$work/rs.out" || ok=0
     cmp -s "$work/py.err" "$work/rs.err" || ok=0
@@ -325,6 +407,8 @@ run_case() {
     # `config.json` is precisely the divergence a stdout-only diff misses.
     local home_diff=""
     if [ -n "$home_spec" ]; then
+        normalise_backup_stamps "$py_home"
+        normalise_backup_stamps "$rs_home"
         home_diff="$(diff -r "$py_home" "$rs_home" 2>&1)" || ok=0
     fi
 
@@ -422,6 +506,8 @@ printf '\n=== parity tally ===\n'
 printf 'cases: %s   pass: %s   FAIL: %s   accepted: %s   skipped: %s\n' \
     "$total" "$pass" "$fail" "$accepted_count" "$skipped"
 printf 'program-name normalisation fired on %s case(s)\n' "$normalized"
+printf 'installer backup-stamp normalisation fired on %s file(s), %s case output(s)\n' \
+    "$backup_stamps_normalized" "$stdout_stamps_normalized"
 if [ "$accepted_count" -gt 0 ]; then
     printf '\nmaintainer-accepted divergences (desk ruling 2, DIV-010):\n'
     printf '  %s\n' "${accepted_ids[@]}"

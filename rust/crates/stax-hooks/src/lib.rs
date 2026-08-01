@@ -54,10 +54,13 @@
 pub mod env;
 pub mod handlers;
 pub mod inject;
+pub mod install;
+pub mod jsonerr;
 pub mod patterns;
 pub mod proactive;
 pub mod pystr;
 pub mod recall;
+pub mod repair;
 pub mod templates;
 
 pub use env::HookEnv;

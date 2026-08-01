@@ -38,6 +38,12 @@ stax-core = { workspace = true }
 stax-adapters = { path = "../stax-adapters" }
 stax-etl = { path = "../stax-etl" }
 stax-memory = { path = "../stax-memory" }
+# WAVE 8 TRANCHE 3 — the report layer this crate used to own. It moved out so
+# `stax-cli` could stop depending on THIS crate (and, transitively, on axum and
+# tokio) to build a spend report. `services/mod.rs` re-exports every module that
+# moved, so no route module changed. One owner per helper, the wave-5 law: the
+# owner is now `stax-reports` and both consumers are peers.
+stax-reports = { path = "../stax-reports" }
 # `routes/sync.rs` delegates BOTH its endpoints here — `merge::merged_overview`
 # (the SQL batch D had to inline because it could not edit this manifest) and
 # `runner::status`, which closes DIV-133. One owner per helper, the wave-5 law.
@@ -58,6 +64,34 @@ tokio = { version = "1.52.3", features = [
 # `fs` only: `ServeDir` is the `StaticFiles` mount, and nothing else in this
 # crate wants a middleware stack Python does not have.
 tower-http = { version = "0.6.7", features = ["fs"] }
+# ── APPENDED (SSE mount, DIV-165 → DIV-320). Do not reorder; add below. ──────
+#
+# The ONE line that mounts `GET /api/live/stream`, and the whole of it.
+# `routes/live.rs` needs a value that implements `Stream` so
+# `axum::body::Body::from_stream` will take it; the trait lives in this crate
+# and Rust 2018+ cannot name a transitive dependency, which is the `E0463` batch
+# E recorded. `axum-core` already depends on `futures-core "0.3"` — this pins the
+# version the graph had ALREADY resolved (0.3.33), so:
+#
+#   Cargo.lock delta, measured with `git diff rust/Cargo.lock` after
+#   `cargo build -p stax-server`: ONE line — `"futures-core"` joins
+#   `stax-server`'s own dependency list. ZERO new `[[package]]` stanzas, ZERO
+#   version changes, ZERO extra compilation units (axum-core already builds it).
+#   (The package count moved 257 → 258 in the same window; that +1 is the
+#   concurrent `stax-reports` crate, visible in the same diff and not ours.)
+#
+# Deliberately NOT taken, each measured rather than assumed:
+#   * `tokio-stream` — would add a real lock entry for `ReceiverStream`, a
+#     wrapper this crate can write in nine lines over the public
+#     `Receiver::poll_recv`.
+#   * `http-body` — implementing `Body` by hand means naming `http_body::Frame`
+#     and re-deriving hyper's framing; `from_stream` already does it.
+#   * `axum`'s `sse` feature — there is none; the `sse` module is ungated. Its
+#     `Event` builder is not used either: it re-encodes the frame, and this port
+#     already has `format_sse`, whose bytes are pinned to a recording of the
+#     reference. A second encoder is a second thing to keep byte-true.
+# Default features (`std`) are the ones the graph already unified on.
+futures-core = "0.3.33"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = [

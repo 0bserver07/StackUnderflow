@@ -37,13 +37,19 @@
 
 pub mod currency;
 pub mod json;
-pub mod pricing;
-pub mod pyops;
 pub mod qs;
 pub mod routes;
 pub mod services;
 pub mod spa;
 pub mod state;
+
+// WAVE 8 TRANCHE 3 — `pricing` and `pyops` moved to `stax-reports`, which owns
+// the report layer both this crate and `stax-cli` consume (see that crate's
+// `lib.rs` for why). Re-exported rather than re-spelled so every `crate::pricing`
+// / `crate::pyops` path already written in `routes/` and `services/` still names
+// the same items: the split cost the route modules zero edits, which is the
+// point of doing it as a move.
+pub use stax_reports::{pricing, pyops};
 
 use axum::Router;
 

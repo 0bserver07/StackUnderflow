@@ -387,18 +387,15 @@ fn spend_for_window(
 /// lower bound slightly permissive and the (half-open) upper bound slightly
 /// strict. Inherited, not corrected.
 fn window_bounds(period_start: &str, period_end: &str) -> Result<(String, String), HttpError> {
-    let bad = |field: &str| {
+    // WAVE 8 TRANCHE 3: the arithmetic moved to `stax_reports::plans` so the CLI
+    // can reach it (`cli.py` imports `routes.plan._spend_daily_window` for the
+    // same reason). This function is now the HTTP error shape and nothing else.
+    plans::window_bounds(period_start, period_end).ok_or_else(|| {
         HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{field} is not an ISO date"),
+            "period_start is not an ISO date".to_owned(),
         )
-    };
-    let start_d = Date::from_isoformat(period_start).ok_or_else(|| bad("period_start"))?;
-    let end_d = Date::from_isoformat(period_end).ok_or_else(|| bad("period_end"))?;
-    Ok((
-        format!("{}T00:00:00", start_d.isoformat()),
-        format!("{}T00:00:00", end_d.plus_days(1).isoformat()),
-    ))
+    })
 }
 
 /// `_spend_daily_window` — per-day USD across every project, oldest-first.
@@ -419,41 +416,10 @@ fn spend_daily_window(
     since: &str,
     until: &str,
 ) -> rusqlite::Result<Vec<f64>> {
-    let mut by_day: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT substr(ts, 1, 10) AS day, SUM(cost_usd) AS cost \
-             FROM usage_events WHERE ts >= ? AND ts < ? \
-             GROUP BY day ORDER BY day",
-        )?;
-        let mut rows = stmt.query([since, until])?;
-        while let Some(row) = rows.next()? {
-            let day: String = row.get(0)?;
-            // `float(r["cost"] or 0.0)` — a NULL SUM and a real 0.0 agree.
-            let cost: Option<f64> = row.get(1)?;
-            by_day.insert(day, cost.unwrap_or(0.0));
-        }
-    }
-
-    // These two parsed cleanly in `window_bounds` a moment ago; a failure here
-    // would mean the caller changed them, so an empty series is the honest
-    // answer rather than an unwrap.
-    let (Some(start_d), Some(end_d)) = (
-        Date::from_isoformat(period_start),
-        Date::from_isoformat(period_end),
-    ) else {
-        return Ok(Vec::new());
-    };
-    let today = Date::today_local();
-    let last_day = end_d.min(today);
-
-    let mut out: Vec<f64> = Vec::new();
-    let mut cursor = start_d;
-    while cursor <= last_day {
-        out.push(by_day.get(&cursor.isoformat()).copied().unwrap_or(0.0));
-        cursor = cursor.plus_days(1);
-    }
-    Ok(out)
+    // WAVE 8 TRANCHE 3: moved to `stax_reports::plans`, where `stax-cli` can
+    // reach it. One owner per helper — the doc comment above is the contract and
+    // it now lives with the implementation.
+    plans::spend_daily_window(conn, period_start, period_end, since, until)
 }
 
 #[cfg(test)]

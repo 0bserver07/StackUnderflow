@@ -1,0 +1,2322 @@
+//! `services/skill_synth.py` — the pattern miner behind `stax skills`.
+//!
+//! 1256 lines of Python that read every message of a project, reconstruct the
+//! shell commands an agent ran, and emit `SKILL.md` files. What makes it a
+//! careful port rather than a transliteration is that **almost every output is
+//! a tie-break away from a different answer**:
+//!
+//! * **`Counter.most_common(1)` is insertion-ordered.** `heapq.nlargest`
+//!   decorates with a *decreasing* index, so among equal counts the
+//!   first-inserted literal wins. The chosen literal is printed into the skill
+//!   body, so a `HashMap` here would produce a different — and equally
+//!   plausible — file on every run. [`OrderedCounter`] keeps insertion order.
+//! * **`sorted(..., reverse=True)` is stable.** Python does not reverse the
+//!   list; it inverts the comparison, so equal-ranked candidates keep the order
+//!   the detector found them in. Rust's `sort_by` is stable, so the reversed
+//!   comparator reproduces it exactly.
+//! * **`max(dict, key=…)` returns the FIRST maximal key**, in insertion order.
+//!   `_detect_canonical_test_command` picks the project's canonical test
+//!   invocation that way.
+//!
+//! Every dict here is therefore an ordered map, not a hash map, and the choice
+//! is load-bearing rather than stylistic.
+//!
+//! # The command parser is `shlex`, not `split`
+//!
+//! `_parse_command` calls `shlex.split(seg, comments=True)` and falls back to
+//! `seg.split()` on `ValueError`. Both halves matter: `pytest -k "not slow"` is
+//! four tokens under `shlex` and five under `split`, and an unbalanced quote
+//! (which real transcripts contain) takes the fallback. [`shlex_split`] is a
+//! port of the POSIX branch of `shlex.read_token`, including `comments=True`
+//! and the two escaping rules that differ inside and outside double quotes.
+//!
+//! # What is NOT ported
+//!
+//! `--use-llm` does not exist (the module's docstring calls it a possible v2),
+//! and `write_skill_files`' `shutil.copy2` metadata copy is a `std::fs::copy`
+//! here: `copy2` preserves mtime, `fs::copy` preserves permissions only. The
+//! backup's *bytes* are identical, which is what the differ compares; the
+//! mtime of a `.bak` file is not a documented output (DIV-294).
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use regex::Regex;
+use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+use stax_core::queries::pyjson::{self, Value};
+use stax_core::queries::pytime;
+
+// ── constants (`skill_synth.py:65`–`:126`) ───────────────────────────────────
+
+/// `SKILL_DIR_PREFIX`.
+pub const SKILL_DIR_PREFIX: &str = "auto-";
+/// `DEFAULT_MIN_OCCURRENCES`.
+pub const DEFAULT_MIN_OCCURRENCES: i64 = 5;
+/// `DEFAULT_WINDOW` — the frequency window `skills generate` defaults to.
+pub const DEFAULT_WINDOW: &str = "90d";
+
+/// `ALL_PATTERN_KINDS`, in priority order (earlier wins a merge tie).
+pub const ALL_PATTERN_KINDS: [&str; 5] = [
+    "avoids-X",
+    "never-touches-paths",
+    "canonical-test-command",
+    "always-runs-X-after-Y",
+    "uses-tool-flag-combo",
+];
+
+/// `_PATTERN_PRIORITY.get(kind, 99)`.
+#[must_use]
+pub fn pattern_priority(kind: &str) -> usize {
+    ALL_PATTERN_KINDS
+        .iter()
+        .position(|known| *known == kind)
+        .unwrap_or(99)
+}
+
+/// `_BORING_EXES` — too generic to make a "this project does X" skill from.
+const BORING_EXES: [&str; 93] = [
+    "cd", "pushd", "popd", "ls", "ll", "la", "cat", "bat", "pwd", "echo", "printf", "true",
+    "false", ":", "export", "set", "unset", "source", ".", "which", "type", "command", "head",
+    "tail", "less", "more", "clear", "history", "git", "sleep", "wait", "kill", "pkill", "killall",
+    "pgrep", "jobs", "fg", "bg", "disown", "exit", "return", "read", "test", "[", "[[", "mkdir",
+    "rmdir", "touch", "cp", "mv", "ln", "chmod", "chown", "find", "grep", "rg", "ag", "sed", "awk",
+    "cut", "sort", "uniq", "wc", "tr", "tee", "xargs", "env", "open", "code", "vim", "nano",
+    "emacs", "tmux", "screen", "ssh", "scp", "curl", "wget", "ping", "host", "dig", "nslookup",
+    "ps", "top", "htop", "df", "du", "free", "uname", "whoami", "id", "date", "uptime",
+];
+
+/// `_NAV_EXES` — the much smaller skip-set the correction detectors use.
+const NAV_EXES: [&str; 7] = ["cd", "pushd", "popd", "ls", "ll", "la", "pwd"];
+
+/// `_TEST_EXES`.
+const TEST_EXES: [&str; 11] = [
+    "pytest", "py.test", "tox", "nox", "jest", "vitest", "mocha", "ava", "phpunit", "rspec",
+    "minitest",
+];
+
+/// `_LEADING_WRAPPERS`.
+const LEADING_WRAPPERS: [&str; 8] = [
+    "sudo", "time", "nice", "nohup", "env", "command", "exec", "xargs",
+];
+
+/// `_EDIT_TOOLS`.
+const EDIT_TOOLS: [&str; 6] = [
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "str_replace_editor",
+    "create_file",
+];
+
+/// `_GENERATED_MARKER_PREFIX`.
+const GENERATED_MARKER_PREFIX: &str = "<!-- Generated by stackunderflow skills generate";
+
+/// `_NEGATION_PATTERNS`, transcribed alternation-for-alternation.
+fn negation_re() -> &'static Regex {
+    static CELL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(don'?t|do not|never|stop|instead|avoid|please don'?t|no,|nope|not the|not that|don'?t use|don'?t edit|don'?t touch|don'?t run|shouldn'?t|should not|won'?t|will not|cannot|can'?t|undo|revert|roll ?back|that'?s wrong|wrong (file|approach|command))\b",
+        )
+        .expect("the negation alternation is a literal")
+    })
+}
+
+/// `_PATH_LIKE = re.compile(r"[/\\]|\.\w{1,5}$|^\.+$")`.
+fn path_like_re() -> &'static Regex {
+    static CELL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"[/\\]|\.\w{1,5}$|^\.+$").expect("literal"))
+}
+
+/// `_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")`.
+fn env_assign_re() -> &'static Regex {
+    static CELL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=").expect("literal"))
+}
+
+/// `_VOLATILE_LINE`, in `re.MULTILINE`.
+fn volatile_line_re() -> &'static Regex {
+    static CELL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?m)^(generated_at:|<!-- Generated by stackunderflow skills generate at ).*")
+            .expect("literal")
+    })
+}
+
+// ── ordered containers ───────────────────────────────────────────────────────
+
+/// A `dict`-ordered `Counter[str]`.
+///
+/// `most_common(1)` is `heapq.nlargest(1, items, key=itemgetter(1))`, which
+/// breaks ties toward the **earlier** item — so insertion order is part of the
+/// answer, not an implementation detail.
+#[derive(Debug, Default, Clone)]
+pub struct OrderedCounter {
+    order: Vec<String>,
+    counts: HashMap<String, i64>,
+}
+
+impl OrderedCounter {
+    fn add(&mut self, key: &str) {
+        match self.counts.get_mut(key) {
+            Some(count) => *count += 1,
+            None => {
+                self.order.push(key.to_string());
+                self.counts.insert(key.to_string(), 1);
+            }
+        }
+    }
+
+    /// `Counter.most_common(1)[0][0]`.
+    #[must_use]
+    pub fn most_common(&self) -> Option<&str> {
+        let mut best: Option<(&str, i64)> = None;
+        for key in &self.order {
+            let count = self.counts[key];
+            if best.is_none_or(|(_, best_count)| count > best_count) {
+                best = Some((key.as_str(), count));
+            }
+        }
+        best.map(|(key, _)| key)
+    }
+
+    /// `sum(counter.values())`.
+    #[must_use]
+    pub fn total(&self) -> i64 {
+        self.counts.values().sum()
+    }
+}
+
+/// A `dict` with Python's insertion order.
+#[derive(Debug, Clone)]
+struct OrderedMap<V> {
+    order: Vec<String>,
+    values: HashMap<String, V>,
+}
+
+impl<V> Default for OrderedMap<V> {
+    fn default() -> Self {
+        Self {
+            order: Vec::new(),
+            values: HashMap::new(),
+        }
+    }
+}
+
+impl<V: Default> OrderedMap<V> {
+    fn entry(&mut self, key: &str) -> &mut V {
+        if !self.values.contains_key(key) {
+            self.order.push(key.to_string());
+            self.values.insert(key.to_string(), V::default());
+        }
+        self.values.get_mut(key).expect("just inserted")
+    }
+}
+
+impl<V> OrderedMap<V> {
+    fn get(&self, key: &str) -> Option<&V> {
+        self.values.get(key)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, &V)> {
+        self.order
+            .iter()
+            .map(|key| (key.as_str(), &self.values[key]))
+    }
+}
+
+/// `{session_id: timestamp}` in insertion order — the shape `_top_session_ids`
+/// and `max(values, default="")` both read.
+#[derive(Debug, Default, Clone)]
+struct SeenMap {
+    order: Vec<String>,
+    stamps: HashMap<String, String>,
+}
+
+impl SeenMap {
+    /// `seen[sid] = max(seen.get(sid, ""), ts)`.
+    fn bump(&mut self, session_id: &str, timestamp: &str) {
+        match self.stamps.get_mut(session_id) {
+            Some(current) => {
+                if timestamp > current.as_str() {
+                    *current = timestamp.to_string();
+                }
+            }
+            None => {
+                self.order.push(session_id.to_string());
+                self.stamps
+                    .insert(session_id.to_string(), timestamp.to_string());
+            }
+        }
+    }
+
+    /// `_top_session_ids` — the three most recent, ties keeping insertion order.
+    fn top_session_ids(&self) -> Vec<String> {
+        let mut pairs: Vec<(&String, &String)> = self
+            .order
+            .iter()
+            .map(|sid| (sid, &self.stamps[sid]))
+            .collect();
+        pairs.sort_by(|left, right| right.1.cmp(left.1));
+        pairs
+            .into_iter()
+            .take(3)
+            .map(|(sid, _)| sid.clone())
+            .collect()
+    }
+
+    /// `max(seen.values(), default="")`.
+    fn max_stamp(&self) -> String {
+        self.order
+            .iter()
+            .map(|sid| self.stamps[sid].as_str())
+            .max()
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
+/// A `set[str]` that remembers insertion order — only `len` is read, but the
+/// order keeps the debug output reproducible.
+#[derive(Debug, Default, Clone)]
+struct OrderedSet {
+    order: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl OrderedSet {
+    fn insert(&mut self, value: &str) {
+        if self.seen.insert(value.to_string()) {
+            self.order.push(value.to_string());
+        }
+    }
+
+    fn len(&self) -> i64 {
+        i64::try_from(self.order.len()).unwrap_or(i64::MAX)
+    }
+}
+
+// ── the candidate ────────────────────────────────────────────────────────────
+
+/// `SkillCandidate` — one mined pattern, ready to render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillCandidate {
+    /// `pattern_id` — sha256 of the normalized signature, first 16 hex chars.
+    pub pattern_id: String,
+    /// The output directory name.
+    pub name: String,
+    /// The frontmatter `description`.
+    pub description: String,
+    /// The rendered Markdown body.
+    pub body: String,
+    /// Distinct sessions exhibiting the pattern.
+    pub evidence_count: i64,
+    /// The newest timestamp any evidence session carries.
+    pub last_seen_ts: String,
+    /// One of [`ALL_PATTERN_KINDS`].
+    pub pattern_kind: &'static str,
+    /// The scope slug, stamped by `synthesize_skills`.
+    pub project_slug: Option<String>,
+    /// Up to three example session ids, newest first.
+    pub example_session_ids: Vec<String>,
+    /// Internal: what two detectors use to recognise the same command.
+    pub normalized_command: Option<String>,
+}
+
+impl SkillCandidate {
+    /// `SkillCandidate.to_dict()`.
+    #[must_use]
+    pub fn to_dict(&self) -> Value {
+        Value::Object(vec![
+            ("pattern_id".to_string(), Value::from(&self.pattern_id)),
+            ("name".to_string(), Value::from(&self.name)),
+            ("description".to_string(), Value::from(&self.description)),
+            ("body".to_string(), Value::from(&self.body)),
+            (
+                "evidence_count".to_string(),
+                Value::Int(self.evidence_count),
+            ),
+            ("last_seen_ts".to_string(), Value::from(&self.last_seen_ts)),
+            ("pattern_kind".to_string(), Value::from(self.pattern_kind)),
+            (
+                "project_slug".to_string(),
+                self.project_slug.as_ref().map_or(Value::Null, Value::from),
+            ),
+            (
+                "example_session_ids".to_string(),
+                Value::Array(self.example_session_ids.iter().map(Value::from).collect()),
+            ),
+        ])
+    }
+
+    /// `_rank(c)` — `(evidence_count, -priority)`.
+    fn rank(&self) -> (i64, i64) {
+        (
+            self.evidence_count,
+            -i64::try_from(pattern_priority(self.pattern_kind)).unwrap_or(99),
+        )
+    }
+}
+
+// ── in-memory model ──────────────────────────────────────────────────────────
+
+/// `_ToolCall`.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    /// The tool name.
+    pub name: String,
+    /// The tool arguments — a JSON object, or an empty one.
+    pub args: Value,
+}
+
+/// `_Event`.
+#[derive(Debug, Clone)]
+pub struct Event {
+    seq: i64,
+    ts: String,
+    #[allow(
+        dead_code,
+        reason = "part of the ported shape; only `is_user_text` reads role"
+    )]
+    role: String,
+    text: String,
+    tool_calls: Vec<ToolCall>,
+    is_user_text: bool,
+}
+
+/// `_Session`.
+#[derive(Debug, Clone)]
+pub struct Session {
+    /// The provider-facing session id.
+    pub session_id: String,
+    /// The project slug the session was loaded under.
+    pub project_slug: String,
+    /// The newest timestamp in the session.
+    pub last_ts: String,
+    events: Vec<Event>,
+}
+
+/// `_ParsedCmd`.
+#[derive(Debug, Clone)]
+pub struct ParsedCmd {
+    /// The executable, path-stripped.
+    pub exe: String,
+    /// The first non-path positional, if any.
+    pub sub: Option<String>,
+    /// Flag *names* — `--tb=short` is `--tb`.
+    pub flags: Vec<String>,
+    /// Every positional, in order.
+    pub positionals: Vec<String>,
+    /// The raw segment, stripped.
+    pub raw: String,
+}
+
+impl ParsedCmd {
+    /// `_ParsedCmd.is_boring`.
+    #[must_use]
+    pub fn is_boring(&self) -> bool {
+        BORING_EXES.contains(&self.exe.as_str()) || self.exe.is_empty()
+    }
+
+    /// `_ParsedCmd.normalized` — exe + non-path positionals + sorted flags.
+    #[must_use]
+    pub fn normalized(&self) -> String {
+        let mut parts = vec![self.exe.clone()];
+        for positional in &self.positionals {
+            if !path_like_re().is_match(positional) {
+                parts.push(positional.clone());
+            }
+        }
+        let mut flags: Vec<String> = self.flags.clone();
+        flags.sort();
+        flags.dedup();
+        parts.extend(flags);
+        parts.join(" ")
+    }
+}
+
+// ── raw payload parsing (`skill_synth.py:221`–`:394`) ────────────────────────
+
+/// `_safe_json`.
+fn safe_json(raw: Option<&str>) -> Option<Value> {
+    let text = raw?;
+    if text.is_empty() {
+        return None;
+    }
+    pyjson::loads(text)
+}
+
+/// `_tool_calls_from_raw`.
+#[must_use]
+pub fn tool_calls_from_raw(raw: Option<&Value>) -> Vec<ToolCall> {
+    let mut out: Vec<ToolCall> = Vec::new();
+    let Some(raw) = raw else { return out };
+    let mut candidates: Vec<&Value> = Vec::new();
+    match raw {
+        Value::Object(_) => {
+            if let Some(Value::Array(content)) =
+                raw.get("message").and_then(|msg| msg.get("content"))
+            {
+                candidates = content.iter().collect();
+            } else if let Some(Value::Array(content)) = raw.get("content") {
+                candidates = content.iter().collect();
+            }
+            if let Some(Value::Array(calls)) = raw.get("tool_calls") {
+                candidates.extend(calls.iter());
+            }
+        }
+        Value::Array(items) => candidates = items.iter().collect(),
+        _ => return out,
+    }
+
+    for block in candidates {
+        if !matches!(block, Value::Object(_)) {
+            continue;
+        }
+        let block_type = block.get("type");
+        let type_ok = match block_type {
+            None | Some(Value::Null) => true,
+            Some(value) => matches!(value.as_str(), Some("tool_use" | "function" | "tool_call")),
+        };
+        if !type_ok {
+            continue;
+        }
+        let name = block
+            .get("name")
+            .filter(|value| value.is_truthy())
+            .or_else(|| block.get("tool").filter(|value| value.is_truthy()));
+        let Some(name) = name.and_then(Value::as_str) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let args = ["input", "arguments", "args"]
+            .into_iter()
+            .find_map(|key| block.get(key).filter(|value| value.is_truthy()))
+            .filter(|value| matches!(value, Value::Object(_)))
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Vec::new()));
+        out.push(ToolCall {
+            name: name.to_string(),
+            args,
+        });
+    }
+    out
+}
+
+/// `_is_tool_result_payload`.
+#[must_use]
+pub fn is_tool_result_payload(raw: Option<&Value>) -> bool {
+    let Some(raw @ Value::Object(_)) = raw else {
+        return false;
+    };
+    let message = raw.get("message");
+    let body = match message {
+        Some(msg @ Value::Object(_)) => msg.get("content"),
+        _ => raw.get("content"),
+    };
+    let Some(Value::Array(blocks)) = body else {
+        return false;
+    };
+    if blocks.is_empty() {
+        return false;
+    }
+    let mut saw_result = false;
+    for block in blocks {
+        if !matches!(block, Value::Object(_)) {
+            return false;
+        }
+        let block_type = block.get("type").and_then(Value::as_str);
+        match block_type {
+            Some("tool_result") => saw_result = true,
+            Some("text") => return false,
+            None => {
+                // `t` is `None` only when the key is missing or JSON `null`;
+                // any other non-string type falls into the final `not in`
+                // branch, which rejects.
+                if !matches!(block.get("type"), None | Some(Value::Null)) {
+                    return false;
+                }
+            }
+            Some(_) => return false,
+        }
+    }
+    saw_result
+}
+
+/// `_split_command_segments` — `&&` / `||` / `;` / newline, pipes intact.
+#[must_use]
+pub fn split_command_segments(command: &str) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = command.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let two: Option<[char; 2]> = if index + 1 < chars.len() {
+            Some([chars[index], chars[index + 1]])
+        } else {
+            None
+        };
+        if two == Some(['&', '&']) || two == Some(['|', '|']) {
+            parts.push(std::mem::take(&mut current));
+            index += 2;
+            continue;
+        }
+        if chars[index] == ';' || chars[index] == '\n' {
+            parts.push(std::mem::take(&mut current));
+            index += 1;
+            continue;
+        }
+        current.push(chars[index]);
+        index += 1;
+    }
+    parts.push(current);
+    parts
+        .into_iter()
+        .map(|part| py_strip(&part).to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// `str.strip()` — Python's whitespace definition.
+fn py_strip(text: &str) -> &str {
+    text.trim_matches(|ch: char| ch.is_whitespace())
+}
+
+/// `shlex.split(text, comments=True)` in POSIX mode.
+///
+/// `None` is `ValueError` — an unbalanced quote or a trailing escape — which
+/// `_parse_command` catches and answers with `text.split()`.
+#[must_use]
+pub fn shlex_split(text: &str) -> Option<Vec<String>> {
+    #[derive(PartialEq)]
+    enum State {
+        Space,
+        Word,
+        Single,
+        Double,
+        EscapeWord,
+        EscapeDouble,
+    }
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut has_token = false;
+    let mut state = State::Space;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Space | State::Word => {
+                if ch.is_whitespace() {
+                    if state == State::Word && has_token {
+                        tokens.push(std::mem::take(&mut current));
+                        has_token = false;
+                    }
+                    state = State::Space;
+                } else if ch == '#' {
+                    // `commenters` — the rest of the LINE is discarded, and a
+                    // token in flight is returned.
+                    for skipped in chars.by_ref() {
+                        if skipped == '\n' {
+                            break;
+                        }
+                    }
+                    if has_token {
+                        tokens.push(std::mem::take(&mut current));
+                        has_token = false;
+                    }
+                    state = State::Space;
+                } else if ch == '\'' {
+                    has_token = true;
+                    state = State::Single;
+                } else if ch == '"' {
+                    has_token = true;
+                    state = State::Double;
+                } else if ch == '\\' {
+                    has_token = true;
+                    state = State::EscapeWord;
+                } else {
+                    has_token = true;
+                    current.push(ch);
+                    state = State::Word;
+                }
+            }
+            State::Single => {
+                if ch == '\'' {
+                    state = State::Word;
+                } else {
+                    current.push(ch);
+                }
+            }
+            State::Double => {
+                if ch == '"' {
+                    state = State::Word;
+                } else if ch == '\\' {
+                    state = State::EscapeDouble;
+                } else {
+                    current.push(ch);
+                }
+            }
+            State::EscapeWord => {
+                current.push(ch);
+                state = State::Word;
+            }
+            State::EscapeDouble => {
+                // Inside double quotes a backslash escapes only `"` and `\`;
+                // anything else keeps the backslash.
+                if ch != '"' && ch != '\\' {
+                    current.push('\\');
+                }
+                current.push(ch);
+                state = State::Double;
+            }
+        }
+    }
+    match state {
+        State::Single | State::Double | State::EscapeWord | State::EscapeDouble => None,
+        State::Space | State::Word => {
+            if has_token {
+                tokens.push(current);
+            }
+            Some(tokens)
+        }
+    }
+}
+
+/// `_parse_command`.
+#[must_use]
+pub fn parse_command(segment: &str) -> Option<ParsedCmd> {
+    let mut tokens = shlex_split(segment).unwrap_or_else(|| {
+        segment
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect()
+    });
+    while !tokens.is_empty()
+        && (env_assign_re().is_match(&tokens[0]) || LEADING_WRAPPERS.contains(&tokens[0].as_str()))
+    {
+        tokens.remove(0);
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut exe = tokens[0].clone();
+    if exe.contains('/') || exe.contains('\\') {
+        exe = purepath_name(&exe);
+    }
+    let mut rest: Vec<String> = tokens[1..].to_vec();
+
+    if matches!(exe.as_str(), "python" | "python3" | "py") && rest.len() >= 2 && rest[0] == "-m" {
+        exe = rest[1].clone();
+        rest = rest[2..].to_vec();
+    }
+    if exe == "npx" && !rest.is_empty() && !rest[0].starts_with('-') {
+        exe = rest[0].clone();
+        rest = rest[1..].to_vec();
+    }
+
+    let mut flags: Vec<String> = Vec::new();
+    let mut positionals: Vec<String> = Vec::new();
+    for token in rest {
+        if token.starts_with('-') && token != "-" {
+            let name = token.split('=').next().unwrap_or(&token).to_string();
+            flags.push(name);
+        } else {
+            positionals.push(token);
+        }
+    }
+    let sub = positionals
+        .first()
+        .filter(|first| !path_like_re().is_match(first))
+        .cloned();
+    Some(ParsedCmd {
+        exe,
+        sub,
+        flags,
+        positionals,
+        raw: py_strip(segment).to_string(),
+    })
+}
+
+/// `_parsed_commands` — every shell sub-command a Bash-ish tool call implies.
+#[must_use]
+pub fn parsed_commands(call: &ToolCall) -> Vec<ParsedCmd> {
+    if !matches!(
+        call.name.as_str(),
+        "Bash" | "Shell" | "shell" | "run_command" | "execute"
+    ) {
+        return Vec::new();
+    }
+    let command = ["command", "cmd", "script"]
+        .into_iter()
+        .find_map(|key| call.args.get(key).filter(|value| value.is_truthy()));
+    let Some(Value::Str(command)) = command else {
+        return Vec::new();
+    };
+    if py_strip(command).is_empty() {
+        return Vec::new();
+    }
+    split_command_segments(command)
+        .iter()
+        .filter_map(|segment| parse_command(segment))
+        .collect()
+}
+
+/// `_edited_paths`.
+#[must_use]
+pub fn edited_paths(call: &ToolCall) -> Vec<String> {
+    if !EDIT_TOOLS.contains(&call.name.as_str()) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for key in [
+        "file_path",
+        "path",
+        "filename",
+        "notebook_path",
+        "target_file",
+    ] {
+        if let Some(Value::Str(value)) = call.args.get(key)
+            && !py_strip(value).is_empty()
+        {
+            out.push(py_strip(value).to_string());
+        }
+    }
+    out
+}
+
+/// `_is_test_command`.
+#[must_use]
+pub fn is_test_command(command: &ParsedCmd) -> bool {
+    if TEST_EXES.contains(&command.exe.as_str()) {
+        return true;
+    }
+    let sub = command.sub.as_deref();
+    if matches!(command.exe.as_str(), "npm" | "yarn" | "pnpm" | "bun") {
+        if matches!(sub, Some("test" | "t")) {
+            return true;
+        }
+        if sub == Some("run")
+            && command.positionals.len() >= 2
+            && matches!(
+                command.positionals[1].as_str(),
+                "test" | "tests" | "test:unit" | "jest" | "vitest"
+            )
+        {
+            return true;
+        }
+    }
+    if command.exe == "cargo" && sub == Some("test") {
+        return true;
+    }
+    if command.exe == "go" && sub == Some("test") {
+        return true;
+    }
+    if matches!(command.exe.as_str(), "make" | "just" | "task")
+        && command
+            .positionals
+            .iter()
+            .any(|positional| matches!(positional.as_str(), "test" | "tests" | "check"))
+    {
+        return true;
+    }
+    command.exe == "unittest"
+}
+
+// ── path / slug helpers (`skill_synth.py:399`–`:420`) ────────────────────────
+
+/// `PurePath(p).name`.
+#[must_use]
+pub fn purepath_name(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed
+        .rsplit('/')
+        .next()
+        .filter(|name| *name != "." && *name != "..")
+        .unwrap_or("")
+        .to_string()
+}
+
+/// `PurePath(p).parent`.
+///
+/// `pathlib` collapses redundant separators and answers `"."` for a bare name,
+/// which is exactly what the `dir_hint` branch tests against.
+#[must_use]
+pub fn purepath_parent(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.len() <= 1 {
+        return if absolute {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    let head = &parts[..parts.len() - 1];
+    if absolute {
+        format!("/{}", head.join("/"))
+    } else {
+        head.join("/")
+    }
+}
+
+/// `_abbrev_home`.
+#[must_use]
+pub fn abbrev_home(path: &str, home: Option<&Path>) -> String {
+    let home = home.map(|value| value.to_string_lossy().to_string());
+    match home {
+        Some(home) if !home.is_empty() => {
+            if let Some(rest) = path.strip_prefix(&format!("{home}/")) {
+                format!("~/{rest}")
+            } else if path == home {
+                "~".to_string()
+            } else {
+                path.to_string()
+            }
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// `_slugify`.
+#[must_use]
+pub fn slugify(text: &str) -> String {
+    let lowered = py_strip(text).to_lowercase();
+    let mut slug = String::new();
+    let mut in_run = false;
+    for ch in lowered.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            in_run = false;
+        } else if !in_run {
+            slug.push('-');
+            in_run = true;
+        }
+    }
+    // `re.sub(r"-{2,}", "-", s)` is a no-op after the run collapse above.
+    let mut slug = slug.trim_matches('-').to_string();
+    if slug.chars().count() > 48 {
+        slug = slug.chars().take(48).collect::<String>();
+        slug = slug.trim_end_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        "pattern".to_string()
+    } else {
+        slug
+    }
+}
+
+/// `_hash_signature` — `sha256(sig).hexdigest()[:16]`.
+#[must_use]
+pub fn hash_signature(signature: &str) -> String {
+    let digest = Sha256::digest(signature.as_bytes());
+    let hex = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        });
+    hex[..16].to_string()
+}
+
+// ── loading (`skill_synth.py:426`–`:508`) ────────────────────────────────────
+
+/// `_resolve_project_ids`.
+///
+/// # Errors
+/// When the query fails.
+pub fn resolve_project_ids(conn: &Connection, slug: &str) -> Result<Vec<i64>> {
+    let mut statement = conn.prepare("SELECT id FROM projects WHERE slug = ?")?;
+    let rows = statement
+        .query_map([slug], |row| row.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<i64>, _>>()?;
+    Ok(rows)
+}
+
+/// One `messages` row, as `discovery.load_messages_for_project` returns it.
+struct MessageRow {
+    session_id: String,
+    seq: i64,
+    timestamp: String,
+    role: String,
+    content_text: String,
+    raw_json: Option<String>,
+}
+
+/// `discovery.load_messages_for_project` — the same SQL, shape for shape.
+fn load_messages_for_project(
+    conn: &Connection,
+    project_id: i64,
+    since: Option<&str>,
+) -> Result<Vec<MessageRow>> {
+    let base = "SELECT m.id            AS message_id, \
+                       m.session_fk    AS session_fk, \
+                       s.session_id    AS session_id, \
+                       p.slug          AS project_slug, \
+                       p.provider      AS provider, \
+                       m.seq           AS seq, \
+                       m.timestamp     AS timestamp, \
+                       m.role          AS role, \
+                       m.model         AS model, \
+                       m.content_text  AS content_text, \
+                       m.tools_json    AS tools_json, \
+                       m.raw_json      AS raw_json, \
+                       m.is_sidechain  AS is_sidechain \
+                FROM messages m \
+                JOIN sessions s ON s.id = m.session_fk \
+                JOIN projects p ON p.id = s.project_id \
+                WHERE s.project_id = ?";
+    let tail = " ORDER BY m.session_fk, m.seq";
+    let read = |row: &rusqlite::Row<'_>| -> rusqlite::Result<MessageRow> {
+        Ok(MessageRow {
+            session_id: row
+                .get::<_, Option<String>>("session_id")?
+                .unwrap_or_default(),
+            seq: row.get::<_, Option<i64>>("seq")?.unwrap_or(0),
+            timestamp: row
+                .get::<_, Option<String>>("timestamp")?
+                .unwrap_or_default(),
+            role: row.get::<_, Option<String>>("role")?.unwrap_or_default(),
+            content_text: row
+                .get::<_, Option<String>>("content_text")?
+                .unwrap_or_default(),
+            raw_json: row.get::<_, Option<String>>("raw_json")?,
+        })
+    };
+    let rows = match since {
+        Some(cutoff) => {
+            let sql = format!("{base} AND m.timestamp >= ?{tail}");
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(rusqlite::params![project_id, cutoff], read)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+        None => {
+            let sql = format!("{base}{tail}");
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(rusqlite::params![project_id], read)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+    };
+    Ok(rows)
+}
+
+/// `_load_sessions`.
+///
+/// # Errors
+/// When the store cannot be read.
+pub fn load_sessions(
+    conn: &Connection,
+    project: Option<&str>,
+    projects: Option<&[String]>,
+    since: Option<&str>,
+) -> Result<Vec<Session>> {
+    let slugs: Vec<String> = match (projects, project) {
+        (Some(list), _) if !list.is_empty() => {
+            let mut seen = HashSet::new();
+            list.iter()
+                .filter(|slug| seen.insert((*slug).clone()))
+                .cloned()
+                .collect()
+        }
+        (_, Some(slug)) => vec![slug.to_string()],
+        _ => anyhow::bail!("a scope is required: pass project= or projects="),
+    };
+
+    // `pid_to_slug` — a dict keyed by project id, so a later slug claiming the
+    // same id overwrites, and iteration is insertion-ordered.
+    let mut pid_order: Vec<i64> = Vec::new();
+    let mut pid_to_slug: HashMap<i64, String> = HashMap::new();
+    for slug in &slugs {
+        for pid in resolve_project_ids(conn, slug)? {
+            if !pid_to_slug.contains_key(&pid) {
+                pid_order.push(pid);
+            }
+            pid_to_slug.insert(pid, slug.clone());
+        }
+    }
+    if pid_order.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut by_session: HashMap<(String, String), Session> = HashMap::new();
+    for pid in pid_order {
+        let slug = pid_to_slug[&pid].clone();
+        for row in load_messages_for_project(conn, pid, since)? {
+            let key = (slug.clone(), row.session_id.clone());
+            let session = match by_session.get_mut(&key) {
+                Some(session) => session,
+                None => {
+                    order.push(key.clone());
+                    by_session.entry(key.clone()).or_insert(Session {
+                        session_id: row.session_id.clone(),
+                        project_slug: slug.clone(),
+                        last_ts: row.timestamp.clone(),
+                        events: Vec::new(),
+                    })
+                }
+            };
+            let raw = safe_json(row.raw_json.as_deref());
+            let tool_calls = tool_calls_from_raw(raw.as_ref());
+            let is_user_text = row.role == "user"
+                && !py_strip(&row.content_text).is_empty()
+                && !is_tool_result_payload(raw.as_ref());
+            session.events.push(Event {
+                seq: row.seq,
+                ts: row.timestamp.clone(),
+                role: row.role.clone(),
+                text: row.content_text.clone(),
+                tool_calls,
+                is_user_text,
+            });
+            if row.timestamp > session.last_ts {
+                session.last_ts = row.timestamp.clone();
+            }
+        }
+    }
+
+    let mut sessions: Vec<Session> = order
+        .into_iter()
+        .filter_map(|key| by_session.remove(&key))
+        .collect();
+    for session in &mut sessions {
+        session.events.sort_by_key(|event| event.seq);
+    }
+    Ok(sessions)
+}
+
+/// `_scope_label` — the `(generated_from, project_slug)` pair.
+fn scope_label(project: Option<&str>, projects: Option<&[String]>) -> Option<String> {
+    if let Some(list) = projects {
+        let mut seen = HashSet::new();
+        let unique: Vec<&String> = list
+            .iter()
+            .filter(|slug| seen.insert((*slug).clone()))
+            .collect();
+        if unique.len() > 1 {
+            return None;
+        }
+        if let Some(first) = unique.first() {
+            return Some((*first).clone());
+        }
+    }
+    project.map(ToString::to_string)
+}
+
+// ── body rendering (`skill_synth.py:871`–`:919`) ─────────────────────────────
+
+/// `_build_body`.
+fn build_body(
+    title: &str,
+    explanation: &str,
+    action_hint: Option<&str>,
+    examples: &[String],
+) -> String {
+    let mut lines: Vec<String> = vec![
+        format!("# {title}"),
+        String::new(),
+        py_strip(explanation).to_string(),
+        String::new(),
+        "## Evidence".to_string(),
+        String::new(),
+    ];
+    if examples.is_empty() {
+        lines.push("Most-recent example sessions: (none recorded)".to_string());
+    } else {
+        lines.push(format!(
+            "Most-recent example sessions: {}",
+            examples.join(", ")
+        ));
+    }
+    lines.push(String::new());
+    match action_hint {
+        Some(hint) => lines.push(format!(
+            "(view via `stackunderflow find-sessions-touching-file <path>` or \
+             `stackunderflow search-past-decisions {} --project this`)",
+            stax_core::queries::paths::py_repr(hint)
+        )),
+        None => lines.push(
+            "(view via `stackunderflow search-past-decisions \"<term>\" --project this`)"
+                .to_string(),
+        ),
+    }
+    format!("{}\n", py_rstrip(&lines.join("\n")))
+}
+
+/// `str.rstrip()`.
+fn py_rstrip(text: &str) -> &str {
+    text.trim_end_matches(|ch: char| ch.is_whitespace())
+}
+
+/// `render_skill_md`.
+#[must_use]
+pub fn render_skill_md(candidate: &SkillCandidate, generated_at_micros: i64) -> String {
+    // `.replace(microsecond=0)` — the stamp is second-resolution.
+    let stamp = pytime::isoformat_utc(generated_at_micros.div_euclid(1_000_000) * 1_000_000);
+    let count = candidate.evidence_count;
+    let generated_from = match &candidate.project_slug {
+        Some(slug) => format!("{count} sessions in {slug}"),
+        None => format!("{count} sessions"),
+    };
+    let frontmatter = [
+        "---".to_string(),
+        format!("name: {}", candidate.name),
+        format!("description: {}", candidate.description),
+        "auto_generated: true".to_string(),
+        format!("generated_at: {stamp}"),
+        format!("generated_from: {generated_from}"),
+        format!("pattern_kind: {}", candidate.pattern_kind),
+        format!("pattern_id: {}", candidate.pattern_id),
+        format!("evidence_count: {count}"),
+        "---".to_string(),
+        String::new(),
+        format!(
+            "<!-- Generated by stackunderflow skills generate at {stamp} from {count} sessions \
+             — do not edit manually; regenerate to update -->"
+        ),
+        String::new(),
+        String::new(),
+    ];
+    format!("{}{}", frontmatter.join("\n"), candidate.body)
+}
+
+// ── the five detectors (`skill_synth.py:525`–`:856`) ─────────────────────────
+
+/// `_detect_canonical_test_command`.
+fn detect_canonical_test_command(
+    sessions: &[Session],
+    min_occurrences: i64,
+) -> Vec<SkillCandidate> {
+    let mut sessions_with_sig: OrderedMap<OrderedSet> = OrderedMap::default();
+    let mut literal_counts: OrderedMap<OrderedCounter> = OrderedMap::default();
+    let mut last_seen: OrderedMap<SeenMap> = OrderedMap::default();
+    for session in sessions {
+        for event in &session.events {
+            for call in &event.tool_calls {
+                for command in parsed_commands(call) {
+                    if !is_test_command(&command) {
+                        continue;
+                    }
+                    let sig = command.normalized();
+                    sessions_with_sig.entry(&sig).insert(&session.session_id);
+                    literal_counts.entry(&sig).add(&command.raw);
+                    last_seen.entry(&sig).bump(&session.session_id, &event.ts);
+                }
+            }
+        }
+    }
+    if sessions_with_sig.is_empty() {
+        return Vec::new();
+    }
+    // `max(dict, key=…)` — the FIRST maximal key in insertion order.
+    let mut best: Option<(&str, (i64, i64))> = None;
+    for (sig, sids) in sessions_with_sig.iter() {
+        let key = (
+            sids.len(),
+            literal_counts.get(sig).map_or(0, OrderedCounter::total),
+        );
+        if best.is_none_or(|(_, best_key)| key > best_key) {
+            best = Some((sig, key));
+        }
+    }
+    let (best_sig, _) = best.expect("non-empty");
+    let count = sessions_with_sig.get(best_sig).map_or(0, OrderedSet::len);
+    if count < min_occurrences {
+        return Vec::new();
+    }
+    let literal = literal_counts
+        .get(best_sig)
+        .and_then(OrderedCounter::most_common)
+        .unwrap_or_default()
+        .to_string();
+    let seen = last_seen
+        .get(best_sig)
+        .expect("populated with the signature");
+    let examples = seen.top_session_ids();
+    let title = format!("Run this project's tests with `{literal}`");
+    let explanation = format!(
+        "This project's test suite is invoked as:\n\n```bash\n{literal}\n```\n\n\
+         Run it before claiming a task is complete. Learned from {count} sessions in this \
+         project that used this invocation."
+    );
+    vec![SkillCandidate {
+        pattern_id: hash_signature(&format!("canonical-test-command::{best_sig}")),
+        name: format!("{SKILL_DIR_PREFIX}canonical-test-command"),
+        description: format!(
+            "Triggers when running or verifying tests in this project. The canonical test \
+             command is `{literal}` — use it rather than guessing a runner or scope."
+        ),
+        body: build_body(&title, &explanation, Some(&literal), &examples),
+        evidence_count: count,
+        last_seen_ts: seen.max_stamp(),
+        pattern_kind: "canonical-test-command",
+        project_slug: None,
+        example_session_ids: examples,
+        normalized_command: Some(best_sig.to_string()),
+    }]
+}
+
+/// `_detect_always_runs_after_edit`.
+fn detect_always_runs_after_edit(
+    sessions: &[Session],
+    min_occurrences: i64,
+    home: Option<&Path>,
+) -> Vec<SkillCandidate> {
+    let mut edit_sessions: OrderedSet = OrderedSet::default();
+    let mut sig_sessions: OrderedMap<OrderedSet> = OrderedMap::default();
+    let mut literal_counts: OrderedMap<OrderedCounter> = OrderedMap::default();
+    let mut last_seen: OrderedMap<SeenMap> = OrderedMap::default();
+    let mut edited_dirs: OrderedMap<OrderedCounter> = OrderedMap::default();
+
+    for session in sessions {
+        let mut seen_edit = false;
+        let mut dirs_this_session: Vec<String> = Vec::new();
+        let mut per_sig_here: Vec<String> = Vec::new();
+        let mut per_sig_seen: HashSet<String> = HashSet::new();
+        for event in &session.events {
+            for call in &event.tool_calls {
+                let paths = edited_paths(call);
+                if !paths.is_empty() {
+                    seen_edit = true;
+                    for path in paths {
+                        dirs_this_session.push(abbrev_home(&purepath_parent(&path), home));
+                    }
+                }
+                if !seen_edit {
+                    continue;
+                }
+                for command in parsed_commands(call) {
+                    if command.is_boring() {
+                        continue;
+                    }
+                    let sig = command.normalized();
+                    if per_sig_seen.insert(sig.clone()) {
+                        per_sig_here.push(sig.clone());
+                    }
+                    literal_counts.entry(&sig).add(&command.raw);
+                    last_seen.entry(&sig).bump(&session.session_id, &event.ts);
+                }
+            }
+        }
+        if seen_edit {
+            edit_sessions.insert(&session.session_id);
+        }
+        for sig in &per_sig_here {
+            sig_sessions.entry(sig).insert(&session.session_id);
+            for dir in &dirs_this_session {
+                edited_dirs.entry(sig).add(dir);
+            }
+        }
+    }
+
+    if edit_sessions.len() < min_occurrences {
+        return Vec::new();
+    }
+    let mut ranked: Vec<(&str, i64)> = sig_sessions
+        .iter()
+        .map(|(sig, sids)| (sig, sids.len()))
+        .collect();
+    // Descending, and STABLE: `sorted(..., reverse=True)` inverts the
+    // comparison rather than reversing the list, so equal counts keep the order
+    // the detector found them in.
+    ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+
+    let mut out: Vec<SkillCandidate> = Vec::new();
+    for (sig, count) in ranked {
+        if count < min_occurrences {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss, reason = "session counts are small")]
+        let ratio = count as f64 / edit_sessions.len().max(1) as f64;
+        if ratio < 0.5 {
+            continue;
+        }
+        let literal = literal_counts
+            .get(sig)
+            .and_then(OrderedCounter::most_common)
+            .unwrap_or_default()
+            .to_string();
+        let mut dir_hint = String::new();
+        if let Some(dirs) = edited_dirs.get(sig)
+            && let Some(top_dir) = dirs.most_common()
+            && !top_dir.is_empty()
+            && top_dir != "."
+            && top_dir != "~"
+        {
+            dir_hint = format!(" in `{top_dir}/`");
+        }
+        let seen = last_seen.get(sig).expect("populated with the signature");
+        let examples = seen.top_session_ids();
+        let title = format!("Run `{literal}` after editing files{dir_hint}");
+        let where_clause = if dir_hint.is_empty() {
+            " in this project".to_string()
+        } else {
+            dir_hint.clone()
+        };
+        let explanation = format!(
+            "After editing files{where_clause}, run:\n\n```bash\n{literal}\n```\n\n\
+             before claiming the task is complete. Learned from {count} of {} \
+             sessions that edited files and then ran this.",
+            edit_sessions.len()
+        );
+        out.push(SkillCandidate {
+            pattern_id: hash_signature(&format!("always-runs-after-edit::{sig}")),
+            name: format!("{SKILL_DIR_PREFIX}run-{}-after-edits", slugify(sig)),
+            description: format!(
+                "Triggers after editing files{where_clause}. Run `{literal}` to \
+                 verify the change before reporting the task done."
+            ),
+            body: build_body(&title, &explanation, Some(&literal), &examples),
+            evidence_count: count,
+            last_seen_ts: seen.max_stamp(),
+            pattern_kind: "always-runs-X-after-Y",
+            project_slug: None,
+            example_session_ids: examples,
+            normalized_command: Some(sig.to_string()),
+        });
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// `_detect_uses_tool_flag_combo`.
+fn detect_uses_tool_flag_combo(sessions: &[Session], min_occurrences: i64) -> Vec<SkillCandidate> {
+    // The Python key is the tuple `(exe, sub, sorted-flags)`; the joined form
+    // below is injective for our alphabet because `\u{0}` cannot appear in a
+    // shell token that `shlex` produced.
+    let mut combo_sessions: OrderedMap<OrderedSet> = OrderedMap::default();
+    let mut combo_raw: OrderedMap<OrderedCounter> = OrderedMap::default();
+    let mut combo_count: OrderedCounter = OrderedCounter::default();
+    let mut last_seen: OrderedMap<SeenMap> = OrderedMap::default();
+    let mut parts: HashMap<String, (String, String, Vec<String>)> = HashMap::new();
+
+    for session in sessions {
+        for event in &session.events {
+            for call in &event.tool_calls {
+                for command in parsed_commands(call) {
+                    if command.is_boring() || command.flags.is_empty() {
+                        continue;
+                    }
+                    let mut flags = command.flags.clone();
+                    flags.sort();
+                    flags.dedup();
+                    let sub = command.sub.clone().unwrap_or_default();
+                    let key = format!("{}\u{0}{}\u{0}{}", command.exe, sub, flags.join("\u{1}"));
+                    parts
+                        .entry(key.clone())
+                        .or_insert_with(|| (command.exe.clone(), sub.clone(), flags.clone()));
+                    combo_sessions.entry(&key).insert(&session.session_id);
+                    combo_raw.entry(&key).add(&command.raw);
+                    combo_count.add(&key);
+                    last_seen.entry(&key).bump(&session.session_id, &event.ts);
+                }
+            }
+        }
+    }
+
+    let mut ranked: Vec<(&str, (i64, i64))> = combo_sessions
+        .iter()
+        .map(|(key, sids)| {
+            (
+                key,
+                (
+                    sids.len(),
+                    combo_count.counts.get(key).copied().unwrap_or(0),
+                ),
+            )
+        })
+        .collect();
+    // Descending, and STABLE: `sorted(..., reverse=True)` inverts the
+    // comparison rather than reversing the list, so equal counts keep the order
+    // the detector found them in.
+    ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+
+    let mut out: Vec<SkillCandidate> = Vec::new();
+    for (key, (count, invocations)) in ranked {
+        if count < min_occurrences {
+            continue;
+        }
+        let (exe, sub, flags) = parts[key].clone();
+        let base = py_strip(&format!("{exe} {sub}")).to_string();
+        let literal = combo_raw
+            .get(key)
+            .and_then(OrderedCounter::most_common)
+            .unwrap_or_default()
+            .to_string();
+        let flags_str = flags.join(" ");
+        let seen = last_seen.get(key).expect("populated with the key");
+        let examples = seen.top_session_ids();
+        let title = format!("Use `{literal}` — keep the `{flags_str}` flag(s)");
+        let explanation = format!(
+            "When you run `{base}` in this project, include the `{flags_str}` flag(s):\n\n\
+             ```bash\n{literal}\n```\n\nLearned from {count} sessions ({invocations} invocations) \
+             that used this combination."
+        );
+        let mut normalized_parts = vec![exe.clone()];
+        if !sub.is_empty() {
+            normalized_parts.push(sub.clone());
+        }
+        normalized_parts.extend(flags.iter().cloned());
+        out.push(SkillCandidate {
+            pattern_id: hash_signature(&format!("flag-combo::{exe}::{sub}::{}", flags.join(","))),
+            name: format!("{SKILL_DIR_PREFIX}flags-{}", slugify(&base)),
+            description: format!(
+                "Triggers when running `{base}` in this project. Use `{literal}` — the \
+                 `{flags_str}` flag(s) are the established convention here."
+            ),
+            body: build_body(&title, &explanation, Some(&literal), &examples),
+            evidence_count: count,
+            last_seen_ts: seen.max_stamp(),
+            pattern_kind: "uses-tool-flag-combo",
+            project_slug: None,
+            example_session_ids: examples,
+            normalized_command: Some(normalized_parts.join(" ")),
+        });
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// `_recent_assistant_tool_calls`.
+fn recent_assistant_tool_calls(events: &[Event], upto_idx: usize) -> Vec<ToolCall> {
+    let mut out: Vec<ToolCall> = Vec::new();
+    let mut seen_assistant = 0;
+    let mut index = upto_idx;
+    while index > 0 && seen_assistant < 3 {
+        index -= 1;
+        let event = &events[index];
+        if !event.tool_calls.is_empty() {
+            out.extend(event.tool_calls.iter().cloned());
+            seen_assistant += 1;
+        }
+    }
+    out
+}
+
+/// `_detect_avoids_command`.
+fn detect_avoids_command(sessions: &[Session], min_occurrences: i64) -> Vec<SkillCandidate> {
+    let mut exe_sessions: OrderedMap<OrderedSet> = OrderedMap::default();
+    let mut exe_examples: OrderedMap<SeenMap> = OrderedMap::default();
+    for session in sessions {
+        for (index, event) in session.events.iter().enumerate() {
+            if !event.is_user_text || !negation_re().is_match(&event.text) {
+                continue;
+            }
+            let recent = recent_assistant_tool_calls(&session.events, index);
+            let lowered = event.text.to_lowercase();
+            for call in &recent {
+                for command in parsed_commands(call) {
+                    if command.exe.is_empty() || NAV_EXES.contains(&command.exe.as_str()) {
+                        continue;
+                    }
+                    let word = Regex::new(&format!(r"\b{}\b", regex::escape(&command.exe)))
+                        .expect("escaped literal");
+                    if word.is_match(&lowered) {
+                        exe_sessions.entry(&command.exe).insert(&session.session_id);
+                        exe_examples
+                            .entry(&command.exe)
+                            .bump(&session.session_id, &event.ts);
+                    }
+                }
+            }
+        }
+    }
+    let mut ranked: Vec<(&str, i64)> = exe_sessions
+        .iter()
+        .map(|(exe, sids)| (exe, sids.len()))
+        .collect();
+    // Descending, and STABLE: `sorted(..., reverse=True)` inverts the
+    // comparison rather than reversing the list, so equal counts keep the order
+    // the detector found them in.
+    ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+
+    let mut out: Vec<SkillCandidate> = Vec::new();
+    for (exe, count) in ranked {
+        if count < min_occurrences {
+            continue;
+        }
+        let seen = exe_examples.get(exe).expect("populated with the exe");
+        let examples = seen.top_session_ids();
+        let title = format!("Avoid `{exe}` in this project");
+        let explanation = format!(
+            "Across {count} sessions the user has steered Claude away from running `{exe}`. \
+             Don't reach for it by default — check `CLAUDE.md` for the preferred approach, \
+             or ask the user before using `{exe}`."
+        );
+        out.push(SkillCandidate {
+            pattern_id: hash_signature(&format!("avoids::{exe}")),
+            name: format!("{SKILL_DIR_PREFIX}avoid-{}", slugify(exe)),
+            description: format!(
+                "Triggers when about to run `{exe}`. The user has repeatedly corrected this in \
+                 this project — prefer the established alternative or ask first."
+            ),
+            body: build_body(&title, &explanation, None, &examples),
+            evidence_count: count,
+            last_seen_ts: seen.max_stamp(),
+            pattern_kind: "avoids-X",
+            project_slug: None,
+            example_session_ids: examples,
+            normalized_command: Some(exe.to_string()),
+        });
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// `_detect_never_touches_paths`.
+fn detect_never_touches_paths(
+    sessions: &[Session],
+    min_occurrences: i64,
+    home: Option<&Path>,
+) -> Vec<SkillCandidate> {
+    let mut path_sessions: OrderedMap<OrderedSet> = OrderedMap::default();
+    let mut path_examples: OrderedMap<SeenMap> = OrderedMap::default();
+    for session in sessions {
+        for (index, event) in session.events.iter().enumerate() {
+            if !event.is_user_text || !negation_re().is_match(&event.text) {
+                continue;
+            }
+            let recent = recent_assistant_tool_calls(&session.events, index);
+            let lowered = event.text.to_lowercase();
+            for call in &recent {
+                for path in edited_paths(call) {
+                    let norm = abbrev_home(&path, home);
+                    let base = purepath_name(&path);
+                    if base.is_empty() {
+                        continue;
+                    }
+                    if lowered.contains(&base.to_lowercase())
+                        || lowered.contains(&norm.to_lowercase())
+                        || lowered.contains(&path.to_lowercase())
+                    {
+                        path_sessions.entry(&norm).insert(&session.session_id);
+                        path_examples
+                            .entry(&norm)
+                            .bump(&session.session_id, &event.ts);
+                    }
+                }
+            }
+        }
+    }
+    let mut ranked: Vec<(&str, i64)> = path_sessions
+        .iter()
+        .map(|(path, sids)| (path, sids.len()))
+        .collect();
+    // Descending, and STABLE: `sorted(..., reverse=True)` inverts the
+    // comparison rather than reversing the list, so equal counts keep the order
+    // the detector found them in.
+    ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+
+    let mut out: Vec<SkillCandidate> = Vec::new();
+    for (path, count) in ranked {
+        if count < min_occurrences {
+            continue;
+        }
+        let seen = path_examples.get(path).expect("populated with the path");
+        let examples = seen.top_session_ids();
+        let title = format!("Never modify `{path}`");
+        let explanation = format!(
+            "Across {count} sessions the user has corrected Claude away from editing `{path}`. \
+             Treat it as off-limits — if a change seems to require touching it, stop and ask, \
+             or look for the right file (tests typically use a temp copy / fixture)."
+        );
+        out.push(SkillCandidate {
+            pattern_id: hash_signature(&format!("never-touches::{path}")),
+            name: format!(
+                "{SKILL_DIR_PREFIX}never-touch-{}",
+                slugify(&purepath_name(path))
+            ),
+            description: format!(
+                "Triggers when about to edit `{path}` (or anything that resolves to it). The \
+                 user has repeatedly steered Claude away from modifying it in this project."
+            ),
+            body: build_body(&title, &explanation, None, &examples),
+            evidence_count: count,
+            last_seen_ts: seen.max_stamp(),
+            pattern_kind: "never-touches-paths",
+            project_slug: None,
+            example_session_ids: examples,
+            normalized_command: None,
+        });
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+// ── public synthesis API (`skill_synth.py:925`–`:1053`) ──────────────────────
+
+/// `synthesize_skills`.
+///
+/// # Errors
+/// The `ValueError`s the CLI turns into `UsageError`s: a missing scope, a
+/// `min_occurrences` below 1, an unknown pattern kind, or a `since` string
+/// `parse_since` rejects. Store failures propagate as themselves.
+pub fn synthesize_skills(
+    conn: &Connection,
+    project: Option<&str>,
+    projects: Option<&[String]>,
+    min_occurrences: i64,
+    pattern_kinds: Option<&[String]>,
+    since: Option<&str>,
+    home: Option<&Path>,
+) -> Result<Vec<SkillCandidate>> {
+    if project.is_none() && projects.is_none_or(<[String]>::is_empty) {
+        anyhow::bail!(
+            "synthesize_skills requires a scope: pass project=<slug> or \
+             projects=[<slug>, ...]. Mining every project is intentionally \
+             not supported."
+        );
+    }
+    if min_occurrences < 1 {
+        anyhow::bail!("min_occurrences must be >= 1");
+    }
+    let kinds: Vec<String> = match pattern_kinds {
+        Some(list) if !list.is_empty() => list.to_vec(),
+        _ => ALL_PATTERN_KINDS.iter().map(ToString::to_string).collect(),
+    };
+    let mut unknown: Vec<&String> = kinds
+        .iter()
+        .filter(|kind| !ALL_PATTERN_KINDS.contains(&kind.as_str()))
+        .collect();
+    unknown.sort();
+    unknown.dedup();
+    if !unknown.is_empty() {
+        let rendered: Vec<String> = unknown
+            .iter()
+            .map(|kind| stax_core::queries::paths::py_repr(kind))
+            .collect();
+        anyhow::bail!("unknown pattern kind(s): [{}]", rendered.join(", "));
+    }
+    // `parse_since(since)` — validated early so a bad value fails fast.
+    let cutoff = pytime::parse_since(since)?;
+
+    let sessions = load_sessions(conn, project, projects, cutoff.as_deref())?;
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidate_slug = scope_label(project, projects);
+
+    let mut raw_candidates: Vec<SkillCandidate> = Vec::new();
+    for kind in &kinds {
+        let found = match kind.as_str() {
+            "canonical-test-command" => detect_canonical_test_command(&sessions, min_occurrences),
+            "always-runs-X-after-Y" => {
+                detect_always_runs_after_edit(&sessions, min_occurrences, home)
+            }
+            "uses-tool-flag-combo" => detect_uses_tool_flag_combo(&sessions, min_occurrences),
+            "avoids-X" => detect_avoids_command(&sessions, min_occurrences),
+            "never-touches-paths" => detect_never_touches_paths(&sessions, min_occurrences, home),
+            _ => Vec::new(),
+        };
+        for mut candidate in found {
+            candidate.project_slug = candidate_slug.clone();
+            raw_candidates.push(candidate);
+        }
+    }
+    Ok(merge_and_dedup(raw_candidates))
+}
+
+/// `_merge_and_dedup`.
+#[must_use]
+pub fn merge_and_dedup(candidates: Vec<SkillCandidate>) -> Vec<SkillCandidate> {
+    let mut name_order: Vec<String> = Vec::new();
+    let mut by_name: HashMap<String, SkillCandidate> = HashMap::new();
+    for candidate in candidates {
+        match by_name.get(&candidate.name) {
+            Some(current) if candidate.rank() <= current.rank() => {}
+            Some(_) => {
+                by_name.insert(candidate.name.clone(), candidate);
+            }
+            None => {
+                name_order.push(candidate.name.clone());
+                by_name.insert(candidate.name.clone(), candidate);
+            }
+        }
+    }
+
+    let mut cmd_order: Vec<String> = Vec::new();
+    let mut by_cmd: HashMap<String, SkillCandidate> = HashMap::new();
+    let mut leftovers: Vec<SkillCandidate> = Vec::new();
+    for name in &name_order {
+        let candidate = by_name[name].clone();
+        let Some(command) = candidate.normalized_command.clone() else {
+            leftovers.push(candidate);
+            continue;
+        };
+        match by_cmd.get(&command) {
+            None => {
+                cmd_order.push(command.clone());
+                by_cmd.insert(command, candidate);
+            }
+            Some(current) => {
+                let challenger = (
+                    pattern_priority(candidate.pattern_kind),
+                    -candidate.evidence_count,
+                );
+                let champion = (
+                    pattern_priority(current.pattern_kind),
+                    -current.evidence_count,
+                );
+                if challenger < champion {
+                    by_cmd.insert(command, candidate);
+                }
+            }
+        }
+    }
+
+    let mut merged: Vec<SkillCandidate> = leftovers;
+    merged.extend(
+        cmd_order
+            .into_iter()
+            .map(|command| by_cmd[&command].clone()),
+    );
+    merged.sort_by_key(|candidate| std::cmp::Reverse(candidate.rank()));
+    merged
+}
+
+// ── filesystem: write / list / clean (`skill_synth.py:1059`–`:1256`) ─────────
+
+/// `_frontmatter`.
+#[must_use]
+pub fn frontmatter(text: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = py_splitlines(text);
+    if lines.first().map(|line| py_strip(line)) != Some("---") {
+        return Vec::new();
+    }
+    let Some(end) = lines.iter().skip(1).position(|line| *line == "---") else {
+        return Vec::new();
+    };
+    let end = end + 1;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in &lines[1..end] {
+        let stripped = py_strip(line);
+        if stripped.is_empty() || stripped.starts_with('#') || !stripped.contains(':') {
+            continue;
+        }
+        let (key, value) = stripped.split_once(':').expect("contains a colon");
+        out.push((py_strip(key).to_string(), py_strip(value).to_string()));
+    }
+    out
+}
+
+/// `str.splitlines()` — a trailing newline does NOT produce an empty last line.
+fn py_splitlines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
+}
+
+fn frontmatter_get<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+/// `_is_generated_skill_md`.
+#[must_use]
+pub fn is_generated_skill_md(path: &Path) -> Option<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let fields = frontmatter(&text);
+    if frontmatter_get(&fields, "auto_generated")
+        .map(|value| py_strip(value).to_lowercase())
+        .as_deref()
+        == Some("true")
+    {
+        return Some(fields);
+    }
+    if text.contains(GENERATED_MARKER_PREFIX) && !fields.is_empty() {
+        return Some(fields);
+    }
+    None
+}
+
+/// `WriteResult`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteResult {
+    /// The directory name actually used (a collision adds a hash suffix).
+    pub name: String,
+    /// `<out_dir>/<name>/SKILL.md`.
+    pub path: PathBuf,
+    /// created | updated | unchanged | skipped-user-authored | would-create |
+    /// would-update.
+    pub action: &'static str,
+}
+
+/// `write_skill_files`.
+///
+/// # Errors
+/// Any filesystem failure — Python would raise `OSError` and Click would print
+/// a traceback, so this port surfaces it rather than swallowing it.
+pub fn write_skill_files(
+    candidates: &[SkillCandidate],
+    out_dir: &Path,
+    generated_at_micros: i64,
+    dry_run: bool,
+) -> Result<Vec<WriteResult>> {
+    let mut results: Vec<WriteResult> = Vec::new();
+    let mut used_dirs: HashSet<String> = HashSet::new();
+    for candidate in candidates {
+        let mut name = candidate.name.clone();
+        let mut target_dir = out_dir.join(&name);
+        let collides = used_dirs.contains(&name)
+            || (target_dir.exists()
+                && is_generated_skill_md(&target_dir.join("SKILL.md")).is_some_and(|existing| {
+                    frontmatter_get(&existing, "pattern_id")
+                        .is_some_and(|pid| !pid.is_empty() && pid != candidate.pattern_id)
+                }));
+        if collides {
+            name = format!("{}-{}", candidate.name, &candidate.pattern_id[..6]);
+            target_dir = out_dir.join(&name);
+        }
+        used_dirs.insert(name.clone());
+        let skill_md = target_dir.join("SKILL.md");
+        let rendered = render_skill_md(candidate, generated_at_micros);
+
+        if skill_md.exists() {
+            let Some(_) = is_generated_skill_md(&skill_md) else {
+                results.push(WriteResult {
+                    name,
+                    path: skill_md,
+                    action: "skipped-user-authored",
+                });
+                continue;
+            };
+            let prior = std::fs::read_to_string(&skill_md)
+                .with_context(|| format!("reading {}", skill_md.display()))?;
+            if strip_volatile(&prior) == strip_volatile(&rendered) {
+                results.push(WriteResult {
+                    name,
+                    path: skill_md,
+                    action: "unchanged",
+                });
+                continue;
+            }
+            if dry_run {
+                results.push(WriteResult {
+                    name,
+                    path: skill_md,
+                    action: "would-update",
+                });
+                continue;
+            }
+            let backup = skill_md.with_extension("md.bak");
+            std::fs::copy(&skill_md, &backup)
+                .with_context(|| format!("backing up {}", skill_md.display()))?;
+            std::fs::create_dir_all(&target_dir)?;
+            std::fs::write(&skill_md, &rendered)
+                .with_context(|| format!("writing {}", skill_md.display()))?;
+            results.push(WriteResult {
+                name,
+                path: skill_md,
+                action: "updated",
+            });
+        } else {
+            if dry_run {
+                results.push(WriteResult {
+                    name,
+                    path: skill_md,
+                    action: "would-create",
+                });
+                continue;
+            }
+            std::fs::create_dir_all(&target_dir)?;
+            std::fs::write(&skill_md, &rendered)
+                .with_context(|| format!("writing {}", skill_md.display()))?;
+            results.push(WriteResult {
+                name,
+                path: skill_md,
+                action: "created",
+            });
+        }
+    }
+    Ok(results)
+}
+
+/// `_strip_volatile`.
+#[must_use]
+pub fn strip_volatile(text: &str) -> String {
+    volatile_line_re()
+        .replace_all(text, "<volatile>")
+        .to_string()
+}
+
+/// One row of `list_generated_skills`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedSkill {
+    /// `fm["name"]`, falling back to the directory name.
+    pub name: String,
+    /// The `SKILL.md` path.
+    pub path: String,
+    /// `fm["pattern_kind"]`.
+    pub pattern_kind: String,
+    /// `fm["pattern_id"]`.
+    pub pattern_id: String,
+    /// `int(fm["evidence_count"])`, or 0 when it does not parse.
+    pub evidence_count: i64,
+    /// `fm["generated_at"]`.
+    pub generated_at: String,
+    /// `fm["generated_from"]`.
+    pub generated_from: String,
+    /// `fm["description"]`.
+    pub description: String,
+}
+
+impl GeneratedSkill {
+    /// The dict `skills list --format json` serialises.
+    #[must_use]
+    pub fn to_dict(&self) -> Value {
+        Value::Object(vec![
+            ("name".to_string(), Value::from(&self.name)),
+            ("path".to_string(), Value::from(&self.path)),
+            ("pattern_kind".to_string(), Value::from(&self.pattern_kind)),
+            ("pattern_id".to_string(), Value::from(&self.pattern_id)),
+            (
+                "evidence_count".to_string(),
+                Value::Int(self.evidence_count),
+            ),
+            ("generated_at".to_string(), Value::from(&self.generated_at)),
+            (
+                "generated_from".to_string(),
+                Value::from(&self.generated_from),
+            ),
+            ("description".to_string(), Value::from(&self.description)),
+        ])
+    }
+}
+
+/// `sorted(skills_dir.iterdir())` — the entries, sorted by full path string.
+fn sorted_children(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut children: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    children.sort_by(|left, right| {
+        left.to_string_lossy()
+            .as_bytes()
+            .cmp(right.to_string_lossy().as_bytes())
+    });
+    children
+}
+
+/// `list_generated_skills`.
+#[must_use]
+pub fn list_generated_skills(skills_dir: &Path) -> Vec<GeneratedSkill> {
+    if !skills_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut out: Vec<GeneratedSkill> = Vec::new();
+    for child in sorted_children(skills_dir) {
+        if !child.is_dir() {
+            continue;
+        }
+        let dir_name = child
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !dir_name.starts_with(SKILL_DIR_PREFIX) {
+            continue;
+        }
+        let skill_md = child.join("SKILL.md");
+        let Some(fields) = is_generated_skill_md(&skill_md) else {
+            continue;
+        };
+        let evidence = frontmatter_get(&fields, "evidence_count")
+            .unwrap_or("0")
+            .parse::<i64>()
+            .unwrap_or(0);
+        out.push(GeneratedSkill {
+            name: frontmatter_get(&fields, "name")
+                .unwrap_or(&dir_name)
+                .to_string(),
+            path: skill_md.to_string_lossy().to_string(),
+            pattern_kind: frontmatter_get(&fields, "pattern_kind")
+                .unwrap_or_default()
+                .to_string(),
+            pattern_id: frontmatter_get(&fields, "pattern_id")
+                .unwrap_or_default()
+                .to_string(),
+            evidence_count: evidence,
+            generated_at: frontmatter_get(&fields, "generated_at")
+                .unwrap_or_default()
+                .to_string(),
+            generated_from: frontmatter_get(&fields, "generated_from")
+                .unwrap_or_default()
+                .to_string(),
+            description: frontmatter_get(&fields, "description")
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+    out
+}
+
+/// `clean_generated_skills`.
+///
+/// # Errors
+/// The `ValueError` from `parse_since(older_than)`, or a removal failure.
+pub fn clean_generated_skills(
+    skills_dir: &Path,
+    older_than: Option<&str>,
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
+    if !skills_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    // `parse_since(older_than) if older_than else None` — the empty string is
+    // falsy in Python, so `--older-than ''` never reaches the parser.
+    let cutoff = match older_than.filter(|value| !value.is_empty()) {
+        Some(value) => pytime::parse_since(Some(value))?,
+        None => None,
+    };
+    let mut removed: Vec<PathBuf> = Vec::new();
+    for child in sorted_children(skills_dir) {
+        if !child.is_dir() {
+            continue;
+        }
+        let dir_name = child
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !dir_name.starts_with(SKILL_DIR_PREFIX) {
+            continue;
+        }
+        let Some(fields) = is_generated_skill_md(&child.join("SKILL.md")) else {
+            continue;
+        };
+        if let Some(cutoff) = cutoff.as_deref() {
+            let generated_at = py_strip(frontmatter_get(&fields, "generated_at").unwrap_or(""));
+            if !generated_at.is_empty() && generated_at >= cutoff {
+                continue;
+            }
+            if generated_at.is_empty() {
+                continue;
+            }
+        }
+        removed.push(child.clone());
+        if !dry_run {
+            std::fs::remove_dir_all(&child)
+                .with_context(|| format!("removing {}", child.display()))?;
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(name: &str, command: &str) -> ToolCall {
+        ToolCall {
+            name: name.to_string(),
+            args: Value::Object(vec![(
+                "command".to_string(),
+                Value::Str(command.to_string()),
+            )]),
+        }
+    }
+
+    #[test]
+    fn shlex_keeps_a_quoted_argument_whole() {
+        assert_eq!(
+            shlex_split("pytest -k \"not slow\" -q").expect("balanced"),
+            ["pytest", "-k", "not slow", "-q"]
+        );
+        assert_eq!(
+            shlex_split("echo 'a b' c").expect("balanced"),
+            ["echo", "a b", "c"]
+        );
+        // `comments=True`: the rest of the line goes, the token in flight stays.
+        assert_eq!(
+            shlex_split("pytest -q # run the suite").expect("balanced"),
+            ["pytest", "-q"]
+        );
+        // An unbalanced quote is `ValueError`, which the caller answers with
+        // `str.split()`.
+        assert!(shlex_split("pytest -k \"not slow").is_none());
+        assert!(shlex_split("trailing\\").is_none());
+    }
+
+    #[test]
+    fn the_fallback_split_is_whitespace_runs() {
+        let parsed = parse_command("pytest -k \"not slow").expect("falls back");
+        assert_eq!(parsed.exe, "pytest");
+        assert_eq!(parsed.flags, ["-k"]);
+        assert_eq!(parsed.positionals, ["\"not", "slow"]);
+    }
+
+    #[test]
+    fn python_dash_m_and_npx_rewrite_the_executable() {
+        assert_eq!(
+            parse_command("python -m pytest -q").expect("parses").exe,
+            "pytest"
+        );
+        assert_eq!(
+            parse_command("npx vitest run").expect("parses").exe,
+            "vitest"
+        );
+        assert_eq!(
+            parse_command("/usr/local/bin/pytest -q")
+                .expect("parses")
+                .exe,
+            "pytest"
+        );
+        assert_eq!(
+            parse_command("FOO=1 sudo pytest -q").expect("parses").exe,
+            "pytest"
+        );
+    }
+
+    #[test]
+    fn the_normalized_signature_drops_path_positionals_and_sorts_flags() {
+        let parsed = parse_command("pytest tests/ -q --tb=short").expect("parses");
+        assert_eq!(parsed.normalized(), "pytest --tb -q");
+        assert_eq!(parsed.sub, None);
+    }
+
+    #[test]
+    fn segments_split_on_operators_but_not_pipes() {
+        assert_eq!(
+            split_command_segments("a && b || c ; d\ne | f"),
+            ["a", "b", "c", "d", "e | f"]
+        );
+    }
+
+    #[test]
+    fn most_common_breaks_ties_toward_the_first_inserted() {
+        let mut counter = OrderedCounter::default();
+        counter.add("first");
+        counter.add("second");
+        counter.add("second");
+        assert_eq!(counter.most_common(), Some("second"));
+        let mut tied = OrderedCounter::default();
+        tied.add("first");
+        tied.add("second");
+        assert_eq!(tied.most_common(), Some("first"));
+        assert_eq!(tied.total(), 2);
+    }
+
+    #[test]
+    fn slugify_collapses_runs_and_truncates_at_48() {
+        assert_eq!(slugify("pytest --tb -q"), "pytest-tb-q");
+        assert_eq!(slugify("!!!"), "pattern");
+        assert_eq!(slugify(&"a-".repeat(40)).chars().count(), 47);
+    }
+
+    #[test]
+    fn purepath_parent_matches_pathlib() {
+        assert_eq!(purepath_parent("/a/b/c.py"), "/a/b");
+        assert_eq!(purepath_parent("c.py"), ".");
+        assert_eq!(purepath_parent("/c.py"), "/");
+        assert_eq!(purepath_name("/a/b/c.py"), "c.py");
+        assert_eq!(purepath_name("/a/b/"), "b");
+    }
+
+    #[test]
+    fn a_bash_tool_call_yields_every_segment() {
+        let commands = parsed_commands(&call("Bash", "cd /tmp && pytest -q"));
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[1].exe, "pytest");
+        assert!(commands[0].is_boring());
+        assert!(parsed_commands(&call("Edit", "pytest")).is_empty());
+    }
+
+    #[test]
+    fn tool_calls_come_out_of_the_claude_shape() {
+        let raw = pyjson::loads(
+            r#"{"message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q"}}]}}"#,
+        )
+        .expect("valid JSON");
+        let calls = tool_calls_from_raw(Some(&raw));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "Bash");
+        assert_eq!(parsed_commands(&calls[0])[0].exe, "pytest");
+    }
+
+    #[test]
+    fn a_tool_result_only_payload_is_not_user_text() {
+        let raw = pyjson::loads(
+            r#"{"message": {"content": [{"type": "tool_result", "content": "ok"}]}}"#,
+        )
+        .expect("valid JSON");
+        assert!(is_tool_result_payload(Some(&raw)));
+        let with_text = pyjson::loads(
+            r#"{"message": {"content": [{"type": "tool_result"}, {"type": "text", "text": "hi"}]}}"#,
+        )
+        .expect("valid JSON");
+        assert!(!is_tool_result_payload(Some(&with_text)));
+    }
+
+    #[test]
+    fn the_negation_cues_match_the_python_alternation() {
+        for text in [
+            "don't use pkill",
+            "Do not edit that",
+            "revert it",
+            "no, stop",
+        ] {
+            assert!(negation_re().is_match(text), "{text}");
+        }
+        assert!(!negation_re().is_match("please run the tests"));
+    }
+
+    #[test]
+    fn hash_signature_is_the_first_sixteen_hex_digits() {
+        assert_eq!(
+            hash_signature("avoids::pkill"),
+            &sha256_hex("avoids::pkill")[..16]
+        );
+        assert_eq!(hash_signature("x").len(), 16);
+    }
+
+    fn sha256_hex(text: &str) -> String {
+        use std::fmt::Write as _;
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .fold(String::new(), |mut acc, byte| {
+                let _ = write!(acc, "{byte:02x}");
+                acc
+            })
+    }
+
+    #[test]
+    fn frontmatter_reads_only_the_leading_block() {
+        let text = "---\nname: auto-x\nauto_generated: true\n---\n\nbody: not a field\n";
+        let fields = frontmatter(text);
+        assert_eq!(frontmatter_get(&fields, "name"), Some("auto-x"));
+        assert_eq!(frontmatter_get(&fields, "body"), None);
+        assert!(frontmatter("no frontmatter\n").is_empty());
+    }
+
+    #[test]
+    fn strip_volatile_erases_both_stamped_lines() {
+        let text = "generated_at: 2026-01-01T00:00:00+00:00\n<!-- Generated by stackunderflow skills generate at X from 5 sessions -->\nkeep\n";
+        assert_eq!(strip_volatile(text), "<volatile>\n<volatile>\nkeep\n");
+    }
+}

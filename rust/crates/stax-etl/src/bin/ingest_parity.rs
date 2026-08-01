@@ -75,17 +75,20 @@ struct TableSpec {
     order_by: &'static str,
 }
 
-const DEFERRED_HOOK: &str = "written by the deferred PostIngestHook body \
-    (claude_teams.materialize_team_metadata, RS-2-004 — wave 2, open), not by \
-    the ingest layer; counted in deferred_hook.txt (DIV-042)";
-
 const SURROGATE: &str = "surrogate key — its value is enumerate order (wave-2 \
     order-only divergence), and the content key replaces it";
 
-/// The five tables. The spec's gate names four; `ingest_log` is the fifth
+/// The seven tables. The spec's gate names four; `ingest_log` is the fifth
 /// because the *watermark* is the thing wave 4 adds and it lives nowhere else —
 /// diffing the four without it would prove the rows match while saying nothing
 /// about whether the next pass resumes from the same place.
+///
+/// `agent_teams` and `commit_session_link` are the sixth and seventh, added
+/// when **DIV-042 closed**: they are the two tables the `PostIngestHook` body
+/// writes, and until that body existed there was nothing on the Rust side to
+/// compare. `sessions`' four team columns joined the diff in the same change —
+/// the exclusion that used to carry the counted reason is gone, and
+/// `deferred_hook.txt` now reports a gap of zero rather than of 41 sessions.
 const TABLES: &[TableSpec] = &[
     TableSpec {
         name: "projects",
@@ -98,24 +101,10 @@ const TABLES: &[TableSpec] = &[
         name: "sessions",
         from: "sessions t JOIN projects p ON p.id = t.project_id",
         key_select: &[("k_provider", "p.provider"), ("k_slug", "p.slug")],
-        exclude: &[
-            ("id", SURROGATE),
-            ("project_id", SURROGATE),
-            // The four agent-team columns are NOT written by the ingest layer on
-            // either side. They are written by `ClaudeAdapter.
-            // materialize_metadata` -> `claude_teams.materialize_team_metadata`
-            // (RS-2-004, 926 ln, wave 2, still open), which the wave-4
-            // `PostIngestHook` deliberately stubs. `discover_teams_from_jsonl`
-            // reads the transcripts themselves, so the columns fill even on a
-            // machine with no `~/.claude/teams` — which is why a big enough
-            // corpus surfaces them. Excluding them keeps this gate measuring
-            // wave 4's contract; the size of the gap is reported separately by
-            // `deferred_hook.txt` rather than left to a reader's imagination.
-            ("team_id", DEFERRED_HOOK),
-            ("spawned_by_session_id", DEFERRED_HOOK),
-            ("spawn_prompt", DEFERRED_HOOK),
-            ("agent_role", DEFERRED_HOOK),
-        ],
+        // `team_id`, `spawned_by_session_id`, `spawn_prompt` and `agent_role`
+        // were excluded here with a counted reason until DIV-042 closed. They
+        // are compared like every other column now.
+        exclude: &[("id", SURROGATE), ("project_id", SURROGATE)],
         order_by: "p.provider, p.slug, t.session_id",
     },
     TableSpec {
@@ -173,6 +162,24 @@ const TABLES: &[TableSpec] = &[
             ),
         ],
         order_by: "t.file_path, t.session_id",
+    },
+    // ── the PostIngestHook's own two tables (DIV-042) ────────────────────────
+    TableSpec {
+        name: "agent_teams",
+        // `project_id` is a real attribution, not just a surrogate: it is the
+        // project the team is filed under. Resolved to `provider/slug` so the
+        // check survives the id permutation.
+        from: "agent_teams t LEFT JOIN projects p ON p.id = t.project_id",
+        key_select: &[("k_provider", "p.provider"), ("k_slug", "p.slug")],
+        exclude: &[("project_id", SURROGATE)],
+        order_by: "t.team_id",
+    },
+    TableSpec {
+        name: "commit_session_link",
+        from: "commit_session_link t",
+        key_select: &[],
+        exclude: &[("id", SURROGATE)],
+        order_by: "t.session_id, t.commit_sha",
     },
 ];
 
@@ -332,7 +339,10 @@ fn dump_cmd(store: &Path, outdir: &Path) -> Result<()> {
         }
         println!("{:<14} rows={}", spec.name, rows.len());
     }
-    // The size of the deferred-hook gap, as a number rather than an omission.
+    // What DIV-042 used to measure. It stays in the dump after the close, as
+    // the number the two sides now have to AGREE on rather than the size of a
+    // hole: a hook that silently stopped running would show up here as a
+    // 41 → 0 collapse even if the `sessions` diff were somehow satisfied.
     let filled: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sessions WHERE team_id IS NOT NULL \
@@ -350,7 +360,7 @@ fn dump_cmd(store: &Path, outdir: &Path) -> Result<()> {
         outdir.join("deferred_hook.txt"),
         format!(
             "sessions_with_team_metadata\t{filled}\nsessions_total\t{total}\n\
-             source\tclaude_teams.materialize_team_metadata (RS-2-004, open)\n"
+             source\tclaude_teams.materialize_team_metadata (RS-2-004, ported)\n"
         ),
     )?;
     println!("deferred_hook  sessions_with_team_metadata={filled}/{total}");

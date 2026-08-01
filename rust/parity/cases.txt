@@ -282,3 +282,331 @@ C-status-json         | repo | status --format json --no-auto-ingest
 C-status-fmt-text     | repo | status --format text --no-auto-ingest
 C-status-lastwins     | repo | status --auto-ingest --no-auto-ingest
 C-status-cwd-tmp      | tmp  | status --no-auto-ingest
+
+# ══ WAVE 8 TRANCHE 2 — the writer family ══════════════════════════════════════
+#
+# T-*  rows. Three mechanisms are in play and each is named where it is used:
+#   · `@home[:SEED]` — a case-local home, diffed recursively after the run.
+#   · cwd token `home` — run INSIDE that home, with `$HOME` pointed at it, so a
+#     `--scope project` installer writes into the diffed tree and never into this
+#     worktree, and `--scope user` never into the maintainer's real ~/.claude.
+#   · stdin is /dev/null for every row, which is what makes `backup restore`'s
+#     `click.confirm` abort deterministically instead of reading a terminal.
+#
+# `backup create` is NOT here: its directory name is `datetime.now()` to the
+# second, so two runs never agree. It is proven by `rust/backup-differ.sh`
+# (argv interception + a real run on scratch trees). Same reason wave 5 proved
+# its six wall-clock rows off-matrix.
+
+# ── backup restore: every branch that does not actually restore ──────────────
+T-bak-restore-escape  | home@home:backup-tree   | backup restore ../etc
+T-bak-restore-missing | home@home:backup-tree   | backup restore nope
+T-bak-restore-empty   | home@home:backup-tree   | backup restore ''
+T-bak-restore-dry     | home@home:backup-tree   | backup restore 2026-07-30_120000 --dry-run
+T-bak-restore-dry-old | home@home:backup-tree   | backup restore 2026-06-01_000000 --dry-run
+T-bak-restore-file    | home@home:backup-tree   | backup restore notadir --dry-run
+T-bak-restore-confirm | home@home:backup-tree   | backup restore 2026-07-30_120000
+T-bak-restore-none    | home@home               | backup restore anything
+
+# ── backup auto: the cron leg (this host is not Darwin; the plist is a golden) ─
+T-bak-auto-default    | repo@home               | backup auto
+T-bak-auto-enable     | repo@home               | backup auto --enable
+T-bak-auto-disable    | repo@home               | backup auto --disable
+T-bak-auto-lastwins   | repo@home               | backup auto --enable --disable
+T-bak-auto-lastwins2  | repo@home               | backup auto --disable --enable
+
+# ── guide: install / uninstall / status, both scopes, on a case-local tree ────
+T-guide-status-fresh  | home@home               | guide status
+T-guide-status-json   | home@home               | guide status --format json
+T-guide-status-proj   | home@home               | guide status --scope project
+T-guide-status-user   | home@home               | guide status --scope user
+T-guide-install-dry   | home@home               | guide install --dry-run
+T-guide-install       | home@home               | guide install
+T-guide-install-user  | home@home               | guide install --scope user
+T-guide-install-exist | home@home:guide-existing | guide install
+T-guide-install-stale | home@home:guide-stale   | guide install
+T-guide-status-stale  | home@home:guide-stale   | guide status --scope project
+T-guide-stale-json    | home@home:guide-stale   | guide status --scope project --format json
+T-guide-uninst-none   | home@home               | guide uninstall
+T-guide-uninst-stale  | home@home:guide-stale   | guide uninstall
+T-guide-uninst-exist  | home@home:guide-existing | guide uninstall
+
+# ── hooks status / repair: read-only and rewrite-only, no store bootstrap ─────
+T-hooks-status-none   | home@home               | hooks status
+T-hooks-status-json   | home@home               | hooks status --format json
+T-hooks-status-inst   | home@home:hooks-installed | hooks status
+T-hooks-status-i-json | home@home:hooks-installed | hooks status --format json
+T-hooks-status-stale  | home@home:hooks-stale   | hooks status --scope project
+T-hooks-status-bad    | home@home:hooks-badjson | hooks status --scope project
+T-hooks-status-badjs  | home@home:hooks-badjson | hooks status --scope project --format json
+T-hooks-status-other  | home@home:hooks-other   | hooks status --scope user
+T-hooks-repair-clean  | home@home               | hooks repair
+T-hooks-repair-dry    | home@home:hooks-stale   | hooks repair --dry-run
+T-hooks-repair        | home@home:hooks-stale   | hooks repair
+T-hooks-repair-user   | home@home:hooks-stale   | hooks repair --scope user
+T-hooks-repair-all    | home@home:hooks-stale   | hooks repair --scope all
+T-hooks-repair-inst   | home@home:hooks-installed | hooks repair
+
+# ── hooks uninstall: the "only ours, never the file" invariant ───────────────
+T-hooks-uninst-none   | home@home               | hooks uninstall
+T-hooks-uninst-inst   | home@home:hooks-installed | hooks uninstall
+T-hooks-uninst-other  | home@home:hooks-other   | hooks uninstall
+T-hooks-uninst-bad    | home@home:hooks-badjson | hooks uninstall
+T-hooks-uninst-notobj | home@home:hooks-notobject | hooks uninstall
+
+# ── hooks install: dry runs (no store bootstrap) then the real writes ────────
+T-hooks-inst-dry      | home@home               | hooks install --dry-run
+T-hooks-inst-dry-cap  | home@home               | hooks install --dry-run --capture-content
+T-hooks-inst-dry-inj  | home@home               | hooks install --dry-run --inject
+T-hooks-inst-dry-both | home@home               | hooks install --dry-run --capture-content --inject
+T-hooks-inst-dry-noop | home@home:hooks-installed | hooks install --dry-run --inject
+T-hooks-inst-dry-st   | home@home:hooks-stale   | hooks install --dry-run
+T-hooks-inst-dry-bad  | home@home:hooks-badjson | hooks install --dry-run
+T-hooks-inst-dry-nobj | home@home:hooks-notobject | hooks install --dry-run
+T-hooks-inst          | home@home:hooks-fresh   | hooks install
+T-hooks-inst-user     | home@home:hooks-fresh   | hooks install --scope user
+T-hooks-inst-inject   | home@home:hooks-fresh   | hooks install --inject
+T-hooks-inst-cap      | home@home:hooks-fresh   | hooks install --capture-content
+T-hooks-inst-stale    | home@home:hooks-stale   | hooks install
+T-hooks-inst-other    | home@home:hooks-other   | hooks install
+
+# ── hooks run: the stdin contract (payload is /dev/null → `{}` on both sides) ─
+# `hooks run stackunderflow-stop` is NOT a row: the capture handlers write a
+# `captured_events` row stamped with the wall clock, so the two store.db files
+# differ by construction. Wave 6's `hooks-parity.sh` owns that proof (80/80
+# invocations + a diffed `captured_events`); what these rows owe is that the
+# `stax hooks run` SURFACE reaches the same handlers, which the two
+# non-writing ids below establish.
+T-hooks-run-unknown   | home@home:hooks-fresh   | hooks run not-a-hook
+T-hooks-run-inject    | home@home:hooks-fresh   | hooks run stackunderflow-session-start
+
+# ── sync: the network verbs, proven on the branches that never reach a network ─
+#
+# The sync LIBRARY is proven by construction elsewhere — `rust/sync-parity.sh`
+# runs 173 rows over `keys`/`bucket`/`ssh_store`/`runner`/`merge`/`egress`,
+# including the ssh ARGV rows, and no case there reaches a socket either. What
+# those rows do NOT cover is this CLI shell: the printed layout, the exit codes
+# and the flag parsing of `cli.py`'s `sync` group. These do.
+#
+# Every row below stops before any transport, and that is a property of the
+# reference's own control flow, not of the fixture: `push`/`pull` check
+# `is_enabled` on the first line and exit 1, and `init` validates the URL scheme
+# before it opens the store. Hence the dedicated `sync-off` seed — the SHARED
+# parity states carry a real `sync_identity` row (measured: 1 in both `fresh`
+# and `fts`), so an unseeded `sync push` row would have been ENABLED and would
+# have gone looking for the maintainer's bucket. That is the trap this seed
+# exists to avoid, and it is why no sync row here uses the shared home.
+#
+# `sync init`'s success path is not a row for `backup create`'s reason: it
+# generates a fresh age identity, so the key, its fingerprint and the banner
+# differ on every run by design.
+T-sync-status         | repo@home:sync-off | sync status
+T-sync-status-json    | repo@home:sync-off | sync status --json
+T-sync-push-off       | repo@home:sync-off | sync push
+T-sync-pull-off       | repo@home:sync-off | sync pull
+T-sync-pull-off-json  | repo@home:sync-off | sync pull --json
+T-sync-init-scheme    | repo@home:sync-off | sync init --bucket ftp://x
+T-sync-init-ssh-bad   | repo@home:sync-off | sync init --bucket ssh://nope
+
+# ── WAVE 7 — the boot path (`start`, `init`) ─────────────────────────────────
+#
+# THREE rows, and the smallness is the finding, not an omission.
+#
+# A case row must TERMINATE (DIV-059/078/136), and `start` does not: its last
+# statement blocks on the server until Ctrl-C. `init` is worse — the reference's
+# own comment says so ("the user can pipe --no-browser or hit Ctrl-C if they
+# only wanted the install"), so there is no flag combination that installs the
+# skills and stops. Every observable byte those two verbs produce on a SUCCESSFUL
+# run therefore lives outside this file, in `rust/init-differ.sh`, which boots
+# both implementations on :8100, waits for the live line, interrupts them, and
+# diffs stdout plus the skills tree.
+#
+# What is left here is the part that terminates: the three parameter rejections.
+# They are worth rows because they come from THREE different places and only one
+# of them is clap's:
+#
+#   * `start --data-dir <missing>` is the command BODY's `click.BadParameter`,
+#     whose `param_hint` is a bare string — so Click prints it UNQUOTED — and
+#     whose message carries the `Path.resolve()`d path, not the argument.
+#   * `start --data-dir <file>` is Click's own `Path(file_okay=False)`
+#     conversion, whose hint IS quoted and whose message carries the argument
+#     verbatim. Two rejections of one option, two renderings.
+#   * `init --skills-dest <file>` proves the same conversion fires on the other
+#     verb's path option — and that it fires BEFORE the installer runs, which is
+#     what stops a bad `--skills-dest` from half-installing.
+#
+# The paths are chosen to be stable on every machine the harness runs on:
+# `/nonexistent-stax-parity-dir` cannot exist and `Path.resolve()` leaves it
+# unchanged; `/etc/hostname` is a regular file everywhere this campaign builds.
+W-start-datadir-missing | tmp | start --data-dir /nonexistent-stax-parity-dir
+W-start-datadir-file    | tmp | start --data-dir /etc/hostname
+W-init-skillsdest-file  | tmp | init --skills-dest /etc/hostname
+
+# ── wave 8 tranche 3: the spend / reports family ─────────────────────────────
+#
+# `T3-*`. Every read row carries `--no-auto-ingest`: without it the Python side
+# takes `ensure_fresh`'s ingest branch, rewrites the SHARED state home mid-run
+# and poisons every later case — measured, not feared (a `yield` probe without
+# the flag printed "[stale data — ingesting...]" and ran past a 180 s timeout).
+# The Rust side refuses that branch loudly (DIV-238), so the flag is also what
+# keeps the two comparable at all.
+#
+# The `report -p all` rows are the Rich-table proof: 298 projects, a column that
+# overflows 80 columns and truncates with `…`, and 22 KB of box-drawing
+# characters that have to land on the same byte.
+T3-report-text        | repo | report -p all --no-auto-ingest
+T3-report-json        | repo | report -p all --format json --no-auto-ingest
+T3-report-default     | repo | report --no-auto-ingest
+T3-report-7days       | repo | report -p 7days --no-auto-ingest
+T3-report-30days-json | repo | report -p 30days --format json --no-auto-ingest
+T3-report-month       | repo | report -p month --no-auto-ingest
+T3-report-today       | repo | report -p today --no-auto-ingest
+T3-report-project     | repo | report -p all --project -home-tmos --no-auto-ingest
+T3-report-exclude     | repo | report -p all --exclude -home-tmos --format json --no-auto-ingest
+T3-report-provider    | repo | report -p all --provider claude --no-auto-ingest
+T3-report-badperiod   | repo | report -p nope --no-auto-ingest
+T3-report-fmt-text    | repo | report -p all --format text --no-auto-ingest
+T3-report-cwd-tmp     | tmp  | report -p all --no-auto-ingest
+T3-today-text         | repo | today --no-auto-ingest
+T3-today-json         | repo | today --format json --no-auto-ingest
+T3-month-text         | repo | month --no-auto-ingest
+T3-month-json         | repo | month --format json --no-auto-ingest
+T3-yield-text         | repo | yield -p all --no-auto-ingest
+T3-yield-json         | repo | yield -p all --format json --no-auto-ingest
+T3-yield-month        | repo | yield -p month --no-auto-ingest
+
+# `context-budget` reads `Path.home()`, never the store — so it runs inside a
+# case-local home with `HOME` exported there. Without that the row would read
+# the maintainer's real `~/.claude` and answer differently on every machine.
+T3-ctxbudget-global   | home@home | context-budget --global
+T3-ctxbudget-glb-json | home@home | context-budget --global --format json
+T3-ctxbudget-cwd      | home@home | context-budget
+T3-ctxbudget-project  | home@home | context-budget --project .
+
+# `plan show` / `plan thresholds show` are READS and run on the shared state
+# (no plan is configured there, which is the branch these rows prove).
+T3-plan-show          | repo | plan show
+T3-plan-show-json     | repo | plan show --format json
+T3-plan-thr-show      | repo | plan thresholds show
+T3-plan-thr-show-json | repo | plan thresholds show --format json
+
+# The four writers get their own home each side, and the harness diffs the two
+# resulting trees — `plan set` printing the right line while persisting a
+# different float is exactly what a stdout-only diff misses.
+T3-plan-set           | repo@home | plan set claude-pro
+T3-plan-set-custom    | repo@home | plan set custom --monthly-usd 42.5 --reset-day 15
+T3-plan-set-override  | repo@home | plan set claude-max --monthly-usd 250
+T3-plan-set-badname   | repo@home | plan set nope
+T3-plan-set-nocustom  | repo@home | plan set custom
+T3-plan-set-zero      | repo@home | plan set custom --monthly-usd 0
+T3-plan-reset         | repo@home | plan reset
+T3-plan-thr-set       | repo@home | plan thresholds set 50 75 90
+T3-plan-thr-set-dupes | repo@home | plan thresholds set 90 50 50 75
+T3-plan-thr-set-one   | repo@home | plan thresholds set 42
+T3-plan-thr-set-bad   | repo@home | plan thresholds set 50 500
+T3-plan-thr-reset     | repo@home | plan thresholds reset
+
+# ══ WAVE 8 TRANCHE 4 — skills / docs / recommend ══════════════════════════════
+#
+# `S-*` rows. Three mechanisms, each named where it is used:
+#   · `repo` for `docs` — six pages of embedded text plus one rendered live from
+#     `adapters/capabilities.json`; no store, no home, no writes.
+#   · `home@home:SEED` for `skills` / `recommend` — the verbs read a store and
+#     write into `$HOME/.claude/skills`, so they run INSIDE a case-local home
+#     whose seed carries both. `rust/parity/build_skills_state.py` builds the
+#     three seeds; its docstring says why they are synthetic (the detectors are
+#     threshold machines, and `skill_synth` reads `raw_json`, which the hook
+#     seeds leave as `{}`).
+#   · every `skills generate` row here passes `--dry-run`, and every
+#     `recommend mode` row passes `--no-cache`.
+#
+# The writing paths are NOT here and are not unproven: `skills generate` stamps
+# `generated_at` into every SKILL.md, `recommend skills` writes a `time.time()`
+# float into its JSON cache on every run (`--no-cache` included), and
+# `recommend mode` INSERTs a `mode_recommendations` row whose two timestamps are
+# `datetime.now(UTC)`. Two implementations run seconds apart, so a tree diff
+# would compare the harness's clock. `rust/skills-differ.sh` runs those 14 cases
+# with the clock normalised — counted, reported, and scoped to the one shape
+# that justifies it — and compares the store by ROWS (a write re-stamps the
+# header's SQLITE_VERSION_NUMBER, DIV-257's shape). Same treatment wave 5 gave
+# its six wall-clock rows and tranche 2 gave `backup create`.
+#
+# Not rowed, deliberately: clap's own parser errors (`--min-occurrences 0`,
+# a missing `--prompt`, `--kind bogus`) — the D-2 class, where a row would
+# encode clap's wording as the contract; and the no-store branch (DIV-291),
+# where Python CREATES and migrates a store and this port refuses.
+
+# ── docs: five embedded pages, one rendered from the capability table ────────
+S-docs-list           | repo | docs list
+S-docs-list-json      | repo | docs list --json
+S-docs-aud-agent      | repo | docs list --audience agent
+S-docs-aud-user       | repo | docs list --audience user
+S-docs-aud-all        | repo | docs list --audience all
+S-docs-aud-all-json   | repo | docs list --audience all --json
+S-docs-aud-bad        | repo | docs list --audience bogus
+S-docs-aud-empty      | repo | docs list --audience ''
+S-docs-show-overview  | repo | docs show overview
+S-docs-show-quick     | repo | docs show quickstart
+S-docs-show-memory    | repo | docs show memory
+S-docs-show-doctor    | repo | docs show doctor
+S-docs-show-privacy   | repo | docs show privacy
+S-docs-show-matrix    | repo | docs show support-matrix
+S-docs-show-mtx-json  | repo | docs show support-matrix --json
+S-docs-show-json      | repo | docs show overview --json
+S-docs-show-bad       | repo | docs show nope
+S-docs-show-empty     | repo | docs show ''
+
+# ── skills list: the frontmatter reader (only `auto_generated: true` counts) ─
+S-skl-list            | home@home:skills-installed | skills list
+S-skl-list-json       | home@home:skills-installed | skills list --format json
+S-skl-list-user       | home@home:skills-installed | skills list --scope user
+S-skl-list-out-json   | home@home:skills-installed | skills list --out .claude/skills --format json
+S-skl-list-none       | home@home                  | skills list
+S-skl-list-both       | home@home:skills-both      | skills list
+
+# ── skills clean: preview unless --yes, and never a hand-authored file ───────
+S-skl-clean-preview   | home@home:skills-installed | skills clean
+S-skl-clean-yes       | home@home:skills-installed | skills clean --yes
+S-skl-clean-dry       | home@home:skills-installed | skills clean --dry-run
+S-skl-clean-dry-yes   | home@home:skills-installed | skills clean --dry-run --yes
+S-skl-clean-older     | home@home:skills-installed | skills clean --older-than 30d --yes
+S-skl-clean-older-iso | home@home:skills-installed | skills clean --older-than 2026-05-01 --yes
+S-skl-clean-user      | home@home:skills-installed | skills clean --scope user --yes
+S-skl-clean-missing   | home@home:skills-installed | skills clean --out nope --yes
+S-skl-clean-badsince  | home@home:skills-installed | skills clean --older-than notadate
+S-skl-clean-none      | home@home                  | skills clean --yes
+
+# ── skills generate: the miner, dry-run (the write path is the differ's) ─────
+S-skl-gen-dry         | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --dry-run
+S-skl-gen-dry-json    | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --dry-run --format json
+S-skl-gen-min6        | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --min-occurrences 6 --dry-run
+S-skl-gen-min1        | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --min-occurrences 1 --dry-run
+S-skl-gen-min7        | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --min-occurrences 7 --dry-run
+S-skl-gen-window1d    | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window 1d --dry-run
+S-skl-gen-window-none | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window none --dry-run
+S-skl-gen-window-empty| home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window '' --dry-run
+S-skl-gen-kind        | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --kind avoids-X --dry-run
+S-skl-gen-kinds-json  | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --kind avoids-X --kind never-touches-paths --dry-run --format json
+S-skl-gen-nosuch      | home@home:skills-corpus | skills generate --project nosuch --window all --dry-run
+S-skl-gen-nocwd       | home@home:skills-corpus | skills generate --window all --dry-run
+S-skl-gen-projects    | home@home:skills-corpus | skills generate --projects -tmp-stax-skills-parity-proj,other --window all --dry-run
+S-skl-gen-window-bad  | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window notadate --dry-run
+S-skl-gen-out         | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --out out/skills --dry-run
+S-skl-gen-user-json   | home@home:skills-corpus | skills generate --project -tmp-stax-skills-parity-proj --window all --scope user --dry-run --format json
+S-skl-gen-user-noproj | home@home:skills-corpus | skills generate --scope user --window all --dry-run
+S-skl-gen-both-dry    | home@home:skills-both   | skills generate --project -tmp-stax-skills-parity-proj --window all --dry-run
+S-skl-gen-both-json   | home@home:skills-both   | skills generate --project -tmp-stax-skills-parity-proj --window all --dry-run --format json
+
+# ── recommend mode: --no-cache, the branch that neither reads nor writes ─────
+S-rec-mode            | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --no-cache
+S-rec-mode-json       | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --no-cache --format json
+S-rec-mode-fmt-text   | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --no-cache --format text
+S-rec-mode-cur-up     | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --current-model spendy-model --no-cache
+S-rec-mode-cur-same   | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --current-model cheap-model --no-cache
+S-rec-mode-cur-absent | home@home:skills-corpus | recommend mode --prompt 'fix the failing test in cost.py with pytest' --current-model nosuch --no-cache --format json
+S-rec-mode-empty      | home@home:skills-corpus | recommend mode --prompt '' --no-cache
+S-rec-mode-refactor   | home@home:skills-corpus | recommend mode --prompt 'refactor the rust module in main.rs' --no-cache --format json
+S-rec-mode-build      | home@home:skills-corpus | recommend mode --prompt 'add a health endpoint' --no-cache
+
+# ── recommend skills: the funnel that fires BEFORE the cache is written ──────
+S-rec-skl-nocwd       | home@home:skills-corpus | recommend skills

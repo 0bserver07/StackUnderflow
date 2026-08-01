@@ -154,6 +154,25 @@ mod tests {
     }
 
     #[test]
+    fn the_services_error_message_sorts_the_aliases_and_the_routes_does_not() {
+        // RELOCATED by the tranche-3 crate split. `services/compare.rs` moved to
+        // `stax-reports`, which must not depend on this crate, so the half of
+        // that module's assertion which reaches for the HTTP string lives here
+        // now. Both halves still run every `cargo test`; neither string is
+        // allowed to quietly become the other.
+        assert_eq!(
+            stax_reports::compare::unknown_period_message("nope"),
+            "Unknown period 'nope'. Valid: all, month, today, week",
+            "the service layer sorts `PERIOD_MAP`"
+        );
+        assert_eq!(
+            unknown_period_detail("nope"),
+            "Unknown period 'nope'. Valid: today, week, month, all",
+            "`routes/compare.py` joins the tuple in declaration order"
+        );
+    }
+
+    #[test]
     fn the_allow_list_is_exactly_the_service_layers_alias_table() {
         // If these ever drift, the 400 stops guarding `_resolve_scope` and its
         // ValueError becomes reachable as a 500.

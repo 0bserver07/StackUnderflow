@@ -1,0 +1,29 @@
+[package]
+name = "stax-reports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The domain layer `reports/*.py` + the report-shaped half of `services/*.py`
+# already were: pure functions over a `rusqlite::Connection` that return
+# `serde_json::Value`. No binary, no HTTP, no runtime — see `src/lib.rs` for why
+# this crate exists at all (tranche-1 filed the deviation; this is its fix).
+[dependencies]
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+# `grading` reads the wall clock through `stax_adapters::pytime::Clock`, the
+# injected-clock type wave 2 made law. Already in the lock as a dependency of
+# `stax-etl`; no new third-party code enters the tree with this crate.
+stax-adapters = { path = "../stax-adapters" }
+stax-core = { workspace = true }
+# The pricing engine, the Neumaier sums, `round_py`, the pytext/pydatetime
+# transcriptions — every one of them is `stax-etl`'s, and a second copy here is
+# the DIV-035 mistake (145 false divergences from a locally rewritten formatter).
+stax-etl = { path = "../stax-etl" }
+# `pyjson` — CPython's writer. `grading`'s frozen-body assertions compare against
+# `dumps_http`, which is what `stax_server::json::JsonBody::render` calls; the
+# server crate is what this one must NOT depend on, so the assertions name the
+# writer directly.
+stax-memory = { path = "../stax-memory" }

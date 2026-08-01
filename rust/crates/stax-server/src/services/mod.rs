@@ -45,23 +45,8 @@
 //! | [`scope`] | `reports/scope.py` | [`optimize`], [`prescribe`], [`export`], `routes/plan.rs` |
 //! | [`yield_tracker`] | `services/yield_tracker.py` | `routes/yield_route.rs` |
 
-pub mod aggregate;
-pub mod anomaly;
-pub mod burn;
-pub mod compare;
-pub mod context_budget;
-pub mod context_replay;
-pub mod export;
 pub mod json_error;
-pub mod mart_queries;
 pub mod messages;
-pub mod mode_recommender;
-pub mod optimize;
-pub mod outcome_attribution;
-pub mod plans;
-pub mod prescribe;
-pub mod scope;
-pub mod yield_tracker;
 
 // ── batch E: the deferred-endpoint remainder ─────────────────────────────────
 //
@@ -89,18 +74,58 @@ pub mod yield_tracker;
 // registration point is a merge conflict waiting to happen (`routes/mod.rs` was
 // pre-wired for exactly this reason).
 pub mod agent_teams;
-pub mod benchmark;
-pub mod benchmark_stats;
 pub mod etl_backfill;
 pub mod etl_status;
-pub mod forks;
-pub mod grading;
 pub mod live;
 pub mod ollama_proxy;
-pub mod patterns;
 pub mod playback;
 pub mod playback_fs;
 pub mod pricing_refresh;
-pub mod risk;
 pub mod session_compare;
-pub mod worktrees;
+
+// ── wave 8 tranche 3: the report layer moved out, and the paths did not ───────
+//
+// Twenty-two of the modules above are now `stax-reports`'s. The reason is in
+// that crate's `lib.rs`: this directory was the shared home for logic `/api/…`
+// and `stackunderflow …` both call, and it was the RIGHT split at the wrong
+// address — living inside the HTTP crate meant `stax-cli` had to link `axum`
+// and `tokio` to print a spend line (tranche 1 filed exactly that deviation).
+//
+// They are re-exported here, one name per line, rather than being reached for
+// as `stax_reports::…` at each call site. That is deliberate and it is the
+// whole reason the move was cheap: `crate::services::optimize::round_half_even`,
+// `super::scope::Scope`, `crate::services::mart_queries::table_exists` — every
+// path already written in `routes/` and in the eleven modules that stayed
+// resolves to the same item it did before, so the split touched **no route
+// module** and no handler. A `pub use` list is also honest about the ownership:
+// these are consumed here, not owned here.
+//
+// | Module | Python source | Consumed by |
+// |---|---|---|
+// | [`aggregate`] | `reports/aggregate.py` | `routes/plan.rs`, [`export`], `stax-cli` |
+// | [`anomaly`] | `reports/anomaly.py` | `routes/optimize.rs`, [`benchmark_stats`] |
+// | [`benchmark`] | `reports/benchmark.py` | `routes/benchmark.rs`, `stax-cli` |
+// | [`benchmark_stats`] | `services/benchmark_stats.py` | [`benchmark`] |
+// | [`burn`] | `services/burn.py` | `routes/plan.rs`, `stax-cli` |
+// | [`compare`] | `services/compare.py` | `routes/compare.rs`, `stax-cli` |
+// | [`context_budget`] | `services/context_budget.py` | `routes/context_budget.rs`, [`prescribe`], `stax-cli` |
+// | [`context_replay`] | `services/context_replay.py` | `routes/context_replay.rs`, `stax-cli` |
+// | [`export`] | `reports/export.py` | `routes/export.rs`, `stax-cli` |
+// | [`forks`] | `reports/forks.py` | `routes/forks.rs` |
+// | [`grading`] | `services/grading.py` | `routes/quality.rs`, `stax-cli` |
+// | [`mart_queries`] | `store/mart_queries.py` | `routes/data.rs`, [`optimize`], [`live`], [`playback`] |
+// | [`mode_recommender`] | `services/mode_recommender.py` | [`prescribe`] |
+// | [`optimize`] | `reports/optimize.py` | `routes/optimize.rs`, `stax-cli` |
+// | [`outcome_attribution`] | `services/outcome_attribution.py` | `routes/yield_route.rs` |
+// | [`patterns`] | `reports/patterns.py` | `routes/patterns.rs`, `stax-cli` |
+// | [`plans`] | `services/plans.py` | `routes/plan.rs`, [`live`], `stax-cli` |
+// | [`prescribe`] | `reports/prescribe.py` | `routes/optimize.rs` |
+// | [`risk`] | `services/risk.py` | [`playback`], `stax-cli` |
+// | [`scope`] | `reports/scope.py` | [`optimize`], [`prescribe`], [`export`], `routes/plan.rs`, `stax-cli` |
+// | [`worktrees`] | `services/worktrees.py` | `routes/worktrees.rs`, `stax-cli` |
+// | [`yield_tracker`] | `services/yield_tracker.py` | `routes/yield_route.rs`, `stax-cli` |
+pub use stax_reports::{
+    aggregate, anomaly, benchmark, benchmark_stats, burn, compare, context_budget, context_replay,
+    export, forks, grading, mart_queries, mode_recommender, optimize, outcome_attribution,
+    patterns, plans, prescribe, risk, scope, worktrees, yield_tracker,
+};

@@ -15,6 +15,11 @@
 //!   lazy project/session upsert and the per-record normalize hook.
 //! * [`hooks`] — `PostIngestHook`, the trait that replaces Python's
 //!   `getattr(adapter, "materialize_metadata")`.
+//! * [`teams`] — the Claude hook's body: `adapters/claude_teams.py`, which is
+//!   what fills `sessions.{team_id, spawned_by_session_id, spawn_prompt,
+//!   agent_role}` and `agent_teams` (DIV-042).
+//! * [`outcomes`] — the hook's second call: `link_commits_to_sessions`, the
+//!   ingest half of `services/outcome_attribution.py`.
 //! * [`reindex`] — `auto_reindex_touched`, interface ported, index builds
 //!   deferred to wave 6.
 //! * [`watcher`] — the `notify` filesystem watcher (non-wasm targets).
@@ -43,8 +48,10 @@
 
 pub mod enumerate;
 pub mod hooks;
+pub mod outcomes;
 pub mod pyraw;
 pub mod reindex;
+pub mod teams;
 pub mod writer;
 
 // `notify` has no wasm32 backend. Everything else in this module is portable, so
@@ -198,8 +205,14 @@ pub fn run_ingest(
     // Per-adapter post-ingest hook. Claude uses it to materialise agent-team
     // metadata so the Agents tab JOINs instead of re-parsing `raw_json` on every
     // render. Each call is fenced — a hook hiccup must never break the pass.
+    // `HookEnv::live()` is `_claude_home()`, read here rather than inside the
+    // hook so a test can point it somewhere small — see [`hooks::HookEnv`].
     let provider_names: Vec<&str> = adapters.iter().map(|a| a.name()).collect();
-    report.notes.extend(hooks::run_all(conn, &provider_names));
+    report.notes.extend(hooks::run_all(
+        conn,
+        &provider_names,
+        &hooks::HookEnv::live(),
+    ));
 
     if !report.touched_slugs.is_empty() {
         report.reindex =
@@ -647,10 +660,15 @@ mod tests {
     fn the_pass_ends_with_the_post_ingest_hooks_and_the_reindex_seam() {
         let conn = testdb::store();
         let clock = FixedClock::new(1_700_000_100.0, "2026-07-31T00:00:00+00:00");
+        // `codex`, deliberately: `run_ingest` reads the LIVE `_claude_home()`,
+        // so a fake adapter called `claude` would send this unit test through
+        // the developer's real 1.1 GB `~/.claude/projects` (measured: 5.3 s a
+        // run). The claude hook's own dispatch is proven against an injected
+        // three-line home in `hooks::tests`, and end to end by `ingest-parity.sh`.
         let adapters: Vec<Box<dyn SourceAdapter>> =
             vec![Box::new(testdb::FakeAdapter::new_with_ref(
-                "claude",
-                testdb::session_ref("claude", "-a-proj", "s1", 1_700_000_000.0, 240),
+                "codex",
+                testdb::session_ref("codex", "-a-proj", "s1", 1_700_000_000.0, 240),
                 vec![testdb::billable_record(0)],
             ))];
         let report = run_ingest(
