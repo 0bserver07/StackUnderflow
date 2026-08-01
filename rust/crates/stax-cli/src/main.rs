@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match stax_cli::run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("stax: {error:#}");
             ExitCode::FAILURE

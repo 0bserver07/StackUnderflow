@@ -25,3 +25,19 @@ serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtr
 stax-adapters = { path = "../stax-adapters" }
 stax-core.workspace = true
 stax-memory = { path = "../stax-memory" }
+# WAVE 8 — `status` prices and aggregates through the SAME functions the HTTP
+# surface does. `stax_server::services` is where wave-5 batch C deliberately put
+# the `reports/*.py` + `services/*.py` layer, and its module doc names this wave
+# as the reason: "wave 8 ports the CLI verbs, finds no shared home, and writes a
+# second copy that drifts". A second `build_report` in this crate is exactly the
+# fork that split exists to prevent, so the CLI takes the dependency.
+#
+# DEVIATION, recorded: the CLI binary now links `axum` / `tokio` transitively
+# and never serves a byte. `lto = true` strips the dead code from the shipped
+# binary, but the *build* is heavier. The clean fix is a `stax-reports` crate
+# both `stax-cli` and `stax-server` depend on; that is a tranche-3 refactor
+# touching another wave's files, and it is filed rather than done here.
+stax-server = { path = "../stax-server" }
+# `build_report`'s pre-backfill fallback path re-derives cost, and the CLI's
+# engine is the MANIFEST one (`cli.py` never calls `use_price_book_store`).
+stax-etl = { path = "../stax-etl" }

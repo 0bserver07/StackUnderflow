@@ -189,3 +189,96 @@ A-fail-since-bad    | repo | find-failure-modes-for-file /Users/yadkonrad/dev_de
 # ── Rust-only commands (round-trip, no Python counterpart) ───────────────────
 rust:anchor-roundtrip  | repo | anchor
 rust:store             | repo | store
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WAVE 8 — tranche 1: the read-only and config verbs.
+#
+# `C-*` ids. Most of these carry a `@home[:SEED]` cwd token: the verb WRITES
+# (or, for `clear-cache`, prints a different number of lines depending on what
+# it found), so it cannot run against the shared state — the Python run goes
+# first and would leave the store the Rust run then reads. The harness gives
+# each implementation its own fresh copy of `rust/parity/homes/SEED`, at the
+# SAME path, and diffs the two resulting trees as part of the case. So each row
+# below proves three things: the stdout bytes, the exit code, and the bytes left
+# on disk.
+#
+# `status` is the exception: it is read-only on the `--no-auto-ingest` branch
+# and needs a real store, so it runs on the shared states like every other read
+# verb. The DEFAULT branch (auto-ingest on) is deliberately unrowed — it would
+# run a real ingest+backfill pass against the shared state. See DIV-238.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── cfg ls ───────────────────────────────────────────────────────────────────
+C-cfg-ls              | repo@home                | cfg ls
+C-cfg-ls-json         | repo@home                | cfg ls --json
+C-cfg-ls-pop          | repo@home:cfg-populated  | cfg ls
+C-cfg-ls-pop-json     | repo@home:cfg-populated  | cfg ls --json
+C-cfg-ls-corrupt      | repo@home:cfg-corrupt    | cfg ls
+C-cfg-ls-corrupt-json | repo@home:cfg-corrupt    | cfg ls --json
+C-cfg-ls-wrong        | repo@home:cfg-wrongtypes | cfg ls
+C-cfg-ls-wrong-json   | repo@home:cfg-wrongtypes | cfg ls --json
+
+# ── cfg set: the four casts, the three rejections, the read-back ─────────────
+C-cfg-set-int         | repo@home                | cfg set port 9090
+C-cfg-set-bool        | repo@home                | cfg set auto_browser no
+C-cfg-set-str         | repo@home                | cfg set log_level DEBUG
+C-cfg-set-none        | repo@home                | cfg set budget_monthly_usd 50
+C-cfg-set-currency    | repo@home                | cfg set currency eur
+C-cfg-set-int-space   | repo@home                | cfg set port ' 12 '
+C-cfg-set-unicode     | repo@home                | cfg set log_level café
+C-cfg-set-overwrite   | repo@home:cfg-populated  | cfg set port 1234
+C-cfg-set-cur-bad     | repo@home                | cfg set currency zz
+C-cfg-set-unknown     | repo@home                | cfg set bogus x
+C-cfg-set-dict        | repo@home                | cfg set model_aliases x
+C-cfg-set-plan-name   | repo@home                | cfg set plan_name pro
+C-cfg-set-plan-day    | repo@home                | cfg set plan_reset_day 3
+C-cfg-set-plan-thr    | repo@home                | cfg set plan_alert_thresholds 50
+
+# ── cfg rm: the unconditional write ─────────────────────────────────────────
+C-cfg-rm-hit          | repo@home:cfg-populated  | cfg rm port
+C-cfg-rm-absent       | repo@home                | cfg rm port
+C-cfg-rm-unknown      | repo@home                | cfg rm not_a_key
+C-cfg-rm-corrupt      | repo@home:cfg-corrupt    | cfg rm port
+
+# ── cfg model-alias ─────────────────────────────────────────────────────────
+C-alias-ls-empty      | repo@home                | cfg model-alias ls
+C-alias-ls-empty-json | repo@home                | cfg model-alias ls --json
+C-alias-ls            | repo@home:cfg-populated  | cfg model-alias ls
+C-alias-ls-json       | repo@home:cfg-populated  | cfg model-alias ls --json
+C-alias-ls-wrong      | repo@home:cfg-wrongtypes | cfg model-alias ls
+C-alias-set-new       | repo@home:cfg-populated  | cfg model-alias set zzz qqq
+C-alias-set-over      | repo@home:cfg-populated  | cfg model-alias set a other
+C-alias-set-fresh     | repo@home                | cfg model-alias set p/foo claude
+C-alias-rm-hit        | repo@home:cfg-populated  | cfg model-alias rm a
+C-alias-rm-miss       | repo@home:cfg-populated  | cfg model-alias rm nope
+C-alias-rm-miss-empty | repo@home                | cfg model-alias rm nope
+
+# ── config (the hidden back-compat group — same bytes as its cfg target) ────
+C-config-show         | repo@home:cfg-populated  | config show
+C-config-show-json    | repo@home:cfg-populated  | config show --json
+C-config-set          | repo@home                | config set port 8000
+C-config-unset        | repo@home:cfg-populated  | config unset currency
+
+# ── clear-cache (both branches, and the argument that is accepted+ignored) ──
+C-cache-miss          | repo@home                | clear-cache
+C-cache-hit           | repo@home:cursor-cache   | clear-cache
+C-cache-hit-arg       | repo@home:cursor-cache   | clear-cache someproject
+C-cache-miss-arg      | repo@home                | clear-cache alpha
+
+# ── backup: the read-only leg ───────────────────────────────────────────────
+C-bak-list-none       | repo@home                | backup list
+C-bak-list            | repo@home:backup-tree    | backup list
+C-bak-verify-none     | repo@home                | backup verify
+C-bak-verify-latest   | repo@home:backup-tree    | backup verify
+C-bak-verify-named    | repo@home:backup-tree    | backup verify --name 2026-06-01_000000
+C-bak-verify-missing  | repo@home:backup-tree    | backup verify --name nope
+C-bak-verify-escape   | repo@home:backup-tree    | backup verify --name ../etc
+C-bak-verify-file     | repo@home:backup-tree    | backup verify --name notadir
+C-bak-verify-empty    | repo@home:backup-tree    | backup verify --name ''
+
+# ── status: the reserved verb (DIV-025), read-only branch only ──────────────
+C-status-text         | repo | status --no-auto-ingest
+C-status-json         | repo | status --format json --no-auto-ingest
+C-status-fmt-text     | repo | status --format text --no-auto-ingest
+C-status-lastwins     | repo | status --auto-ingest --no-auto-ingest
+C-status-cwd-tmp      | tmp  | status --no-auto-ingest

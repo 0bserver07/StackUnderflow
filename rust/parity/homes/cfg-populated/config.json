@@ -1,0 +1,15 @@
+{
+  "currency": "EUR",
+  "port": 9090,
+  "auto_browser": false,
+  "budget_monthly_usd": "50",
+  "log_level": "DEBUG",
+  "plan_alert_thresholds": [
+    10,
+    20
+  ],
+  "model_aliases": {
+    "proxy/foo": "claude-sonnet-4-5",
+    "a": "b"
+  }
+}

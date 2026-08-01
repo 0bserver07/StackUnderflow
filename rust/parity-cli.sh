@@ -16,6 +16,12 @@
 # verbs diverging on it. A gate that only tests `fresh` tests a machine nobody
 # owns.
 #
+# A case may opt out of the shared state with a `@home[:SEED]` suffix on its
+# cwd token (wave 8): each implementation then gets its own fresh copy of
+# rust/parity/homes/SEED, and the two resulting trees are diffed as part of the
+# case. That is how a WRITER (`cfg set`, `clear-cache`) can be gated without one
+# run poisoning the next.
+#
 # Usage
 #   rust/parity-cli.sh                    # both states, the whole matrix
 #   rust/parity-cli.sh --state fts        # one state
@@ -64,7 +70,7 @@ while [ $# -gt 0 ]; do
         --build-state) DO_BUILD=1; shift ;;
         --force) FORCE=1; shift ;;
         --list) DO_LIST=1; shift ;;
-        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
         *) echo "parity-cli: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
@@ -143,6 +149,39 @@ resolve_cwd() {
     esac
 }
 
+# ── case-local homes (wave 8) ────────────────────────────────────────────────
+#
+# Every row above runs against a SHARED `$STATE_DIR/<state>` home, which is
+# correct for read-only verbs and wrong for writers: `cfg set` would leave a
+# config.json the next case reads, and `clear-cache` prints a *different number
+# of lines* on its second run than its first — so with a shared home the Python
+# run (which goes first) would delete the file and the Rust run would then take
+# the other branch and "diverge" on a state the harness itself created.
+#
+# So a cwd token may carry a home spec after an `@`:
+#
+#   repo@home            a fresh, EMPTY home for this case
+#   repo@home:cfg-basic  a fresh home seeded from rust/parity/homes/cfg-basic/
+#
+# Each implementation gets its OWN copy of the seed, so neither can observe the
+# other's writes, and after the run the two homes are diffed recursively — which
+# is the actual proof for a config writer: not just that the two printed the
+# same line, but that they left the same bytes on disk. A difference in the
+# resulting tree fails the case exactly like a stdout difference would.
+HOMES="$HERE/parity/homes"
+
+seed_home() {
+    local dest="$1" seed="$2"
+    mkdir -p "$dest" || return 1
+    [ -z "$seed" ] && return 0
+    if [ ! -d "$HOMES/$seed" ]; then
+        echo "parity-cli: SETUP FAILURE — no seed home $HOMES/$seed" >&2
+        return 1
+    fi
+    cp -a "$HOMES/$seed/." "$dest/" || return 1
+    return 0
+}
+
 # ── the Rust-only rows ───────────────────────────────────────────────────────
 #
 # `anchor` and `store` have no Python counterpart (DIV-025 ruled: the verb is `store`; `stackunderflow status` is a
@@ -193,8 +232,21 @@ run_rust_only() {
 run_case() {
     local id="$1" cwd_token="$2" argv="$3" state="$4"
     local home="$STATE_DIR/$state"
-    local cwd; cwd="$(resolve_cwd "$cwd_token")"
     local tag="$state/$id"
+
+    # `TOKEN@home[:SEED]` — a case-local home instead of the shared state.
+    local home_spec="" seed=""
+    case "$cwd_token" in
+        *@*) home_spec="${cwd_token#*@}"; cwd_token="${cwd_token%%@*}" ;;
+    esac
+    case "$home_spec" in
+        home)    seed="" ;;
+        home:*)  seed="${home_spec#home:}" ;;
+        "")      ;;
+        *) echo "parity-cli: case $id has an unknown home spec '$home_spec'" >&2; return 1 ;;
+    esac
+
+    local cwd; cwd="$(resolve_cwd "$cwd_token")"
 
     if [ ! -d "$cwd" ]; then
         skipped=$((skipped + 1)); printf '  SKIP  %-28s (no cwd %s)\n' "$tag" "$cwd"; return 0
@@ -210,16 +262,42 @@ run_case() {
     esac
 
     local work; work="$(mktemp -d)"
+
     # shellcheck disable=SC2086 — the case file is trusted repo content and its
     # quoting is the point: `eval set --` is how a case says `'cache lookup'`.
     eval "set -- $argv"
 
-    ( cd "$cwd" && STACKUNDERFLOW_HOME="$home" timeout "$CASE_TIMEOUT" \
+    # Both runs see the SAME `$STACKUNDERFLOW_HOME` string. That is not a
+    # convenience: `backup list` prints its own directory, so two different home
+    # paths would show up as a false divergence in the very rows this mechanism
+    # exists for. The isolation comes from re-seeding between the runs and
+    # moving each result aside, not from giving them different paths.
+    local case_home="$work/home"
+    if [ -n "$home_spec" ] && ! seed_home "$case_home" "$seed"; then
+        fail=$((fail + 1)); failed_ids+=("$tag")
+        printf '  FAIL  %-28s (could not seed the case home)\n' "$tag"
+        rm -rf "$work"; return 1
+    fi
+    local run_home="$home"
+    [ -n "$home_spec" ] && run_home="$case_home"
+
+    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" timeout "$CASE_TIMEOUT" \
         "$PY_BIN" "$@" >"$work/py.out" 2>"$work/py.err" )
     local py_rc=$?
-    ( cd "$cwd" && STACKUNDERFLOW_HOME="$home" timeout "$CASE_TIMEOUT" \
+    local py_home="$run_home" rs_home="$run_home"
+    if [ -n "$home_spec" ]; then
+        py_home="$work/after-py"; rs_home="$work/after-rs"
+        mv "$case_home" "$py_home"
+        if ! seed_home "$case_home" "$seed"; then
+            fail=$((fail + 1)); failed_ids+=("$tag")
+            printf '  FAIL  %-28s (could not re-seed the case home)\n' "$tag"
+            rm -rf "$work"; return 1
+        fi
+    fi
+    ( cd "$cwd" && STACKUNDERFLOW_HOME="$run_home" timeout "$CASE_TIMEOUT" \
         "$RS_BIN" "$@" >"$work/rs.raw" 2>"$work/rs.raw.err" )
     local rs_rc=$?
+    [ -n "$home_spec" ] && mv "$case_home" "$rs_home"
 
     # Program-name normalisation, Rust side only, counted when it fires.
     # Scoped to the two Click-shaped surfaces that carry the program name
@@ -241,6 +319,14 @@ run_case() {
     cmp -s "$work/py.out" "$work/rs.out" || ok=0
     cmp -s "$work/py.err" "$work/rs.err" || ok=0
     [ "$py_rc" = "$rs_rc" ] || ok=0
+
+    # The writer proof: the two case-local homes must be byte-identical
+    # afterwards. `cfg set` printing the same line while writing a different
+    # `config.json` is precisely the divergence a stdout-only diff misses.
+    local home_diff=""
+    if [ -n "$home_spec" ]; then
+        home_diff="$(diff -r "$py_home" "$rs_home" 2>&1)" || ok=0
+    fi
 
     # Maintainer-ACCEPTED divergences (desk ruling 2, 2026-07-31, DIV-010
     # residue): the >u64 `--limit` clamp cases stay named here, every run,
@@ -271,8 +357,11 @@ run_case() {
         printf '=== %s ===\n' "$tag"
         printf 'argv:  %s\n' "$argv"
         printf 'cwd:   %s\n' "$cwd"
-        printf 'home:  %s\n' "$home"
+        printf 'home:  python=%s rust=%s\n' "$py_home" "$rs_home"
         printf 'exit:  python=%s rust=%s\n\n' "$py_rc" "$rs_rc"
+        if [ -n "$home_diff" ]; then
+            printf -- '--- the case-local homes differ ---\n%s\n\n' "$home_diff"
+        fi
         printf -- '--- stdout (python) vs (rust) ---\n'
         diff -u "$work/py.out" "$work/rs.out" | head -80
         printf -- '\n--- stderr (python) vs (rust) ---\n'

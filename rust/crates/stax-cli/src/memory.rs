@@ -160,6 +160,10 @@ pub struct MemoryArgs {
 #[derive(Debug, Subcommand)]
 pub enum MemoryVerb {
     /// Search past decisions — "did I decide something about this before?"
+    ///
+    /// Substring-searches QUERY across past message content and returns the
+    /// matching sessions, newest first, each with a short snippet. Wraps
+    /// ``services/discovery.py``'s ``search_past_decisions``.
     Decisions {
         /// Text to substring-search across past message content.
         #[arg(allow_hyphen_values = true)]
@@ -169,6 +173,11 @@ pub enum MemoryVerb {
         options: MemoryOptions,
     },
     /// Everything known about a file — "what do I know about this file?"
+    ///
+    /// Merges three file-scoped discovery calls into one report: known
+    /// failure modes, every session that touched the file, and a risk
+    /// summary (revert / fail / work counts). PATH is resolved against the
+    /// current directory, so ``memory file src/foo.py`` works inside a repo.
     File {
         /// File (or directory) to report on.
         #[arg(allow_hyphen_values = true)]
@@ -178,6 +187,11 @@ pub enum MemoryVerb {
         options: MemoryOptions,
     },
     /// Find where an action worked — "what worked last time I tried this?"
+    ///
+    /// ACTION is matched as a substring against tool calls and message text.
+    /// Returns sessions where ACTION was performed and the next user turn
+    /// confirmed success. Wraps ``services/discovery.py``'s
+    /// ``find_sessions_where_action_worked``.
     Worked {
         /// Action to match against tool calls and message text.
         #[arg(allow_hyphen_values = true)]
@@ -187,6 +201,14 @@ pub enum MemoryVerb {
         options: MemoryOptions,
     },
     /// List past sessions that touched here — "which sessions ran here?"
+    ///
+    /// With no PATH, lists sessions for the current directory's project. Give
+    /// a directory to scope to that project tree, or a file to list only the
+    /// sessions that touched that file. An explicit ``--project SLUG``
+    /// overrides PATH. Wraps ``services/discovery.py``'s
+    /// ``find_sessions_in_path`` / ``find_sessions_touching_file``; note the
+    /// file form has no time bound, so ``--since`` applies to the path form
+    /// only.
     Sessions {
         /// Directory or file. Default: the current directory.
         #[arg(allow_hyphen_values = true)]
@@ -196,6 +218,15 @@ pub enum MemoryVerb {
         options: MemoryOptions,
     },
     /// Ask a natural-language question of the local store.
+    ///
+    /// ``ask`` runs a **hybrid** retrieval: a keyword search over past
+    /// decisions fused (reciprocal-rank fusion) with a local semantic vector
+    /// search. The vector half uses a small local embedding model served by
+    /// Ollama; when Ollama is not running it is silently skipped and ``ask``
+    /// degrades to the keyword search alone — so the command always works,
+    /// and gets sharper (finds sessions you didn't have the exact words for)
+    /// when a local Ollama is available. Every result carries its provenance:
+    /// session id, date (``last_ts``) and cost (``cost_usd``).
     Ask {
         /// The question. Hybrid retrieval: keyword search fused with a local
         /// semantic vector search, which is skipped when Ollama is not running.
