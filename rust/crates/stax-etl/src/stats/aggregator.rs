@@ -454,6 +454,46 @@ pub fn summarise(
     Value::Object(out)
 }
 
+/// `aggregator.summarise_session_costs` — just the `session_costs` section.
+///
+/// `/api/sessions/compare` reads exactly one of [`summarise`]'s eighteen
+/// sections. Reaching it through the full sweep means feeding nine other record
+/// collectors, three interaction collectors and building overview / daily /
+/// hourly / trends, all of it discarded. This runs ONLY
+/// [`SessionCostCollector`], over the same records and interactions and with the
+/// same provider resolution, so the rows it returns are element-for-element what
+/// `summarise(ds, …)["session_costs"]` returns.
+///
+/// # Why this exists now
+///
+/// Wave 5 recorded this function as deliberately outside the ported subset:
+/// nothing in the mart path or in `get_project_stats` calls it, and the one
+/// consumer that does — the compare endpoint — was itself unported (DIV-070).
+/// The reason was scope, never a hazard, and batch E's `compare` member closes
+/// RS-5-105, so the exclusion is lifted here rather than worked around from the
+/// server crate. `stats/mod.rs`'s scope paragraph is updated to match.
+///
+/// # `_safe` is not reproduced, for the same reason [`summarise`] does not
+///
+/// Python wraps the call in `_safe(fn, [])` and the route then writes `or []`.
+/// Both are exception guards over a port that is total: the collector cannot
+/// raise here, and an empty dataset already returns an empty array.
+#[must_use]
+pub fn summarise_session_costs(ds: &EnrichedDataset, engine: &PricingEngine) -> Value {
+    // `ds.records[0].provider if ds.records else "anthropic"` — resolved once
+    // for the whole dataset, exactly as `summarise` resolves it.
+    let provider: &str = ds
+        .records
+        .first()
+        .map_or("anthropic", |r| r.provider.as_str());
+
+    let mut sess_cost_c = SessionCostCollector::default();
+    for rec in &ds.records {
+        sess_cost_c.ingest(rec);
+    }
+    sess_cost_c.result(ds, engine, provider)
+}
+
 // ── overview ────────────────────────────────────────────────────────────────
 
 fn build_overview(
@@ -2738,6 +2778,100 @@ mod tests {
         assert_eq!(path_name("a"), "a");
         assert_eq!(path_name("a/./b"), "b");
         assert_eq!(path_name("a/."), "a");
+    }
+
+    // ── summarise_session_costs (batch E, RS-5-105) ─────────────────────────
+
+    #[test]
+    fn the_session_cost_shortcut_is_the_section_summarise_would_have_built() {
+        // The whole contract of the shortcut: same rows, same order, same
+        // int/float split, same last bits on every float — for a dataset with
+        // priced assistant turns, an error, and a real interaction chain.
+        let ds = fixture();
+        assert_eq!(
+            summarise_session_costs(&ds, &engine()),
+            summarise(&ds, "", 0, &engine())["session_costs"]
+        );
+    }
+
+    #[test]
+    fn the_shortcut_seeds_a_float_zero_cost_like_the_full_sweep() {
+        // LAW 3's other half — a session with no priced model must still write
+        // `"cost": 0.0`, because `_SessionCostCollector` seeds `cost = 0.0`
+        // where `_CommandCostCollector` seeds `sum([])`.
+        let ds = dataset(vec![
+            json!({"type": "human", "timestamp": "2026-03-04T10:00:00+00:00",
+                                     "message": {"content": "no reply ever came"}}),
+        ]);
+        let rows = summarise_session_costs(&ds, &engine());
+        assert_eq!(rows[0]["cost"].to_string(), "0.0");
+        assert_eq!(rows[0]["duration_s"].to_string(), "0.0");
+        assert_eq!(rows[0]["messages"].to_string(), "1");
+        assert_eq!(
+            rows[0]["tokens"],
+            json!({"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0})
+        );
+    }
+
+    #[test]
+    fn an_empty_dataset_is_an_empty_array_not_a_null() {
+        // Python's `_safe(…, [])` fallback and the route's `or []` both land on
+        // `[]`; so does the collector with nothing to iterate.
+        assert_eq!(
+            summarise_session_costs(&EnrichedDataset::default(), &engine()),
+            json!([])
+        );
+    }
+
+    #[test]
+    fn the_rows_carry_every_key_the_compare_endpoint_reads() {
+        // `/api/sessions/compare` indexes `session_id`, `cost`, `tokens`,
+        // `commands`, `errors` and `duration_s` by name and would answer a
+        // silently-renamed key with a 404 rather than a crash.
+        let rows = summarise_session_costs(&fixture(), &engine());
+        let keys: Vec<&str> = rows[0]
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "session_id",
+                "started_at",
+                "ended_at",
+                "duration_s",
+                "cost",
+                "tokens",
+                "messages",
+                "commands",
+                "errors",
+                "first_prompt_preview",
+                "models_used",
+            ]
+        );
+        assert_eq!(rows[0]["session_id"], json!("sess-1"));
+        assert_eq!(rows[0]["errors"], json!(1));
+        assert_eq!(rows[0]["commands"], json!(1));
+    }
+
+    #[test]
+    fn the_shortcut_resolves_the_provider_from_the_first_record() {
+        // Not a parameter and not per-record: `ds.records[0].provider`, once.
+        // An unknown provider prices to nothing, which is the observable proof
+        // that the resolution happened at all.
+        let ds = build_detailed(tag(vec![RawEntry {
+            payload: json!({"type": "assistant", "timestamp": "2026-03-04T10:00:00+00:00",
+                            "message": {"model": "claude-opus-4-8",
+                                        "usage": {"input_tokens": 1000, "output_tokens": 1000}}}),
+            session_id: "sess-1".into(),
+            provider: "no-such-provider".into(),
+        }]));
+        assert_eq!(
+            summarise_session_costs(&ds, &engine()),
+            summarise(&ds, "", 0, &engine())["session_costs"]
+        );
     }
 
     #[test]

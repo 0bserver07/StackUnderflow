@@ -1,0 +1,142 @@
+# Batch E / member `patterns` — case rows for `routes/patterns.py` (RS-5-088/089).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# THE HEADLINE, and it decides the shape of this whole file:
+#
+#   `GET /api/patterns` puts a WALL CLOCK in its 200 body.
+#   `reports/patterns.py:653-656` computes
+#       since_iso = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+#   and `:1055` emits it as `report.window.since`. `.isoformat()` on an aware
+#   datetime renders MICROSECONDS. Two servers answering the same case a few
+#   milliseconds apart emit different bytes; so does one server answering twice.
+#
+#   Therefore EVERY 200 on this endpoint is permanently `!`, by construction —
+#   structurally DIV-085 (`/api/compare`'s `generated = time.time()`), reached
+#   through a different module. `!PT-patterns` and `!PT-patterns-window` are not
+#   "not yet flipped", they are NOT FLIPPABLE, and the two blocks below are split
+#   on exactly that line. Both endpoints are nevertheless fully ported: the
+#   arithmetic under the clock is covered by 55 unit tests, which is the only
+#   place it can be covered.
+#
+#   `PT-bad-since` reads no clock. It flips, and every other validator leg beside
+#   it flips with it (law 5).
+#
+# SIDE EFFECTS of the rows below: NONE. Every row is a `GET` or an unclaimed
+# method on `/api/patterns`. The handler opens the store through
+# `store/db.py::connect` on both sides (read-write handle, SELECT-only use,
+# plus Python's idempotent `schema.apply`) and `mine_patterns` is `sqlite_master`-
+# guarded SELECTs throughout. Nothing under `$STACKUNDERFLOW_HOME` is written.
+#
+# `POST /api/patterns/dismiss` (RS-5-089) HAS NO ROW HERE, AT ANY STATUS.
+# It bumps a `dismissed` counter in `proactive_state.json`, so python-then-rust
+# leaves `2` where either alone leaves `1` — non-idempotent under the differ's one
+# shared home, which is law 4 / DIV-146's ruling. See `DIV-e-patterns.md` finding
+# 2 for the correction to DIV-144's stated reason (the file is NOT outside
+# `$STACKUNDERFLOW_HOME`; it is `deps.store_path.parent/proactive_state.json`),
+# and finding 10 for the four 422 legs this leaves unprobed — a known, instructed
+# law-5 gap, not an oversight.
+#
+# NOT CLAIMED: `GET /api/patterns/` (trailing slash). That is DIV-133, the
+# architect's `lib.rs` item, and adding a row for it here would re-raise a
+# dispositioned divergence under a new id.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the three inherited rows ─────────────────────────────────────────────────
+# Two stay open forever; the third flips. Kept in their original order and with
+# their original ids so the integrator can diff this file against the ledger.
+#
+# `!PT-patterns` runs AFTER the selection row, so `project` resolves through
+# `deps.current_log_path` and the body opens
+# `{"project":"-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnd…` — proof the
+# basename-as-slug fallback fires. Everything after `report.window.since` in that
+# body is deterministic; only that one string moves.
+!PT-patterns         | GET | /api/patterns                     | -
+!PT-patterns-window  | GET | /api/patterns?since=7d            | -
+# FLIPPED. No clock on this path — a pure 400 off the query string. The body is
+#   {"detail":"Invalid since 'nonsense'. Use <days>d between 1d and 365d, e.g. 7d, 30d, 90d."}
+# and note that the message interpolates the parameter UNSTRIPPED, so a padded
+# input echoes its own padding (PT-since-padded-bad below).
+PT-bad-since         | GET | /api/patterns?since=nonsense      | -
+
+# ── the rest of the 200 surface — same clock, same permanent `!` ─────────────
+# These are here despite being unflippable because "we know" beats "nobody
+# looked": each one still proves its own branch under the differ's banner, and a
+# divergence in any field OTHER than `report.window.since` is a real defect the
+# integrator should see.
+#
+# The two window boundaries. `1d` and `365d` are the inclusive ends of the
+# validator's range, and `1d` also exercises the day-truncation gap recorded as
+# finding 7 (the mart is bounded by `since_iso[:10]`, the messages sweep by the
+# full instant, so this request sees a wider touch window than error window).
+!PT-since-1d         | GET | /api/patterns?since=1d            | -
+!PT-since-365d       | GET | /api/patterns?since=365d          | -
+# `_SINCE_RE` is `^(\d{1,3})d$` applied to `since.strip()`: leading zeros are
+# fine and surrounding whitespace is stripped BEFORE the match. Both are 7d.
+!PT-since-zeropad    | GET | /api/patterns?since=007d          | -
+!PT-since-padded     | GET | /api/patterns?since=%20%207d%20   | -
+# An explicit `?project=` wins over `deps.current_log_path`. This one names the
+# selected project itself, so it must agree with `!PT-patterns` field for field.
+!PT-project-self     | GET | /api/patterns?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+# An unknown slug resolves to an EMPTY id list, which `mine_patterns` reads as
+# "a filter matched nothing" — an empty report, NOT a 404. The feature is
+# advisory and this is the row that says so.
+!PT-project-unknown  | GET | /api/patterns?project=-no-such-project-anywhere | -
+# `?project=` is a present-but-EMPTY `str`, which is not `None`. Python's
+# `if slug is None and deps.current_log_path` is therefore skipped, `if slug` is
+# false so no scope is applied, and the echo is `"project":""` — the whole-store
+# view under an empty parameter, with a selected project sitting right there.
+# The single most likely thing a careless port collapses into the `None` branch.
+!PT-project-empty    | GET | /api/patterns?project=            | -
+# A repeated scalar param: starlette's `QueryParams` builds its dict from the
+# items in order, so the LAST value wins. Same rule `OPT-period-last` pins.
+!PT-project-last     | GET | /api/patterns?project=aaa-a&project=zzz-b | -
+# Neither FastAPI nor axum validates unknown query keys, so this must be
+# field-for-field identical to `!PT-patterns`. It is here because "and then
+# someone adds a parameter" is how a 422 quietly appears on a surface that never
+# had one.
+!PT-junk-query       | GET | /api/patterns?nonsense=1&days=7   | -
+
+# ── the validation legs — no clock, these all diff clean (law 5) ─────────────
+# Every one of these is a 400 carrying the same sentence with a different echo.
+# Four distinct rejection causes are represented: below the range, above the
+# range, too many digits for `\d{1,3}`, and no digits at all.
+PT-since-zero        | GET | /api/patterns?since=0d            | -
+PT-since-over        | GET | /api/patterns?since=366d          | -
+PT-since-4digit      | GET | /api/patterns?since=1000d         | -
+PT-since-empty       | GET | /api/patterns?since=              | -
+PT-since-nounit      | GET | /api/patterns?since=7             | -
+PT-since-unit-only   | GET | /api/patterns?since=d             | -
+PT-since-inner-space | GET | /api/patterns?since=7%20d         | -
+PT-since-upper       | GET | /api/patterns?since=7D            | -
+PT-since-negative    | GET | /api/patterns?since=-1d           | -
+PT-since-word        | GET | /api/patterns?since=7days         | -
+# The echo is the RAW parameter, padding included: `Invalid since '  bad  '.`
+PT-since-padded-bad  | GET | /api/patterns?since=%20%20bad%20%20 | -
+# Last-value-wins again, this time landing on the 400 rather than the 200. A
+# port that read the FIRST value would answer 200 here and the divergence would
+# be a whole body, not a field.
+PT-since-last-bad    | GET | /api/patterns?since=7d&since=nonsense | -
+# ...and the mirror: a bad value FOLLOWED by a good one is a 200 (so, `!`).
+!PT-since-last-good  | GET | /api/patterns?since=nonsense&since=7d | -
+# Validation order: `_parse_since` runs BEFORE the project is resolved, so a bad
+# window on an unknown project is still the 400, never a project error.
+PT-bad-since-project | GET | /api/patterns?project=-no-such-project-anywhere&since=nope | -
+
+# ── the router fallbacks ────────────────────────────────────────────────────
+# GET-only, so FastAPI's router raises HTTPException(405) and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's native 405 is
+# an empty body with no content-type; `lib.rs`'s `method_not_allowed_fallback`
+# restores starlette's. Body is `-` because a 405 is decided before the body is
+# read — none of these three reaches a handler, and none can write.
+PT-post              | POST   | /api/patterns                 | -
+PT-put               | PUT    | /api/patterns                 | -
+PT-delete            | DELETE | /api/patterns                 | -
+# A path nothing claims — FastAPI's `{"detail":"Not Found"}`, not starlette's
+# plain-text default. `/api/pattern` (singular) is the typo a client makes.
+PT-singular          | GET | /api/pattern                      | -
+PT-subpath           | GET | /api/patterns/status              | -

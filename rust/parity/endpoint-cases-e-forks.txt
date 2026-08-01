@@ -1,0 +1,143 @@
+# Batch E / `forks` — endpoint differ cases for `routes/forks.py` (RS-5-074).
+#
+# Format is `rust/parity/endpoint-cases.txt`'s; read that file's header first.
+# The integrator merges these rows into the shared file and strips the leading
+# `P-by-dir-known`, which already runs earlier there.
+#
+# `F-forks`, `F-forks-week` and `F-forks-bad-period` are the three ids the
+# shared file currently carries with a leading `!` under DIV-142. They are
+# reproduced here verbatim WITHOUT the `!`, because the endpoint is ported —
+# flipping them is the point of this member. Every other row is new.
+#
+# FOR THE INTEGRATOR: if a neighbouring member's block leaves a DIFFERENT
+# project selected by the time this block runs, these rows still diff cleanly —
+# both servers read the same state in the same order, so they simply scope to
+# whatever project is current. The only rows that assume a SPECIFIC project are
+# `F-forks-log-path` (which names the slug itself) and the two `no-project`
+# rows (which name a slug that exists nowhere).
+#
+# ── I CHECKED FOR A WALL-CLOCK STAMP FIRST, AND THERE IS NONE ────────────────
+#
+# The payload is `{period, scope, report, currency, warning}`. `scope` is
+# `Scope.label` — a PHRASE ("today", "last 7 days", "this month (July 2026)",
+# "all time"), not an instant — and there is no `generated` key anywhere. So
+# unlike `/api/compare` (DIV-085, `time.time()` in the body) every 200 here CAN
+# byte-match, and these rows are real rows rather than permanent known-opens.
+#
+# ── ORDER IS SIGNIFICANT, and here it is significant TWICE ───────────────────
+#
+# The usual reason applies (`deps.current_log_path` is server state). The second
+# reason is this module's process-wide memo:
+#
+#   key   = (str(deps.store_path), scope.LABEL, tuple(sorted(project_ids)) or None)
+#   token = (MAX(sessions.last_ts), SUM(sessions.message_count)) — validity only
+#
+# The key is the LABEL, not the period, so `?period=week` and `?period=7days`
+# are ONE key: whichever runs first computes, and the second is served that
+# report — rolling `now − 7d` bounds included. The rows below are ordered so
+# that collision is exercised deliberately (`F-forks-week` first, then
+# `F-forks-7days`) instead of by accident.
+#
+# Unlike `/api/optimize` (DIV-111) the memo is NOT visible in the body: there is
+# no `"cache": "hit"|"miss"` field. A repeat row is therefore expected to be
+# byte-identical whether it was served from the memo or recomputed — which is
+# exactly what makes `F-forks-again` worth having.
+#
+# ── the rolling-window caveat ────────────────────────────────────────────────
+#
+# `7days` / `30days` bound on `now`, so the two servers compute bounds a few
+# milliseconds apart and a message inside that gap is a real (if rare)
+# divergence — the same property `CD-prov-week` carries. The memo caps the
+# exposure at ONE request per label: every later row on that label is served
+# from the entry the first one wrote.
+#
+# ── COST ─────────────────────────────────────────────────────────────────────
+#
+# DIV-142 measured ~6 s warm and 12.7 s cold on this store, and no shortcut was
+# added (a faster answer that differs is a divergence). Budget for it: the
+# distinct cache keys below are all-time, today, month, 7days, 30days and the
+# empty scope — six cold computations per server, the rest memo-served.
+#
+# ── LAW 7 ────────────────────────────────────────────────────────────────────
+#
+# `/api/forks` writes nothing: one read-only join over messages/sessions/
+# projects, one `MAX/SUM` over `sessions` for the validity token, `models.toml`
+# and the `price_book` table for pricing, and an in-process memo that is
+# ordinary process memory. Verified against `reports/forks.py` and
+# `routes/forks.py` rather than the docstrings. Every row below is safe.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── validation first: these 400 before the scope is built and never cache ────
+# `_PERIOD_ALIASES.get(period)` misses, and the message joins the alias table
+# in DICT order — "today, week, 7days, month, 30days, all", NOT sorted.
+F-forks-bad-period  | GET | /api/forks?period=nonsense        | -
+# A PRESENT-but-empty `?period=` is `""`, not the `Query("all")` default, so it
+# is a 400 too. Checked against DIV-086 on purpose: `/api/compare?provider=`
+# reaches a FILTER and prunes everything; `?period=` here reaches a LOOKUP with
+# no `""` key and answers deterministically. No analogous trap.
+F-forks-empty-period | GET | /api/forks?period=               | -
+# The alias table is case-SENSITIVE.
+F-forks-period-case | GET | /api/forks?period=Week            | -
+# pydantic does not strip a scalar `str` query param, so the space is part of
+# the value and this is a 400 whose `detail` contains the space.
+F-forks-period-space | GET | /api/forks?period=%20all         | -
+# starlette's QueryParams is last-wins for a scalar param, so the VALID second
+# value decides. First-wins would 400 here.
+F-forks-period-last | GET | /api/forks?period=nonsense&period=all | -
+
+# ── the "all time" key: the default, a repeat, and the explicit spelling ─────
+# `period` defaults to `all`, so all three of these are ONE cache key. The
+# repeat proves the memo is not answer-visible; the explicit row proves the
+# default really is `all` and not `month` (which is what the cost routes use).
+F-forks             | GET | /api/forks                        | -
+F-forks-again       | GET | /api/forks                        | -
+F-forks-all         | GET | /api/forks?period=all             | -
+# `?log_path=` empty is FALSY and falls back to `deps.current_log_path`, so this
+# is still the same key — a present-but-empty param that must not widen scope.
+F-forks-empty-log   | GET | /api/forks?period=all&log_path=   | -
+# The same project named explicitly: same slug, same ids, same key.
+F-forks-log-path    | GET | /api/forks?period=all&log_path=/x/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── the day-aligned periods, one cold computation each ───────────────────────
+F-forks-today       | GET | /api/forks?period=today           | -
+F-forks-month       | GET | /api/forks?period=month           | -
+
+# ── the rolling windows, and the label collision ─────────────────────────────
+# `week` computes; `7days` maps to the SAME `parse_period` spec and therefore
+# the same `scope.label`, so it is served `week`'s report. Reordering these two
+# changes which one pays for the rolling-window drift.
+F-forks-week        | GET | /api/forks?period=week            | -
+F-forks-7days       | GET | /api/forks?period=7days           | -
+# `30days` is its own label ("last 30 days") and its own key.
+F-forks-30days      | GET | /api/forks?period=30days          | -
+
+# ── the unknown project: an EMPTY scope, not a 404 ───────────────────────────
+# `_project_ids_for` returns `[]` for a slug nothing matches, and `[]` means
+# "a filter was requested and matched nothing" — the report is the ForkReport
+# DEFAULTS (float zeros, `abandoned_cost_usd: 0.0`), served 200. That is the
+# opposite of `routes/cost.py::_project_ids_for`, which 404s on the same query,
+# and the difference is the whole reason this row is a 200.
+F-forks-no-project  | GET | /api/forks?period=all&log_path=/x/no-such-project-anywhere | -
+# `Path(path).name` is the slug, so a trailing slash resolves to the SAME slug
+# on both sides — pathlib drops it, and `pyops::path_name` reproduces that.
+F-forks-trailing    | GET | /api/forks?period=all&log_path=/x/no-such-project-anywhere/ | -
+
+# ── the shapes a happy-path matrix never sees ────────────────────────────────
+# An undeclared query parameter is ignored, not a 422.
+F-forks-extra-param | GET | /api/forks?period=all&limit=abc&details=1 | -
+# GET-only path: FastAPI's router raises HTTPException(405) and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's native 405
+# is an empty body with no content-type; `crate::json::method_not_allowed`
+# restores starlette's. Body is `-` because a 405 is decided before the body is
+# read, so none of these three reaches a handler or the store.
+F-forks-post        | POST   | /api/forks                     | -
+F-forks-put         | PUT    | /api/forks                     | -
+F-forks-delete      | DELETE | /api/forks                     | -
+# A neighbouring path nothing claims — FastAPI's `{"detail":"Not Found"}`, not
+# starlette's plain-text default. `/api/fork` (singular) is the typo a client
+# actually makes.
+F-forks-singular    | GET | /api/fork                         | -
+# NO ROW for `/api/forks/` — the trailing-slash 307 is DIV-133, an architect's
+# `lib.rs` change, and the batch-E claim puts it out of this member's scope.
+# Stated rather than silently omitted.

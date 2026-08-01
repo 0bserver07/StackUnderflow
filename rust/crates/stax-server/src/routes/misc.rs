@@ -1,58 +1,68 @@
-//! `routes/misc.py` — 6 endpoints, wave 5 (batch A).
+//! `routes/misc.py` — 6 endpoints, wave 5 (batch A, completed in batch E).
 //!
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
-//! | `RS-5-079` | `GET`  | `/api/pricing`             | `/api/pricing`          | **open** — DIV-065 |
-//! | `RS-5-080` | `POST` | `/api/pricing/refresh`     | `/api/pricing/refresh`  | **open** — DIV-065 |
+//! | `RS-5-079` | `GET`  | `/api/pricing`             | `/api/pricing`          | ported — no case row, ever |
+//! | `RS-5-080` | `POST` | `/api/pricing/refresh`     | `/api/pricing/refresh`  | ported — no case row, ever |
 //! | `RS-5-081` | `GET`  | `/api/health`              | `/api/health`           | ported |
 //! | `RS-5-082` | `GET`  | `/favicon.ico`             | `/favicon.ico`          | ported |
 //! | `RS-5-083` | `GET`  | `/assets/{full_path:path}` | `/assets/{*full_path}`  | ported |
-//! | `RS-5-084` | `GET`… | `/ollama-api/{path:path}`  | `/ollama-api/{*path}`   | **open** — DIV-066 |
+//! | `RS-5-084` | `GET`… | `/ollama-api/{path:path}`  | `/ollama-api/{*path}`   | ported — `M-ollama` flipped |
 //!
 //! # What is ported, and what is a network call wearing a route's clothes
 //!
 //! Three of these six read the filesystem and answer. The other three do not
-//! answer from local state at all:
+//! answer from local state at all, and each one needed a *measurement* of the
+//! machine before a line of it could be written honestly.
 //!
+//! * `/ollama-api/{path}` proxies to `http://localhost:11434` (DIV-066). Port
+//!   11434 is **closed on this host** — `ss -lnt` lists no listener, a TCP
+//!   connect to `127.0.0.1:11434` and to `[::1]:11434` is refused, and `getent
+//!   ahosts localhost` resolves to `127.0.0.1` only. The only branch either side
+//!   can reach is the bare `except Exception`, whose body is a fixed
+//!   `502 {"error":"Ollama not available"}`. That is deterministic, so
+//!   `M-ollama` stops being a `!` row and becomes a real one — see
+//!   [`crate::services::ollama_proxy`] for what changes the day Ollama is up.
 //! * `/api/pricing` calls `PricingService.get_pricing()`, which on a cache older
 //!   than 24 h issues a blocking `urlopen` to LiteLLM on GitHub and **writes the
-//!   fetched payload back to `$STACKUNDERFLOW_HOME/cache/pricing.json`**. Its
-//!   body is therefore a function of the network *and* of which server asked
-//!   first — the second one diffed would read the cache the first just wrote.
-//!   No ordering makes that a byte comparison. DIV-065.
+//!   fetched payload back to `$STACKUNDERFLOW_HOME/cache/pricing.json`**.
 //! * `/api/pricing/refresh` is the same fetch, unconditionally, plus the write.
-//!   DIV-065.
-//! * `/ollama-api/{path}` proxies to `http://localhost:11434`. DIV-066.
 //!
-//! All three are filed rather than stubbed-with-a-guess. `/ollama-api` carries a
-//! `!`-prefixed row in `parity/endpoint-cases.txt` so the differ reports it every
-//! run; the two pricing routes deliberately do **not**, and that exception was
-//! earned rather than assumed. They went in as `!` rows first, and the run
-//! proved the problem: a `!` row still ISSUES the request — the marker only
-//! softens the verdict — so Python fetched LiteLLM and wrote
-//! `cache/pricing.json` into the shared home, which turned all five
-//! `GET /api/pricing/doctor` rows from a deterministic "no overlay on disk"
-//! payload into a live elapsed-time `age_days` float. Five clean cases became
-//! five divergences on one field, from a case file edit, with no code change.
-//! An endpoint whose side effect is another endpoint's input cannot share a home
-//! with it, so this one is tracked in the ledger and here instead.
+//! Both pricing routes are now ported — see [`crate::services::pricing_refresh`],
+//! which also records the one thing the port cannot do (the LiteLLM URL is
+//! HTTPS and this workspace has no TLS crate, so the Rust half is pinned to the
+//! reference's fetch-failure leg). Neither gets a row in
+//! `parity/endpoint-cases.txt`, and that exception was earned rather than
+//! assumed. They went in as `!` rows first, and the run proved the problem: a
+//! `!` row still ISSUES the request — the marker only softens the verdict — so
+//! Python fetched LiteLLM and wrote `cache/pricing.json` into the shared home,
+//! which turned all five `GET /api/pricing/doctor` rows from a deterministic "no
+//! overlay on disk" payload into a live elapsed-time `age_days` float. Five clean
+//! cases became five divergences on one field, from a case file edit, with no
+//! code change. An endpoint whose side effect is another endpoint's input cannot
+//! share a home with it, so the two of them are verified by the isolated
+//! procedure in `rust/PRICING-REFRESH-DIFFER.md` instead.
 
 use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path as PathParam, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::extract::{Path as PathParam, Request, State};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::{Map, Value};
 
 use crate::json::{JSON_CONTENT_TYPE, JsonBody};
+use crate::services::ollama_proxy::{self, ProxyOutcome};
+use crate::services::pricing_refresh::{PricingService, rate_card_payload};
 use crate::state::AppState;
 
 /// Mount this module's endpoints onto `router`.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
     router
+        .route("/api/pricing", get(get_pricing))
+        .route("/api/pricing/refresh", post(refresh_pricing))
         .route("/api/health", get(health_check))
         .route("/favicon.ico", get(favicon))
         // `{full_path:path}` matches the EMPTY rest too, so `/assets/` is a real
@@ -61,6 +71,147 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
         // needs its own route or it would fall through to the 404 fallback.
         .route("/assets/", get(assets_root))
         .route("/assets/{*full_path}", get(serve_react_assets))
+        // Same `{path:path}` rule, same two routes. `api_route(methods=[…])`
+        // claims exactly four verbs, so anything else is the 405 `lib.rs`
+        // already answers with FastAPI's `{"detail":"Method Not Allowed"}`.
+        .route(
+            "/ollama-api/",
+            get(ollama_proxy_root)
+                .post(ollama_proxy_root)
+                .put(ollama_proxy_root)
+                .delete(ollama_proxy_root),
+        )
+        .route(
+            "/ollama-api/{*path}",
+            get(ollama_proxy_route)
+                .post(ollama_proxy_route)
+                .put(ollama_proxy_route)
+                .delete(ollama_proxy_route),
+        )
+}
+
+// ── GET /api/pricing ─────────────────────────────────────────────────────────
+
+/// `get_pricing` — `deps.pricing_service.get_pricing()`, re-keyed and 500-wrapped.
+///
+/// The handler rebuilds the payload key-by-key rather than forwarding the
+/// service's dict, and the order it uses (`pricing`, `source`, `timestamp`,
+/// `is_stale`) happens to match the service's own — so the byte contract is the
+/// same order twice. Note the last key is `pricing_data.get("is_stale", False)`,
+/// a `.get` with a default where the other three are subscripts; the service
+/// always sets it, so the default is unreachable and is not reproduced as a
+/// separate branch.
+///
+/// The `deps.pricing_service is None` → 503 leg is not ported: the service is
+/// constructed in `_lifespan` and its `__init__` only `mkdir`s, so `None` means
+/// the process failed to make a directory. There is no corresponding object in
+/// the port to be absent, and inventing one to report on would be exactly the
+/// fabricated service layer [`health_check`] declines to build.
+async fn get_pricing(State(state): State<AppState>) -> Response {
+    let app_dir = app_dir_of(&state);
+    let package_dir = state.package_dir().to_path_buf();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let service = PricingService::new(&app_dir);
+        // Built eagerly, exactly as `routes/pricing.rs` builds it per request,
+        // and it is `crate::pricing::engine` — NEVER `default_engine`, which is
+        // a silent 2 % cost error (DIV-056). It feeds only the `source:
+        // "default"` leg, which is why the closure is `FnOnce`.
+        let engine = match state
+            .connect()
+            .and_then(|conn| crate::pricing::engine(&conn, &package_dir))
+        {
+            Ok(engine) => engine,
+            Err(err) => return Err(err.to_string()),
+        };
+        service
+            .get_pricing(|| rate_card_payload(&engine))
+            .map_err(|raise| raise.message().to_owned())
+    })
+    .await;
+
+    let payload = match outcome {
+        Ok(Ok(data)) => data,
+        // `except Exception as e: {"error": f"Failed to get pricing: {str(e)}"}`.
+        Ok(Err(message)) => return pricing_failure("Failed to get pricing", &message),
+        // A panicking worker has no Python counterpart; it lands in the same
+        // 500 shape rather than being swallowed into a well-formed body.
+        Err(err) => return pricing_failure("Failed to get pricing", &err.to_string()),
+    };
+
+    let mut obj = Map::new();
+    obj.insert(
+        "pricing".to_owned(),
+        payload.get("pricing").cloned().unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "source".to_owned(),
+        payload.get("source").cloned().unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "timestamp".to_owned(),
+        payload.get("timestamp").cloned().unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "is_stale".to_owned(),
+        payload
+            .get("is_stale")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+    );
+    JsonBody::ok(Value::Object(obj)).into_response()
+}
+
+// ── POST /api/pricing/refresh ────────────────────────────────────────────────
+
+/// `refresh_pricing` — `force_refresh()`, with the false case as a **500**.
+///
+/// The failure body is `{"status": "error", "message": …}`, not the `{"error":
+/// …}` shape the `except` leg uses; both are 500s, and the two shapes are the
+/// reference's, not a simplification.
+async fn refresh_pricing(State(state): State<AppState>) -> Response {
+    let app_dir = app_dir_of(&state);
+    let refreshed =
+        tokio::task::spawn_blocking(move || PricingService::new(&app_dir).force_refresh()).await;
+    match refreshed {
+        Ok(true) => {
+            let mut obj = Map::new();
+            obj.insert("status".to_owned(), Value::from("success"));
+            obj.insert(
+                "message".to_owned(),
+                Value::from("Pricing updated successfully"),
+            );
+            JsonBody::ok(Value::Object(obj)).into_response()
+        }
+        Ok(false) => {
+            let mut obj = Map::new();
+            obj.insert("status".to_owned(), Value::from("error"));
+            obj.insert(
+                "message".to_owned(),
+                Value::from("Failed to fetch pricing from LiteLLM"),
+            );
+            JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
+                .into_response()
+        }
+        Err(err) => pricing_failure("Failed to refresh pricing", &err.to_string()),
+    }
+}
+
+/// `JSONResponse({"error": f"{prefix}: {str(e)}"}, status_code=500)`.
+fn pricing_failure(prefix: &str, message: &str) -> Response {
+    let mut obj = Map::new();
+    obj.insert(
+        "error".to_owned(),
+        Value::from(format!("{prefix}: {message}")),
+    );
+    JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj)).into_response()
+}
+
+/// `settings.app_dir()` — the directory the store lives in.
+fn app_dir_of(state: &AppState) -> PathBuf {
+    state
+        .store_path()
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 // ── GET /api/health ──────────────────────────────────────────────────────────
@@ -166,6 +317,78 @@ fn invalid_path() -> Response {
     let mut obj = Map::new();
     obj.insert("error".to_owned(), Value::from("Invalid path"));
     JsonBody::with_status(StatusCode::BAD_REQUEST, Value::Object(obj)).into_response()
+}
+
+// ── GET|POST|PUT|DELETE /ollama-api/{path:path} ──────────────────────────────
+
+/// `/ollama-api/` with nothing after it — `{path:path}` matches the empty rest,
+/// so `path` is `""` and the upstream URL is `http://localhost:11434/api/`.
+async fn ollama_proxy_root(request: Request) -> Response {
+    forward_to_ollama(String::new(), request).await
+}
+
+/// `ollama_proxy` — forward the method, the raw body and (almost) every header.
+async fn ollama_proxy_route(PathParam(path): PathParam<String>, request: Request) -> Response {
+    forward_to_ollama(path, request).await
+}
+
+/// The shared body of both routes.
+///
+/// Everything from `body = await request.body()` inward is inside Python's
+/// `try`, including the body read itself — a client that disconnects mid-upload
+/// therefore gets the same 502 as a dead Ollama, which is why the `to_bytes`
+/// failure below is not a separate 400.
+async fn forward_to_ollama(path: String, request: Request) -> Response {
+    let method = request.method().clone();
+    let headers = ollama_proxy::forwarded_headers(request.headers());
+    let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => return ollama_unavailable(),
+    };
+
+    match ollama_proxy::proxy(method.as_str(), &path, &headers, &body).await {
+        ProxyOutcome::Json { status, body } => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+            JsonBody::with_status(status, body).into_response()
+        }
+        ProxyOutcome::Stream {
+            status,
+            headers,
+            body,
+        } => {
+            // `StreamingResponse(stream(), status_code=…, headers=dict(response.headers))`
+            // — starlette forwards the upstream headers verbatim and adds no
+            // `content-length`, because a streaming body has no known length.
+            // Unreachable while 11434 is closed and therefore UNMEASURED: no
+            // case row (law 4 bars stream rows outright) and no claim that these
+            // bytes match.
+            let mut response = Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY));
+            if let Some(map) = response.headers_mut() {
+                for (name, value) in headers {
+                    if let (Ok(name), Ok(value)) = (
+                        HeaderName::from_bytes(name.as_bytes()),
+                        HeaderValue::from_str(&value),
+                    ) {
+                        map.append(name, value);
+                    }
+                }
+            }
+            response
+                .body(Body::from(body))
+                .unwrap_or_else(|_| ollama_unavailable())
+        }
+        ProxyOutcome::Unavailable => ollama_unavailable(),
+    }
+}
+
+/// `except Exception: JSONResponse({"error": "Ollama not available"}, 502)`.
+///
+/// The whole endpoint on this host, and the reason `M-ollama` is a real row.
+fn ollama_unavailable() -> Response {
+    let mut obj = Map::new();
+    obj.insert("error".to_owned(), Value::from("Ollama not available"));
+    JsonBody::with_status(StatusCode::BAD_GATEWAY, Value::Object(obj)).into_response()
 }
 
 /// starlette's `FileResponse`, minus the two headers DIV-051 already records.
@@ -328,6 +551,172 @@ fn resolve_lexically(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Request as HttpRequest;
+    use tower::ServiceExt as _;
+
+    /// A router over a scratch app dir: an empty store next to a `cache/` the
+    /// tests seed. `package_dir` is the real package tree, because
+    /// `crate::pricing::engine` reads `data/models.toml` out of it.
+    fn app(tag: &str) -> (Router, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "stax-misc-{tag}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let store = dir.join("store.db");
+        drop(rusqlite::Connection::open(&store).expect("store"));
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let state = AppState::new(store, package, crate::state::Config::default());
+        (register(Router::new()).with_state(state), dir)
+    }
+
+    async fn send(router: &Router, request: HttpRequest<Body>) -> (StatusCode, String) {
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router answers");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .expect("body");
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn verb(method: &str, uri: &str) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request")
+    }
+
+    /// The row `M-ollama` flips on. **This test asserts the state of the
+    /// machine**: 11434 must be closed for the reference to answer 502, and it
+    /// is (`ss -lnt` has no listener; a connect to `127.0.0.1:11434` and to
+    /// `[::1]:11434` is refused). If someone starts Ollama, this test goes red
+    /// — which is the point. A green tick that depended on a daemon nobody
+    /// checked would be worth less than nothing.
+    #[tokio::test]
+    async fn every_verb_answers_the_502_because_the_port_is_closed() {
+        let (router, dir) = app("ollama");
+        for (method, uri) in [
+            ("GET", "/ollama-api/tags"),
+            ("POST", "/ollama-api/generate"),
+            ("PUT", "/ollama-api/blobs/sha256:abc"),
+            ("DELETE", "/ollama-api/delete"),
+            ("GET", "/ollama-api/a/b/c"),
+            ("GET", "/ollama-api/"),
+        ] {
+            let (status, body) = send(&router, verb(method, uri)).await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{method} {uri}");
+            assert_eq!(
+                body, r#"{"error":"Ollama not available"}"#,
+                "{method} {uri}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `api_route(methods=["GET", "POST", "PUT", "DELETE"])` claims four verbs,
+    /// so a fifth is starlette's 405 — which `lib.rs` already renders as
+    /// FastAPI's JSON. Asserted through the module router, where axum's own
+    /// empty 405 is what would show up if the method list were wrong.
+    #[tokio::test]
+    async fn a_fifth_verb_is_not_claimed_by_the_proxy_route() {
+        let (router, dir) = app("ollama-405");
+        let (status, _) = send(&router, verb("PATCH", "/ollama-api/tags")).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn seed_cache(dir: &Path, body: &str) {
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&cache).expect("cache dir");
+        std::fs::write(cache.join("pricing.json"), body).expect("seed");
+    }
+
+    /// The one `/api/pricing` shape that is deterministic on BOTH sides: a cache
+    /// younger than 24 h is served verbatim and nothing fetches, so nothing
+    /// writes. This is the branch `rust/PRICING-REFRESH-DIFFER.md` proves
+    /// byte-identical.
+    #[tokio::test]
+    async fn a_fresh_cache_is_served_without_touching_the_network() {
+        let (router, dir) = app("pricing-fresh");
+        let ts = crate::services::pricing_refresh::now_isoformat();
+        seed_cache(
+            &dir,
+            &format!(r#"{{"timestamp": "{ts}", "source": "litellm", "pricing": {{"m": 1.5}}}}"#),
+        );
+        let (status, body) = send(&router, verb("GET", "/api/pricing")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            format!(
+                r#"{{"pricing":{{"m":1.5}},"source":"cache","timestamp":"{ts}","is_stale":false}}"#
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `cache_data["pricing"]` is a subscript: the missing key is a `KeyError`
+    /// whose `str()` is `'pricing'`, and the route interpolates it. Measured
+    /// against the reference, not transcribed.
+    #[tokio::test]
+    async fn a_cache_without_the_pricing_key_is_the_measured_500() {
+        let (router, dir) = app("pricing-keyerror");
+        let ts = crate::services::pricing_refresh::now_isoformat();
+        seed_cache(&dir, &format!(r#"{{"timestamp": "{ts}"}}"#));
+        let (status, body) = send(&router, verb("GET", "/api/pricing")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, r#"{"error":"Failed to get pricing: 'pricing'"}"#);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No cache at all: the fetch is attempted, cannot succeed (no TLS in this
+    /// workspace), and the rate card is served as `source: "default"`.
+    #[tokio::test]
+    async fn an_absent_cache_falls_through_to_the_rate_card() {
+        let (router, dir) = app("pricing-default");
+        let (status, body) = send(&router, verb("GET", "/api/pricing")).await;
+        assert_eq!(status, StatusCode::OK);
+        let parsed: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(parsed["source"], Value::from("default"));
+        assert_eq!(parsed["is_stale"], Value::Bool(true));
+        // The reference, probed under a failed fetch, answered 53 entries whose
+        // first key is `claude-fable-5`. Both sides read the same manifest.
+        let pricing = parsed["pricing"].as_object().expect("object");
+        assert_eq!(
+            pricing.keys().next().map(String::as_str),
+            Some("claude-fable-5")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `force_refresh()` false → **500**, and the failure body is the
+    /// `{"status", "message"}` shape, not the `{"error"}` one.
+    #[tokio::test]
+    async fn refresh_reports_the_fetch_failure_with_a_500() {
+        let (router, dir) = app("pricing-refresh");
+        let (status, body) = send(
+            &router,
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/pricing/refresh")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body,
+            r#"{"status":"error","message":"Failed to fetch pricing from LiteLLM"}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn health_key_order_is_the_literals_not_the_alphabets() {

@@ -1,0 +1,146 @@
+# Batch E / member `live` — case rows for `routes/live.py` (RS-5-075/076).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, REPLACING the two existing
+# `!LV-*` rows, and strips the leading `P-by-dir-known` selection row, which
+# already runs earlier there.
+#
+# ── the honest headline ─────────────────────────────────────────────────────
+#
+# `/api/live/stats` IS PORTED AND MOUNTED, AND ITS ROWS STAY `!`. The payload
+# stamps `burn.ts = datetime.now(UTC).isoformat()` at microsecond resolution,
+# so no two responses byte-match — not python-vs-rust, and not python-vs-python
+# on ONE server two seconds apart. Measured both ways before a line was ported;
+# `DIV-e-live.md` carries the diffs. `!` here means "clock-stamped, permanently
+# open by construction", the DIV-085 disposition, not "unported".
+#
+# What the `!` rows still buy is real: the differ executes them, so a 500, a
+# panic, a schema drift or a shape change on either side surfaces in the dump
+# under `.parity-state/endpoint-diffs/` even though the verdict is suppressed.
+# The *content* proof is in `DIV-e-live.md`: five offsets, python and rust
+# rendered from the same read-only store, byte-identical on every field except
+# `.burn.ts`.
+#
+# `/api/live/stream` HAS NO ROW, EVER — DIV-136, restated in `SSE-PROBE-d.md`.
+# `!` suppresses `Verdict::Divergent`, never `Verdict::Error`, and a body that
+# never terminates books two harness errors and exits 2. Its verification is
+# the recorded probe, now with both halves.
+#
+# Side effects: NONE. Every row is a GET or an unclaimed method on
+# `/api/live/*`. `_live_stats_sync` opens the store read-write (that is what
+# `store/db.py::connect` does) and Python additionally runs `schema.apply` —
+# idempotent DDL the harness store already satisfies — but the handler issues
+# only SELECTs. Nothing under `$STACKUNDERFLOW_HOME` is written.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the happy path and the timezone legs ────────────────────────────────────
+# DIV-141 / finding 1: `burn.ts` is a clock stamp, so these can never go green.
+# Everything else in the body is deterministic on a frozen store — six tools at
+# 61/15/9/5/4/3 samples, both watermarks, and every burn figure but `ts`.
+!LV-stats            | GET | /api/live/stats                        | -
+# `-480` is minutes EAST of UTC and §6b divergence 5 (the React sign inversion)
+# is INHERITED FAITHFULLY, exactly as `D-stats-tz` / `D-stats-tz-inverted` do
+# for `/api/stats`. Both signs are ported, neither is "fixed": `-480` puts the
+# local wall clock eight hours BEHIND UTC and `+480` eight hours ahead, which
+# on the harness home moves `month_to_date` from 3857.83 to 0.0. The sign is
+# load-bearing and both legs are measured.
+!LV-stats-tz         | GET | /api/live/stats?timezone_offset=-480   | -
+!LV-stats-tz-inverted| GET | /api/live/stats?timezone_offset=480    | -
+# Zero is the default, spelled explicitly: it must take the same leg as an
+# ABSENT parameter, not a different one.
+!LV-stats-tz-zero    | GET | /api/live/stats?timezone_offset=0      | -
+
+# ── the clamp that is NOT there (finding 2) ─────────────────────────────────
+# `/api/stats` clamps `timezone_offset` to [-720, 840] inside
+# `_project_stats_cached`. `routes/live.py` hands the raw int straight to
+# `live_svc.snapshot`, so these two answer 200 with genuinely different buckets
+# — probed: `-100000` gives month_to_date 1736.63 / projection 2340.67, and
+# `+100000` gives 550.45 / 1895.99, neither of which is the `[-720, 840]`
+# answer. Inheriting the missing clamp is the DIV-124 call for
+# `/api/dashboard-data`, made again here. These rows exist so that if anyone
+# ever "fixes" one side, the bodies stop matching in a way the dump shows.
+!LV-stats-tz-under   | GET | /api/live/stats?timezone_offset=-100000 | -
+!LV-stats-tz-over    | GET | /api/live/stats?timezone_offset=100000  | -
+
+# ── the 500 the missing clamp makes reachable (finding 3) ───────────────────
+# Not a validation error: the value coerces fine and then
+# `now + timedelta(minutes=tz)` leaves `datetime`'s [year 1, year 9999] range.
+# `OverflowError: date value out of range` at `services/live.py:203`, uncaught,
+# so starlette's ServerErrorMiddleware answers 500 with the 21-byte plain-text
+# body `Internal Server Error` and `content-type: text/plain; charset=utf-8`.
+# NO `!`: the port reproduces that response byte for byte and the row is
+# expected to go GREEN. It is also the only non-JSON response in the module.
+#
+# The asymmetry is real, not a typo. 2026 leaves ~7973 years of headroom
+# forward and only ~2026 backward, so `+2147483647` is a 200 and
+# `-2147483648` is a 500. Both are rows precisely because the boundary is
+# counter-intuitive.
+LV-stats-tz-overflow | GET | /api/live/stats?timezone_offset=-2147483648 | -
+!LV-stats-tz-int32max| GET | /api/live/stats?timezone_offset=2147483647  | -
+
+# ── the 422 legs (law 5, law 8) ─────────────────────────────────────────────
+# `timezone_offset: int = 0` is coerced by FastAPI's dependency solver, so an
+# uncoercible value never reaches the handler and the body is the FULL pydantic
+# error LIST — NOT `json::validation_422_field_only`'s `{"detail":"<field>"}`.
+# Measured, not assumed (law 6):
+#   {"detail":[{"type":"int_parsing","loc":["query","timezone_offset"],
+#     "msg":"Input should be a valid integer, unable to parse string as an
+#     integer","input":"abc"}]}
+# Expected GREEN — the port uses `json::validation_422`.
+LV-stats-bad-int     | GET | /api/live/stats?timezone_offset=abc     | -
+# An EMPTY value is NOT "absent": it is the empty string, and it fails to
+# coerce with `"input":""`. This is the leg a port that reads "missing or
+# empty -> default" would silently pass with a 200.
+LV-stats-empty-int   | GET | /api/live/stats?timezone_offset=        | -
+# pydantic will not narrow a float literal to an `int` field, even an integral
+# one. `1.5` and `1.0` both 422.
+LV-stats-float-int   | GET | /api/live/stats?timezone_offset=1.5     | -
+# A bignum: Python's `int` is arbitrary-precision, so this COERCES and then
+# 500s on the timedelta; `crate::qs::opt_int` parses into `i64` and 422s.
+# `!` because that is DIV-107 — a defect in the SHARED `qs::opt_int` which the
+# batch-E charter reserves for the architect (`!CR-at-float` / `!CR-at-bignum`
+# are the same bug). Named here so `/api/live/stats` is on the list when it is
+# fixed, rather than discovered later.
+!LV-stats-bignum-int | GET | /api/live/stats?timezone_offset=9999999999999999999999 | -
+
+# ── starlette's routers (law 5) ─────────────────────────────────────────────
+# A repeated scalar takes the LAST occurrence — starlette builds
+# `QueryParams._dict` by comprehension. The first row must therefore be a 422
+# (the junk value wins) and the second a 200 (the good value wins). A port that
+# took the FIRST value would pass one row and fail the other, which is why both
+# are here.
+LV-stats-tz-repeat-bad  | GET | /api/live/stats?timezone_offset=-480&timezone_offset=abc  | -
+!LV-stats-tz-repeat-good| GET | /api/live/stats?timezone_offset=abc&timezone_offset=-480  | -
+# An unknown query parameter is IGNORED, not rejected — FastAPI does not run
+# an extra-forbid model on query params.
+!LV-stats-unknown-param | GET | /api/live/stats?bogus=1                | -
+# The unclaimed methods. FastAPI's own handler renders
+# `{"detail":"Method Not Allowed"}`; starlette's default plain text is
+# replaced. Expected GREEN.
+LV-stats-post        | POST   | /api/live/stats                    | -
+LV-stats-put         | PUT    | /api/live/stats                    | -
+LV-stats-delete      | DELETE | /api/live/stats                    | -
+LV-stats-patch       | PATCH  | /api/live/stats                    | -
+# A path under the prefix that no route claims: FastAPI's `{"detail":"Not
+# Found"}`, not axum's empty 404. Expected GREEN.
+LV-unknown-subpath   | GET | /api/live/nope                         | -
+
+# ── the two trailing-slash rows, and why they are a PAIR ────────────────────
+# starlette's `redirect_slashes` answers `307` + `location:` for a trailing
+# slash on a REGISTERED path, and `404` for one that is not registered —
+# measured: `/api/live/stats/` and `/api/live/stream/` both 307, while
+# `/api/live/nope/` 404s. axum does neither redirect, so both 404 today.
+#
+# `LV-stats-slash` is therefore the pure DIV-133 control: a path mounted on
+# BOTH servers, diverging only on the redirect. `LV-stream-slash` is the same
+# 307-vs-404 shape today, so on its own it proves nothing extra — the pair is
+# what carries the information. When DIV-133 lands, `LV-stats-slash` goes green
+# and `LV-stream-slash` STAYS 404, and at that moment it becomes the standing,
+# terminating evidence that `/api/live/stream` is unmounted on the Rust side
+# (DIV-e-live.md finding 6). A row on `/api/live/stream` itself would hang the
+# differ and exit 2 (DIV-136), so this is the only safe form of the
+# observation. Both `!`; neither is batch E's to fix.
+!LV-stats-slash      | GET | /api/live/stats/                       | -
+!LV-stream-slash     | GET | /api/live/stream/                      | -

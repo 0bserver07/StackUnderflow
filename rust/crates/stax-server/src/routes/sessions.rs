@@ -3,7 +3,7 @@
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
 //! | `RS-5-104` | `GET` | `/api/jsonl-files` | `/api/jsonl-files` | **ported** |
-//! | `RS-5-105` | `GET` | `/api/sessions/compare` | `/api/sessions/compare` | **open** — DIV-070 |
+//! | `RS-5-105` | `GET` | `/api/sessions/compare` | `/api/sessions/compare` | **ported** — batch E |
 //! | `RS-5-106` | `GET` | `/api/jsonl-content` | `/api/jsonl-content` | **ported** |
 //!
 //! # `/api/jsonl-files`
@@ -25,16 +25,27 @@
 //! 110 MiB of 117 MiB) and the tab never reads `source.data`, so the payload
 //! ships a `<elided: image/png base64, N bytes>` stub unless `raw_media=1`.
 //!
-//! # `/api/sessions/compare` — not ported, DIV-070
+//! # `/api/sessions/compare` — DIV-070 closed, one new divergence in its place
 //!
 //! `_session_costs_for_sessions` reconstructs `RawEntry` objects from two
 //! sessions' `raw_json`, then runs `classifier.tag` → `enricher.build` →
-//! `aggregator.summarise_session_costs`. The first two exist in
-//! `stax_etl::stats`; the third does not — `stats/mod.rs` names
-//! `summarise_session_costs` as explicitly out of the ported subset, and the
-//! `session_costs` block of the whole-pipeline `summarise` has no separate
-//! entry point. Closing it means a new public function in `stax-etl`, another
-//! crate, so this batch files the gap rather than reaching across the fence.
+//! `aggregator.summarise_session_costs`. The first two were already in
+//! `stax_etl::stats`; the third was on that module's deliberately-unported list,
+//! which is why wave 5 filed DIV-070 rather than reaching across the crate fence
+//! for one function. Batch E was granted that reach: the function is now
+//! `stax_etl::stats::aggregator::summarise_session_costs`, ported with tests
+//! beside the collector it drives, and `stats/mod.rs`'s scope paragraph says so.
+//! The endpoint's own logic lives in [`crate::services::session_compare`].
+//!
+//! **The 200 body still cannot be byte-matched, for a different reason.** The
+//! `diff.tokens` object is built by iterating
+//! `set(sa["tokens"]) | set(sb["tokens"])`, and CPython randomises `str` hashing
+//! per process. `endpoint-parity.sh` does not pin `PYTHONHASHSEED` (only
+//! `parity-cli.sh` does), so the reference emits a different key order on every
+//! boot — measured three times over the harness store, three orders, every other
+//! byte identical. `!J-compare` therefore stays known-open on a payload-level
+//! nondeterminism of the same class as DIV-085, and the rows that CAN be pinned
+//! (the 422s, the 404s, the 405s) are pinned. See `parity/DIV-e-compare.md`.
 
 use std::collections::HashMap;
 
@@ -54,6 +65,7 @@ use crate::json::{
 };
 use crate::pyops::{char_prefix, path_name};
 use crate::qs::Query;
+use crate::services::session_compare::{self, CompareError};
 use crate::state::AppState;
 
 /// `title_text[:150]` — a CPython `str` slice, so 150 **code points**.
@@ -61,12 +73,12 @@ const TITLE_CHARS: usize = 150;
 
 /// Mount this module's endpoints onto `router`.
 ///
-/// `/api/sessions/compare` is deliberately absent rather than stubbed: an
-/// unmounted path 404s, and a 404 the differ records as a known-open row is
-/// honest, where a hand-rolled body would be a fabricated answer.
+/// In `router.include_router` order, which is the order `routes/sessions.py`
+/// declares them.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
     router
         .route("/api/jsonl-files", get(get_jsonl_files))
+        .route("/api/sessions/compare", get(compare_sessions))
         .route("/api/jsonl-content", get(get_jsonl_content))
 }
 
@@ -491,6 +503,160 @@ fn normalise_provider_filter(provider: Option<&[String]>) -> Option<Vec<String>>
     normed.sort();
     normed.dedup();
     (!normed.is_empty()).then_some(normed)
+}
+
+// ── GET /api/sessions/compare ────────────────────────────────────────────────
+
+/// FastAPI's 422 when SEVERAL required query parameters are absent at once.
+///
+/// pydantic validates every field and the handler renders the whole error list,
+/// in the order the endpoint DECLARES its parameters (`a`, then `b`) — not the
+/// order in which the query string happens to omit them. Measured against the
+/// harness interpreter's FastAPI 0.141 / pydantic 2.13, not transcribed
+/// (`endpoint-cases-e-compare.txt` carries all three shapes as rows).
+///
+/// The per-field entry is [`missing_query_param`]'s, concatenated rather than
+/// re-spelled, so there is exactly one place that knows what a `missing` error
+/// looks like. Law 8's `{"detail":"<field>"}` shape is **not** what FastAPI
+/// answers here and is not used.
+fn missing_query_params(fields: &[&str]) -> Value {
+    let mut detail: Vec<Value> = Vec::with_capacity(fields.len());
+    for field in fields {
+        let mut one = missing_query_param(field);
+        if let Some(Value::Array(items)) = one.get_mut("detail") {
+            detail.append(items);
+        }
+    }
+    let mut obj = Map::new();
+    obj.insert("detail".to_owned(), Value::Array(detail));
+    Value::Object(obj)
+}
+
+/// `GET /api/sessions/compare` — the cost/token/duration diff of two sessions.
+///
+/// Python declares this `async def` and then blocks on SQLite inside it; the
+/// port runs the store work on `spawn_blocking`, as every other ported handler
+/// in this module does.
+async fn compare_sessions(State(state): State<AppState>, RawQuery(raw): RawQuery) -> HandlerResult {
+    let query = Query::parse(raw.as_deref().unwrap_or_default());
+    // `a: str` / `b: str` have no defaults, so FastAPI 422s before the handler
+    // runs. An EMPTY `?a=` is a perfectly valid `str` and DOES reach the
+    // handler — it simply names no session and 404s there. A repeated `?a=`
+    // keeps the LAST value, which is `Query::get`'s starlette semantics.
+    let a = query.get("a").map(str::to_owned);
+    let b = query.get("b").map(str::to_owned);
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) => (a, b),
+        (a, b) => {
+            let mut absent: Vec<&str> = Vec::with_capacity(2);
+            if a.is_none() {
+                absent.push("a");
+            }
+            if b.is_none() {
+                absent.push("b");
+            }
+            return Ok(JsonBody::with_status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                missing_query_params(&absent),
+            ));
+        }
+    };
+
+    // `path = log_path or deps.current_log_path` — truthiness on both, so
+    // `?log_path=` (empty) falls through to the selected project and an empty
+    // selection 400s exactly like an unset one.
+    let path = query
+        .get("log_path")
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            state
+                .current_project()
+                .log_path
+                .filter(|value| !value.is_empty())
+        });
+    let Some(path) = path else {
+        return Err(HttpError::bad_request(
+            "No project selected or log_path provided",
+        ));
+    };
+    let slug = path_name(&path);
+
+    let worker = state.clone();
+    let payload = tokio::task::spawn_blocking(move || compare_payload(&worker, &slug, &a, &b))
+        .await
+        .map_err(|err| join_failure(&err))??;
+
+    // `currency = active_currency_payload()` runs AFTER the try/except that
+    // produces the 500, so a currency failure is not "Failed to load stats".
+    let currency = active_currency_payload(&state.config().currency)
+        .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    // `if rate != 1.0:` rewrites `a.cost`, `b.cost` and `diff.cost` in place
+    // (`{**sa, "cost": …}` keeps `cost` where it already was). DIV-052 makes
+    // the non-USD leg unreachable, so — as in `routes/commands.rs` and
+    // `routes/data.rs` — the conversion is not ported blind.
+
+    let Value::Object(mut obj) = payload else {
+        return Err(HttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to load stats: comparison payload was not an object",
+        ));
+    };
+    obj.insert("currency".to_owned(), currency);
+    Ok(JsonBody::ok(Value::Object(obj)))
+}
+
+/// The blocking body: open, resolve the slug, run the comparison.
+///
+/// The two SQLite-error funnels are Python's two, and they are NOT the same
+/// message: everything inside the handler's `try` becomes
+/// `500 "Failed to load stats: {e}"`, while `db.connect` itself is inside it
+/// too — so a failure to open is that message as well.
+fn compare_payload(state: &AppState, slug: &str, a: &str, b: &str) -> Result<Value, HttpError> {
+    let failed = |message: String| {
+        HttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load stats: {message}"),
+        )
+    };
+
+    let conn = state.connect().map_err(|err| failed(err.to_string()))?;
+    let project_rows = get_projects_by_slug(&conn, slug).map_err(|err| failed(err.to_string()))?;
+    if project_rows.is_empty() {
+        // The slug is interpolated into the detail here and NOT in
+        // `/api/jsonl-content`'s "Project not found in store" — two neighbouring
+        // handlers, two different messages.
+        return Err(HttpError::not_found(format!(
+            "Project '{slug}' not found in store"
+        )));
+    }
+    let project_ids: Vec<i64> = project_rows.iter().map(|row| row.id).collect();
+    let provider_map: HashMap<i64, String> = project_rows
+        .iter()
+        .map(|row| {
+            (
+                row.id,
+                // `r.provider or "anthropic"` — an EMPTY provider is falsy too.
+                if row.provider.is_empty() {
+                    "anthropic".to_owned()
+                } else {
+                    row.provider.clone()
+                },
+            )
+        })
+        .collect();
+
+    // LAW 2 / DIV-056: the engine comes from THIS store's `price_book`, which is
+    // what `server.py`'s lifespan primes `infra.costs` with. `default_engine()`
+    // would price off the manifest and be quietly ~2% wrong.
+    let engine = crate::pricing::engine(&conn, state.package_dir())
+        .map_err(|err| failed(err.to_string()))?;
+
+    match session_compare::compare_payload(&conn, &engine, &project_ids, &provider_map, a, b) {
+        Ok(payload) => Ok(payload),
+        Err(CompareError::NotFound(detail)) => Err(HttpError::not_found(detail)),
+        Err(CompareError::Failed(message)) => Err(failed(message)),
+    }
 }
 
 // ── GET /api/jsonl-content ───────────────────────────────────────────────────
@@ -973,5 +1139,336 @@ mod tests {
         // `?provider=` — truthy list, empty after normalisation, so `None`.
         assert_eq!(normalise_provider_filter(Some(&[String::new()])), None);
         assert_eq!(normalise_provider_filter(None), None);
+    }
+
+    // ── GET /api/sessions/compare ───────────────────────────────────────────
+
+    #[test]
+    fn several_absent_parameters_come_out_as_one_list_in_declaration_order() {
+        // Measured on the harness interpreter (fastapi 0.141.1 / pydantic
+        // 2.13.4), not transcribed: `a` before `b`, both entries, one `detail`.
+        assert_eq!(
+            JsonBody::with_status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                missing_query_params(&["a", "b"])
+            )
+            .render(),
+            r#"{"detail":[{"type":"missing","loc":["query","a"],"msg":"Field required","input":null},{"type":"missing","loc":["query","b"],"msg":"Field required","input":null}]}"#
+        );
+        assert_eq!(
+            JsonBody::with_status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                missing_query_params(&["b"])
+            )
+            .render(),
+            r#"{"detail":[{"type":"missing","loc":["query","b"],"msg":"Field required","input":null}]}"#
+        );
+    }
+}
+
+/// In-process exercises of `/api/sessions/compare` against a seeded store.
+///
+/// Separate module because these are the only tests in the file that need a
+/// router, a scratch home and the real package tree; the block above is pure
+/// functions.
+#[cfg(test)]
+mod compare_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use tower::ServiceExt as _;
+
+    /// A scratch `STACKUNDERFLOW_HOME` that cleans itself up.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    /// Two projects; `-p-one` holds a cheap session, a priced one and a session
+    /// with no messages at all, `-p-two` holds one the first project must not
+    /// see.
+    ///
+    /// `package_dir` is the REAL package tree, because `crate::pricing::engine`
+    /// reads `data/models.toml` out of it — LAW 2, and the reason the priced
+    /// row below is a real number rather than a fixture's.
+    fn seeded(tag: &str) -> (AppState, Scratch) {
+        let dir = std::env::temp_dir().join(format!(
+            "stax-sesscmp-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |delta| delta.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let store = dir.join("store.db");
+        let conn = Connection::open(&store).expect("open");
+        conn.execute_batch(
+            "CREATE TABLE projects (id INTEGER PRIMARY KEY, provider TEXT, slug TEXT, \
+                 path TEXT, display_name TEXT, first_seen TEXT, last_modified TEXT);
+             CREATE TABLE sessions (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, \
+                 session_id TEXT NOT NULL, first_ts TEXT, last_ts TEXT, \
+                 message_count INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE messages (id INTEGER PRIMARY KEY, session_fk INTEGER NOT NULL, \
+                 seq INTEGER NOT NULL, timestamp TEXT, raw_json TEXT);
+             INSERT INTO projects (id, provider, slug) VALUES
+                 (1, 'claude', '-p-one'), (2, 'claude', '-p-two');
+             INSERT INTO sessions (id, project_id, session_id) VALUES
+                 (10, 1, 'sess-a'), (11, 1, 'sess-b'), (12, 1, 'sess-empty'),
+                 (13, 2, 'sess-other');",
+        )
+        .expect("schema");
+
+        let rows: [(i64, i64, &str, &str); 4] = [
+            (
+                10,
+                1,
+                "2026-03-04T10:00:00+00:00",
+                r#"{"type":"human","uuid":"a1","message":{"content":"just asking"}}"#,
+            ),
+            (
+                11,
+                1,
+                "2026-03-04T11:00:00+00:00",
+                r#"{"type":"human","uuid":"b1","message":{"content":"do the work"}}"#,
+            ),
+            (
+                11,
+                2,
+                "2026-03-04T11:00:30+00:00",
+                r#"{"type":"assistant","uuid":"b2","message":{"id":"m1",
+                    "model":"claude-opus-4-8",
+                    "usage":{"input_tokens":100,"output_tokens":200,
+                             "cache_creation_input_tokens":300,
+                             "cache_read_input_tokens":400},
+                    "content":"done"}}"#,
+            ),
+            (
+                13,
+                1,
+                "2026-03-04T12:00:00+00:00",
+                r#"{"type":"human","uuid":"o1","message":{"content":"other project"}}"#,
+            ),
+        ];
+        for (fk, seq, ts, raw) in rows {
+            conn.execute(
+                "INSERT INTO messages (session_fk, seq, timestamp, raw_json) \
+                 VALUES (?, ?, ?, ?)",
+                rusqlite::params![fk, seq, ts, raw],
+            )
+            .expect("seed message");
+        }
+        drop(conn);
+
+        let package =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let state = AppState::new(store, package, crate::state::Config::default());
+        (state, Scratch(dir))
+    }
+
+    /// Drive the mounted route in-process — no port, so nothing can collide
+    /// with the harness's `:8096` / `:8097` or the maintainer's `:8095`.
+    ///
+    /// The `method_not_allowed_fallback` mirrors `lib.rs:76`, because the 405
+    /// body is stamped by the crate root and a bare `register(Router::new())`
+    /// would answer axum's native empty 405 instead of starlette's.
+    async fn call(state: &AppState, method: &str, target: &str) -> (StatusCode, String) {
+        let app = register(Router::new())
+            .method_not_allowed_fallback(|| async { crate::json::method_not_allowed() })
+            .with_state(state.clone());
+        let response = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method(method)
+                    .uri(target)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .expect("body");
+        (status, String::from_utf8(bytes.to_vec()).expect("utf-8"))
+    }
+
+    #[tokio::test]
+    async fn both_required_parameters_are_reported_together() {
+        let (state, _scratch) = seeded("missing");
+        let (status, body) = call(&state, "GET", "/api/sessions/compare").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body,
+            r#"{"detail":[{"type":"missing","loc":["query","a"],"msg":"Field required","input":null},{"type":"missing","loc":["query","b"],"msg":"Field required","input":null}]}"#
+        );
+
+        // One present, one absent — only the absent one is named.
+        let (status, body) = call(&state, "GET", "/api/sessions/compare?a=sess-a").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body,
+            r#"{"detail":[{"type":"missing","loc":["query","b"],"msg":"Field required","input":null}]}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn no_project_and_no_log_path_is_the_four_hundred() {
+        // The case matrix cannot reach this: `P-by-dir-known` selects a project
+        // long before the `J-*` rows and nothing deselects. Pinned here instead.
+        let (state, _scratch) = seeded("noproject");
+        let (status, body) = call(&state, "GET", "/api/sessions/compare?a=x&b=y").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body,
+            r#"{"detail":"No project selected or log_path provided"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_log_path_falls_back_to_the_selected_project() {
+        // `log_path or deps.current_log_path` is a TRUTHINESS test on both, so
+        // `?log_path=` is not "the empty project", it is "no override".
+        let (state, _scratch) = seeded("fallback");
+        state.set_current_project(crate::state::CurrentProject {
+            project_path: None,
+            log_path: Some("/home/u/.claude/projects/-p-one".to_owned()),
+        });
+        let (status, body) =
+            call(&state, "GET", "/api/sessions/compare?a=zzz&b=zzz&log_path=").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        // …and the id is named ONCE PER POSITION, not once per value.
+        assert_eq!(body, r#"{"detail":"Session(s) not found: zzz, zzz"}"#);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_slug_is_spelled_out_in_the_detail() {
+        // This handler interpolates the slug; its neighbour
+        // `/api/jsonl-content` says only "Project not found in store".
+        let (state, _scratch) = seeded("noslug");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=x&b=y&log_path=/home/u/.claude/projects/-nope",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"detail":"Project '-nope' not found in store"}"#);
+    }
+
+    #[tokio::test]
+    async fn the_session_lookup_is_scoped_to_the_resolved_project() {
+        // `sess-other` is a real session — of the OTHER project. A handler that
+        // dropped the `project_id IN (…)` predicate would answer 200.
+        let (state, _scratch) = seeded("scope");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=sess-a&b=sess-other&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"detail":"Session(s) not found: sess-other"}"#);
+    }
+
+    #[tokio::test]
+    async fn a_repeated_parameter_keeps_the_last_value() {
+        // starlette's `QueryParams.get`. The 404 names `zzz`, not `sess-a`.
+        let (state, _scratch) = seeded("repeat");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=sess-a&a=zzz&b=sess-b&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"detail":"Session(s) not found: zzz"}"#);
+    }
+
+    #[tokio::test]
+    async fn an_empty_id_passes_validation_and_fails_the_lookup() {
+        // `?a=` is a valid `str` to pydantic, so it reaches the handler and
+        // names no session — the detail ends in a bare space.
+        let (state, _scratch) = seeded("emptyid");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=&b=sess-b&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"detail":"Session(s) not found: "}"#);
+    }
+
+    #[tokio::test]
+    async fn a_session_with_no_messages_reaches_the_second_four_oh_four() {
+        // `sess-empty` clears the id check — it IS a `sessions` row — and then
+        // produces no `session_costs` entry, so `sa is None`. Without this the
+        // second 404 would be an unported branch wearing a green tick.
+        let (state, _scratch) = seeded("nocosts");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=sess-empty&b=sess-b&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"detail":"Session(s) not found: sess-empty"}"#);
+    }
+
+    #[tokio::test]
+    async fn the_happy_path_is_the_whole_payload_byte_for_byte() {
+        // `cost` is the reference's own answer, not this port's: the same token
+        // bag through the reference `infra.costs.compute_cost` for
+        // `claude-opus-4-8` gives `0.007574999999999999`, trailing bits and all
+        // — which is what makes the float a parity assertion rather than a
+        // snapshot. The `diff.tokens` key order here is the port's chosen one
+        // (see `services::session_compare::token_diff`); Python's is a
+        // hash-randomised set and is the reason `!J-compare` stays open.
+        let (state, _scratch) = seeded("happy");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=sess-a&b=sess-b&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            r#"{"a":{"session_id":"sess-a","started_at":"2026-03-04T10:00:00+00:00","ended_at":"2026-03-04T10:00:00+00:00","duration_s":0.0,"cost":0.0,"tokens":{"input":0,"output":0,"cache_creation":0,"cache_read":0},"messages":1,"commands":1,"errors":0,"first_prompt_preview":"just asking","models_used":[]},"b":{"session_id":"sess-b","started_at":"2026-03-04T11:00:00+00:00","ended_at":"2026-03-04T11:00:30+00:00","duration_s":30.0,"cost":0.007574999999999999,"tokens":{"input":100,"output":200,"cache_creation":300,"cache_read":400},"messages":2,"commands":1,"errors":0,"first_prompt_preview":"do the work","models_used":["claude-opus-4-8"]},"diff":{"cost":0.007574999999999999,"tokens":{"input":100,"output":200,"cache_creation":300,"cache_read":400},"commands":0,"errors":0,"duration_s":30.0},"currency":{"code":"USD","symbol":"$","rate_from_usd":1.0,"warning":null}}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn comparing_a_session_with_itself_is_a_zero_diff_and_not_a_four_oh_four() {
+        // `session_id IN (?, ?)` binds the same value twice and SQLite returns
+        // one row, so this is the branch that proves `cost` / `duration_s`
+        // still render `0.0` where `commands` / `errors` render `0`.
+        let (state, _scratch) = seeded("same");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/api/sessions/compare?a=sess-b&b=sess-b&log_path=/h/-p-one",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains(
+                r#""diff":{"cost":0.0,"tokens":{"input":0,"output":0,"cache_creation":0,"cache_read":0},"commands":0,"errors":0,"duration_s":0.0}"#
+            ),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_unclaimed_methods_answer_starlettes_405() {
+        let (state, _scratch) = seeded("methods");
+        for method in ["POST", "PUT", "DELETE"] {
+            let (status, body) = call(&state, method, "/api/sessions/compare?a=x&b=y").await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{method}");
+            assert_eq!(body, r#"{"detail":"Method Not Allowed"}"#, "{method}");
+        }
     }
 }

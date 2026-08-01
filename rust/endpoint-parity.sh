@@ -200,6 +200,21 @@ PY_PID=$!
 echo "=== booting rust (stax-server) on :$RS_PORT ==="
 (
     export STACKUNDERFLOW_HOME="$HOME_DIR"
+    # ENV SYMMETRY (batch E, measured). `parity/pyserver.py` sets these two with
+    # `os.environ.setdefault` so the reference does not run a watcher or take the
+    # singleton lock — but it sets them INSIDE the Python interpreter, so until
+    # now the Rust subshell never saw them. `GET /api/etl/status` REPORTS
+    # `watcher.enabled`, so the two servers disagreed on a fact about the
+    # HARNESS rather than about the port: python `false`, rust a truthful `true`.
+    # With the variables exported here the whole `watcher` block is byte-
+    # identical, and nothing else in the matrix moves.
+    #
+    # This file's own premise is what makes the fix mandatory rather than
+    # convenient: "Both servers are pointed at the SAME package directory … A
+    # difference can then only come from the server." That claim was false while
+    # one side's configuration was set in a place the other could not read.
+    export STACKUNDERFLOW_DISABLE_WATCHER=1
+    export STACKUNDERFLOW_DISABLE_LOCK=1
     exec "$RS_BIN" --host 127.0.0.1 --port "$RS_PORT" \
         --data-dir "$HOME_DIR" --package-dir "$PKG_DIR"
 ) >>"$RS_LOG" 2>&1 &

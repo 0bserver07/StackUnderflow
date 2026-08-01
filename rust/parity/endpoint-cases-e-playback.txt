@@ -1,0 +1,187 @@
+# Batch E / member `playback` — case rows for `routes/playback.py`
+# (RS-5-091 `/api/playback/{session_id}/fs`, RS-5-092 `/api/playback/{session_id}`,
+#  RS-5-093 `/api/playback/project/{project_slug}`).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, replacing the five `!PB-*` rows
+# that live there today, and strips the leading `P-by-dir-known` selection row.
+#
+# ── SAFETY (law 4) ───────────────────────────────────────────────────────────
+#
+# Every row is a GET or an unclaimed method on a GET-only path. All three
+# endpoints are pure read-side over `messages.raw_json`, `sessions`, `projects`
+# and (when present) `captured_events`; the only write in the Python handlers is
+# `schema.apply(conn)`, idempotent DDL the harness store already satisfies, and
+# the port does not run it at all (DIV-106). Nothing under
+# `$STACKUNDERFLOW_HOME` is written by any row below.
+#
+# ── TERMINATION (law 4, second half) ─────────────────────────────────────────
+#
+# The `/fs` endpoint decorates each reconstructed file with a risk overlay, and
+# that overlay is O(files × four `LIKE` sweeps of `messages`). Measured on the
+# harness store (3.9 GB, `messages` a partitioned VIEW): ~0.6 s per sweep, so
+# ~2.5 s per file. The fixtures below are chosen so no row reconstructs more
+# than two files — see `PB-fs-replay`'s comment. A row against a
+# hundred-file session would be minutes and does not belong in a gate.
+#
+# ── NO ROW DEPENDS ON SERVER STATE ───────────────────────────────────────────
+#
+# Unlike most of the matrix, these three endpoints never read
+# `deps.current_log_path`: the session id and the project slug both arrive in
+# the path. The selection row is carried anyway, per batch C's convention, so
+# these rows behave identically whether they are run standalone or spliced into
+# the middle of the merged file.
+#
+# ── THE FIXTURES ─────────────────────────────────────────────────────────────
+#
+#   04a86c63-4cfd-4929-91a3-3edfe80e3e2f  sessions.id 3488, project 314 (this
+#       repo). THREE messages, all role=user, so the event stream and the fs
+#       snapshot are both EMPTY at every cutoff — which is what makes it the
+#       cheap, always-terminating fixture for the required rows.
+#   4f6cb3a7-a786-4fe2-8c40-66c5ec02d933  sessions.id 20, 22 messages, 12 of
+#       them assistant rows carrying `tool_use` blocks, TWO of which name a
+#       `file_path`. Ingested 2026-03-13 from a project nothing in this
+#       campaign writes to, so it is stable. This is the fixture that actually
+#       exercises the extractor, the excerpt builder and the fs replay.
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow  projects.id 314,
+#       two sessions, 1,279 messages. One provider, so `get_project`'s
+#       first-row-wins narrowing is not observable here (see DIV finding 8).
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── RS-5-092  GET /api/playback/{session_id} ─────────────────────────────────
+# The two rows the claim named. `PB-session` is the 404 leg; `PB-session-real`
+# is a session that EXISTS and has no tool calls — 200 with an empty list, the
+# distinction the whole `page is None` return type exists to make.
+PB-session          | GET | /api/playback/no-such-session | -
+PB-session-real     | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+
+# The real extractor: tool-call pairing, the summary table, `byte_count` in
+# BYTES, `duration_ms` from the result message's timestamp, and the 200-CODE-
+# POINT `payload_excerpt` (which defaults ON for this endpoint).
+PB-session-tools    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933 | -
+# `include_payload=0` must blank the excerpt and change nothing else.
+PB-session-nopayload | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=0 | -
+# A filter subsets the list while each event KEEPS its `seq` from the full
+# stream — the gap-preserving property a deep link depends on.
+PB-session-filter   | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=Read,Edit | -
+# A filter naming a tool the session never called: empty, not 404.
+PB-session-filter-miss | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=Frobnicate | -
+# `_parse_tool_filter` drops blank parts and then `cleaned or None` — so a
+# filter of nothing but whitespace is NO filter, and every event survives.
+PB-session-filter-blank | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=%20,%20, | -
+# `truncated: true`, and the cap applies to the RETURNED list, not the scan.
+PB-session-limit1   | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=1 | -
+# Percent-decoding of the path parameter plus `ensure_ascii=False` on the way
+# out: the 404 detail must ship the raw UTF-8 bytes of `café`.
+PB-session-utf8     | GET | /api/playback/caf%C3%A9 | -
+# An unclaimed method on a claimed path — FastAPI's `{"detail":"Method Not
+# Allowed"}`, and no handler runs.
+PB-session-post     | POST | /api/playback/no-such-session | -
+
+# ── RS-5-092 validation legs (law 5: one row per branch) ─────────────────────
+# `limit: int = Query(1000, ge=1, le=10_000)`. These three are the first rows in
+# the whole matrix to issue `greater_than_equal` / `less_than_equal`, which
+# carry a `ctx` object the type errors do not.
+PB-session-limit-ge | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=0 | -
+PB-session-limit-le | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=10001 | -
+PB-session-limit-bad | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=abc | -
+# pydantic's lax `str`→`int` accepts an integral float form and CPython's digit
+# underscores; a big integer parses EXACTLY and then fails the bound, so this
+# must be `less_than_equal` and not `int_parsing`. The `qs::opt_int` DIV-107
+# defect is why this route coerces locally — finding 1.
+PB-session-limit-float | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=100.0 | -
+PB-session-limit-under | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=1_000 | -
+PB-session-limit-big | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=99999999999999999999 | -
+# `include_payload: bool` — pydantic's boolean vocabulary, and what is outside it.
+PB-session-bad-bool | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=maybe | -
+# TWO bad parameters: both are reported, in DECLARATION order (`limit` then
+# `include_payload`), not in query-string order.
+PB-session-two-errors | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=maybe&limit=0 | -
+
+# ── RS-5-093  GET /api/playback/project/{project_slug} ───────────────────────
+PB-project          | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+PB-project-unknown  | GET | /api/playback/project/-no-such-project-anywhere | -
+# `include_payload` defaults OFF here — this row turns it on over a small window
+# so the excerpt builder is measured on the cross-session path too.
+PB-project-payload  | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?include_payload=1&limit=5 | -
+PB-project-filter   | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?tool_filter=Bash&limit=50 | -
+# `since` — an ISO literal above every stamp, so the stream is empty.
+PB-project-since-iso | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=2027-01-01 | -
+# The RELATIVE grammar (`^\s*(\d+)\s*([dhm])\s*$`). 9,999 days lands the bound
+# in 1999, so the millisecond gap between the two servers' `datetime.now(UTC)`
+# calls cannot move a row. A `?since=7d` row would be a coin flip on any
+# message written in that gap and is deliberately NOT here — finding 2.
+PB-project-since-rel | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=9999d | -
+# The regex allows internal whitespace and is case-insensitive.
+PB-project-since-rel2 | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=%20999999%20H%20 | -
+# Unrecognised → passed through as a LITERAL, and `'7 days' >= '2026-…'`
+# lexically, so the SQL matches nothing. Harmless by design, and measurable.
+PB-project-since-junk | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=7%20days | -
+# Blank `since` is `None`, NOT an empty lower bound — no clause is added at all.
+PB-project-since-blank | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since= | -
+# The project endpoint's bounds are a DIFFERENT pair (`ge=1, le=20_000`) and the
+# `le` message carries `20000`, not `10000`.
+PB-project-limit-ge | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=0 | -
+PB-project-limit-le | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=20001 | -
+PB-project-limit1   | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=1 | -
+
+# ── RS-5-091  GET /api/playback/{session_id}/fs ──────────────────────────────
+# `at: str = Query(...)` — absent is FastAPI's `missing`, with a null `input`.
+PB-fs-no-at         | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs | -
+# A session with no assistant rows: 200, `files: {}`, `warnings: []`, and the
+# `snapshot_ts` echo. No file means no risk sweep, so this row is instant.
+PB-fs-empty         | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=2026-07-30T00:00:00Z | -
+# The full replay: Read seeds through the `cat -n` stripper, Edit substitutes,
+# `operations_applied` counts per tool per file, and the risk overlay runs. Two
+# files (~5 s of `LIKE` sweeps on both servers) — the ceiling this file accepts.
+PB-fs-replay        | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z | -
+# The CUTOFF, and it is placed BETWEEN the session's two file-touching calls
+# (14:38:26.965 and 14:38:49.636), so this row returns ONE file where
+# `PB-fs-replay` returns two. A cutoff that happens to fall after both — the
+# obvious mid-session guess — measures nothing, and did on the first attempt.
+PB-fs-cutoff        | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-13T14:38:30Z | -
+# `include_content=0` drops only the bodies; `byte_count` still measures the
+# body that was NOT shipped.
+PB-fs-no-content    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z&include_content=0 | -
+# A cutoff before the session began: empty, not an error.
+PB-fs-early         | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2020-01-01T00:00:00Z | -
+# `paths` restricts the REPLAY, not just the output; a path the session never
+# touched yields `files: {}` (and therefore no risk sweep).
+PB-fs-paths-miss    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z&paths=/nope,%20, | -
+# A naive cutoff (no offset) against aware message stamps — the third row of
+# `_ts_le`'s four-case table, where CPython compares WALL clocks and discards
+# the offset.
+PB-fs-naive-at      | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00 | -
+# 404 — session not in store. Note the cutoff is parsed BEFORE the session is
+# resolved, so this row needs a VALID `at` to reach the 404 at all.
+PB-fs-404           | GET | /api/playback/no-such-session/fs?at=2026-01-01T00:00:00Z | -
+# 422 — `at` present and unparseable. This is `HTTPException(422, detail=str(e))`,
+# a one-key object with a STRING detail, and the message embeds Python's
+# `repr()` of the raw value. NOT the pydantic list the rows above produce.
+PB-fs-bad-at        | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=nope | -
+# An EMPTY `at` is present-but-unparseable, so it takes the string 422 and not
+# the `missing` one — the distinction is `Query(...)` seeing a value at all.
+PB-fs-blank-at      | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at= | -
+# `include_content: bool` — the third field in the signature.
+PB-fs-bad-bool      | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=2026-07-30T00:00:00Z&include_content=maybe | -
+# `missing` AND `bool_parsing` together, `at` first: declaration order again,
+# and proof the dependency solver runs before the handler.
+PB-fs-two-errors    | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?include_content=maybe | -
+# A repeated scalar takes the LAST occurrence (starlette's `QueryParams._dict`).
+PB-fs-repeated-at   | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=nope&at=2026-07-30T00:00:00Z | -
+
+# ── router precedence: the three paths overlap, and the overlap is measurable ─
+# `/api/playback/project/fs` is matched by BOTH `/api/playback/{session_id}/fs`
+# and `/api/playback/project/{project_slug}`. starlette takes the first
+# REGISTERED (the fs route, `session_id="project"`); axum's trie prefers the
+# static `project` segment and would take the other. `routes/playback.rs` carries
+# an explicit shadow check to reconcile them — finding 3.
+PB-project-named-fs | GET | /api/playback/project/fs | -
+PB-project-named-fs-at | GET | /api/playback/project/fs?at=2026-01-01T00:00:00Z | -
+# `/api/playback/project` with no slug is the SESSION route, id `"project"`.
+PB-project-bare     | GET | /api/playback/project | -
+# Four segments match no route on either side — FastAPI's JSON 404, not
+# starlette's plain text.
+PB-fs-four-segments | GET | /api/playback/project/x/fs?at=2026-01-01T00:00:00Z | -

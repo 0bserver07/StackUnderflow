@@ -1,0 +1,135 @@
+# Batch E / member `worktrees` — cases for /api/worktrees (RS-5-114, RS-5-115).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. Ids are
+# prefixed `W-`. ORDER IS SIGNIFICANT; do not sort this file.
+#
+# ── LAW 7 clearance, and the one endpoint that does NOT get it ───────────────
+#
+# `GET /api/worktrees` shells out to git six ways. Every invocation is
+# READ-ONLY: `services/worktrees.py::_run_git` refuses anything outside the
+# five-entry `_ALLOWED_GIT_PREFIXES` allow-list (`worktree list`,
+# `status --porcelain`, `cherry`, `rev-parse`, `symbolic-ref`) and every call
+# carries `--no-optional-locks`, so not even `status` may refresh the index. No
+# file is written, no store row is written, no cache is touched. The full argv
+# table and the per-command determinism verdicts are in
+# `parity/DIV-e-worktrees.md`.
+#
+# `POST /api/worktrees/attribute` has NO ROW AND NEVER WILL. It writes
+# `projects.worktree_of`. It is idempotent and additive, which is exactly what
+# makes a row look safe — but python-then-rust against ONE shared home means the
+# second server answers a question the first already changed. DIV-078 / LAW 4.
+# The response shapes were probed against the reference on a PRIVATE COPY of the
+# harness home instead: `{"updated":3}` on a store where nothing was stamped,
+# `{"updated":0}` on every run after. Recorded in the ledger, not in this file.
+#
+# ── Why every 200 row here is `!`, permanently ───────────────────────────────
+#
+# The payload's last-but-one key is
+#
+#     "scanned_at": datetime.now(UTC).isoformat()      # routes/worktrees.py:105
+#
+# — microsecond resolution, stamped unconditionally. There is no query parameter
+# that suppresses it and no branch that omits it. MEASURED against the reference
+# on :8099: two `GET /api/worktrees` calls 11 s apart differed in EXACTLY ONE
+# leaf, `/scanned_at`, and agreed on every other leaf, `worktrees[*]` included.
+# So the impossibility is one field wide — precise, and still fatal to a byte
+# differ. An honest `!` outranks a green tick that had to be engineered.
+#
+# ── What ELSE can move, on the rows that reach a real repo ───────────────────
+#
+# Only `W-scoped` below reaches one (see the next section). On that row three
+# further fields are a function of the MACHINE rather than of the store:
+#
+#   * `worktrees[*].dirty_count` — the `git status --porcelain` line count.
+#     MEASURED moving 23 -> 26 inside one session while sibling batch-E agents
+#     wrote files into one of the scanned worktrees. This is the field most
+#     likely to make a row look red for a reason that is not a port defect.
+#   * `worktrees[*].head` / `.branch` / `.unique_commits` — any commit, checkout
+#     or rebase in a scanned repo between the two requests.
+#   * `worktrees[*].age_days`, and therefore `.verdict` — `round(days, 2)` is
+#     864-second granularity, so it is stable within a call pair EXCEPT across a
+#     bucket boundary, and `ACTIVE` flips at exactly 48 h.
+#
+# ── The whole-store scan is NOT reachable from the shared matrix ─────────────
+#
+# `path = log_path or deps.current_log_path`, and the whole-store branch needs
+# BOTH to be falsy. The shared file selects a project early
+# (`P-by-dir-known`), which sets `deps.current_log_path` to
+# `/home/tmos/.claude/projects/-media-…-StackUnderflow` — a directory that is
+# not a git repo. So `W-worktrees` and `W-blank` below are the SCOPED-to-a-
+# non-repo case, and their body is the empty scan:
+#
+#   {"scope":"/home/tmos/.claude/projects/-media-…","worktrees":[],
+#    "summary":{"total":0,…,"attributed_cost_usd":0.0},"scanned_at":…}
+#
+# (measured, and the same prefix the pre-existing `!W-worktrees` row recorded).
+# That is not a loss: it is the row that proves `attributed_cost_usd` ships as
+# the FLOAT `0.0` — the summary seeds the literal `0.0` and steps it with `+=`
+# rather than `sum()`, so an int `0` would be a divergence in the other
+# direction. `W-scoped` is what covers the git fan-out.
+#
+# ── The deterministic subset that DOES exist ─────────────────────────────────
+#
+# The method-fallback rows at the end. FastAPI's router answers them before any
+# handler exists, so they touch neither git nor the store and their bodies are
+# fixed strings. They are the only rows on this path that can go identical, and
+# they are also LAW 5's requirement: neither endpoint has a 400/404/422 leg at
+# all (`log_path` is a free-form string and there is nothing to validate), so
+# the 405s are the entire error surface.
+#
+# NOT claimed here: `GET /api/worktrees/` (trailing slash) answers 307 on the
+# reference. That is DIV-133, the architect's `lib.rs` item, and batch E's
+# charter says not to fix it in passing — so no row.
+
+# Select a project so `deps.current_log_path` is set. The integrator strips this
+# row when merging — it already runs earlier in the shared file. `W-worktrees`
+# and `W-blank` DEPEND on it having run.
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the default resolution ───────────────────────────────────────────────────
+# No query parameter: falls to `deps.current_log_path`, which is the .claude
+# projects directory and not a repo. Short-circuits at the `Path.is_dir()`
+# stat + one `rev-parse --git-common-dir`, so this row is cheap AND it is the
+# empty-scan shape.
+!W-worktrees        | GET | /api/worktrees                    | -
+
+# ── the row that actually exercises git ──────────────────────────────────────
+# The maintainer's repo: one `worktree list --porcelain`, one `symbolic-ref`,
+# then `cherry` + `status` per linked worktree. Three linked worktrees on this
+# host at time of writing (`…/StackUnderflow-rust`, `…/.claude/worktrees/
+# agent-…`, and a detached one under /tmp). ~1.4 s end to end — comfortably
+# inside the differ's 300 s per-case timeout. This is where a `dirty_count`
+# difference will show up if an agent is writing while the matrix runs.
+!W-scoped           | GET | /api/worktrees?log_path=/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow | -
+
+# A path that is not a directory short-circuits at the stat, so NO git process
+# is spawned at all — and `scope` still echoes the requested path verbatim
+# rather than falling back.
+!W-scope-miss       | GET | /api/worktrees?log_path=/nonexistent/nope | -
+
+# `?log_path=` is the EMPTY string, which is falsy — so it falls through to
+# `deps.current_log_path` rather than scoping to `""`. `scope` must therefore be
+# the selected project's log path, identical to `W-worktrees`, and NOT `"store"`.
+!W-blank            | GET | /api/worktrees?log_path=          | -
+
+# starlette resolves a repeated SCALAR to the LAST occurrence, so this scopes to
+# `/nonexistent/b` and 200s — not to `a`, and not a 422. Measured.
+!W-last-wins        | GET | /api/worktrees?log_path=/nonexistent/a&log_path=/nonexistent/b | -
+
+# An unknown query parameter is ignored by FastAPI, not rejected.
+!W-unknown-param    | GET | /api/worktrees?nope=1             | -
+
+# ── the method surface: the only rows that can go green ──────────────────────
+# `/api/worktrees` is GET-only, so every other verb is FastAPI's
+# `{"detail":"Method Not Allowed"}` at 405 — starlette's router raises it before
+# the handler exists, so nothing is scanned and nothing is written. Measured on
+# the reference for all three verbs.
+W-post-405          | POST   | /api/worktrees                 | -
+W-put-405           | PUT    | /api/worktrees                 | -
+W-delete-405        | DELETE | /api/worktrees                 | -
+
+# The mirror image on the writer's path: it is POST-only, so a GET is the same
+# 405 — and the row is safe precisely BECAUSE the handler never runs. This is
+# the only way `/api/worktrees/attribute` can appear in the matrix at all.
+W-attribute-get-405 | GET    | /api/worktrees/attribute       | -
+W-attribute-put-405 | PUT    | /api/worktrees/attribute       | -

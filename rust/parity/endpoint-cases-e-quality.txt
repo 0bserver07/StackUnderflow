@@ -1,0 +1,117 @@
+# Batch E / quality — `routes/quality.py` (RS-5-102 / RS-5-103), closing DIV-135.
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ORDER IS NOT LOAD-BEARING for this group. Neither endpoint reads
+# `deps.current_log_path` or any other server state; the selection row is here
+# only for the batch-C convention. The rows are still listed 404s-first so that
+# a failure in the cheap deterministic legs is visible before the slow ones run.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SAFETY — READ BEFORE ADDING ANY ROW ON A REAL SESSION ID
+# ─────────────────────────────────────────────────────────────────────────────
+# `grade_session` calls a local Ollama: `GET localhost:11434/api/tags` (3 s) then
+# `POST /api/chat` (30 s). On THIS host :11434 is CLOSED — re-verified at probe
+# time by `ss -ltn` (no listener), `curl` (exit 7, "Connection refused") and a
+# direct `socket.create_connection` to 127.0.0.1 / ::1 / localhost (all ECONNREFUSED
+# 111). Both sides therefore take the connect-refused path, and grading.py:205
+# puts the `INSERT OR REPLACE` inside `if not is_fallback:` — so the fallback
+# path WRITES NOTHING AND COMMITS NOTHING. Verified end to end: after ~20 grader
+# hits per side across the probe, `SELECT COUNT(*) FROM session_quality_metrics`
+# was still 0.
+#
+# IF :11434 IS EVER OPEN ON THE HOST RUNNING THIS MATRIX, DELETE THE
+# `!QL-quality-real` ROW BEFORE RUNNING IT. With Ollama up the endpoint becomes
+# (a) nondeterministic — a sampled grade — and (b) a real writer whose row the
+# NEXT request serves from cache, so python-then-rust on one shared home stops
+# being idempotent and the shared `.parity-state/fresh` store acquires a
+# fabricated grade. Check first:  ss -ltn | grep 11434
+#
+# NOT IN THIS FILE, deliberately, so that "absent" never means "nobody looked":
+#   * POST …/{real}/grade — `force=True`. While :11434 is closed it adds ZERO
+#     coverage over the GET (both take the identical fallback path; measured,
+#     byte for byte) and strictly more risk if the port ever opens. The probe
+#     ran it on two real sessions and recorded the bodies in DIV-e-quality.md.
+#   * The trailing-slash leg (`…/quality/`): Python answers 307, Rust 404. That
+#     is DIV-133, the architect's `lib.rs` redirect_slashes item, explicitly out
+#     of batch E's charter. Measured and recorded, no row.
+#   * A stored-grade row. `get_stored_grade` is the ONLY fully deterministic
+#     200 this module has — one indexed SELECT, no clock, no socket — and it has
+#     no row because `session_quality_metrics` holds **0 rows** in
+#     `.parity-state/fresh`. Only real LLM grades are ever persisted and nothing
+#     has graded that snapshot. The day a row exists, add it: it is a free green.
+#
+# COST: the `!QL-quality-real` row is the most expensive row in the matrix.
+# Measured 1.5–3.0 s (Python) and 3.9–8.0 s (Rust) per request, against 4–6 ms
+# for every 404/405 row below. The cause is Python's own SQL, identical on both
+# sides: the transcript joins the `messages` VIEW, a 16-partition UNION ALL that
+# SQLite MATERIALIZES in full and then auto-indexes, to fetch 3 rows. Well inside
+# the differ's 300 s timeout, so it terminates (DIV-136) — but it is ~10 s of
+# wall clock and one line to drop if the matrix budget says no.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the 404: the leg that fires BEFORE the grader, on both endpoints ─────────
+# `SELECT id FROM sessions` misses -> `HTTPException(404, f"Session {sid} not
+# found")`. Fully deterministic, no socket, no clock. These are the two rows the
+# claim file listed as known-open; both are GREEN now.
+QL-quality-missing  | GET  | /api/static-analysis/session/no-such-session-anywhere/quality | -
+QL-grade-missing    | POST | /api/static-analysis/session/no-such-session-anywhere/grade   | -
+# No query parameter is declared on either endpoint, so a stray one is ignored
+# rather than 422'd — the one shape a `qs`-parsing port could have got wrong.
+QL-quality-query    | GET  | /api/static-analysis/session/no-such-session-anywhere/quality?force=1 | -
+
+# ── the detail string is an f-string, and the body is ensure_ascii=False ─────
+# starlette percent-decodes the path param, the f-string interpolates it raw,
+# and `JSONResponse` writes UTF-8 rather than `é` (law 1). 44 bytes, not 50.
+QL-quality-unicode  | GET  | /api/static-analysis/session/caf%C3%A9%20session/quality | -
+QL-grade-unicode    | POST | /api/static-analysis/session/caf%C3%A9%20session/grade   | -
+# `+` is NOT a space in a path (only in a query string). Both sides agree.
+QL-quality-plus     | GET  | /api/static-analysis/session/a+b/quality | -
+
+# ── the unclaimed methods on both paths ─────────────────────────────────────
+# FastAPI's JSON 405, not starlette's plain text. `quality` is GET-only and
+# `grade` is POST-only, so each path answers 405 for the other's verb.
+QL-quality-method   | POST   | /api/static-analysis/session/no-such-session-anywhere/quality | -
+QL-grade-method     | GET    | /api/static-analysis/session/no-such-session-anywhere/grade   | -
+QL-quality-delete   | DELETE | /api/static-analysis/session/no-such-session-anywhere/quality | -
+
+# ── KNOWN-OPEN: two shared-router seams, measured here, owned elsewhere ──────
+# NOT this module's handlers — both are pre-existing and reproduce on routes
+# batches A, C and D already shipped green. Recorded as rows so the gap is in
+# the file rather than missing from it; the fix is one change in `lib.rs`, which
+# batch E may not make.
+#
+# An EMPTY non-terminal path segment. starlette compiles `{session_id}` to
+# `[^/]+`, which needs at least one character, so Python never routes it and
+# answers `{"detail":"Not Found"}`. axum's matchit DOES match the empty segment
+# and hands the handler `""`, which the f-string renders with two spaces:
+#   py {"detail":"Not Found"}      rs {"detail":"Session  not found"}
+# A TERMINAL param is unaffected — `/api/static-analysis/session/` and
+# `/api/context-replay/` both answer 404 identically on both sides — so this
+# only surfaces where a param is followed by another segment.
+!QL-quality-empty-id | GET  | /api/static-analysis/session//quality | -
+!QL-grade-empty-id   | POST | /api/static-analysis/session//grade   | -
+#
+# A percent-encoded SLASH. uvicorn unquotes the raw path into `scope["path"]`
+# BEFORE starlette routes it, so `a%2Fb` is two segments and nothing matches;
+# hyper routes on the raw path and axum's `Path` decodes AFTER matching, so the
+# handler gets `a/b`. Reproduced on three already-green endpoints — see
+# DIV-e-quality.md — and invisible today because no row anywhere sends `%2F`.
+#   py {"detail":"Not Found"}      rs {"detail":"Session a/b not found"}
+!QL-quality-encoded-slash | GET | /api/static-analysis/session/a%2Fb/quality | -
+
+# ── KNOWN-OPEN: the one field that keeps a real-session 200 open ─────────────
+# `graded_at` is `datetime.now(UTC)` (grading.py:200) and it is IN THE BODY, so
+# two processes can never agree. Everything else does: the isolated two-server
+# probe (python :8099 / rust :8098) found both bodies 368 bytes, same status,
+# same `content-type`, same key order, and the FIRST DIFFERING BYTE AT OFFSET
+# 331 OF 368 — inside the `graded_at` value and nowhere else. That probe, with
+# its full diff, is the evidence this row cannot itself produce; it is written
+# out in `parity/DIV-e-quality.md`.
+#
+# Read the SAFETY block at the top of this file before running this row.
+# 04a86c63… is 3 messages, which is why it is this session and not a larger one.
+!QL-quality-real    | GET  | /api/static-analysis/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/quality | -

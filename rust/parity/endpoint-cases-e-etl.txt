@@ -1,0 +1,93 @@
+# BATCH E — routes/etl.py (RS-5-071, RS-5-072). DIV-139 cleared.
+#
+# Merged into `endpoint-cases.txt` by the integrator; the leading
+# `P-by-dir-known` row below is stripped there, because the shared file already
+# selects a project earlier and the ordering is load-bearing. (Neither endpoint
+# in this file reads `deps.current_log_path`; the row is here so the sidecar can
+# be run standalone with the same server state the shared file establishes.)
+#
+#   E-etl-*   GET  /api/etl/status    (RS-5-071)
+#   E-405-*   the unclaimed methods on both paths, and the bare prefix
+#
+# ── `POST /api/etl/backfill` HAS NO ROW HERE AND NEVER WILL ──────────────────
+#
+# It is a writer. `force=true` is `DELETE FROM usage_events` + `DELETE FROM
+# mart_watermark` + `rebuild_from_scratch` on all eight marts + a full
+# `messages → usage_events` normalize pass; `force=false` still re-streams every
+# message and re-stamps every watermark. A `!` known-open row would still ISSUE
+# the request (DIV-059) and the write would land on the SHARED harness home
+# while it is being diffed — DIV-078, at mart scale. Its `409` leg additionally
+# needs a job already in flight on BOTH servers at once, which a linear case
+# file cannot express.
+#
+# Its verification is `rust/ETL-BACKFILL-DIFFER.md`: two separate scratch state
+# copies, ports :8098/:8099, and its own seeds. RUN 2026-07-31 — every leg green
+# (five byte-identical 422s, identical stores after both the incremental and the
+# force run, 202→409 on both sides). Log:
+# `rust/.parity-state/etl-backfill/REPORT.txt`.
+#
+# The 422 legs are not here either, for the same reason the refresh differ keeps
+# its own: they are safe to issue (FastAPI validates before the handler), but a
+# port bug that failed to reject `[]` would turn the "safe" row into a live mart
+# rebuild. The isolated procedure is where a validation probe for a writer
+# belongs.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── GET /api/etl/status — RS-5-071 ───────────────────────────────────────────
+#
+# STAYS KNOWN-OPEN, and the reason is NOT the port. Measured 2026-07-31 by
+# `ETL-BACKFILL-DIFFER.md` §4: the two bodies differ in exactly one leaf,
+# `watcher.enabled` — `false` on Python, `true` on Rust — and in nothing else.
+#
+# `_watcher_env_disabled()` reads `STACKUNDERFLOW_DISABLE_WATCHER` from the
+# process environment on every request. `parity/pyserver.py` sets it with
+# `os.environ.setdefault(...)` at import, which puts it in the PYTHON
+# interpreter only; `endpoint-parity.sh` exports just `STACKUNDERFLOW_HOME` into
+# the Rust subshell, so the Rust server never sees the variable and correctly
+# reports the watcher as enabled. Both sides are faithful; the harness is
+# asymmetric.
+#
+# Re-measured with `STACKUNDERFLOW_DISABLE_WATCHER=1` in the Rust environment
+# too: the `watcher` block is byte-identical. The fix is one word in
+# `endpoint-parity.sh`'s rust subshell —
+#     export STACKUNDERFLOW_HOME="$HOME_DIR" STACKUNDERFLOW_DISABLE_WATCHER=1
+# — and it belongs to the harness owner, not to this batch (the claim forbids
+# editing it). Flip this row to `E-etl-status` in the same commit as that
+# export; nothing else about the payload blocks it.
+#
+# Everything else in the body is deterministic against a shared store:
+# `marts[*].last_refresh_ts` is READ from `mart_watermark` (a stored string, not
+# a reading), `lag_seconds` is an event COUNT despite the name, `coverage` is an
+# anti-join, and `current_job` / `last_job` are `null` unless a backfill ran in
+# that process inside the last 30 s — which, with no backfill row in this file,
+# never happens.
+#
+# The endpoint is a pure read on a current store. Python's handler calls
+# `schema.apply(conn)`, which on an up-to-date store is a single
+# `PRAGMA user_version` and writes nothing; the Rust port does not run
+# migrations at all (RS-0-025).
+!E-etl-status       | GET | /api/etl/status                    | -
+
+# A second, back-to-back read. The payload must not move between two calls a
+# few milliseconds apart — this is the row that would catch a `scanned_at`, a
+# "seconds since", or a per-request clock reading sneaking into a STATUS
+# surface (the DIV-073 / DIV-085 class). It carries the same `watcher.enabled`
+# divergence and no other, so it is `!` for that reason alone.
+!E-etl-status-again | GET | /api/etl/status                    | -
+
+# ── the unclaimed methods, and the bare prefix ───────────────────────────────
+#
+# FastAPI answers a known path with an unclaimed method as `405
+# {"detail":"Method Not Allowed"}` (starlette's router raises, FastAPI's handler
+# renders it as JSON); an unknown path is `404 {"detail":"Not Found"}`. axum's
+# own defaults are an EMPTY body with no content-type, so these rows are what
+# proves `lib.rs`'s two fallbacks still cover the two paths this module adds.
+# None of them reaches a handler, so none of them writes.
+E-405-status-post   | POST   | /api/etl/status                 | {}
+E-405-status-del    | DELETE | /api/etl/status                 | -
+E-405-backfill-get  | GET    | /api/etl/backfill               | -
+E-405-backfill-put  | PUT    | /api/etl/backfill               | {}
+E-404-etl-prefix    | GET    | /api/etl                        | -
+E-404-etl-slash     | GET    | /api/etl/                       | -
+E-404-etl-unknown   | GET    | /api/etl/nosuchthing            | -

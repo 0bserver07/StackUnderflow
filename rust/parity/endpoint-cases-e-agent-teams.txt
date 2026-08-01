@@ -1,0 +1,203 @@
+# Batch E / member `agent_teams` — case rows for `routes/agent_teams.py`
+# (RS-5-042 … RS-5-044), the module DIV-082 deferred whole.
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, strips the leading
+# `P-by-dir-known` selection row (which already runs earlier there) and
+# REPLACES the five `!A-*` rows in the "agent teams — the whole module is open"
+# block with the un-`!`-ed copies below.
+#
+# ── Side effects: NONE ───────────────────────────────────────────────────────
+#
+# Every row is a GET or an unclaimed method. All three handlers open the store
+# read-write (that is what `store/db.py::connect` does on both sides) and issue
+# only SELECTs. Python additionally calls `schema.apply(conn)` per request — a
+# migration ladder — which is idempotent DDL the harness store already
+# satisfies; the port does not run it at all (DIV-102). Nothing under
+# `$STACKUNDERFLOW_HOME` is written. Law 4 is satisfied: every row is safe, and
+# every row terminates well inside the differ's 300 s socket timeout (the
+# slowest, `A-list-empty-project`, is a ~6 s full-store sidechain rollup).
+#
+# ── None of these rows need a selected project ───────────────────────────────
+#
+# `agent_teams` never reads `deps.current_log_path`; `?project=` is a SLUG, not
+# a log path. The selection row is carried only so this file runs standalone
+# under `--only A-`.
+#
+# ── What DIV-042 does to these payloads ──────────────────────────────────────
+#
+# DIV-042 (the port's ingest-side team-metadata hook is a stub) does NOT starve
+# these rows. Both servers read the SAME store, and the reference's ingest
+# already materialised 50 `agent_teams` rows and 321 team-tagged sessions into
+# it, so the indexed path has real content on both sides and compares like
+# against like. The project the harness selects
+# (`…jul26-StackUnderflow`, id 314) happens to have ZERO materialised teams and
+# ZERO sidechain messages, which is why the two rows scoped to it exercise the
+# *heuristic* paths instead — see `A-list-scoped` and `A-graph`. Coverage of the
+# indexed path therefore comes from the unscoped and jan26-scoped rows below,
+# deliberately.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ═══ GET /api/agent-teams — RS-5-042 ═════════════════════════════════════════
+#
+# The list view's THREE strategies are chosen by two gates, and each row below
+# names which strategy it lands on. Getting the gate order wrong is invisible on
+# an empty store and loud on this one.
+
+# (1) INDEXED. `_indexed_teams_available` is true (321 team-tagged sessions) and
+# `project_slug is None` short-circuits `_indexed_teams_match_project`, so this
+# is the `agent_teams` JOIN, ordered `MAX(last_ts) DESC, team_id ASC`. **46**
+# rows, not 50: the table has 50 teams and four of them have no session
+# carrying their `team_id`, so the inner JOIN drops them and `LIMIT 50` never
+# binds. Proves the whole indexed row shape: `team_name` = the team id,
+# `description` = the config blurb, `session_id` = `lead_session_id or team_id`.
+A-list              | GET | /api/agent-teams                     | -
+
+# (3) TASK-TOOL. `?project=<the selected slug>` — project 314 has no
+# `agent_teams` row, so `_indexed_teams_match_project` returns False; it has no
+# sidechain message either, so `_list_team_sessions_scan` returns `[]`, which is
+# FALSY and falls through. The answer is the `tools_json LIKE '%"Task"%'` rollup:
+# one row, 37 invocations, with the interpolated `description` f-string.
+A-list-scoped       | GET | /api/agent-teams?limit=5&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# (1) INDEXED, FILTERED. A slug that DOES have `agent_teams` rows, so the same
+# path as `A-list` but with the `WHERE p.slug = ?` arm — 14 teams. This is the
+# only row that proves the filtered branch of the indexed SQL builder; without
+# it a port that ignored `project` entirely would still pass `A-list`.
+A-list-scoped-idx   | GET | /api/agent-teams?limit=20&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# (2) SIDECHAIN SCAN. The only row that reaches it. This project has sidechain
+# messages but NO `agent_teams` row, so gate 2 fails and the scan finds one
+# lead candidate with two `agent-XXXX` sub-sessions. Proves the heuristic's
+# `agentId` extraction (the `agent_count` is `len(set(agent ids))`, 2, not
+# `len(other_subs)`), the `sum(...)` of sub-message counts (4), and that
+# `team_name` stays null when no blob carries `teamName`.
+A-list-scan         | GET | /api/agent-teams?limit=5&project=-Users-yadkonrad-dev-dev-year25-dec25-mycelium-ecosystem | -
+
+# `?project=` — the EMPTY string. `_indexed_teams_match_project` tests
+# `project_slug is None`, an IDENTITY test, so `""` does not short-circuit: it
+# runs the JOIN with `slug = ''`, misses, and forces the fall-through. The
+# fall-through paths then test `if project_slug:`, TRUTHINESS, and read the same
+# `""` as "no filter". One request, two readings. `limit=1` bounds the loop to a
+# single candidate so the row stays cheap.
+A-list-empty-proj   | GET | /api/agent-teams?limit=1&project=    | -
+
+# A slug no project has. All three strategies come back empty and the contract
+# is a clean `{"teams":[]}` — never a 500, never a 404.
+A-list-unknown-proj | GET | /api/agent-teams?project=no-such-project-slug-at-all | -
+
+# The two INCLUSIVE bounds of `Query(50, ge=1, le=500)`. `limit=1` also proves
+# the SQL `LIMIT ?` is bound and not clamped host-side.
+A-list-limit-min    | GET | /api/agent-teams?limit=1             | -
+A-list-limit-max    | GET | /api/agent-teams?limit=500           | -
+
+# pydantic strips surrounding whitespace before coercing, so `%20%205%20` is 5
+# and NOT a 422 — the opposite of the intuitive guess.
+A-list-limit-space  | GET | /api/agent-teams?limit=%20%205%20    | -
+
+# starlette's `QueryParams._dict` keeps the LAST occurrence of a scalar key.
+A-list-limit-repeat | GET | /api/agent-teams?limit=1&limit=2     | -
+
+# ── the four 422 legs (law 5) ────────────────────────────────────────────────
+#
+# `limit: int = Query(50, ge=1, le=500)` is a CONSTRAINED int, so a bound
+# failure is `greater_than_equal` / `less_than_equal` with a `ctx` object — NOT
+# `int_parsing`, and NOT DIV-151's `{"detail":"limit"}`. The `input` field
+# echoes the RAW query string, not the coerced integer.
+A-limit-zero        | GET | /api/agent-teams?limit=0             | -
+A-limit-negative    | GET | /api/agent-teams?limit=-1            | -
+A-limit-over        | GET | /api/agent-teams?limit=501           | -
+# pydantic ints are arbitrary-precision, so this coerces fine and then fails the
+# UPPER BOUND. `crate::qs::opt_int` would answer `int_parsing` here (DIV-107,
+# `!CR-at-bignum`), which is exactly why this module coerces `limit` locally.
+A-limit-bignum      | GET | /api/agent-teams?limit=999999999999999999999 | -
+A-limit-nan         | GET | /api/agent-teams?limit=abc           | -
+# A fractional STRING is not an integer to pydantic's lax str→int, so `5.5` is a
+# parse failure and not a truncation.
+A-limit-float       | GET | /api/agent-teams?limit=5.5           | -
+# Present-but-empty: `int_parsing` with `"input":""`, not the default of 50.
+A-limit-blank       | GET | /api/agent-teams?limit=              | -
+
+# ═══ GET /api/agent-teams/{session_id} — RS-5-043 ════════════════════════════
+
+# HEURISTIC GRAPH. The selected project's busiest session. It carries no
+# `team_id`, so `_build_team_graph_indexed` returns None and the module falls
+# through to `_build_team_graph_scan` — which finds the lead, finds NO sidechain
+# sessions in project 314, and answers 200 with `"agents":[]`. That empty array
+# is the documented "session exists but spawned nothing" contract, and the
+# `lead` block it ships is the full `_agent_summary_for_session`: message count,
+# the 300-CODE-POINT first user prompt, the dominant model, and `cost_usd`
+# priced through the store's price book (LAW 2) and `round(…, 4)`.
+A-graph             | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+
+# INDEXED GRAPH, entered by the team's own lead. One lead + three sub-agents,
+# ordered `agent_role='lead' first, then first_ts ASC, session_id ASC`. Proves
+# `spawned_by_session_id` reaching `parent_session_id`, the `agent_role`
+# passthrough, and — the byte contract the brief flags — that the `agents` array
+# order is the SQL's insertion order and not a re-sort.
+A-graph-indexed     | GET | /api/agent-teams/b29f314f-3f98-46cd-aebc-f4d085f7aef4 | -
+
+# INDEXED GRAPH, entered by a SUB-AGENT's id. `t.lead_session_id = ?` misses, so
+# the second lookup resolves `sessions.team_id` and re-roots the graph at the
+# team's lead: the response's `session_id` is `b29f314f…`, NOT the id in the
+# URL. The only row that proves the member-resolution branch.
+A-graph-member      | GET | /api/agent-teams/15f6a8d0-3e55-4867-b662-93b83a38484f | -
+
+# Neither a lead, nor a member, nor a session — 404 with the id interpolated
+# verbatim into the detail string.
+A-graph-missing     | GET | /api/agent-teams/no-such-session     | -
+
+# A percent-encoded path segment. Both routers decode before the handler sees
+# it, so the 404 detail carries a literal space. Cheap proof that the port is
+# not double-decoding or echoing the encoded form.
+A-graph-encoded     | GET | /api/agent-teams/%20                 | -
+
+# ═══ GET /api/agent-teams/{session_id}/agent/{agent_session_id} — RS-5-044 ═══
+
+# The happy path: a real lead and a real sub-agent of its team, 28 messages
+# (~44 KB). Proves the transcript row shape end to end — the 16 columns in
+# SELECT order, `sqlite3.Row`'s STORAGE-class values with no affinity coercion,
+# and `is_sidechain` coerced to a JSON bool IN PLACE at position 13 rather than
+# being appended.
+A-transcript-real   | GET | /api/agent-teams/42f45b99-782c-4f9e-9572-c9d2a726efc6/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# The fence is the PROJECT and nothing else — no team-membership check — so a
+# session paired with ITSELF is a legitimate 200. Same rows, different
+# `session_id` header field.
+A-transcript-self   | GET | /api/agent-teams/49f7aa40-b956-44a9-b9a1-fc54419586d1/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# A real lead, an agent id that exists nowhere — 404.
+A-transcript        | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | -
+
+# A real lead and a real agent that live in DIFFERENT projects (314 vs 109). The
+# self-join on `project_id` finds no pair, so this is a 404 with the SAME detail
+# string as the row above — three causes, one message. Reproduced, not improved.
+A-transcript-cross  | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# The lead is missing and the agent is real — still 404, and the detail names
+# both, so the caller cannot tell which half failed.
+A-transcript-nolead | GET | /api/agent-teams/no-such-session/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# ═══ the router's own answers ════════════════════════════════════════════════
+#
+# All four unclaimed methods 405 in starlette's router BEFORE any handler runs,
+# so none of them can write anything — they are safe under law 4 by
+# construction. FastAPI renders `{"detail":"Method Not Allowed"}` where axum's
+# bare default would send an empty body.
+A-list-post         | POST   | /api/agent-teams                  | -
+A-list-delete       | DELETE | /api/agent-teams                  | -
+A-graph-post        | POST   | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+A-transcript-put    | PUT    | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | {"x": 1}
+
+# An empty final path segment does NOT match `{agent_session_id}` (starlette's
+# default `str` convertor is `[^/]+`), and `/api/agent-teams/x/agent` is not a
+# route either, so there is nothing to redirect to: a plain
+# `{"detail":"Not Found"}`, not a 307. One segment too many is the same.
+A-agent-no-id       | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/ | -
+A-agent-too-deep    | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/x/y | -
+
+# DELIBERATELY ABSENT: `/api/agent-teams/` (the bare trailing slash). It is a
+# `redirect_slashes` 307, which is DIV-133 and the ARCHITECT's — a `lib.rs`
+# change this member may not make and must not measure around.

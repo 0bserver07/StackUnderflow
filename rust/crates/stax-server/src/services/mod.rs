@@ -62,3 +62,45 @@ pub mod plans;
 pub mod prescribe;
 pub mod scope;
 pub mod yield_tracker;
+
+// ── batch E: the deferred-endpoint remainder ─────────────────────────────────
+//
+// | Module | Python source | Consumed by |
+// |---|---|---|
+// | [`agent_teams`] | `services/agent_teams.py` | `routes/agent_teams.rs` |
+// | [`benchmark`] | `reports/benchmark.py` | `routes/benchmark.rs` |
+// | [`benchmark_stats`] | `services/benchmark_stats.py` | [`benchmark`] |
+// | [`etl_backfill`] | `etl/backfill.py` | `routes/etl.rs` |
+// | [`etl_status`] | `etl/status.py` | `routes/etl.rs` |
+// | [`forks`] | `reports/forks.py` | `routes/forks.rs` |
+// | [`grading`] | `services/grading.py` | `routes/quality.rs` |
+// | [`live`] | `services/live.py` | `routes/live.rs` |
+// | [`ollama_proxy`] | `routes/misc.py::ollama_proxy` | `routes/misc.rs` |
+// | [`patterns`] | `reports/patterns.py` | `routes/patterns.rs` |
+// | [`playback`] | `services/playback.py` | `routes/playback.rs` |
+// | [`playback_fs`] | `services/playback_fs.py` | `routes/playback.rs` |
+// | [`pricing_refresh`] | `routes/misc.py::refresh_pricing` | `routes/misc.rs` |
+// | [`risk`] | `services/risk.py` | [`playback`] |
+// | [`session_compare`] | `routes/sessions.py::compare_sessions` | `routes/sessions.rs` |
+// | [`worktrees`] | `services/worktrees.py` | `routes/worktrees.rs` |
+//
+// The module list is declared by the batch-E integrator up front so that the
+// parallel members never contend on this file — the wave-5 lesson that a shared
+// registration point is a merge conflict waiting to happen (`routes/mod.rs` was
+// pre-wired for exactly this reason).
+pub mod agent_teams;
+pub mod benchmark;
+pub mod benchmark_stats;
+pub mod etl_backfill;
+pub mod etl_status;
+pub mod forks;
+pub mod grading;
+pub mod live;
+pub mod ollama_proxy;
+pub mod patterns;
+pub mod playback;
+pub mod playback_fs;
+pub mod pricing_refresh;
+pub mod risk;
+pub mod session_compare;
+pub mod worktrees;

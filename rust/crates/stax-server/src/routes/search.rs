@@ -3,7 +3,7 @@
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
 //! | `RS-6-016` | `GET` | `/api/search` | `/api/search` | **ported** |
-//! | `RS-6-017` | `POST` | `/api/search/reindex` | `/api/search/reindex` | **open** — DIV-078 |
+//! | `RS-6-017` | `POST` | `/api/search/reindex` | `/api/search/reindex` | **ported** — see `SEARCH-REINDEX-DIFFER.md` |
 //! | `RS-6-018` | `GET` | `/api/search/stats` | `/api/search/stats` | **ported** |
 //!
 //! # The sidecar, and why the port never creates it
@@ -27,21 +27,45 @@
 //! which is why the narrowing is safe, but it is a narrowing and it is recorded
 //! rather than assumed.
 //!
-//! # `POST /api/search/reindex` — not ported, DIV-078
+//! # `POST /api/search/reindex` — ported, and it has no case row. Ever.
 //!
-//! `reindex_all` walks every project in the store, rebuilds the whole FTS index
-//! (a `DELETE` plus a row-per-message `INSERT`), and stamps a wall-clock
-//! `elapsed_ms` into its response. A writer with a time-varying body cannot be
-//! byte-diffed, and rebuilding a 251 K-row index is not what the Search tab
-//! reads. Filed, not faked.
+//! DIV-078 filed this as deferred; it is now written. What has *not* changed is
+//! the ruling that produced DIV-078: **no row for it in
+//! `parity/endpoint-cases.txt`, not even a `!` one.** `!` suppresses the
+//! verdict, never the request (DIV-059), and this handler `DELETE`s and rebuilds
+//! every row of `search_index.db` under `$STACKUNDERFLOW_HOME` — the home the
+//! two harness servers *share*. One row here silently rewrites the answers of
+//! every `X-*` case after it. And even a safe home could not host it: the
+//! rebuild is idempotent, so whichever side ran first would consume the work.
+//!
+//! It is proven instead by `rust/SEARCH-REINDEX-DIFFER.md` — two throwaway
+//! homes, two ports, an artefact diff of the rebuilt index, run twice.
+//!
+//! # What the writer is, in one paragraph
+//!
+//! `reindex_all` re-reads `queries.list_projects`, groups the rows by **slug**
+//! (`UNIQUE(provider, slug)` lets one slug carry a claude row *and* a codex row,
+//! and `index_project` `DELETE`s by slug — so a per-row loop would let the
+//! second wipe the first), concatenates every row's `get_project_stats`
+//! messages, and hands the merged list to `index_project`, which clears the
+//! slug and re-inserts one row per message with non-blank content. The FTS5
+//! index is maintained by the table's own triggers, so the writer never touches
+//! `messages_fts` by name.
+//!
+//! Two fields in what it leaves behind are wall-clock and can never match:
+//! `elapsed_ms` in the response, and `index_metadata.indexed_at` in the
+//! artefact. Both are compared for shape, per the differ.
+
+use std::collections::HashMap;
 
 use axum::Router;
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 use stax_core::ask::{build_filter_clauses, sanitize_fts_query};
+use stax_etl::stats::aggregator::round_py;
 
 use crate::json::{JsonBody, validation_422};
 use crate::pyops::{char_prefix, floor_div, sql_value};
@@ -58,6 +82,7 @@ const CONTENT_CHARS: usize = 500;
 pub fn register(router: Router<AppState>) -> Router<AppState> {
     router
         .route("/api/search", get(search_messages))
+        .route("/api/search/reindex", post(reindex_search))
         .route("/api/search/stats", get(search_index_stats))
 }
 
@@ -274,6 +299,368 @@ fn empty_results(params: &SearchParams) -> Value {
     obj.insert("total_pages".to_owned(), Value::from(0));
     obj.insert("query".to_owned(), Value::from(params.q.clone()));
     Value::Object(obj)
+}
+
+// ── POST /api/search/reindex ─────────────────────────────────────────────────
+
+/// `reindex_search` — the route, its clock, and its one error leg.
+///
+/// `start_time = time.time()` is taken **before** the `try`, so the store
+/// connect is inside the measurement. `elapsed_ms` is `round(ms, 2)` and is
+/// assigned onto the service's dict *after* it returns, so it is the LAST key —
+/// after `projects_indexed`, `total_messages_indexed`, `errors`.
+async fn reindex_search(State(state): State<AppState>) -> JsonBody {
+    let start = std::time::Instant::now();
+    let outcome = tokio::task::spawn_blocking(move || reindex_all(&state)).await;
+    // `time.time() - start_time` is read after the work, before the response is
+    // built, on both legs of the `try` — but only the success leg uses it.
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    match outcome {
+        Ok(Ok(mut result)) => {
+            if let Value::Object(map) = &mut result {
+                map.insert(
+                    "elapsed_ms".to_owned(),
+                    Value::from(round_py(elapsed_ms, 2)),
+                );
+            }
+            JsonBody::ok(result)
+        }
+        // `except Exception as e: return {"error": f"Reindex failed: {str(e)}"}`
+        // with a 500. The message body embeds a CPython exception string, which
+        // this port can match in shape but not in wording — the DIV-137 case,
+        // recorded in `parity/DIV-e-reindex.md`.
+        Ok(Err(err)) => reindex_failure(&format!("Reindex failed: {}", py_error_text(&err))),
+        Err(err) => reindex_failure(&format!("Reindex failed: {err}")),
+    }
+}
+
+/// `str(e)` for an exception that escaped the service — the DIV-137 shape.
+///
+/// All three reindex routes end `f"…: {str(e)}"`, so the body embeds whatever
+/// CPython's exception stringifies to. Three renderings of the *same* SQLite
+/// failure were measured on one probe (the store made unreadable while both
+/// servers were up):
+///
+/// ```text
+/// CPython  sqlite3.OperationalError   unable to open database file
+/// anyhow   Display (outermost)        opening /…/store.db
+/// anyhow   root_cause() Display       Error code 14: unable to open database file
+/// ```
+///
+/// Neither `anyhow` form matches, and the third is the *worse* of the two on a
+/// different error: `rusqlite::ffi::Error`'s `Display` is a static description
+/// per result code, so `no such table: x` renders as `SQL logic error` and the
+/// specific message is lost. That message is not lost from the *value* though —
+/// `rusqlite::Error::SqliteFailure(_, Some(msg))` carries `sqlite3_errmsg`'s
+/// text, which is byte-for-byte the string CPython puts in its exception. So
+/// this walks the chain for a `rusqlite::Error` and takes that field.
+///
+/// A *narrowing, not a proof*: a failure whose innermost error is a Rust-side
+/// condition with no CPython counterpart still cannot match, and no probe has
+/// issued one (law 6). Recorded in `parity/DIV-e-reindex.md`.
+pub(super) fn py_error_text(err: &anyhow::Error) -> String {
+    for cause in err.chain() {
+        if let Some(rusqlite::Error::SqliteFailure(_, Some(message))) =
+            cause.downcast_ref::<rusqlite::Error>()
+        {
+            return message.clone();
+        }
+    }
+    err.root_cause().to_string()
+}
+
+/// The route's 500: `{"error": …}`.
+fn reindex_failure(message: &str) -> JsonBody {
+    let mut obj = Map::new();
+    obj.insert("error".to_owned(), Value::from(message));
+    JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
+}
+
+/// `SearchService._get_conn` + `_ensure_schema`, on a WRITE handle.
+///
+/// The read path deliberately never creates this file (DIV-077); the writer has
+/// to, because Python creates it in `SearchService.__init__` at server startup
+/// and a reindex on a home that has never had one is a legitimate first run.
+/// The narrowing that remains — Python's file exists from startup, this one
+/// from the first reindex — is DIV-077's, unchanged: an absent index and an
+/// empty one answer the same bytes.
+///
+/// The two pragmas are not decoration. `journal_mode=WAL` is written into the
+/// database header, so it is part of the artefact the differ compares.
+/// `SearchService._ensure_schema`, statement for statement.
+///
+/// The indentation inside these literals is not a style choice and rustfmt must
+/// not be allowed to think it is: SQLite stores the **verbatim text** of a
+/// `CREATE` statement in `sqlite_master.sql`, so `.schema search_index.db` on a
+/// port-built index would differ from a reference-built one by nothing but
+/// whitespace — a real byte divergence in the artefact the differ compares.
+/// These are the reference's strings, character for character, with the
+/// `IF NOT EXISTS` that SQLite strips before storing put back.
+const SEARCH_SCHEMA: [&str; 10] = [
+    r#"CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    project TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT,
+                    model TEXT,
+                    tokens_input INTEGER DEFAULT 0,
+                    tokens_output INTEGER DEFAULT 0
+                )"#,
+    r#"CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    content,
+                    content='messages',
+                    content_rowid='id',
+                    tokenize='porter unicode61'
+                )"#,
+    r#"CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+                END"#,
+    r#"CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
+                END"#,
+    r#"CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+                END"#,
+    r#"CREATE TABLE IF NOT EXISTS index_metadata (
+                    project TEXT PRIMARY KEY,
+                    indexed_at TEXT NOT NULL,
+                    message_count INTEGER DEFAULT 0
+                )"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project)"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role)"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_messages_model ON messages(model)"#,
+];
+
+fn open_index_for_write(state: &AppState) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(index_path(state))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    for statement in SEARCH_SCHEMA {
+        // One `conn.execute` per statement, as the reference does, and NOT one
+        // `execute_batch` of the lot: the batch would still work, but keeping
+        // the calls separate is what keeps the stored text one statement wide.
+        conn.execute(statement, [])?;
+    }
+    Ok(conn)
+}
+
+/// `msg.get(key, "")` for a value the formatter always writes as a `str`.
+pub(super) fn msg_text<'a>(msg: &'a Value, key: &str) -> &'a str {
+    msg.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
+/// CPython's `str.strip()`, which is not `str::trim`.
+///
+/// `str.strip()` removes every character `str.isspace()` accepts, and that set
+/// includes `U+001C`..`U+001F` — which Rust's `char::is_whitespace` does not.
+/// `stax_core`'s `is_regex_space` is already the owner of exactly that
+/// predicate (it is also what Python's `\s` matches), so this is a two-line
+/// adapter rather than a fourth definition.
+pub(super) fn py_strip(text: &str) -> &str {
+    text.trim_matches(stax_core::queries::pyint::is_regex_space)
+}
+
+/// `msg.get("model", "")` — which is NOT the same as [`msg_text`].
+///
+/// `dict.get(key, default)` returns the *stored* value when the key is present,
+/// so a message whose `model` is `None` binds SQL NULL, while a message with no
+/// `model` key at all binds `''`. The formatter emits the key with a null for
+/// every user turn, so this is the common path, not a corner.
+fn msg_nullable(msg: &Value, key: &str) -> Option<String> {
+    match msg.get(key) {
+        None => Some(String::new()),
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Null) => None,
+        Some(other) => Some(other.to_string()),
+    }
+}
+
+/// `msg.get("tokens", {}).get(key, 0)`.
+fn msg_tokens(msg: &Value, key: &str) -> i64 {
+    msg.get("tokens")
+        .and_then(|tokens| tokens.get(key))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+/// `SearchService.index_project` — clear the slug, re-insert, stamp metadata.
+///
+/// Returns the number of rows actually inserted, which is **not** what the
+/// response reports: `reindex_all` adds `len(merged)`, the message count
+/// *before* the blank-content skip below. On this corpus that gap is large and
+/// legitimate (architect finding 1: `content_text` is ~86% empty on
+/// agent-heavy sessions), so a `total_messages_indexed` far above the row count
+/// is the reference's answer, not a bug.
+fn index_project(conn: &Connection, project: &str, messages: &[Value]) -> rusqlite::Result<i64> {
+    // Python runs the whole method on one connection and commits at the end,
+    // rolling back on any error. An explicit transaction is that, exactly.
+    conn.execute_batch("BEGIN")?;
+    let result = index_project_body(conn, project, messages);
+    match &result {
+        Ok(_) => conn.execute_batch("COMMIT")?,
+        Err(_) => conn.execute_batch("ROLLBACK")?,
+    }
+    result
+}
+
+fn index_project_body(
+    conn: &Connection,
+    project: &str,
+    messages: &[Value],
+) -> rusqlite::Result<i64> {
+    conn.execute("DELETE FROM messages WHERE project = ?", [project])?;
+
+    let mut count = 0i64;
+    {
+        let mut insert = conn.prepare(
+            "INSERT INTO messages \
+             (session_id, project, role, content, timestamp, model, tokens_input, tokens_output) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )?;
+        for msg in messages {
+            let content = msg_text(msg, "content");
+            // `if not content or not content.strip(): continue`
+            if py_strip(content).is_empty() {
+                continue;
+            }
+            insert.execute(rusqlite::params![
+                msg_text(msg, "session_id"),
+                project,
+                // `msg.get("type", "unknown")` — the ONE default here that is
+                // not the empty string.
+                msg.get("type").and_then(Value::as_str).unwrap_or("unknown"),
+                content,
+                msg_nullable(msg, "timestamp"),
+                msg_nullable(msg, "model"),
+                msg_tokens(msg, "input"),
+                msg_tokens(msg, "output"),
+            ])?;
+            count += 1;
+        }
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO index_metadata (project, indexed_at, message_count) \
+         VALUES (?, ?, ?)",
+        rusqlite::params![project, now_iso(), count],
+    )?;
+    Ok(count)
+}
+
+/// `datetime.now(UTC).isoformat()` — the field the differ can never equality-check.
+pub(super) fn now_iso() -> String {
+    stax_core::queries::pytime::isoformat_utc(stax_core::queries::pytime::now_micros())
+}
+
+/// Slug → every `projects.id` carrying it, in `list_projects` order.
+///
+/// `defaultdict(list)` keyed by slug: **insertion order is the response's
+/// error order and the index-write order**, and `list_projects` is
+/// `ORDER BY last_modified DESC`, so a `HashMap` iteration here would randomise
+/// both. The `Vec<String>` alongside is that order.
+pub(super) fn group_by_slug(
+    rows: &[stax_core::api::ProjectRow],
+    wanted: Option<&[String]>,
+) -> Vec<(String, Vec<i64>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
+    for row in rows {
+        if let Some(wanted) = wanted
+            && !wanted.contains(&row.slug)
+        {
+            continue;
+        }
+        if !groups.contains_key(&row.slug) {
+            order.push(row.slug.clone());
+        }
+        groups.entry(row.slug.clone()).or_default().push(row.id);
+    }
+    order
+        .into_iter()
+        .map(|slug| {
+            let ids = groups.remove(&slug).unwrap_or_default();
+            (slug, ids)
+        })
+        .collect()
+}
+
+/// `SearchService.reindex_all(None, None, projects=projects)`.
+///
+/// The route builds `projects` from `queries.list_projects` and the service
+/// then re-reads the same table and filters to those slugs — an identity
+/// filter, reproduced because it is not identity when the caller passes a
+/// narrower list (the ingest path does).
+fn reindex_all(state: &AppState) -> anyhow::Result<Value> {
+    // The route's own connection, opened and closed before the service's.
+    let wanted: Vec<String> = {
+        let conn = state.connect()?;
+        stax_core::api::store_list_projects(&conn)?
+            .into_iter()
+            .map(|row| row.slug)
+            .collect()
+    };
+
+    let conn = state.connect()?;
+    let rows = stax_core::api::store_list_projects(&conn)?;
+    // `if projects` — an EMPTY project list is falsy, so it means "no filter",
+    // not "filter to nothing". On an empty store both readings give the same
+    // (empty) answer; on a caller that passed `[]` deliberately they do not.
+    let groups = group_by_slug(&rows, (!wanted.is_empty()).then_some(wanted.as_slice()));
+
+    let index = open_index_for_write(state)?;
+    let mut total_messages = 0i64;
+    let mut projects_indexed = 0i64;
+    let mut errors: Vec<Value> = Vec::new();
+
+    for (slug, ids) in groups {
+        match merged_messages(&conn, &ids) {
+            Ok(merged) if merged.is_empty() => {}
+            Ok(merged) => match index_project(&index, &slug, &merged) {
+                Ok(_) => {
+                    total_messages += i64::try_from(merged.len()).unwrap_or(i64::MAX);
+                    projects_indexed += 1;
+                }
+                Err(err) => errors.push(index_error(&slug, &err.to_string())),
+            },
+            Err(err) => errors.push(index_error(&slug, &py_error_text(&err))),
+        }
+    }
+
+    let mut obj = Map::new();
+    obj.insert("projects_indexed".to_owned(), Value::from(projects_indexed));
+    obj.insert(
+        "total_messages_indexed".to_owned(),
+        Value::from(total_messages),
+    );
+    obj.insert("errors".to_owned(), Value::Array(errors));
+    Ok(Value::Object(obj))
+}
+
+/// `{"project": slug, "error": str(e)}`.
+pub(super) fn index_error(slug: &str, message: &str) -> Value {
+    let mut obj = Map::new();
+    obj.insert("project".to_owned(), Value::from(slug));
+    obj.insert("error".to_owned(), Value::from(message));
+    Value::Object(obj)
+}
+
+/// `for pid in ids: msgs, _ = get_project_stats(conn, project_id=pid); merged.extend(msgs)`.
+///
+/// One call **per project id**, concatenated — not one call with the id list.
+/// The two are not the same: `build_enriched_dataset` dedups and sorts within a
+/// call, so a single multi-id call would interleave two providers' messages
+/// where Python appends one provider's block after the other's.
+pub(super) fn merged_messages(conn: &Connection, ids: &[i64]) -> anyhow::Result<Vec<Value>> {
+    let mut merged: Vec<Value> = Vec::new();
+    for id in ids {
+        let (messages, _stats) = stax_etl::stats::dataset::get_project_stats(conn, &[*id], 0)?;
+        merged.extend(messages);
+    }
+    Ok(merged)
 }
 
 // ── GET /api/search/stats ────────────────────────────────────────────────────
@@ -545,6 +932,189 @@ mod tests {
                 "indexed_projects"
             ]
         );
+    }
+
+    // ── POST /api/search/reindex ────────────────────────────────────────────
+
+    fn project_row(id: i64, provider: &str, slug: &str) -> stax_core::api::ProjectRow {
+        stax_core::api::ProjectRow {
+            id,
+            provider: provider.to_owned(),
+            slug: slug.to_owned(),
+            path: None,
+            display_name: slug.to_owned(),
+            first_seen: 0.0,
+            last_modified: 0.0,
+        }
+    }
+
+    #[test]
+    fn one_slug_across_two_providers_is_one_group_carrying_both_ids() {
+        // The rule `index_project` forces: it DELETEs by slug, so a per-row
+        // loop would let the codex pass wipe the claude pass. Order is
+        // `list_projects`' (last_modified DESC), not sorted.
+        let rows = [
+            project_row(9, "claude", "-zeta"),
+            project_row(1, "claude", "-alpha"),
+            project_row(2, "codex", "-alpha"),
+        ];
+        let groups = group_by_slug(&rows, None);
+        assert_eq!(
+            groups,
+            vec![
+                ("-zeta".to_owned(), vec![9]),
+                ("-alpha".to_owned(), vec![1, 2]),
+            ]
+        );
+        // …and the caller's slug list narrows it.
+        let wanted = ["-alpha".to_owned()];
+        assert_eq!(
+            group_by_slug(&rows, Some(&wanted)),
+            vec![("-alpha".to_owned(), vec![1, 2])]
+        );
+    }
+
+    #[test]
+    fn the_writer_indexes_only_non_blank_content_and_stamps_the_metadata() {
+        let scratch = Scratch::new("write");
+        let state = state_at(&scratch.0);
+        let conn = open_index_for_write(&state).expect("schema");
+        let messages: Vec<Value> = serde_json::json!([
+            {"session_id": "s1", "type": "user", "timestamp": "2026-01-01T00:00:00",
+             "model": null, "content": "the quick brown fox", "tokens": {"input": 3, "output": 4}},
+            {"session_id": "s1", "type": "assistant", "timestamp": "2026-01-01T00:00:01",
+             "model": "claude-opus-4-8", "content": "   ", "tokens": {"input": 1, "output": 1}},
+            {"session_id": "s2", "timestamp": "2026-01-01T00:00:02",
+             "content": "a second message", "tokens": {}}
+        ])
+        .as_array()
+        .expect("array")
+        .clone();
+
+        // Two of the three rows: the whitespace-only one is skipped, and the
+        // RETURNED count is the inserted count.
+        assert_eq!(index_project(&conn, "-p-one", &messages).expect("write"), 2);
+
+        let (role, model, tokens_in): (String, Option<String>, i64) = conn
+            .query_row(
+                "SELECT role, model, tokens_input FROM messages WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("row");
+        // `msg.get("type", "unknown")` on a message that HAS the key…
+        assert_eq!(role, "user");
+        // …and `msg.get("model", "")` on one whose value is None: SQL NULL,
+        // not the empty string.
+        assert_eq!(model, None);
+        assert_eq!(tokens_in, 3);
+
+        // The third message has no `type` key at all, so it takes the default.
+        let missing: String = conn
+            .query_row(
+                "SELECT role FROM messages WHERE session_id = 's2'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row");
+        assert_eq!(missing, "unknown");
+        // …and no `model` key at all, which is `''`, not NULL.
+        let empty: Option<String> = conn
+            .query_row(
+                "SELECT model FROM messages WHERE session_id = 's2'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row");
+        assert_eq!(empty.as_deref(), Some(""));
+
+        let (project, count): (String, i64) = conn
+            .query_row(
+                "SELECT project, message_count FROM index_metadata",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("metadata");
+        assert_eq!((project.as_str(), count), ("-p-one", 2));
+    }
+
+    #[test]
+    fn a_second_pass_replaces_rather_than_doubles_and_the_fts_follows() {
+        let scratch = Scratch::new("idem");
+        let state = state_at(&scratch.0);
+        let conn = open_index_for_write(&state).expect("schema");
+        let messages: Vec<Value> = serde_json::json!([
+            {"session_id": "s1", "type": "user", "timestamp": "t", "model": "m",
+             "content": "the quick brown fox", "tokens": {"input": 1, "output": 2}}
+        ])
+        .as_array()
+        .expect("array")
+        .clone();
+
+        for _ in 0..3 {
+            index_project(&conn, "-p-one", &messages).expect("write");
+        }
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 1, "DELETE-then-INSERT, three times over");
+        // The FTS index is trigger-maintained; a missing delete trigger shows
+        // up here as three hits for one row.
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'quick'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fts");
+        assert_eq!(hits, 1);
+        // And the schema is `CREATE … IF NOT EXISTS`, so re-opening a populated
+        // index is not an error and does not clear it.
+        drop(conn);
+        let conn = open_index_for_write(&state).expect("reopen");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn py_strip_removes_the_four_separators_rust_leaves_behind() {
+        // `str.strip()` accepts every character `str.isspace()` does, and that
+        // includes U+001C..U+001F. `str::trim` does not, so a message whose
+        // content is only a file separator would have been indexed as content.
+        assert_eq!(py_strip("\u{1c}\u{1f} x \u{1e}"), "x");
+        assert!(py_strip("\u{1c}\u{1d}\u{1e}\u{1f}").is_empty());
+        assert!(!"\u{1c}".trim().is_empty(), "…which trim would have kept");
+    }
+
+    #[test]
+    fn the_error_text_is_sqlites_message_not_anyhows_context_chain() {
+        // Measured, three ways, on the same failure:
+        //   CPython  `str(e)`               → "no such table: nope"
+        //   anyhow   `{err}`                → "while listing" (the context)
+        //   anyhow   `root_cause()`         → "SQL logic error" (the STATIC
+        //                                      per-code description — the
+        //                                      specific message is gone)
+        // Only the `SqliteFailure` message field carries `sqlite3_errmsg`'s
+        // text, which is the string CPython embeds.
+        let conn = Connection::open_in_memory().expect("memory db");
+        let raw = conn
+            .prepare("SELECT * FROM nope")
+            .expect_err("no such table");
+        let wrapped = anyhow::Error::new(raw).context("while listing");
+        assert_eq!(py_error_text(&wrapped), "no such table: nope");
+        assert_eq!(
+            wrapped.to_string(),
+            "while listing",
+            "…which is what a bare {{err}} would have shipped"
+        );
+    }
+
+    #[test]
+    fn an_error_with_no_sqlite_cause_falls_back_to_the_root() {
+        let wrapped = anyhow::anyhow!("the inner thing").context("the outer thing");
+        assert_eq!(py_error_text(&wrapped), "the inner thing");
     }
 
     #[test]

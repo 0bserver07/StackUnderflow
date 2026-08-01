@@ -1,0 +1,100 @@
+# Batch E / misc — `routes/misc.py` (RS-5-079/080/084).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. The integrator
+# folds these rows into that file and strips the leading `P-by-dir-known`, which
+# already runs earlier there.
+#
+# ── What these rows do to the existing file ──────────────────────────────────
+#
+# The existing `!M-ollama` row is **REPLACED** by the unmarked `M-ollama` below.
+# It is the batch's one known-open flip. Everything else here is new.
+#
+# ── Why the flip is legitimate, and the one condition it rests on ───────────
+#
+# `/ollama-api/{path}` proxies to `http://localhost:11434/api/{path}` and wraps
+# the whole call in a BARE `except Exception`, whose body is a fixed
+# `502 {"error": "Ollama not available"}`.
+#
+# Port 11434 is CLOSED on this host. Verified three ways before a line was
+# written, and re-verifiable in one command each:
+#
+#     ss -lnt | grep 11434                       # no listener
+#     bash -c 'exec 3<>/dev/tcp/127.0.0.1/11434' # Connection refused
+#     bash -c 'exec 3<>/dev/tcp/::1/11434'       # Connection refused
+#     getent ahosts localhost                    # 127.0.0.1 only
+#     curl -m 5 http://localhost:11434/api/tags  # curl: (7) refused
+#
+# So the ONLY branch either side can reach is the catch-all, and its body is a
+# constant. That is what makes these rows deterministic — not the port, the
+# MACHINE.
+#
+#   ⚠ IF OLLAMA IS EVER RUNNING, EVERY `M-ollama*` ROW BELOW GOES
+#     NONDETERMINISTIC. The bodies become whatever the daemon answers: `/tags`
+#     lists the installed models, `/generate` streams. The rows do not
+#     self-guard, and a green tick produced against a live daemon would be an
+#     accident, not evidence. If they start failing, run `ss -lnt | grep 11434`
+#     BEFORE looking at the Rust.
+#
+# ── Side effects: none, on either side ──────────────────────────────────────
+#
+# LAW 7 audit. A refused connection writes nothing, allocates nothing, and
+# touches no file. These rows are safe anywhere in the file and in any order,
+# and they leave `deps.current_log_path` alone.
+#
+# ── What is deliberately ABSENT, and why it is not an omission ──────────────
+#
+# `GET /api/pricing` and `POST /api/pricing/refresh` (RS-5-079/080) get **NO
+# ROW**, here or in the merged file, ever. Both fetch the LiteLLM price book and
+# `/api/pricing/refresh` writes `$STACKUNDERFLOW_HOME/cache/pricing.json` plus
+# `price_book` rows — and that cache file is the INPUT to all five `PR-doctor*`
+# rows. A `!` row would not help: DIV-059 established that `!` softens the
+# VERDICT and still ISSUES the REQUEST, and this exact pair proved it once
+# already by turning five clean `PR-doctor*` cases into five divergences from a
+# case-file edit with no code change (`REFRESH-DIFFER.md` point 2). They are
+# verified by the isolated procedure in `rust/PRICING-REFRESH-DIFFER.md`.
+#
+# A `transfer-encoding: chunked` row is also absent: law 4 bars rows for
+# streams, and the branch is unreachable behind a closed port anyway.
+#
+# `/ollama-api` with NO trailing slash is absent too. FastAPI's
+# `redirect_slashes` answers 307 there and axum 404s — the same class as
+# DIV-133 / `!PL-plan-slash`, which is the architect's `lib.rs` change and
+# explicitly not in batch E's charter.
+
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the flip: replaces `!M-ollama` in endpoint-cases.txt ─────────────────────
+# The GET the dashboard actually issues (the settings page's model list).
+M-ollama            | GET | /ollama-api/tags                   | -
+
+# ── the other three verbs `api_route(methods=[…])` claims ───────────────────
+# Each one proves the METHOD reaches the same handler and the same catch-all.
+# A router that only mounted GET would 405 here instead of 502.
+M-ollama-post       | POST | /ollama-api/generate              | {"model": "llama3", "prompt": "hi"}
+M-ollama-put        | PUT | /ollama-api/blobs/sha256-abc       | {"any": "payload"}
+M-ollama-delete     | DELETE | /ollama-api/delete              | {"model": "llama3"}
+
+# ── the path parameter's two edges ──────────────────────────────────────────
+# `{path:path}` swallows slashes, so a nested rest is ONE parameter and not a
+# 404. axum's `{*path}` had to be spelled as a wildcard to match this.
+M-ollama-nested     | GET | /ollama-api/a/b/c                  | -
+# `{path:path}` also matches the EMPTY rest: `/ollama-api/` is a real request
+# that reaches the handler with `path == ""` and proxies to `…/api/`. axum's
+# `{*path}` requires at least one segment, so this needs its own route or it
+# falls through to the 404 fallback — the same shape `M-assets-bare` pins for
+# `/assets/`.
+M-ollama-empty      | GET | /ollama-api/                       | -
+
+# The upstream URL is `f"http://localhost:11434/api/{path}"` — built from the
+# PATH PARAMETER ONLY. The query string is silently dropped and never reaches
+# Ollama. Unobservable while the port is closed, but the row pins that the query
+# does not change the route match or the body.
+M-ollama-query      | GET | /ollama-api/tags?stream=true&x=1   | -
+
+# A percent-encoded separator, where the two stacks decode at DIFFERENT layers:
+# uvicorn decodes the path before starlette routes it (so starlette matches
+# `/ollama-api/show/name`), while hyper hands axum the raw target and only the
+# `Path` extractor decodes (so matchit matches one segment, then yields
+# `show/name`). Both end up interpolating the same decoded text into the
+# upstream URL — this row pins that the layer difference does not surface.
+M-ollama-encoded    | GET | /ollama-api/show%2Fname            | -

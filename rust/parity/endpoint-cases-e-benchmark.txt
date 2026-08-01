@@ -1,0 +1,207 @@
+# Batch E / member `benchmark` — case rows for `routes/benchmark.py`
+# (RS-5-045 `GET /api/benchmark`, RS-5-046 `GET /api/benchmark/recommend`).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file **in place of the four `!BM-*`
+# rows** currently sitting under the `DIV-143` comment, and strips the leading
+# `P-by-dir-known` selection row, which already runs at line 68 there.
+#
+# The four known-open rows are reproduced verbatim below with the `!` removed:
+#   BM-benchmark, BM-bad-period, BM-recommend, BM-recommend-blank.
+#
+# ── State this group depends on ─────────────────────────────────────────────
+#
+# `deps.current_log_path` is the StackUnderflow project (`P-by-dir-known` at
+# line 68, re-asserted by `J-select` at line 316). Every row without an explicit
+# `?log_path=` is therefore PROJECT-SCOPED, and the project-scoped report on the
+# harness store is a single `explore × large` stratum with one model —
+# `sessions_total: 1`. That is a small, stable, fast payload and it is what the
+# happy-path rows diff.
+#
+# COVERAGE GAP, stated up front: the WHOLE-STORE report (1 310 sessions, 22
+# strata, 117 model rows, 43 kB) is unreachable from this matrix, because there
+# is no way to *de*-select a project once one is selected and every unknown
+# `?log_path=` resolves to the empty report instead. It is covered by unit test
+# — `services::benchmark` runs the port against the live store and against a
+# CPython dump of the same 11 calls, byte for byte — and by nothing here. See
+# DIV-e-benchmark.md, finding 12.
+#
+# ── Side effects: NONE ──────────────────────────────────────────────────────
+#
+# Every row is a `GET` or an unclaimed method. The handler opens the store the
+# way `store/db.py::connect` does (read-write, as both sides do) and issues only
+# `SELECT`s: `session_mart`, `sessions`, the `messages` VIEW, `usage_events`,
+# `session_quality_metrics`, `static_analysis_findings`, `commit_session_link`,
+# `pr_outcomes`, `ci_runs`, `projects`. `reports/benchmark.py` has no writer and
+# imports none — `outcome_attribution.link_commits_to_sessions`, the one writer
+# in its dependency graph, is not on this path (DIV-099(b)). Nothing under
+# `$STACKUNDERFLOW_HOME` is written. Law 7 is satisfied.
+#
+# ── Runtime, so the integrator is not surprised ─────────────────────────────
+#
+# The project-scoped rows are milliseconds. The `?period=` rows still scan the
+# whole `session_mart` join before the scope filter narrows it, so each costs
+# ~2 s on the Python side and ~1 s on the port's release build. Python memoises
+# per `(store, scope, ids, intent)` and the port does not, so a repeat row is
+# free on one side and not the other; the differ's 300 s per-case timeout has
+# three orders of magnitude of headroom either way.
+#
+# ── The one inherently time-sensitive pair ──────────────────────────────────
+#
+# `week` and `7days` resolve to a ROLLING `now - 7d` instant carrying the
+# current microsecond (batch A's `_by_model_mart_eligible` measurement, and the
+# `scope.rs` module docs). The two servers compute bounds milliseconds apart, so
+# a session whose `first_ts` lands in that gap is a real divergence. The harness
+# store's newest session starts `2026-07-30T16:32`, six days inside the window,
+# so the rows are stable today. Same property as `CD-prov-week`.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── GET /api/benchmark — the happy path ─────────────────────────────────────
+# The default `period=all`, project-scoped. Proves the whole envelope:
+# `{period, scope, report, currency, warning}`, the `report`'s nine keys in
+# declaration order, the `weights` dict rendering `0.2` and not `0.20`,
+# `ci_level` as `0.9`, `success_threshold` as `7.0` and not `7`, and the
+# `method_notes` array with its `×`, `→`, `—` and `–` intact through
+# `ensure_ascii=False`.
+#
+# It carries one side of the int-versus-float trap: `median_turns` is
+# `statistics.median` over a list of ints, and this cell has an odd count, so it
+# must render `846` and not `846.0`. The even-count spelling (`103.0`) only
+# occurs in the whole-store report, which this matrix cannot reach — see the
+# coverage gap above and DIV-e-benchmark.md finding 2.
+BM-benchmark        | GET | /api/benchmark                    | -
+
+# Immediately again. Python memoises the report behind `_BENCH_CACHE` and the
+# port deliberately does not (DIV-e-benchmark finding 11), so this is the
+# cheapest available proof that the memo cannot change the answer within one
+# store revision — `PL-plan-repeat`'s trick, and the row that would catch a
+# first-call-only side effect.
+BM-benchmark-repeat | GET | /api/benchmark                    | -
+
+# ── GET /api/benchmark — every leg of the period alias table ────────────────
+# `_PERIOD_ALIASES` has SIX keys mapping onto FIVE `parse_period` specs, and
+# `week`/`7days` are the pair that collide. All five distinct windows get a row
+# so the alias table is measured and not assumed.
+#
+# `today` is the empty-report row: the harness store has zero sessions in the
+# current calendar day, so this is `_empty_report` on the wire —
+# `sessions_total: 0`, `strata: []`, the single "Not enough comparable
+# evidence" caveat, and `grade_coverage: 0.0` (a float, never `0`).
+BM-period-today     | GET | /api/benchmark?period=today       | -
+BM-period-week      | GET | /api/benchmark?period=week        | -
+BM-period-7days     | GET | /api/benchmark?period=7days       | -
+BM-period-month     | GET | /api/benchmark?period=month       | -
+BM-period-30days    | GET | /api/benchmark?period=30days      | -
+BM-period-all       | GET | /api/benchmark?period=all         | -
+
+# The `400`. The message joins the alias table's KEYS in INSERTION order —
+# "today, week, 7days, month, 30days, all" — and not the sorted order
+# `/api/optimize` prints for its own set. Two endpoints, two orders.
+BM-bad-period       | GET | /api/benchmark?period=nonsense    | -
+
+# The empty string is an unknown alias, not the default: `Query("all")` only
+# applies when the key is ABSENT. The quoted `''` in the message proves it.
+BM-period-blank     | GET | /api/benchmark?period=            | -
+
+# The lookup is case-sensitive, so `ALL` is a 400 and not a 200.
+BM-period-case      | GET | /api/benchmark?period=ALL         | -
+
+# starlette's `QueryParams` keeps the LAST occurrence of a scalar, not the
+# first, so this is `period=all` and a `200` — the opposite of the intuitive
+# guess (`qs.rs`'s module docs; the same rule `P-list-page2` relies on).
+BM-period-repeated  | GET | /api/benchmark?period=today&period=all | -
+
+# ── GET /api/benchmark — the intent filter ──────────────────────────────────
+# A real intent narrows the fact list before stratification.
+BM-intent-build     | GET | /api/benchmark?intent=build       | -
+BM-intent-explore   | GET | /api/benchmark?intent=explore     | -
+
+# `if intent:` is a TRUTHINESS test, so a blank `?intent=` does NOT filter and
+# this row must be byte-identical to `BM-benchmark`. A port that used
+# `is not None` would answer the empty report here.
+BM-intent-blank     | GET | /api/benchmark?intent=            | -
+
+# An unknown intent matches no fact and is the empty report — a 200, never a
+# 400. There is no intent allow-list on this endpoint.
+BM-intent-unknown   | GET | /api/benchmark?intent=nosuchintent | -
+
+# ── GET /api/benchmark — the project resolver ───────────────────────────────
+# `_project_ids_for` is this module's OWN resolver and it does not 404: it takes
+# `Path(log_path).name` as a slug, and an unknown one yields `[]`, which
+# `_load_facts` reads as "no sessions". `routes/cost.py`'s resolver raises a 404
+# on the same input. The asymmetry is real and this pair measures both sides.
+BM-log-path-known   | GET | /api/benchmark?log_path=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+BM-log-path-unknown | GET | /api/benchmark?log_path=/nope/-no-such-project-anywhere | -
+
+# An EMPTY `?log_path=` is falsy, so it falls back to `deps.current_log_path`
+# rather than meaning "whole store" — identical bytes to `BM-benchmark`.
+BM-log-path-blank   | GET | /api/benchmark?log_path=          | -
+
+# ── GET /api/benchmark — the unclaimed methods ──────────────────────────────
+# FastAPI's router raises `HTTPException(405)` and its handler renders it as
+# JSON; axum's own fallback is an empty 404 with no content-type, which is what
+# `json::method_not_allowed` exists to prevent.
+BM-post             | POST   | /api/benchmark                | -
+BM-put              | PUT    | /api/benchmark                | -
+BM-delete           | DELETE | /api/benchmark                | -
+
+# ── GET /api/benchmark/recommend — the happy path ───────────────────────────
+# `{period, scope, recommendation, currency}` — note that this envelope has NO
+# top-level `warning`, unlike `/api/benchmark`'s. The recommendation's eleven
+# keys are in declaration order and `evidence` is either a whole model row or
+# `null`.
+BM-recommend        | GET | /api/benchmark/recommend?intent=build | -
+BM-recommend-explore | GET | /api/benchmark/recommend?intent=explore | -
+
+# The `size` filter is real and narrows the strata list before the "first clear
+# cell" scan; `language` is echoed into the payload and read by NOTHING (the
+# docstring's "(and language, when both known)" describes a filter that was
+# never written — DIV-e-benchmark finding 8).
+BM-recommend-size   | GET | /api/benchmark/recommend?intent=explore&size=large | -
+BM-recommend-size-miss | GET | /api/benchmark/recommend?intent=explore&size=tiny | -
+BM-recommend-size-blank | GET | /api/benchmark/recommend?intent=explore&size= | -
+BM-recommend-lang   | GET | /api/benchmark/recommend?intent=build&language=python | -
+
+# ── GET /api/benchmark/recommend — the validation ORDER ─────────────────────
+# Three legs, and the order between them is the contract.
+#
+# 1. `intent: str = Query(...)` is REQUIRED, so an absent one never reaches the
+#    handler: FastAPI's dependency solver answers a pydantic `missing` 422.
+BM-recommend-missing | GET | /api/benchmark/recommend         | -
+
+# 2. …and it wins even when `period` is ALSO invalid, because the solver runs
+#    before the body. This row is a 422, NOT the 400 `BM-bad-period` gives.
+BM-recommend-order  | GET | /api/benchmark/recommend?period=nonsense | -
+
+# 3. Inside the body the PERIOD check runs first, so a present-but-blank intent
+#    with a bad period is the period's 400.
+BM-recommend-bad-period | GET | /api/benchmark/recommend?intent=&period=nonsense | -
+
+# 4. …and only with a valid period does the blank intent produce its own 400,
+#    `{"detail":"intent is required"}`. `.strip()` means whitespace counts as
+#    blank, which the second row proves (`%20%20` is two spaces).
+BM-recommend-blank  | GET | /api/benchmark/recommend?intent=  | -
+BM-recommend-ws     | GET | /api/benchmark/recommend?intent=%20%20 | -
+
+# An unknown intent is a 200 with an honest "insufficient evidence", never a
+# 400 — there is no intent allow-list here either.
+BM-recommend-unknown | GET | /api/benchmark/recommend?intent=nosuchintent | -
+
+# The same period table, on the second endpoint. `week`'s rolling-instant
+# caveat above applies to this row too.
+BM-recommend-week   | GET | /api/benchmark/recommend?intent=build&period=week | -
+BM-recommend-month  | GET | /api/benchmark/recommend?intent=build&period=month | -
+BM-recommend-today  | GET | /api/benchmark/recommend?intent=build&period=today | -
+
+# The same project resolver, on the second endpoint.
+BM-recommend-path   | GET | /api/benchmark/recommend?intent=build&log_path=/nope/-no-such-project-anywhere | -
+
+# ── GET /api/benchmark/recommend — the unclaimed methods ────────────────────
+BM-recommend-post   | POST   | /api/benchmark/recommend       | -
+BM-recommend-delete | DELETE | /api/benchmark/recommend       | -
+
+# NO ROW for `/api/benchmark/` or `/api/benchmark/recommend/` — a trailing
+# slash is starlette's `redirect_slashes` 307, which is DIV-133 and the
+# architect's `lib.rs` change, explicitly out of batch E's charter.

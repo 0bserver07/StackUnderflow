@@ -125,9 +125,6 @@ M-assets-nested     | GET | /assets/a/b/c.js                   | -
 # `/assets/` with an empty rest: FastAPI's `{full_path:path}` matches it and the
 # containment check rejects the directory itself, so this is a 400, not a 404.
 M-assets-bare       | GET | /assets/                           | -
-# `/ollama-api` proxies to localhost:11434 — unported (DIV-066), reported every
-# run and never green. It is safe to EXECUTE: nothing local changes.
-!M-ollama           | GET  | /ollama-api/tags                  | -
 #
 # `/api/pricing` and `/api/pricing/refresh` (RS-5-079/080, DIV-065) are NOT rows
 # here, and that is a deliberate exception to "unported belongs in the file".
@@ -324,9 +321,6 @@ J-content-default   | GET  | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3ed
 # between releases — see `ci_dep_drift_fastapi_routes`.
 J-content-no-file   | GET | /api/jsonl-content?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
 J-content-bad-bool  | GET | /api/jsonl-content?file=04a86c63-4cfd-4929-91a3-3edfe80e3e2f.jsonl&raw_media=maybe | -
-# DIV-070: `/api/sessions/compare` needs `aggregator.summarise_session_costs`,
-# which `stax_etl::stats` names as out of the ported subset. Rust 404s.
-!J-compare          | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
 # ── search ───────────────────────────────────────────────────────────────────
 X-stats             | GET | /api/search/stats                   | -
 X-empty             | GET | /api/search?q=                      | -
@@ -405,16 +399,6 @@ B-put-missing       | PUT | /api/bookmarks/no-such-bookmark      | {"notes": "x"
 # Nothing below them reads `bookmarks.json`.
 !B-add              | POST | /api/bookmarks                      | {"session_id": "04a86c63-4cfd-4929-91a3-3edfe80e3e2f", "title": "parity b", "notes": "n", "tags": ["parity"]}
 !B-toggle           | POST | /api/bookmarks/toggle               | {"session_id": "04a86c63-4cfd-4929-91a3-3edfe80e3e2f", "title": "parity b"}
-# ── agent teams — the whole module is open ──────────────────────────────────
-# DIV-082: `services/agent_teams.py` is 847 lines with three dispatch strategies
-# (task-tool scan, materialised `teams` tables, sidechain heuristic) and every
-# route calls `schema.apply(conn)` — a MIGRATION — on each request. Deferred
-# whole rather than half-ported; Rust 404s all three.
-!A-list             | GET | /api/agent-teams                     | -
-!A-list-scoped      | GET | /api/agent-teams?limit=5&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
-!A-graph            | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
-!A-graph-missing    | GET | /api/agent-teams/no-such-session     | -
-!A-transcript       | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | -
 
 # ═══ BATCH C — the service-layer remainder ═══════════════════════════════════
 #
@@ -1447,39 +1431,1655 @@ WI-whatif-project    | GET | /api/whatif?log_path=/x/-media-tmos-bumblebe-dev-de
 WI-whatif-unknown    | GET | /api/whatif?log_path=/x/-no-such-project-anywhere | -
 # An empty `log_path` is falsy and falls back to the (unset) current project.
 WI-whatif-blank      | GET | /api/whatif?log_path=             | -
-# ── the deferred modules, each reported every run ────────────────────────────
-# DIV-139: `etl/status.py::assemble_status` is 566 lines. Read-only.
-!E-etl-status       | GET | /api/etl/status                   | -
-# DIV-140: 1,678 lines of playback/playback_fs/risk service. All read-only.
-!PB-session         | GET | /api/playback/no-such-session     | -
-!PB-session-real    | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
-!PB-project         | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
-!PB-project-unknown | GET | /api/playback/project/-no-such-project-anywhere | -
-!PB-fs-no-at        | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs | -
-# DIV-141: `services/live.py` is 581 lines AND the payload stamps `burn.ts`.
-!LV-stats           | GET | /api/live/stats                   | -
-!LV-stats-tz        | GET | /api/live/stats?timezone_offset=-480 | -
-# `/api/live/stream` has NO ROW — see this file's header and SSE-PROBE-d.md.
-# DIV-135: a GET that calls Ollama and writes the store. The UNKNOWN-session id
-# is the only one either side may be asked for: the 404 fires before the grader.
-!QL-quality-missing  | GET  | /api/static-analysis/session/no-such-session-anywhere/quality | -
-!QL-grade-missing    | POST | /api/static-analysis/session/no-such-session-anywhere/grade   | -
-# DIV-142: `reports/forks.py` is 534 lines + a process-wide memo. Read-only.
-!F-forks            | GET | /api/forks                        | -
-!F-forks-week       | GET | /api/forks?period=week            | -
-!F-forks-bad-period | GET | /api/forks?period=nonsense        | -
-# DIV-143: `reports/benchmark.py` is 1,033 lines. Read-only.
-!BM-benchmark       | GET | /api/benchmark                    | -
-!BM-bad-period      | GET | /api/benchmark?period=nonsense    | -
-!BM-recommend       | GET | /api/benchmark/recommend?intent=build | -
-!BM-recommend-blank | GET | /api/benchmark/recommend?intent=  | -
-# DIV-144: `reports/patterns.py` is 1,097 lines. The dismiss WRITER has no row.
+# ── batch E: the deferred remainder, ported ──────────────────────────────────
+#
+# Wave 5 batch E closed the eight large deferred services plus quality, the
+# ollama proxy and sessions/compare. Each member's rows are folded in below with
+# its own commentary; the per-member sources are `endpoint-cases-e-*.txt`.
+#
+# The `P-by-dir-known` selection row each member led with is STRIPPED here: it
+# already ran near the top of this file and the selection still stands.
+#
+# A remaining `!` in this block is an HONEST RECORDED IMPOSSIBILITY, not an
+# unported endpoint — each one names the field that makes it so (a wall clock,
+# a `scanned_at`, a hash-randomised set order). The endpoint behind it IS
+# ported and is proven by unit tests and by the member's own off-matrix probe.
+
+# ══ member `etl` ═════════════════════════════════════════════════════════════
+# BATCH E — routes/etl.py (RS-5-071, RS-5-072). DIV-139 cleared.
+#
+# Merged into `endpoint-cases.txt` by the integrator; the leading
+# `P-by-dir-known` row below is stripped there, because the shared file already
+# selects a project earlier and the ordering is load-bearing. (Neither endpoint
+# in this file reads `deps.current_log_path`; the row is here so the sidecar can
+# be run standalone with the same server state the shared file establishes.)
+#
+#   E-etl-*   GET  /api/etl/status    (RS-5-071)
+#   E-405-*   the unclaimed methods on both paths, and the bare prefix
+#
+# ── `POST /api/etl/backfill` HAS NO ROW HERE AND NEVER WILL ──────────────────
+#
+# It is a writer. `force=true` is `DELETE FROM usage_events` + `DELETE FROM
+# mart_watermark` + `rebuild_from_scratch` on all eight marts + a full
+# `messages → usage_events` normalize pass; `force=false` still re-streams every
+# message and re-stamps every watermark. A `!` known-open row would still ISSUE
+# the request (DIV-059) and the write would land on the SHARED harness home
+# while it is being diffed — DIV-078, at mart scale. Its `409` leg additionally
+# needs a job already in flight on BOTH servers at once, which a linear case
+# file cannot express.
+#
+# Its verification is `rust/ETL-BACKFILL-DIFFER.md`: two separate scratch state
+# copies, ports :8098/:8099, and its own seeds. RUN 2026-07-31 — every leg green
+# (five byte-identical 422s, identical stores after both the incremental and the
+# force run, 202→409 on both sides). Log:
+# `rust/.parity-state/etl-backfill/REPORT.txt`.
+#
+# The 422 legs are not here either, for the same reason the refresh differ keeps
+# its own: they are safe to issue (FastAPI validates before the handler), but a
+# port bug that failed to reject `[]` would turn the "safe" row into a live mart
+# rebuild. The isolated procedure is where a validation probe for a writer
+# belongs.
+
+
+# ── GET /api/etl/status — RS-5-071 ───────────────────────────────────────────
+#
+# STAYS KNOWN-OPEN, and the reason is NOT the port. Measured 2026-07-31 by
+# `ETL-BACKFILL-DIFFER.md` §4: the two bodies differ in exactly one leaf,
+# `watcher.enabled` — `false` on Python, `true` on Rust — and in nothing else.
+#
+# `_watcher_env_disabled()` reads `STACKUNDERFLOW_DISABLE_WATCHER` from the
+# process environment on every request. `parity/pyserver.py` sets it with
+# `os.environ.setdefault(...)` at import, which puts it in the PYTHON
+# interpreter only; `endpoint-parity.sh` exports just `STACKUNDERFLOW_HOME` into
+# the Rust subshell, so the Rust server never sees the variable and correctly
+# reports the watcher as enabled. Both sides are faithful; the harness is
+# asymmetric.
+#
+# Re-measured with `STACKUNDERFLOW_DISABLE_WATCHER=1` in the Rust environment
+# too: the `watcher` block is byte-identical. The fix is one word in
+# `endpoint-parity.sh`'s rust subshell —
+#     export STACKUNDERFLOW_HOME="$HOME_DIR" STACKUNDERFLOW_DISABLE_WATCHER=1
+# — and it belongs to the harness owner, not to this batch (the claim forbids
+# editing it). Flip this row to `E-etl-status` in the same commit as that
+# export; nothing else about the payload blocks it.
+#
+# Everything else in the body is deterministic against a shared store:
+# `marts[*].last_refresh_ts` is READ from `mart_watermark` (a stored string, not
+# a reading), `lag_seconds` is an event COUNT despite the name, `coverage` is an
+# anti-join, and `current_job` / `last_job` are `null` unless a backfill ran in
+# that process inside the last 30 s — which, with no backfill row in this file,
+# never happens.
+#
+# The endpoint is a pure read on a current store. Python's handler calls
+# `schema.apply(conn)`, which on an up-to-date store is a single
+# `PRAGMA user_version` and writes nothing; the Rust port does not run
+# migrations at all (RS-0-025).
+#
+# GREEN as of the batch-E fold-in. This row was `!` for exactly one reason —
+# `watcher.enabled` was python `false` / rust `true` because `parity/pyserver.py`
+# set `STACKUNDERFLOW_DISABLE_WATCHER` inside the Python interpreter only
+# (DIV-153). `endpoint-parity.sh` now exports it into the Rust subshell too, the
+# `watcher` block is byte-identical, and the marker is gone so that a future
+# break here FAILS the gate instead of being reported and forgiven.
+E-etl-status        | GET | /api/etl/status                    | -
+
+# A second, back-to-back read. The payload must not move between two calls a
+# few milliseconds apart — this is the row that would catch a `scanned_at`, a
+# "seconds since", or a per-request clock reading sneaking into a STATUS
+# surface (the DIV-073 / DIV-085 class). It carried the same `watcher.enabled`
+# divergence and no other; DIV-153 closed it, so this row is green and load-
+# bearing — it is the one that proves a STATUS payload holds still.
+E-etl-status-again  | GET | /api/etl/status                    | -
+
+# ── the unclaimed methods, and the bare prefix ───────────────────────────────
+#
+# FastAPI answers a known path with an unclaimed method as `405
+# {"detail":"Method Not Allowed"}` (starlette's router raises, FastAPI's handler
+# renders it as JSON); an unknown path is `404 {"detail":"Not Found"}`. axum's
+# own defaults are an EMPTY body with no content-type, so these rows are what
+# proves `lib.rs`'s two fallbacks still cover the two paths this module adds.
+# None of them reaches a handler, so none of them writes.
+E-405-status-post   | POST   | /api/etl/status                 | {}
+E-405-status-del    | DELETE | /api/etl/status                 | -
+E-405-backfill-get  | GET    | /api/etl/backfill               | -
+E-405-backfill-put  | PUT    | /api/etl/backfill               | {}
+E-404-etl-prefix    | GET    | /api/etl                        | -
+E-404-etl-slash     | GET    | /api/etl/                       | -
+E-404-etl-unknown   | GET    | /api/etl/nosuchthing            | -
+
+# ══ member `playback` ═════════════════════════════════════════════════════════════
+# Batch E / member `playback` — case rows for `routes/playback.py`
+# (RS-5-091 `/api/playback/{session_id}/fs`, RS-5-092 `/api/playback/{session_id}`,
+#  RS-5-093 `/api/playback/project/{project_slug}`).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, replacing the five `!PB-*` rows
+# that live there today, and strips the leading `P-by-dir-known` selection row.
+#
+# ── SAFETY (law 4) ───────────────────────────────────────────────────────────
+#
+# Every row is a GET or an unclaimed method on a GET-only path. All three
+# endpoints are pure read-side over `messages.raw_json`, `sessions`, `projects`
+# and (when present) `captured_events`; the only write in the Python handlers is
+# `schema.apply(conn)`, idempotent DDL the harness store already satisfies, and
+# the port does not run it at all (DIV-106). Nothing under
+# `$STACKUNDERFLOW_HOME` is written by any row below.
+#
+# ── TERMINATION (law 4, second half) ─────────────────────────────────────────
+#
+# The `/fs` endpoint decorates each reconstructed file with a risk overlay, and
+# that overlay is O(files × four `LIKE` sweeps of `messages`). Measured on the
+# harness store (3.9 GB, `messages` a partitioned VIEW): ~0.6 s per sweep, so
+# ~2.5 s per file. The fixtures below are chosen so no row reconstructs more
+# than two files — see `PB-fs-replay`'s comment. A row against a
+# hundred-file session would be minutes and does not belong in a gate.
+#
+# ── NO ROW DEPENDS ON SERVER STATE ───────────────────────────────────────────
+#
+# Unlike most of the matrix, these three endpoints never read
+# `deps.current_log_path`: the session id and the project slug both arrive in
+# the path. The selection row is carried anyway, per batch C's convention, so
+# these rows behave identically whether they are run standalone or spliced into
+# the middle of the merged file.
+#
+# ── THE FIXTURES ─────────────────────────────────────────────────────────────
+#
+#   04a86c63-4cfd-4929-91a3-3edfe80e3e2f  sessions.id 3488, project 314 (this
+#       repo). THREE messages, all role=user, so the event stream and the fs
+#       snapshot are both EMPTY at every cutoff — which is what makes it the
+#       cheap, always-terminating fixture for the required rows.
+#   4f6cb3a7-a786-4fe2-8c40-66c5ec02d933  sessions.id 20, 22 messages, 12 of
+#       them assistant rows carrying `tool_use` blocks, TWO of which name a
+#       `file_path`. Ingested 2026-03-13 from a project nothing in this
+#       campaign writes to, so it is stable. This is the fixture that actually
+#       exercises the extractor, the excerpt builder and the fs replay.
+#   -media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow  projects.id 314,
+#       two sessions, 1,279 messages. One provider, so `get_project`'s
+#       first-row-wins narrowing is not observable here (see DIV finding 8).
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── RS-5-092  GET /api/playback/{session_id} ─────────────────────────────────
+# The two rows the claim named. `PB-session` is the 404 leg; `PB-session-real`
+# is a session that EXISTS and has no tool calls — 200 with an empty list, the
+# distinction the whole `page is None` return type exists to make.
+PB-session          | GET | /api/playback/no-such-session | -
+PB-session-real     | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+
+# The real extractor: tool-call pairing, the summary table, `byte_count` in
+# BYTES, `duration_ms` from the result message's timestamp, and the 200-CODE-
+# POINT `payload_excerpt` (which defaults ON for this endpoint).
+PB-session-tools    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933 | -
+# `include_payload=0` must blank the excerpt and change nothing else.
+PB-session-nopayload | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=0 | -
+# A filter subsets the list while each event KEEPS its `seq` from the full
+# stream — the gap-preserving property a deep link depends on.
+PB-session-filter   | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=Read,Edit | -
+# A filter naming a tool the session never called: empty, not 404.
+PB-session-filter-miss | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=Frobnicate | -
+# `_parse_tool_filter` drops blank parts and then `cleaned or None` — so a
+# filter of nothing but whitespace is NO filter, and every event survives.
+PB-session-filter-blank | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?tool_filter=%20,%20, | -
+# `truncated: true`, and the cap applies to the RETURNED list, not the scan.
+PB-session-limit1   | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=1 | -
+# Percent-decoding of the path parameter plus `ensure_ascii=False` on the way
+# out: the 404 detail must ship the raw UTF-8 bytes of `café`.
+PB-session-utf8     | GET | /api/playback/caf%C3%A9 | -
+# An unclaimed method on a claimed path — FastAPI's `{"detail":"Method Not
+# Allowed"}`, and no handler runs.
+PB-session-post     | POST | /api/playback/no-such-session | -
+
+# ── RS-5-092 validation legs (law 5: one row per branch) ─────────────────────
+# `limit: int = Query(1000, ge=1, le=10_000)`. These three are the first rows in
+# the whole matrix to issue `greater_than_equal` / `less_than_equal`, which
+# carry a `ctx` object the type errors do not.
+PB-session-limit-ge | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=0 | -
+PB-session-limit-le | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=10001 | -
+PB-session-limit-bad | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=abc | -
+# pydantic's lax `str`→`int` accepts an integral float form and CPython's digit
+# underscores; a big integer parses EXACTLY and then fails the bound, so this
+# must be `less_than_equal` and not `int_parsing`. The `qs::opt_int` DIV-107
+# defect is why this route coerces locally — finding 1.
+PB-session-limit-float | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=100.0 | -
+PB-session-limit-under | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=1_000 | -
+PB-session-limit-big | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?limit=99999999999999999999 | -
+# `include_payload: bool` — pydantic's boolean vocabulary, and what is outside it.
+PB-session-bad-bool | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=maybe | -
+# TWO bad parameters: both are reported, in DECLARATION order (`limit` then
+# `include_payload`), not in query-string order.
+PB-session-two-errors | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933?include_payload=maybe&limit=0 | -
+
+# ── RS-5-093  GET /api/playback/project/{project_slug} ───────────────────────
+PB-project          | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+PB-project-unknown  | GET | /api/playback/project/-no-such-project-anywhere | -
+# `include_payload` defaults OFF here — this row turns it on over a small window
+# so the excerpt builder is measured on the cross-session path too.
+PB-project-payload  | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?include_payload=1&limit=5 | -
+PB-project-filter   | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?tool_filter=Bash&limit=50 | -
+# `since` — an ISO literal above every stamp, so the stream is empty.
+PB-project-since-iso | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=2027-01-01 | -
+# The RELATIVE grammar (`^\s*(\d+)\s*([dhm])\s*$`). 9,999 days lands the bound
+# in 1999, so the millisecond gap between the two servers' `datetime.now(UTC)`
+# calls cannot move a row. A `?since=7d` row would be a coin flip on any
+# message written in that gap and is deliberately NOT here — finding 2.
+PB-project-since-rel | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=9999d | -
+# The regex allows internal whitespace and is case-insensitive.
+PB-project-since-rel2 | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=%20999999%20H%20 | -
+# Unrecognised → passed through as a LITERAL, and `'7 days' >= '2026-…'`
+# lexically, so the SQL matches nothing. Harmless by design, and measurable.
+PB-project-since-junk | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since=7%20days | -
+# Blank `since` is `None`, NOT an empty lower bound — no clause is added at all.
+PB-project-since-blank | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?since= | -
+# The project endpoint's bounds are a DIFFERENT pair (`ge=1, le=20_000`) and the
+# `le` message carries `20000`, not `10000`.
+PB-project-limit-ge | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=0 | -
+PB-project-limit-le | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=20001 | -
+PB-project-limit1   | GET | /api/playback/project/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow?limit=1 | -
+
+# ── RS-5-091  GET /api/playback/{session_id}/fs ──────────────────────────────
+# `at: str = Query(...)` — absent is FastAPI's `missing`, with a null `input`.
+PB-fs-no-at         | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs | -
+# A session with no assistant rows: 200, `files: {}`, `warnings: []`, and the
+# `snapshot_ts` echo. No file means no risk sweep, so this row is instant.
+PB-fs-empty         | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=2026-07-30T00:00:00Z | -
+# The full replay: Read seeds through the `cat -n` stripper, Edit substitutes,
+# `operations_applied` counts per tool per file, and the risk overlay runs. Two
+# files (~5 s of `LIKE` sweeps on both servers) — the ceiling this file accepts.
+PB-fs-replay        | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z | -
+# The CUTOFF, and it is placed BETWEEN the session's two file-touching calls
+# (14:38:26.965 and 14:38:49.636), so this row returns ONE file where
+# `PB-fs-replay` returns two. A cutoff that happens to fall after both — the
+# obvious mid-session guess — measures nothing, and did on the first attempt.
+PB-fs-cutoff        | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-13T14:38:30Z | -
+# `include_content=0` drops only the bodies; `byte_count` still measures the
+# body that was NOT shipped.
+PB-fs-no-content    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z&include_content=0 | -
+# A cutoff before the session began: empty, not an error.
+PB-fs-early         | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2020-01-01T00:00:00Z | -
+# `paths` restricts the REPLAY, not just the output; a path the session never
+# touched yields `files: {}` (and therefore no risk sweep).
+PB-fs-paths-miss    | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00Z&paths=/nope,%20, | -
+# A naive cutoff (no offset) against aware message stamps — the third row of
+# `_ts_le`'s four-case table, where CPython compares WALL clocks and discards
+# the offset.
+PB-fs-naive-at      | GET | /api/playback/4f6cb3a7-a786-4fe2-8c40-66c5ec02d933/fs?at=2026-03-14T00:00:00 | -
+# 404 — session not in store. Note the cutoff is parsed BEFORE the session is
+# resolved, so this row needs a VALID `at` to reach the 404 at all.
+PB-fs-404           | GET | /api/playback/no-such-session/fs?at=2026-01-01T00:00:00Z | -
+# 422 — `at` present and unparseable. This is `HTTPException(422, detail=str(e))`,
+# a one-key object with a STRING detail, and the message embeds Python's
+# `repr()` of the raw value. NOT the pydantic list the rows above produce.
+PB-fs-bad-at        | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=nope | -
+# An EMPTY `at` is present-but-unparseable, so it takes the string 422 and not
+# the `missing` one — the distinction is `Query(...)` seeing a value at all.
+PB-fs-blank-at      | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at= | -
+# `include_content: bool` — the third field in the signature.
+PB-fs-bad-bool      | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=2026-07-30T00:00:00Z&include_content=maybe | -
+# `missing` AND `bool_parsing` together, `at` first: declaration order again,
+# and proof the dependency solver runs before the handler.
+PB-fs-two-errors    | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?include_content=maybe | -
+# A repeated scalar takes the LAST occurrence (starlette's `QueryParams._dict`).
+PB-fs-repeated-at   | GET | /api/playback/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/fs?at=nope&at=2026-07-30T00:00:00Z | -
+
+# ── router precedence: the three paths overlap, and the overlap is measurable ─
+# `/api/playback/project/fs` is matched by BOTH `/api/playback/{session_id}/fs`
+# and `/api/playback/project/{project_slug}`. starlette takes the first
+# REGISTERED (the fs route, `session_id="project"`); axum's trie prefers the
+# static `project` segment and would take the other. `routes/playback.rs` carries
+# an explicit shadow check to reconcile them — finding 3.
+PB-project-named-fs | GET | /api/playback/project/fs | -
+PB-project-named-fs-at | GET | /api/playback/project/fs?at=2026-01-01T00:00:00Z | -
+# `/api/playback/project` with no slug is the SESSION route, id `"project"`.
+PB-project-bare     | GET | /api/playback/project | -
+# Four segments match no route on either side — FastAPI's JSON 404, not
+# starlette's plain text.
+PB-fs-four-segments | GET | /api/playback/project/x/fs?at=2026-01-01T00:00:00Z | -
+
+# ══ member `live` ═════════════════════════════════════════════════════════════
+# Batch E / member `live` — case rows for `routes/live.py` (RS-5-075/076).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, REPLACING the two existing
+# `!LV-*` rows, and strips the leading `P-by-dir-known` selection row, which
+# already runs earlier there.
+#
+# ── the honest headline ─────────────────────────────────────────────────────
+#
+# `/api/live/stats` IS PORTED AND MOUNTED, AND ITS ROWS STAY `!`. The payload
+# stamps `burn.ts = datetime.now(UTC).isoformat()` at microsecond resolution,
+# so no two responses byte-match — not python-vs-rust, and not python-vs-python
+# on ONE server two seconds apart. Measured both ways before a line was ported;
+# `DIV-e-live.md` carries the diffs. `!` here means "clock-stamped, permanently
+# open by construction", the DIV-085 disposition, not "unported".
+#
+# What the `!` rows still buy is real: the differ executes them, so a 500, a
+# panic, a schema drift or a shape change on either side surfaces in the dump
+# under `.parity-state/endpoint-diffs/` even though the verdict is suppressed.
+# The *content* proof is in `DIV-e-live.md`: five offsets, python and rust
+# rendered from the same read-only store, byte-identical on every field except
+# `.burn.ts`.
+#
+# `/api/live/stream` HAS NO ROW, EVER — DIV-136, restated in `SSE-PROBE-d.md`.
+# `!` suppresses `Verdict::Divergent`, never `Verdict::Error`, and a body that
+# never terminates books two harness errors and exits 2. Its verification is
+# the recorded probe, now with both halves.
+#
+# Side effects: NONE. Every row is a GET or an unclaimed method on
+# `/api/live/*`. `_live_stats_sync` opens the store read-write (that is what
+# `store/db.py::connect` does) and Python additionally runs `schema.apply` —
+# idempotent DDL the harness store already satisfies — but the handler issues
+# only SELECTs. Nothing under `$STACKUNDERFLOW_HOME` is written.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── the happy path and the timezone legs ────────────────────────────────────
+# DIV-141 / finding 1: `burn.ts` is a clock stamp, so these can never go green.
+# Everything else in the body is deterministic on a frozen store — six tools at
+# 61/15/9/5/4/3 samples, both watermarks, and every burn figure but `ts`.
+!LV-stats            | GET | /api/live/stats                        | -
+# `-480` is minutes EAST of UTC and §6b divergence 5 (the React sign inversion)
+# is INHERITED FAITHFULLY, exactly as `D-stats-tz` / `D-stats-tz-inverted` do
+# for `/api/stats`. Both signs are ported, neither is "fixed": `-480` puts the
+# local wall clock eight hours BEHIND UTC and `+480` eight hours ahead, which
+# on the harness home moves `month_to_date` from 3857.83 to 0.0. The sign is
+# load-bearing and both legs are measured.
+!LV-stats-tz         | GET | /api/live/stats?timezone_offset=-480   | -
+!LV-stats-tz-inverted| GET | /api/live/stats?timezone_offset=480    | -
+# Zero is the default, spelled explicitly: it must take the same leg as an
+# ABSENT parameter, not a different one.
+!LV-stats-tz-zero    | GET | /api/live/stats?timezone_offset=0      | -
+
+# ── the clamp that is NOT there (finding 2) ─────────────────────────────────
+# `/api/stats` clamps `timezone_offset` to [-720, 840] inside
+# `_project_stats_cached`. `routes/live.py` hands the raw int straight to
+# `live_svc.snapshot`, so these two answer 200 with genuinely different buckets
+# — probed: `-100000` gives month_to_date 1736.63 / projection 2340.67, and
+# `+100000` gives 550.45 / 1895.99, neither of which is the `[-720, 840]`
+# answer. Inheriting the missing clamp is the DIV-124 call for
+# `/api/dashboard-data`, made again here. These rows exist so that if anyone
+# ever "fixes" one side, the bodies stop matching in a way the dump shows.
+!LV-stats-tz-under   | GET | /api/live/stats?timezone_offset=-100000 | -
+!LV-stats-tz-over    | GET | /api/live/stats?timezone_offset=100000  | -
+
+# ── the 500 the missing clamp makes reachable (finding 3) ───────────────────
+# Not a validation error: the value coerces fine and then
+# `now + timedelta(minutes=tz)` leaves `datetime`'s [year 1, year 9999] range.
+# `OverflowError: date value out of range` at `services/live.py:203`, uncaught,
+# so starlette's ServerErrorMiddleware answers 500 with the 21-byte plain-text
+# body `Internal Server Error` and `content-type: text/plain; charset=utf-8`.
+# NO `!`: the port reproduces that response byte for byte and the row is
+# expected to go GREEN. It is also the only non-JSON response in the module.
+#
+# The asymmetry is real, not a typo. 2026 leaves ~7973 years of headroom
+# forward and only ~2026 backward, so `+2147483647` is a 200 and
+# `-2147483648` is a 500. Both are rows precisely because the boundary is
+# counter-intuitive.
+LV-stats-tz-overflow | GET | /api/live/stats?timezone_offset=-2147483648 | -
+!LV-stats-tz-int32max| GET | /api/live/stats?timezone_offset=2147483647  | -
+
+# ── the 422 legs (law 5, law 8) ─────────────────────────────────────────────
+# `timezone_offset: int = 0` is coerced by FastAPI's dependency solver, so an
+# uncoercible value never reaches the handler and the body is the FULL pydantic
+# error LIST — NOT `json::validation_422_field_only`'s `{"detail":"<field>"}`.
+# Measured, not assumed (law 6):
+#   {"detail":[{"type":"int_parsing","loc":["query","timezone_offset"],
+#     "msg":"Input should be a valid integer, unable to parse string as an
+#     integer","input":"abc"}]}
+# Expected GREEN — the port uses `json::validation_422`.
+LV-stats-bad-int     | GET | /api/live/stats?timezone_offset=abc     | -
+# An EMPTY value is NOT "absent": it is the empty string, and it fails to
+# coerce with `"input":""`. This is the leg a port that reads "missing or
+# empty -> default" would silently pass with a 200.
+LV-stats-empty-int   | GET | /api/live/stats?timezone_offset=        | -
+# pydantic will not narrow a float literal to an `int` field, even an integral
+# one. `1.5` and `1.0` both 422.
+LV-stats-float-int   | GET | /api/live/stats?timezone_offset=1.5     | -
+# A bignum: Python's `int` is arbitrary-precision, so this COERCES and then
+# 500s on the timedelta; `crate::qs::opt_int` parses into `i64` and 422s.
+# `!` because that is DIV-107 — a defect in the SHARED `qs::opt_int` which the
+# batch-E charter reserves for the architect (`!CR-at-float` / `!CR-at-bignum`
+# are the same bug). Named here so `/api/live/stats` is on the list when it is
+# fixed, rather than discovered later.
+!LV-stats-bignum-int | GET | /api/live/stats?timezone_offset=9999999999999999999999 | -
+
+# ── starlette's routers (law 5) ─────────────────────────────────────────────
+# A repeated scalar takes the LAST occurrence — starlette builds
+# `QueryParams._dict` by comprehension. The first row must therefore be a 422
+# (the junk value wins) and the second a 200 (the good value wins). A port that
+# took the FIRST value would pass one row and fail the other, which is why both
+# are here.
+LV-stats-tz-repeat-bad  | GET | /api/live/stats?timezone_offset=-480&timezone_offset=abc  | -
+!LV-stats-tz-repeat-good| GET | /api/live/stats?timezone_offset=abc&timezone_offset=-480  | -
+# An unknown query parameter is IGNORED, not rejected — FastAPI does not run
+# an extra-forbid model on query params.
+!LV-stats-unknown-param | GET | /api/live/stats?bogus=1                | -
+# The unclaimed methods. FastAPI's own handler renders
+# `{"detail":"Method Not Allowed"}`; starlette's default plain text is
+# replaced. Expected GREEN.
+LV-stats-post        | POST   | /api/live/stats                    | -
+LV-stats-put         | PUT    | /api/live/stats                    | -
+LV-stats-delete      | DELETE | /api/live/stats                    | -
+LV-stats-patch       | PATCH  | /api/live/stats                    | -
+# A path under the prefix that no route claims: FastAPI's `{"detail":"Not
+# Found"}`, not axum's empty 404. Expected GREEN.
+LV-unknown-subpath   | GET | /api/live/nope                         | -
+
+# ── the two trailing-slash rows, and why they are a PAIR ────────────────────
+# starlette's `redirect_slashes` answers `307` + `location:` for a trailing
+# slash on a REGISTERED path, and `404` for one that is not registered —
+# measured: `/api/live/stats/` and `/api/live/stream/` both 307, while
+# `/api/live/nope/` 404s. axum does neither redirect, so both 404 today.
+#
+# `LV-stats-slash` is therefore the pure DIV-133 control: a path mounted on
+# BOTH servers, diverging only on the redirect. `LV-stream-slash` is the same
+# 307-vs-404 shape today, so on its own it proves nothing extra — the pair is
+# what carries the information. When DIV-133 lands, `LV-stats-slash` goes green
+# and `LV-stream-slash` STAYS 404, and at that moment it becomes the standing,
+# terminating evidence that `/api/live/stream` is unmounted on the Rust side
+# (DIV-e-live.md finding 6). A row on `/api/live/stream` itself would hang the
+# differ and exit 2 (DIV-136), so this is the only safe form of the
+# observation. Both `!`; neither is batch E's to fix.
+!LV-stats-slash      | GET | /api/live/stats/                       | -
+!LV-stream-slash     | GET | /api/live/stream/                      | -
+
+# ══ member `quality` ═════════════════════════════════════════════════════════════
+# Batch E / quality — `routes/quality.py` (RS-5-102 / RS-5-103), closing DIV-135.
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` row, which already runs earlier there.
+#
+# ORDER IS NOT LOAD-BEARING for this group. Neither endpoint reads
+# `deps.current_log_path` or any other server state; the selection row is here
+# only for the batch-C convention. The rows are still listed 404s-first so that
+# a failure in the cheap deterministic legs is visible before the slow ones run.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SAFETY — READ BEFORE ADDING ANY ROW ON A REAL SESSION ID
+# ─────────────────────────────────────────────────────────────────────────────
+# `grade_session` calls a local Ollama: `GET localhost:11434/api/tags` (3 s) then
+# `POST /api/chat` (30 s). On THIS host :11434 is CLOSED — re-verified at probe
+# time by `ss -ltn` (no listener), `curl` (exit 7, "Connection refused") and a
+# direct `socket.create_connection` to 127.0.0.1 / ::1 / localhost (all ECONNREFUSED
+# 111). Both sides therefore take the connect-refused path, and grading.py:205
+# puts the `INSERT OR REPLACE` inside `if not is_fallback:` — so the fallback
+# path WRITES NOTHING AND COMMITS NOTHING. Verified end to end: after ~20 grader
+# hits per side across the probe, `SELECT COUNT(*) FROM session_quality_metrics`
+# was still 0.
+#
+# IF :11434 IS EVER OPEN ON THE HOST RUNNING THIS MATRIX, DELETE THE
+# `!QL-quality-real` ROW BEFORE RUNNING IT. With Ollama up the endpoint becomes
+# (a) nondeterministic — a sampled grade — and (b) a real writer whose row the
+# NEXT request serves from cache, so python-then-rust on one shared home stops
+# being idempotent and the shared `.parity-state/fresh` store acquires a
+# fabricated grade. Check first:  ss -ltn | grep 11434
+#
+# NOT IN THIS FILE, deliberately, so that "absent" never means "nobody looked":
+#   * POST …/{real}/grade — `force=True`. While :11434 is closed it adds ZERO
+#     coverage over the GET (both take the identical fallback path; measured,
+#     byte for byte) and strictly more risk if the port ever opens. The probe
+#     ran it on two real sessions and recorded the bodies in DIV-e-quality.md.
+#   * The trailing-slash leg (`…/quality/`): Python answers 307, Rust 404. That
+#     is DIV-133, the architect's `lib.rs` redirect_slashes item, explicitly out
+#     of batch E's charter. Measured and recorded, no row.
+#   * A stored-grade row. `get_stored_grade` is the ONLY fully deterministic
+#     200 this module has — one indexed SELECT, no clock, no socket — and it has
+#     no row because `session_quality_metrics` holds **0 rows** in
+#     `.parity-state/fresh`. Only real LLM grades are ever persisted and nothing
+#     has graded that snapshot. The day a row exists, add it: it is a free green.
+#
+# COST: the `!QL-quality-real` row is the most expensive row in the matrix.
+# Measured 1.5–3.0 s (Python) and 3.9–8.0 s (Rust) per request, against 4–6 ms
+# for every 404/405 row below. The cause is Python's own SQL, identical on both
+# sides: the transcript joins the `messages` VIEW, a 16-partition UNION ALL that
+# SQLite MATERIALIZES in full and then auto-indexes, to fetch 3 rows. Well inside
+# the differ's 300 s timeout, so it terminates (DIV-136) — but it is ~10 s of
+# wall clock and one line to drop if the matrix budget says no.
+
+
+# ── the 404: the leg that fires BEFORE the grader, on both endpoints ─────────
+# `SELECT id FROM sessions` misses -> `HTTPException(404, f"Session {sid} not
+# found")`. Fully deterministic, no socket, no clock. These are the two rows the
+# claim file listed as known-open; both are GREEN now.
+QL-quality-missing  | GET  | /api/static-analysis/session/no-such-session-anywhere/quality | -
+QL-grade-missing    | POST | /api/static-analysis/session/no-such-session-anywhere/grade   | -
+# No query parameter is declared on either endpoint, so a stray one is ignored
+# rather than 422'd — the one shape a `qs`-parsing port could have got wrong.
+QL-quality-query    | GET  | /api/static-analysis/session/no-such-session-anywhere/quality?force=1 | -
+
+# ── the detail string is an f-string, and the body is ensure_ascii=False ─────
+# starlette percent-decodes the path param, the f-string interpolates it raw,
+# and `JSONResponse` writes UTF-8 rather than `é` (law 1). 44 bytes, not 50.
+QL-quality-unicode  | GET  | /api/static-analysis/session/caf%C3%A9%20session/quality | -
+QL-grade-unicode    | POST | /api/static-analysis/session/caf%C3%A9%20session/grade   | -
+# `+` is NOT a space in a path (only in a query string). Both sides agree.
+QL-quality-plus     | GET  | /api/static-analysis/session/a+b/quality | -
+
+# ── the unclaimed methods on both paths ─────────────────────────────────────
+# FastAPI's JSON 405, not starlette's plain text. `quality` is GET-only and
+# `grade` is POST-only, so each path answers 405 for the other's verb.
+QL-quality-method   | POST   | /api/static-analysis/session/no-such-session-anywhere/quality | -
+QL-grade-method     | GET    | /api/static-analysis/session/no-such-session-anywhere/grade   | -
+QL-quality-delete   | DELETE | /api/static-analysis/session/no-such-session-anywhere/quality | -
+
+# ── KNOWN-OPEN: two shared-router seams, measured here, owned elsewhere ──────
+# NOT this module's handlers — both are pre-existing and reproduce on routes
+# batches A, C and D already shipped green. Recorded as rows so the gap is in
+# the file rather than missing from it; the fix is one change in `lib.rs`, which
+# batch E may not make.
+#
+# An EMPTY non-terminal path segment. starlette compiles `{session_id}` to
+# `[^/]+`, which needs at least one character, so Python never routes it and
+# answers `{"detail":"Not Found"}`. axum's matchit DOES match the empty segment
+# and hands the handler `""`, which the f-string renders with two spaces:
+#   py {"detail":"Not Found"}      rs {"detail":"Session  not found"}
+# A TERMINAL param is unaffected — `/api/static-analysis/session/` and
+# `/api/context-replay/` both answer 404 identically on both sides — so this
+# only surfaces where a param is followed by another segment.
+!QL-quality-empty-id | GET  | /api/static-analysis/session//quality | -
+!QL-grade-empty-id   | POST | /api/static-analysis/session//grade   | -
+#
+# A percent-encoded SLASH. uvicorn unquotes the raw path into `scope["path"]`
+# BEFORE starlette routes it, so `a%2Fb` is two segments and nothing matches;
+# hyper routes on the raw path and axum's `Path` decodes AFTER matching, so the
+# handler gets `a/b`. Reproduced on three already-green endpoints — see
+# DIV-e-quality.md — and invisible today because no row anywhere sends `%2F`.
+#   py {"detail":"Not Found"}      rs {"detail":"Session a/b not found"}
+!QL-quality-encoded-slash | GET | /api/static-analysis/session/a%2Fb/quality | -
+
+# ── KNOWN-OPEN: the one field that keeps a real-session 200 open ─────────────
+# `graded_at` is `datetime.now(UTC)` (grading.py:200) and it is IN THE BODY, so
+# two processes can never agree. Everything else does: the isolated two-server
+# probe (python :8099 / rust :8098) found both bodies 368 bytes, same status,
+# same `content-type`, same key order, and the FIRST DIFFERING BYTE AT OFFSET
+# 331 OF 368 — inside the `graded_at` value and nowhere else. That probe, with
+# its full diff, is the evidence this row cannot itself produce; it is written
+# out in `parity/DIV-e-quality.md`.
+#
+# Read the SAFETY block at the top of this file before running this row.
+# 04a86c63… is 3 messages, which is why it is this session and not a larger one.
+!QL-quality-real    | GET  | /api/static-analysis/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f/quality | -
+
+# ══ member `forks` ═════════════════════════════════════════════════════════════
+# Batch E / `forks` — endpoint differ cases for `routes/forks.py` (RS-5-074).
+#
+# Format is `rust/parity/endpoint-cases.txt`'s; read that file's header first.
+# The integrator merges these rows into the shared file and strips the leading
+# `P-by-dir-known`, which already runs earlier there.
+#
+# `F-forks`, `F-forks-week` and `F-forks-bad-period` are the three ids the
+# shared file currently carries with a leading `!` under DIV-142. They are
+# reproduced here verbatim WITHOUT the `!`, because the endpoint is ported —
+# flipping them is the point of this member. Every other row is new.
+#
+# FOR THE INTEGRATOR: if a neighbouring member's block leaves a DIFFERENT
+# project selected by the time this block runs, these rows still diff cleanly —
+# both servers read the same state in the same order, so they simply scope to
+# whatever project is current. The only rows that assume a SPECIFIC project are
+# `F-forks-log-path` (which names the slug itself) and the two `no-project`
+# rows (which name a slug that exists nowhere).
+#
+# ── I CHECKED FOR A WALL-CLOCK STAMP FIRST, AND THERE IS NONE ────────────────
+#
+# The payload is `{period, scope, report, currency, warning}`. `scope` is
+# `Scope.label` — a PHRASE ("today", "last 7 days", "this month (July 2026)",
+# "all time"), not an instant — and there is no `generated` key anywhere. So
+# unlike `/api/compare` (DIV-085, `time.time()` in the body) every 200 here CAN
+# byte-match, and these rows are real rows rather than permanent known-opens.
+#
+# ── ORDER IS SIGNIFICANT, and here it is significant TWICE ───────────────────
+#
+# The usual reason applies (`deps.current_log_path` is server state). The second
+# reason is this module's process-wide memo:
+#
+#   key   = (str(deps.store_path), scope.LABEL, tuple(sorted(project_ids)) or None)
+#   token = (MAX(sessions.last_ts), SUM(sessions.message_count)) — validity only
+#
+# The key is the LABEL, not the period, so `?period=week` and `?period=7days`
+# are ONE key: whichever runs first computes, and the second is served that
+# report — rolling `now − 7d` bounds included. The rows below are ordered so
+# that collision is exercised deliberately (`F-forks-week` first, then
+# `F-forks-7days`) instead of by accident.
+#
+# Unlike `/api/optimize` (DIV-111) the memo is NOT visible in the body: there is
+# no `"cache": "hit"|"miss"` field. A repeat row is therefore expected to be
+# byte-identical whether it was served from the memo or recomputed — which is
+# exactly what makes `F-forks-again` worth having.
+#
+# ── the rolling-window caveat ────────────────────────────────────────────────
+#
+# `7days` / `30days` bound on `now`, so the two servers compute bounds a few
+# milliseconds apart and a message inside that gap is a real (if rare)
+# divergence — the same property `CD-prov-week` carries. The memo caps the
+# exposure at ONE request per label: every later row on that label is served
+# from the entry the first one wrote.
+#
+# ── COST ─────────────────────────────────────────────────────────────────────
+#
+# DIV-142 measured ~6 s warm and 12.7 s cold on this store, and no shortcut was
+# added (a faster answer that differs is a divergence). Budget for it: the
+# distinct cache keys below are all-time, today, month, 7days, 30days and the
+# empty scope — six cold computations per server, the rest memo-served.
+#
+# ── LAW 7 ────────────────────────────────────────────────────────────────────
+#
+# `/api/forks` writes nothing: one read-only join over messages/sessions/
+# projects, one `MAX/SUM` over `sessions` for the validity token, `models.toml`
+# and the `price_book` table for pricing, and an in-process memo that is
+# ordinary process memory. Verified against `reports/forks.py` and
+# `routes/forks.py` rather than the docstrings. Every row below is safe.
+
+
+# ── validation first: these 400 before the scope is built and never cache ────
+# `_PERIOD_ALIASES.get(period)` misses, and the message joins the alias table
+# in DICT order — "today, week, 7days, month, 30days, all", NOT sorted.
+F-forks-bad-period  | GET | /api/forks?period=nonsense        | -
+# A PRESENT-but-empty `?period=` is `""`, not the `Query("all")` default, so it
+# is a 400 too. Checked against DIV-086 on purpose: `/api/compare?provider=`
+# reaches a FILTER and prunes everything; `?period=` here reaches a LOOKUP with
+# no `""` key and answers deterministically. No analogous trap.
+F-forks-empty-period | GET | /api/forks?period=               | -
+# The alias table is case-SENSITIVE.
+F-forks-period-case | GET | /api/forks?period=Week            | -
+# pydantic does not strip a scalar `str` query param, so the space is part of
+# the value and this is a 400 whose `detail` contains the space.
+F-forks-period-space | GET | /api/forks?period=%20all         | -
+# starlette's QueryParams is last-wins for a scalar param, so the VALID second
+# value decides. First-wins would 400 here.
+F-forks-period-last | GET | /api/forks?period=nonsense&period=all | -
+
+# ── the "all time" key: the default, a repeat, and the explicit spelling ─────
+# `period` defaults to `all`, so all three of these are ONE cache key. The
+# repeat proves the memo is not answer-visible; the explicit row proves the
+# default really is `all` and not `month` (which is what the cost routes use).
+F-forks             | GET | /api/forks                        | -
+F-forks-again       | GET | /api/forks                        | -
+F-forks-all         | GET | /api/forks?period=all             | -
+# `?log_path=` empty is FALSY and falls back to `deps.current_log_path`, so this
+# is still the same key — a present-but-empty param that must not widen scope.
+F-forks-empty-log   | GET | /api/forks?period=all&log_path=   | -
+# The same project named explicitly: same slug, same ids, same key.
+F-forks-log-path    | GET | /api/forks?period=all&log_path=/x/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── the day-aligned periods, one cold computation each ───────────────────────
+F-forks-today       | GET | /api/forks?period=today           | -
+F-forks-month       | GET | /api/forks?period=month           | -
+
+# ── the rolling windows, and the label collision ─────────────────────────────
+# `week` computes; `7days` maps to the SAME `parse_period` spec and therefore
+# the same `scope.label`, so it is served `week`'s report. Reordering these two
+# changes which one pays for the rolling-window drift.
+F-forks-week        | GET | /api/forks?period=week            | -
+F-forks-7days       | GET | /api/forks?period=7days           | -
+# `30days` is its own label ("last 30 days") and its own key.
+F-forks-30days      | GET | /api/forks?period=30days          | -
+
+# ── the unknown project: an EMPTY scope, not a 404 ───────────────────────────
+# `_project_ids_for` returns `[]` for a slug nothing matches, and `[]` means
+# "a filter was requested and matched nothing" — the report is the ForkReport
+# DEFAULTS (float zeros, `abandoned_cost_usd: 0.0`), served 200. That is the
+# opposite of `routes/cost.py::_project_ids_for`, which 404s on the same query,
+# and the difference is the whole reason this row is a 200.
+F-forks-no-project  | GET | /api/forks?period=all&log_path=/x/no-such-project-anywhere | -
+# `Path(path).name` is the slug, so a trailing slash resolves to the SAME slug
+# on both sides — pathlib drops it, and `pyops::path_name` reproduces that.
+F-forks-trailing    | GET | /api/forks?period=all&log_path=/x/no-such-project-anywhere/ | -
+
+# ── the shapes a happy-path matrix never sees ────────────────────────────────
+# An undeclared query parameter is ignored, not a 422.
+F-forks-extra-param | GET | /api/forks?period=all&limit=abc&details=1 | -
+# GET-only path: FastAPI's router raises HTTPException(405) and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's native 405
+# is an empty body with no content-type; `crate::json::method_not_allowed`
+# restores starlette's. Body is `-` because a 405 is decided before the body is
+# read, so none of these three reaches a handler or the store.
+F-forks-post        | POST   | /api/forks                     | -
+F-forks-put         | PUT    | /api/forks                     | -
+F-forks-delete      | DELETE | /api/forks                     | -
+# A neighbouring path nothing claims — FastAPI's `{"detail":"Not Found"}`, not
+# starlette's plain-text default. `/api/fork` (singular) is the typo a client
+# actually makes.
+F-forks-singular    | GET | /api/fork                         | -
+# NO ROW for `/api/forks/` — the trailing-slash 307 is DIV-133, an architect's
+# `lib.rs` change, and the batch-E claim puts it out of this member's scope.
+# Stated rather than silently omitted.
+
+# ══ member `benchmark` ═════════════════════════════════════════════════════════════
+# Batch E / member `benchmark` — case rows for `routes/benchmark.py`
+# (RS-5-045 `GET /api/benchmark`, RS-5-046 `GET /api/benchmark/recommend`).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file **in place of the four `!BM-*`
+# rows** currently sitting under the `DIV-143` comment, and strips the leading
+# `P-by-dir-known` selection row, which already runs at line 68 there.
+#
+# The four known-open rows are reproduced verbatim below with the `!` removed:
+#   BM-benchmark, BM-bad-period, BM-recommend, BM-recommend-blank.
+#
+# ── State this group depends on ─────────────────────────────────────────────
+#
+# `deps.current_log_path` is the StackUnderflow project (`P-by-dir-known` at
+# line 68, re-asserted by `J-select` at line 316). Every row without an explicit
+# `?log_path=` is therefore PROJECT-SCOPED, and the project-scoped report on the
+# harness store is a single `explore × large` stratum with one model —
+# `sessions_total: 1`. That is a small, stable, fast payload and it is what the
+# happy-path rows diff.
+#
+# COVERAGE GAP, stated up front: the WHOLE-STORE report (1 310 sessions, 22
+# strata, 117 model rows, 43 kB) is unreachable from this matrix, because there
+# is no way to *de*-select a project once one is selected and every unknown
+# `?log_path=` resolves to the empty report instead. It is covered by unit test
+# — `services::benchmark` runs the port against the live store and against a
+# CPython dump of the same 11 calls, byte for byte — and by nothing here. See
+# DIV-e-benchmark.md, finding 12.
+#
+# ── Side effects: NONE ──────────────────────────────────────────────────────
+#
+# Every row is a `GET` or an unclaimed method. The handler opens the store the
+# way `store/db.py::connect` does (read-write, as both sides do) and issues only
+# `SELECT`s: `session_mart`, `sessions`, the `messages` VIEW, `usage_events`,
+# `session_quality_metrics`, `static_analysis_findings`, `commit_session_link`,
+# `pr_outcomes`, `ci_runs`, `projects`. `reports/benchmark.py` has no writer and
+# imports none — `outcome_attribution.link_commits_to_sessions`, the one writer
+# in its dependency graph, is not on this path (DIV-099(b)). Nothing under
+# `$STACKUNDERFLOW_HOME` is written. Law 7 is satisfied.
+#
+# ── Runtime, so the integrator is not surprised ─────────────────────────────
+#
+# The project-scoped rows are milliseconds. The `?period=` rows still scan the
+# whole `session_mart` join before the scope filter narrows it, so each costs
+# ~2 s on the Python side and ~1 s on the port's release build. Python memoises
+# per `(store, scope, ids, intent)` and the port does not, so a repeat row is
+# free on one side and not the other; the differ's 300 s per-case timeout has
+# three orders of magnitude of headroom either way.
+#
+# ── The one inherently time-sensitive pair ──────────────────────────────────
+#
+# `week` and `7days` resolve to a ROLLING `now - 7d` instant carrying the
+# current microsecond (batch A's `_by_model_mart_eligible` measurement, and the
+# `scope.rs` module docs). The two servers compute bounds milliseconds apart, so
+# a session whose `first_ts` lands in that gap is a real divergence. The harness
+# store's newest session starts `2026-07-30T16:32`, six days inside the window,
+# so the rows are stable today. Same property as `CD-prov-week`.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── GET /api/benchmark — the happy path ─────────────────────────────────────
+# The default `period=all`, project-scoped. Proves the whole envelope:
+# `{period, scope, report, currency, warning}`, the `report`'s nine keys in
+# declaration order, the `weights` dict rendering `0.2` and not `0.20`,
+# `ci_level` as `0.9`, `success_threshold` as `7.0` and not `7`, and the
+# `method_notes` array with its `×`, `→`, `—` and `–` intact through
+# `ensure_ascii=False`.
+#
+# It carries one side of the int-versus-float trap: `median_turns` is
+# `statistics.median` over a list of ints, and this cell has an odd count, so it
+# must render `846` and not `846.0`. The even-count spelling (`103.0`) only
+# occurs in the whole-store report, which this matrix cannot reach — see the
+# coverage gap above and DIV-e-benchmark.md finding 2.
+BM-benchmark        | GET | /api/benchmark                    | -
+
+# Immediately again. Python memoises the report behind `_BENCH_CACHE` and the
+# port deliberately does not (DIV-e-benchmark finding 11), so this is the
+# cheapest available proof that the memo cannot change the answer within one
+# store revision — `PL-plan-repeat`'s trick, and the row that would catch a
+# first-call-only side effect.
+BM-benchmark-repeat | GET | /api/benchmark                    | -
+
+# ── GET /api/benchmark — every leg of the period alias table ────────────────
+# `_PERIOD_ALIASES` has SIX keys mapping onto FIVE `parse_period` specs, and
+# `week`/`7days` are the pair that collide. All five distinct windows get a row
+# so the alias table is measured and not assumed.
+#
+# `today` is the empty-report row: the harness store has zero sessions in the
+# current calendar day, so this is `_empty_report` on the wire —
+# `sessions_total: 0`, `strata: []`, the single "Not enough comparable
+# evidence" caveat, and `grade_coverage: 0.0` (a float, never `0`).
+BM-period-today     | GET | /api/benchmark?period=today       | -
+BM-period-week      | GET | /api/benchmark?period=week        | -
+BM-period-7days     | GET | /api/benchmark?period=7days       | -
+BM-period-month     | GET | /api/benchmark?period=month       | -
+BM-period-30days    | GET | /api/benchmark?period=30days      | -
+BM-period-all       | GET | /api/benchmark?period=all         | -
+
+# The `400`. The message joins the alias table's KEYS in INSERTION order —
+# "today, week, 7days, month, 30days, all" — and not the sorted order
+# `/api/optimize` prints for its own set. Two endpoints, two orders.
+BM-bad-period       | GET | /api/benchmark?period=nonsense    | -
+
+# The empty string is an unknown alias, not the default: `Query("all")` only
+# applies when the key is ABSENT. The quoted `''` in the message proves it.
+BM-period-blank     | GET | /api/benchmark?period=            | -
+
+# The lookup is case-sensitive, so `ALL` is a 400 and not a 200.
+BM-period-case      | GET | /api/benchmark?period=ALL         | -
+
+# starlette's `QueryParams` keeps the LAST occurrence of a scalar, not the
+# first, so this is `period=all` and a `200` — the opposite of the intuitive
+# guess (`qs.rs`'s module docs; the same rule `P-list-page2` relies on).
+BM-period-repeated  | GET | /api/benchmark?period=today&period=all | -
+
+# ── GET /api/benchmark — the intent filter ──────────────────────────────────
+# A real intent narrows the fact list before stratification.
+BM-intent-build     | GET | /api/benchmark?intent=build       | -
+BM-intent-explore   | GET | /api/benchmark?intent=explore     | -
+
+# `if intent:` is a TRUTHINESS test, so a blank `?intent=` does NOT filter and
+# this row must be byte-identical to `BM-benchmark`. A port that used
+# `is not None` would answer the empty report here.
+BM-intent-blank     | GET | /api/benchmark?intent=            | -
+
+# An unknown intent matches no fact and is the empty report — a 200, never a
+# 400. There is no intent allow-list on this endpoint.
+BM-intent-unknown   | GET | /api/benchmark?intent=nosuchintent | -
+
+# ── GET /api/benchmark — the project resolver ───────────────────────────────
+# `_project_ids_for` is this module's OWN resolver and it does not 404: it takes
+# `Path(log_path).name` as a slug, and an unknown one yields `[]`, which
+# `_load_facts` reads as "no sessions". `routes/cost.py`'s resolver raises a 404
+# on the same input. The asymmetry is real and this pair measures both sides.
+BM-log-path-known   | GET | /api/benchmark?log_path=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+BM-log-path-unknown | GET | /api/benchmark?log_path=/nope/-no-such-project-anywhere | -
+
+# An EMPTY `?log_path=` is falsy, so it falls back to `deps.current_log_path`
+# rather than meaning "whole store" — identical bytes to `BM-benchmark`.
+BM-log-path-blank   | GET | /api/benchmark?log_path=          | -
+
+# ── GET /api/benchmark — the unclaimed methods ──────────────────────────────
+# FastAPI's router raises `HTTPException(405)` and its handler renders it as
+# JSON; axum's own fallback is an empty 404 with no content-type, which is what
+# `json::method_not_allowed` exists to prevent.
+BM-post             | POST   | /api/benchmark                | -
+BM-put              | PUT    | /api/benchmark                | -
+BM-delete           | DELETE | /api/benchmark                | -
+
+# ── GET /api/benchmark/recommend — the happy path ───────────────────────────
+# `{period, scope, recommendation, currency}` — note that this envelope has NO
+# top-level `warning`, unlike `/api/benchmark`'s. The recommendation's eleven
+# keys are in declaration order and `evidence` is either a whole model row or
+# `null`.
+BM-recommend        | GET | /api/benchmark/recommend?intent=build | -
+BM-recommend-explore | GET | /api/benchmark/recommend?intent=explore | -
+
+# The `size` filter is real and narrows the strata list before the "first clear
+# cell" scan; `language` is echoed into the payload and read by NOTHING (the
+# docstring's "(and language, when both known)" describes a filter that was
+# never written — DIV-e-benchmark finding 8).
+BM-recommend-size   | GET | /api/benchmark/recommend?intent=explore&size=large | -
+BM-recommend-size-miss | GET | /api/benchmark/recommend?intent=explore&size=tiny | -
+BM-recommend-size-blank | GET | /api/benchmark/recommend?intent=explore&size= | -
+BM-recommend-lang   | GET | /api/benchmark/recommend?intent=build&language=python | -
+
+# ── GET /api/benchmark/recommend — the validation ORDER ─────────────────────
+# Three legs, and the order between them is the contract.
+#
+# 1. `intent: str = Query(...)` is REQUIRED, so an absent one never reaches the
+#    handler: FastAPI's dependency solver answers a pydantic `missing` 422.
+BM-recommend-missing | GET | /api/benchmark/recommend         | -
+
+# 2. …and it wins even when `period` is ALSO invalid, because the solver runs
+#    before the body. This row is a 422, NOT the 400 `BM-bad-period` gives.
+BM-recommend-order  | GET | /api/benchmark/recommend?period=nonsense | -
+
+# 3. Inside the body the PERIOD check runs first, so a present-but-blank intent
+#    with a bad period is the period's 400.
+BM-recommend-bad-period | GET | /api/benchmark/recommend?intent=&period=nonsense | -
+
+# 4. …and only with a valid period does the blank intent produce its own 400,
+#    `{"detail":"intent is required"}`. `.strip()` means whitespace counts as
+#    blank, which the second row proves (`%20%20` is two spaces).
+BM-recommend-blank  | GET | /api/benchmark/recommend?intent=  | -
+BM-recommend-ws     | GET | /api/benchmark/recommend?intent=%20%20 | -
+
+# An unknown intent is a 200 with an honest "insufficient evidence", never a
+# 400 — there is no intent allow-list here either.
+BM-recommend-unknown | GET | /api/benchmark/recommend?intent=nosuchintent | -
+
+# The same period table, on the second endpoint. `week`'s rolling-instant
+# caveat above applies to this row too.
+BM-recommend-week   | GET | /api/benchmark/recommend?intent=build&period=week | -
+BM-recommend-month  | GET | /api/benchmark/recommend?intent=build&period=month | -
+BM-recommend-today  | GET | /api/benchmark/recommend?intent=build&period=today | -
+
+# The same project resolver, on the second endpoint.
+BM-recommend-path   | GET | /api/benchmark/recommend?intent=build&log_path=/nope/-no-such-project-anywhere | -
+
+# ── GET /api/benchmark/recommend — the unclaimed methods ────────────────────
+BM-recommend-post   | POST   | /api/benchmark/recommend       | -
+BM-recommend-delete | DELETE | /api/benchmark/recommend       | -
+
+# NO ROW for `/api/benchmark/` or `/api/benchmark/recommend/` — a trailing
+# slash is starlette's `redirect_slashes` 307, which is DIV-133 and the
+# architect's `lib.rs` change, explicitly out of batch E's charter.
+
+# ══ member `patterns` ═════════════════════════════════════════════════════════════
+# Batch E / member `patterns` — case rows for `routes/patterns.py` (RS-5-088/089).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file and strips the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# THE HEADLINE, and it decides the shape of this whole file:
+#
+#   `GET /api/patterns` puts a WALL CLOCK in its 200 body.
+#   `reports/patterns.py:653-656` computes
+#       since_iso = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+#   and `:1055` emits it as `report.window.since`. `.isoformat()` on an aware
+#   datetime renders MICROSECONDS. Two servers answering the same case a few
+#   milliseconds apart emit different bytes; so does one server answering twice.
+#
+#   Therefore EVERY 200 on this endpoint is permanently `!`, by construction —
+#   structurally DIV-085 (`/api/compare`'s `generated = time.time()`), reached
+#   through a different module. `!PT-patterns` and `!PT-patterns-window` are not
+#   "not yet flipped", they are NOT FLIPPABLE, and the two blocks below are split
+#   on exactly that line. Both endpoints are nevertheless fully ported: the
+#   arithmetic under the clock is covered by 55 unit tests, which is the only
+#   place it can be covered.
+#
+#   `PT-bad-since` reads no clock. It flips, and every other validator leg beside
+#   it flips with it (law 5).
+#
+# SIDE EFFECTS of the rows below: NONE. Every row is a `GET` or an unclaimed
+# method on `/api/patterns`. The handler opens the store through
+# `store/db.py::connect` on both sides (read-write handle, SELECT-only use,
+# plus Python's idempotent `schema.apply`) and `mine_patterns` is `sqlite_master`-
+# guarded SELECTs throughout. Nothing under `$STACKUNDERFLOW_HOME` is written.
+#
+# `POST /api/patterns/dismiss` (RS-5-089) HAS NO ROW HERE, AT ANY STATUS.
+# It bumps a `dismissed` counter in `proactive_state.json`, so python-then-rust
+# leaves `2` where either alone leaves `1` — non-idempotent under the differ's one
+# shared home, which is law 4 / DIV-146's ruling. See `DIV-e-patterns.md` finding
+# 2 for the correction to DIV-144's stated reason (the file is NOT outside
+# `$STACKUNDERFLOW_HOME`; it is `deps.store_path.parent/proactive_state.json`),
+# and finding 10 for the four 422 legs this leaves unprobed — a known, instructed
+# law-5 gap, not an oversight.
+#
+# NOT CLAIMED: `GET /api/patterns/` (trailing slash). That is DIV-133, the
+# architect's `lib.rs` item, and adding a row for it here would re-raise a
+# dispositioned divergence under a new id.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── the three inherited rows ─────────────────────────────────────────────────
+# Two stay open forever; the third flips. Kept in their original order and with
+# their original ids so the integrator can diff this file against the ledger.
+#
+# `!PT-patterns` runs AFTER the selection row, so `project` resolves through
+# `deps.current_log_path` and the body opens
+# `{"project":"-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnd…` — proof the
+# basename-as-slug fallback fires. Everything after `report.window.since` in that
+# body is deterministic; only that one string moves.
 !PT-patterns         | GET | /api/patterns                     | -
 !PT-patterns-window  | GET | /api/patterns?since=7d            | -
-!PT-bad-since        | GET | /api/patterns?since=nonsense      | -
-# DIV-145: `services/worktrees.py` shells out to git and stamps `scanned_at`.
-# The attribute WRITER has no row.
+# FLIPPED. No clock on this path — a pure 400 off the query string. The body is
+#   {"detail":"Invalid since 'nonsense'. Use <days>d between 1d and 365d, e.g. 7d, 30d, 90d."}
+# and note that the message interpolates the parameter UNSTRIPPED, so a padded
+# input echoes its own padding (PT-since-padded-bad below).
+PT-bad-since         | GET | /api/patterns?since=nonsense      | -
+
+# ── the rest of the 200 surface — same clock, same permanent `!` ─────────────
+# These are here despite being unflippable because "we know" beats "nobody
+# looked": each one still proves its own branch under the differ's banner, and a
+# divergence in any field OTHER than `report.window.since` is a real defect the
+# integrator should see.
+#
+# The two window boundaries. `1d` and `365d` are the inclusive ends of the
+# validator's range, and `1d` also exercises the day-truncation gap recorded as
+# finding 7 (the mart is bounded by `since_iso[:10]`, the messages sweep by the
+# full instant, so this request sees a wider touch window than error window).
+!PT-since-1d         | GET | /api/patterns?since=1d            | -
+!PT-since-365d       | GET | /api/patterns?since=365d          | -
+# `_SINCE_RE` is `^(\d{1,3})d$` applied to `since.strip()`: leading zeros are
+# fine and surrounding whitespace is stripped BEFORE the match. Both are 7d.
+!PT-since-zeropad    | GET | /api/patterns?since=007d          | -
+!PT-since-padded     | GET | /api/patterns?since=%20%207d%20   | -
+# An explicit `?project=` wins over `deps.current_log_path`. This one names the
+# selected project itself, so it must agree with `!PT-patterns` field for field.
+!PT-project-self     | GET | /api/patterns?project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+# An unknown slug resolves to an EMPTY id list, which `mine_patterns` reads as
+# "a filter matched nothing" — an empty report, NOT a 404. The feature is
+# advisory and this is the row that says so.
+!PT-project-unknown  | GET | /api/patterns?project=-no-such-project-anywhere | -
+# `?project=` is a present-but-EMPTY `str`, which is not `None`. Python's
+# `if slug is None and deps.current_log_path` is therefore skipped, `if slug` is
+# false so no scope is applied, and the echo is `"project":""` — the whole-store
+# view under an empty parameter, with a selected project sitting right there.
+# The single most likely thing a careless port collapses into the `None` branch.
+!PT-project-empty    | GET | /api/patterns?project=            | -
+# A repeated scalar param: starlette's `QueryParams` builds its dict from the
+# items in order, so the LAST value wins. Same rule `OPT-period-last` pins.
+!PT-project-last     | GET | /api/patterns?project=aaa-a&project=zzz-b | -
+# Neither FastAPI nor axum validates unknown query keys, so this must be
+# field-for-field identical to `!PT-patterns`. It is here because "and then
+# someone adds a parameter" is how a 422 quietly appears on a surface that never
+# had one.
+!PT-junk-query       | GET | /api/patterns?nonsense=1&days=7   | -
+
+# ── the validation legs — no clock, these all diff clean (law 5) ─────────────
+# Every one of these is a 400 carrying the same sentence with a different echo.
+# Four distinct rejection causes are represented: below the range, above the
+# range, too many digits for `\d{1,3}`, and no digits at all.
+PT-since-zero        | GET | /api/patterns?since=0d            | -
+PT-since-over        | GET | /api/patterns?since=366d          | -
+PT-since-4digit      | GET | /api/patterns?since=1000d         | -
+PT-since-empty       | GET | /api/patterns?since=              | -
+PT-since-nounit      | GET | /api/patterns?since=7             | -
+PT-since-unit-only   | GET | /api/patterns?since=d             | -
+PT-since-inner-space | GET | /api/patterns?since=7%20d         | -
+PT-since-upper       | GET | /api/patterns?since=7D            | -
+PT-since-negative    | GET | /api/patterns?since=-1d           | -
+PT-since-word        | GET | /api/patterns?since=7days         | -
+# The echo is the RAW parameter, padding included: `Invalid since '  bad  '.`
+PT-since-padded-bad  | GET | /api/patterns?since=%20%20bad%20%20 | -
+# Last-value-wins again, this time landing on the 400 rather than the 200. A
+# port that read the FIRST value would answer 200 here and the divergence would
+# be a whole body, not a field.
+PT-since-last-bad    | GET | /api/patterns?since=7d&since=nonsense | -
+# ...and the mirror: a bad value FOLLOWED by a good one is a 200 (so, `!`).
+!PT-since-last-good  | GET | /api/patterns?since=nonsense&since=7d | -
+# Validation order: `_parse_since` runs BEFORE the project is resolved, so a bad
+# window on an unknown project is still the 400, never a project error.
+PT-bad-since-project | GET | /api/patterns?project=-no-such-project-anywhere&since=nope | -
+
+# ── the router fallbacks ────────────────────────────────────────────────────
+# GET-only, so FastAPI's router raises HTTPException(405) and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON. axum's native 405 is
+# an empty body with no content-type; `lib.rs`'s `method_not_allowed_fallback`
+# restores starlette's. Body is `-` because a 405 is decided before the body is
+# read — none of these three reaches a handler, and none can write.
+PT-post              | POST   | /api/patterns                 | -
+PT-put               | PUT    | /api/patterns                 | -
+PT-delete            | DELETE | /api/patterns                 | -
+# A path nothing claims — FastAPI's `{"detail":"Not Found"}`, not starlette's
+# plain-text default. `/api/pattern` (singular) is the typo a client makes.
+PT-singular          | GET | /api/pattern                      | -
+PT-subpath           | GET | /api/patterns/status              | -
+
+# ══ member `worktrees` ═════════════════════════════════════════════════════════════
+# Batch E / member `worktrees` — cases for /api/worktrees (RS-5-114, RS-5-115).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. Ids are
+# prefixed `W-`. ORDER IS SIGNIFICANT; do not sort this file.
+#
+# ── LAW 7 clearance, and the one endpoint that does NOT get it ───────────────
+#
+# `GET /api/worktrees` shells out to git six ways. Every invocation is
+# READ-ONLY: `services/worktrees.py::_run_git` refuses anything outside the
+# five-entry `_ALLOWED_GIT_PREFIXES` allow-list (`worktree list`,
+# `status --porcelain`, `cherry`, `rev-parse`, `symbolic-ref`) and every call
+# carries `--no-optional-locks`, so not even `status` may refresh the index. No
+# file is written, no store row is written, no cache is touched. The full argv
+# table and the per-command determinism verdicts are in
+# `parity/DIV-e-worktrees.md`.
+#
+# `POST /api/worktrees/attribute` has NO ROW AND NEVER WILL. It writes
+# `projects.worktree_of`. It is idempotent and additive, which is exactly what
+# makes a row look safe — but python-then-rust against ONE shared home means the
+# second server answers a question the first already changed. DIV-078 / LAW 4.
+# The response shapes were probed against the reference on a PRIVATE COPY of the
+# harness home instead: `{"updated":3}` on a store where nothing was stamped,
+# `{"updated":0}` on every run after. Recorded in the ledger, not in this file.
+#
+# ── Why every 200 row here is `!`, permanently ───────────────────────────────
+#
+# The payload's last-but-one key is
+#
+#     "scanned_at": datetime.now(UTC).isoformat()      # routes/worktrees.py:105
+#
+# — microsecond resolution, stamped unconditionally. There is no query parameter
+# that suppresses it and no branch that omits it. MEASURED against the reference
+# on :8099: two `GET /api/worktrees` calls 11 s apart differed in EXACTLY ONE
+# leaf, `/scanned_at`, and agreed on every other leaf, `worktrees[*]` included.
+# So the impossibility is one field wide — precise, and still fatal to a byte
+# differ. An honest `!` outranks a green tick that had to be engineered.
+#
+# ── What ELSE can move, on the rows that reach a real repo ───────────────────
+#
+# Only `W-scoped` below reaches one (see the next section). On that row three
+# further fields are a function of the MACHINE rather than of the store:
+#
+#   * `worktrees[*].dirty_count` — the `git status --porcelain` line count.
+#     MEASURED moving 23 -> 26 inside one session while sibling batch-E agents
+#     wrote files into one of the scanned worktrees. This is the field most
+#     likely to make a row look red for a reason that is not a port defect.
+#   * `worktrees[*].head` / `.branch` / `.unique_commits` — any commit, checkout
+#     or rebase in a scanned repo between the two requests.
+#   * `worktrees[*].age_days`, and therefore `.verdict` — `round(days, 2)` is
+#     864-second granularity, so it is stable within a call pair EXCEPT across a
+#     bucket boundary, and `ACTIVE` flips at exactly 48 h.
+#
+# ── The whole-store scan is NOT reachable from the shared matrix ─────────────
+#
+# `path = log_path or deps.current_log_path`, and the whole-store branch needs
+# BOTH to be falsy. The shared file selects a project early
+# (`P-by-dir-known`), which sets `deps.current_log_path` to
+# `/home/tmos/.claude/projects/-media-…-StackUnderflow` — a directory that is
+# not a git repo. So `W-worktrees` and `W-blank` below are the SCOPED-to-a-
+# non-repo case, and their body is the empty scan:
+#
+#   {"scope":"/home/tmos/.claude/projects/-media-…","worktrees":[],
+#    "summary":{"total":0,…,"attributed_cost_usd":0.0},"scanned_at":…}
+#
+# (measured, and the same prefix the pre-existing `!W-worktrees` row recorded).
+# That is not a loss: it is the row that proves `attributed_cost_usd` ships as
+# the FLOAT `0.0` — the summary seeds the literal `0.0` and steps it with `+=`
+# rather than `sum()`, so an int `0` would be a divergence in the other
+# direction. `W-scoped` is what covers the git fan-out.
+#
+# ── The deterministic subset that DOES exist ─────────────────────────────────
+#
+# The method-fallback rows at the end. FastAPI's router answers them before any
+# handler exists, so they touch neither git nor the store and their bodies are
+# fixed strings. They are the only rows on this path that can go identical, and
+# they are also LAW 5's requirement: neither endpoint has a 400/404/422 leg at
+# all (`log_path` is a free-form string and there is nothing to validate), so
+# the 405s are the entire error surface.
+#
+# NOT claimed here: `GET /api/worktrees/` (trailing slash) answers 307 on the
+# reference. That is DIV-133, the architect's `lib.rs` item, and batch E's
+# charter says not to fix it in passing — so no row.
+
+# Select a project so `deps.current_log_path` is set. The integrator strips this
+# row when merging — it already runs earlier in the shared file. `W-worktrees`
+# and `W-blank` DEPEND on it having run.
+
+# ── the default resolution ───────────────────────────────────────────────────
+# No query parameter: falls to `deps.current_log_path`, which is the .claude
+# projects directory and not a repo. Short-circuits at the `Path.is_dir()`
+# stat + one `rev-parse --git-common-dir`, so this row is cheap AND it is the
+# empty-scan shape.
 !W-worktrees        | GET | /api/worktrees                    | -
+
+# ── the row that actually exercises git ──────────────────────────────────────
+# The maintainer's repo: one `worktree list --porcelain`, one `symbolic-ref`,
+# then `cherry` + `status` per linked worktree. Three linked worktrees on this
+# host at time of writing (`…/StackUnderflow-rust`, `…/.claude/worktrees/
+# agent-…`, and a detached one under /tmp). ~1.4 s end to end — comfortably
+# inside the differ's 300 s per-case timeout. This is where a `dirty_count`
+# difference will show up if an agent is writing while the matrix runs.
+!W-scoped           | GET | /api/worktrees?log_path=/media/tmos-bumblebe/dev_dev/year26/jul26/StackUnderflow | -
+
+# A path that is not a directory short-circuits at the stat, so NO git process
+# is spawned at all — and `scope` still echoes the requested path verbatim
+# rather than falling back.
+!W-scope-miss       | GET | /api/worktrees?log_path=/nonexistent/nope | -
+
+# `?log_path=` is the EMPTY string, which is falsy — so it falls through to
+# `deps.current_log_path` rather than scoping to `""`. `scope` must therefore be
+# the selected project's log path, identical to `W-worktrees`, and NOT `"store"`.
+!W-blank            | GET | /api/worktrees?log_path=          | -
+
+# starlette resolves a repeated SCALAR to the LAST occurrence, so this scopes to
+# `/nonexistent/b` and 200s — not to `a`, and not a 422. Measured.
+!W-last-wins        | GET | /api/worktrees?log_path=/nonexistent/a&log_path=/nonexistent/b | -
+
+# An unknown query parameter is ignored by FastAPI, not rejected.
+!W-unknown-param    | GET | /api/worktrees?nope=1             | -
+
+# ── the method surface: the only rows that can go green ──────────────────────
+# `/api/worktrees` is GET-only, so every other verb is FastAPI's
+# `{"detail":"Method Not Allowed"}` at 405 — starlette's router raises it before
+# the handler exists, so nothing is scanned and nothing is written. Measured on
+# the reference for all three verbs.
+W-post-405          | POST   | /api/worktrees                 | -
+W-put-405           | PUT    | /api/worktrees                 | -
+W-delete-405        | DELETE | /api/worktrees                 | -
+
+# The mirror image on the writer's path: it is POST-only, so a GET is the same
+# 405 — and the row is safe precisely BECAUSE the handler never runs. This is
+# the only way `/api/worktrees/attribute` can appear in the matrix at all.
+W-attribute-get-405 | GET    | /api/worktrees/attribute       | -
+W-attribute-put-405 | PUT    | /api/worktrees/attribute       | -
+
+# ══ member `agent-teams` ═════════════════════════════════════════════════════════════
+# Batch E / member `agent_teams` — case rows for `routes/agent_teams.py`
+# (RS-5-042 … RS-5-044), the module DIV-082 deferred whole.
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, strips the leading
+# `P-by-dir-known` selection row (which already runs earlier there) and
+# REPLACES the five `!A-*` rows in the "agent teams — the whole module is open"
+# block with the un-`!`-ed copies below.
+#
+# ── Side effects: NONE ───────────────────────────────────────────────────────
+#
+# Every row is a GET or an unclaimed method. All three handlers open the store
+# read-write (that is what `store/db.py::connect` does on both sides) and issue
+# only SELECTs. Python additionally calls `schema.apply(conn)` per request — a
+# migration ladder — which is idempotent DDL the harness store already
+# satisfies; the port does not run it at all (DIV-102). Nothing under
+# `$STACKUNDERFLOW_HOME` is written. Law 4 is satisfied: every row is safe, and
+# every row terminates well inside the differ's 300 s socket timeout (the
+# slowest, `A-list-empty-project`, is a ~6 s full-store sidechain rollup).
+#
+# ── None of these rows need a selected project ───────────────────────────────
+#
+# `agent_teams` never reads `deps.current_log_path`; `?project=` is a SLUG, not
+# a log path. The selection row is carried only so this file runs standalone
+# under `--only A-`.
+#
+# ── What DIV-042 does to these payloads ──────────────────────────────────────
+#
+# DIV-042 (the port's ingest-side team-metadata hook is a stub) does NOT starve
+# these rows. Both servers read the SAME store, and the reference's ingest
+# already materialised 50 `agent_teams` rows and 321 team-tagged sessions into
+# it, so the indexed path has real content on both sides and compares like
+# against like. The project the harness selects
+# (`…jul26-StackUnderflow`, id 314) happens to have ZERO materialised teams and
+# ZERO sidechain messages, which is why the two rows scoped to it exercise the
+# *heuristic* paths instead — see `A-list-scoped` and `A-graph`. Coverage of the
+# indexed path therefore comes from the unscoped and jan26-scoped rows below,
+# deliberately.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ═══ GET /api/agent-teams — RS-5-042 ═════════════════════════════════════════
+#
+# The list view's THREE strategies are chosen by two gates, and each row below
+# names which strategy it lands on. Getting the gate order wrong is invisible on
+# an empty store and loud on this one.
+
+# (1) INDEXED. `_indexed_teams_available` is true (321 team-tagged sessions) and
+# `project_slug is None` short-circuits `_indexed_teams_match_project`, so this
+# is the `agent_teams` JOIN, ordered `MAX(last_ts) DESC, team_id ASC`. **46**
+# rows, not 50: the table has 50 teams and four of them have no session
+# carrying their `team_id`, so the inner JOIN drops them and `LIMIT 50` never
+# binds. Proves the whole indexed row shape: `team_name` = the team id,
+# `description` = the config blurb, `session_id` = `lead_session_id or team_id`.
+A-list              | GET | /api/agent-teams                     | -
+
+# (3) TASK-TOOL. `?project=<the selected slug>` — project 314 has no
+# `agent_teams` row, so `_indexed_teams_match_project` returns False; it has no
+# sidechain message either, so `_list_team_sessions_scan` returns `[]`, which is
+# FALSY and falls through. The answer is the `tools_json LIKE '%"Task"%'` rollup:
+# one row, 37 invocations, with the interpolated `description` f-string.
+A-list-scoped       | GET | /api/agent-teams?limit=5&project=-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# (1) INDEXED, FILTERED. A slug that DOES have `agent_teams` rows, so the same
+# path as `A-list` but with the `WHERE p.slug = ?` arm — 14 teams. This is the
+# only row that proves the filtered branch of the indexed SQL builder; without
+# it a port that ignored `project` entirely would still pass `A-list`.
+A-list-scoped-idx   | GET | /api/agent-teams?limit=20&project=-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow | -
+
+# (2) SIDECHAIN SCAN. The only row that reaches it. This project has sidechain
+# messages but NO `agent_teams` row, so gate 2 fails and the scan finds one
+# lead candidate with two `agent-XXXX` sub-sessions. Proves the heuristic's
+# `agentId` extraction (the `agent_count` is `len(set(agent ids))`, 2, not
+# `len(other_subs)`), the `sum(...)` of sub-message counts (4), and that
+# `team_name` stays null when no blob carries `teamName`.
+A-list-scan         | GET | /api/agent-teams?limit=5&project=-Users-yadkonrad-dev-dev-year25-dec25-mycelium-ecosystem | -
+
+# `?project=` — the EMPTY string. `_indexed_teams_match_project` tests
+# `project_slug is None`, an IDENTITY test, so `""` does not short-circuit: it
+# runs the JOIN with `slug = ''`, misses, and forces the fall-through. The
+# fall-through paths then test `if project_slug:`, TRUTHINESS, and read the same
+# `""` as "no filter". One request, two readings. `limit=1` bounds the loop to a
+# single candidate so the row stays cheap.
+A-list-empty-proj   | GET | /api/agent-teams?limit=1&project=    | -
+
+# A slug no project has. All three strategies come back empty and the contract
+# is a clean `{"teams":[]}` — never a 500, never a 404.
+A-list-unknown-proj | GET | /api/agent-teams?project=no-such-project-slug-at-all | -
+
+# The two INCLUSIVE bounds of `Query(50, ge=1, le=500)`. `limit=1` also proves
+# the SQL `LIMIT ?` is bound and not clamped host-side.
+A-list-limit-min    | GET | /api/agent-teams?limit=1             | -
+A-list-limit-max    | GET | /api/agent-teams?limit=500           | -
+
+# pydantic strips surrounding whitespace before coercing, so `%20%205%20` is 5
+# and NOT a 422 — the opposite of the intuitive guess.
+A-list-limit-space  | GET | /api/agent-teams?limit=%20%205%20    | -
+
+# starlette's `QueryParams._dict` keeps the LAST occurrence of a scalar key.
+A-list-limit-repeat | GET | /api/agent-teams?limit=1&limit=2     | -
+
+# ── the four 422 legs (law 5) ────────────────────────────────────────────────
+#
+# `limit: int = Query(50, ge=1, le=500)` is a CONSTRAINED int, so a bound
+# failure is `greater_than_equal` / `less_than_equal` with a `ctx` object — NOT
+# `int_parsing`, and NOT DIV-151's `{"detail":"limit"}`. The `input` field
+# echoes the RAW query string, not the coerced integer.
+A-limit-zero        | GET | /api/agent-teams?limit=0             | -
+A-limit-negative    | GET | /api/agent-teams?limit=-1            | -
+A-limit-over        | GET | /api/agent-teams?limit=501           | -
+# pydantic ints are arbitrary-precision, so this coerces fine and then fails the
+# UPPER BOUND. `crate::qs::opt_int` would answer `int_parsing` here (DIV-107,
+# `!CR-at-bignum`), which is exactly why this module coerces `limit` locally.
+A-limit-bignum      | GET | /api/agent-teams?limit=999999999999999999999 | -
+A-limit-nan         | GET | /api/agent-teams?limit=abc           | -
+# A fractional STRING is not an integer to pydantic's lax str→int, so `5.5` is a
+# parse failure and not a truncation.
+A-limit-float       | GET | /api/agent-teams?limit=5.5           | -
+# Present-but-empty: `int_parsing` with `"input":""`, not the default of 50.
+A-limit-blank       | GET | /api/agent-teams?limit=              | -
+
+# ═══ GET /api/agent-teams/{session_id} — RS-5-043 ════════════════════════════
+
+# HEURISTIC GRAPH. The selected project's busiest session. It carries no
+# `team_id`, so `_build_team_graph_indexed` returns None and the module falls
+# through to `_build_team_graph_scan` — which finds the lead, finds NO sidechain
+# sessions in project 314, and answers 200 with `"agents":[]`. That empty array
+# is the documented "session exists but spawned nothing" contract, and the
+# `lead` block it ships is the full `_agent_summary_for_session`: message count,
+# the 300-CODE-POINT first user prompt, the dominant model, and `cost_usd`
+# priced through the store's price book (LAW 2) and `round(…, 4)`.
+A-graph             | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+
+# INDEXED GRAPH, entered by the team's own lead. One lead + three sub-agents,
+# ordered `agent_role='lead' first, then first_ts ASC, session_id ASC`. Proves
+# `spawned_by_session_id` reaching `parent_session_id`, the `agent_role`
+# passthrough, and — the byte contract the brief flags — that the `agents` array
+# order is the SQL's insertion order and not a re-sort.
+A-graph-indexed     | GET | /api/agent-teams/b29f314f-3f98-46cd-aebc-f4d085f7aef4 | -
+
+# INDEXED GRAPH, entered by a SUB-AGENT's id. `t.lead_session_id = ?` misses, so
+# the second lookup resolves `sessions.team_id` and re-roots the graph at the
+# team's lead: the response's `session_id` is `b29f314f…`, NOT the id in the
+# URL. The only row that proves the member-resolution branch.
+A-graph-member      | GET | /api/agent-teams/15f6a8d0-3e55-4867-b662-93b83a38484f | -
+
+# Neither a lead, nor a member, nor a session — 404 with the id interpolated
+# verbatim into the detail string.
+A-graph-missing     | GET | /api/agent-teams/no-such-session     | -
+
+# A percent-encoded path segment. Both routers decode before the handler sees
+# it, so the 404 detail carries a literal space. Cheap proof that the port is
+# not double-decoding or echoing the encoded form.
+A-graph-encoded     | GET | /api/agent-teams/%20                 | -
+
+# ═══ GET /api/agent-teams/{session_id}/agent/{agent_session_id} — RS-5-044 ═══
+
+# The happy path: a real lead and a real sub-agent of its team, 28 messages
+# (~44 KB). Proves the transcript row shape end to end — the 16 columns in
+# SELECT order, `sqlite3.Row`'s STORAGE-class values with no affinity coercion,
+# and `is_sidechain` coerced to a JSON bool IN PLACE at position 13 rather than
+# being appended.
+A-transcript-real   | GET | /api/agent-teams/42f45b99-782c-4f9e-9572-c9d2a726efc6/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# The fence is the PROJECT and nothing else — no team-membership check — so a
+# session paired with ITSELF is a legitimate 200. Same rows, different
+# `session_id` header field.
+A-transcript-self   | GET | /api/agent-teams/49f7aa40-b956-44a9-b9a1-fc54419586d1/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# A real lead, an agent id that exists nowhere — 404.
+A-transcript        | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | -
+
+# A real lead and a real agent that live in DIFFERENT projects (314 vs 109). The
+# self-join on `project_id` finds no pair, so this is a 404 with the SAME detail
+# string as the row above — three causes, one message. Reproduced, not improved.
+A-transcript-cross  | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# The lead is missing and the agent is real — still 404, and the detail names
+# both, so the caller cannot tell which half failed.
+A-transcript-nolead | GET | /api/agent-teams/no-such-session/agent/49f7aa40-b956-44a9-b9a1-fc54419586d1 | -
+
+# ═══ the router's own answers ════════════════════════════════════════════════
+#
+# All four unclaimed methods 405 in starlette's router BEFORE any handler runs,
+# so none of them can write anything — they are safe under law 4 by
+# construction. FastAPI renders `{"detail":"Method Not Allowed"}` where axum's
+# bare default would send an empty body.
+A-list-post         | POST   | /api/agent-teams                  | -
+A-list-delete       | DELETE | /api/agent-teams                  | -
+A-graph-post        | POST   | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+A-transcript-put    | PUT    | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/no-such-agent | {"x": 1}
+
+# An empty final path segment does NOT match `{agent_session_id}` (starlette's
+# default `str` convertor is `[^/]+`), and `/api/agent-teams/x/agent` is not a
+# route either, so there is nothing to redirect to: a plain
+# `{"detail":"Not Found"}`, not a 307. One segment too many is the same.
+A-agent-no-id       | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/ | -
+A-agent-too-deep    | GET | /api/agent-teams/44b8f238-3609-4445-97a9-37a5a99f1c9a/agent/x/y | -
+
+# DELIBERATELY ABSENT: `/api/agent-teams/` (the bare trailing slash). It is a
+# `redirect_slashes` 307, which is DIV-133 and the ARCHITECT's — a `lib.rs`
+# change this member may not make and must not measure around.
+
+# ══ member `compare` ═════════════════════════════════════════════════════════════
+# Batch E / member `compare` — case rows for `GET /api/sessions/compare`
+# (RS-5-105, the endpoint DIV-070 deferred).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, replacing the single existing
+# `!J-compare` row (line 329 at claim time) and stripping the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# Side effects: NONE. Every row is a GET or an unclaimed method. The handler
+# opens the store read-write (that is what `store/db.py::connect` does on both
+# sides) and issues only SELECTs — `projects`, `sessions`, `messages`. Nothing
+# under `$STACKUNDERFLOW_HOME` is written, so the rows are idempotent under
+# python-then-rust on one shared home (law 4).
+#
+# ── READ THIS BEFORE BELIEVING THE `!` ROWS ──────────────────────────────────
+#
+# The 200 body of this endpoint is NOT byte-reproducible, and not because the
+# port is incomplete. `diff.tokens` is built by iterating
+# `set(sa["tokens"]) | set(sb["tokens"])` (`routes/sessions.py:405-408`), and
+# CPython randomises `str` hashing per process. `endpoint-parity.sh` does not
+# export `PYTHONHASHSEED` (`parity-cli.sh` does, line 113), so the reference
+# server emits a different `diff.tokens` KEY ORDER on every boot. Three runs of
+# the reference handler over `.parity-state/fresh` gave:
+#
+#   {"cache_read":…,"cache_creation":…,"input":…,"output":…}
+#   {"input":…,"cache_read":…,"cache_creation":…,"output":…}
+#   {"input":…,"cache_creation":…,"cache_read":…,"output":…}
+#
+# — with every other byte of the payload identical across all three. This is
+# DIV-085's class of defect (a payload that cannot agree with itself) arriving
+# through a different door, so the three 200 rows below stay `!`. Everything
+# that is NOT a 200 is fully pinned, which is the whole point of the rest of
+# this file: 14 green rows over 4 status codes.
+#
+# ── A ROW THAT CANNOT BE PLACED HERE — integrator, please read ───────────────
+#
+# `if not path: raise HTTPException(400, "No project selected or log_path
+# provided")` is a real leg and it is verified (400, exact detail) against the
+# reference. It is unreachable in the merged matrix: `P-by-dir-known` selects a
+# project at line 68 and nothing ever deselects, so `deps.current_log_path` is
+# truthy for every row after it. The row belongs in the pre-selection block
+# beside `P-current-none`, NOT here:
+#
+#   J-compare-noproject | GET | /api/sessions/compare?a=x&b=y | -
+#
+# It is left out of the block below rather than placed where it would silently
+# exercise the wrong branch. Covered meanwhile by `routes/sessions.rs`'s unit
+# tests.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+
+# ── the happy path — permanently open, see the banner above ──────────────────
+# The row the claim hands this member. `a` is a 3-message session that cost
+# nothing (so `cost` renders `0.0` and `models_used` is `[]`); `b` is a
+# 1276-message session across two models. Between them they exercise the float
+# zero, the empty model set, the multi-model `by_model` cost fold and a
+# ~95 000 s duration.
+!J-compare          | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# `a == b`. NOT a 404: the `session_id IN (?, ?)` binds the same value twice,
+# SQLite collapses it to one row, and every field of `diff` is zero — which is
+# the row that proves `cost`/`duration_s` still render `0.0` and
+# `commands`/`errors` still render `0`. Open only because `diff.tokens` (four
+# zeros) is ordered by the same randomised set.
+!J-compare-same     | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# `log_path=` overrides the selected project rather than being ignored. Points
+# at the SAME project by its log dir, so the body must equal `!J-compare`'s
+# modulo the token order — i.e. this row and that one diverge in exactly the
+# same place or the override is broken.
+!J-compare-logpath  | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── 422: the two required parameters (law 5) ─────────────────────────────────
+# `a: str` and `b: str` have no defaults, so FastAPI's dependency solver 422s
+# before the handler runs. Measured on the harness interpreter (fastapi 0.141.1
+# / pydantic 2.13.4), not transcribed — and NOT law 8's `{"detail":"<field>"}`
+# shape, which is a different bug in four other modules. The body is
+# `{"detail":[{"type":"missing","loc":["query","<f>"],"msg":"Field required",
+# "input":null}]}`.
+J-compare-no-a      | GET | /api/sessions/compare?b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-no-b      | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# BOTH absent: pydantic collects every error, so the list has TWO entries — and
+# they are in the order the handler DECLARES its parameters (`a`, then `b`),
+# not the order of the query string. A port that returns the first error only,
+# or that orders by omission, fails exactly here.
+J-compare-no-ab     | GET | /api/sessions/compare | -
+# Query keys are case-SENSITIVE: `?A=` does not satisfy `a`, and the unknown
+# `A` is silently ignored rather than rejected.
+J-compare-case-key  | GET | /api/sessions/compare?A=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+
+# ── 404 (i): the session lookup, `Session(s) not found: …` ───────────────────
+J-compare-unknown-a | GET | /api/sessions/compare?a=00000000-0000-0000-0000-000000000000&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-unknown-b | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=ffffffff-ffff-ffff-ffff-ffffffffffff | -
+# Both unknown: the two ids are `', '.join`ed in `(a, b)` order.
+J-compare-unknown2  | GET | /api/sessions/compare?a=00000000-0000-0000-0000-000000000000&b=ffffffff-ffff-ffff-ffff-ffffffffffff | -
+# The same unknown id twice. The comprehension walks the TUPLE `(a, b)` and does
+# not deduplicate, so the detail really is `Session(s) not found: zzz, zzz`.
+# A port that built the missing list from a set gets one `zzz` and fails here.
+J-compare-dup-miss  | GET | /api/sessions/compare?a=zzz&b=zzz | -
+# `?a=` is an EMPTY STRING, which is a perfectly valid `str` to pydantic — it
+# passes validation, reaches the handler, and names no session. The detail has
+# a trailing space and nothing after it.
+J-compare-empty-a   | GET | /api/sessions/compare?a=&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-empty-ab  | GET | /api/sessions/compare?a=&b= | -
+# A repeated `?a=` keeps the LAST value (starlette's `QueryParams.get`). The
+# 404 names `zzz`, not the valid first id — the cheapest available proof of
+# last-wins on this endpoint.
+J-compare-a-repeat  | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&a=zzz&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# The session lookup is scoped to the resolved project's ids. Both ids are real
+# sessions — of a DIFFERENT project — so a handler that forgot the
+# `project_id IN (…)` predicate would answer 200 here.
+J-compare-wrong-prj | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+
+# ── 404 (ii): the SECOND session 404, which is not the first one ─────────────
+# `2c0af9c7-…` is a real `sessions` row of `-home-tmos` with zero `messages`
+# rows, so it clears the id check and then produces no `session_costs` entry —
+# `sa is None` at `routes/sessions.py:398`. This is the only row that reaches
+# that branch; without it the second 404 is an unported leg wearing a green
+# tick. `b` is a 7-message session of the same project, so the OTHER side does
+# resolve and the detail names exactly one id.
+J-compare-no-costs  | GET | /api/sessions/compare?a=2c0af9c7-b01c-45ea-9404-8de61fcb363c&b=02b9d902-3c4c-4553-a47a-5e090d1a8d60&log_path=/home/u/.claude/projects/-home-tmos | -
+
+# ── 404 (iii): the project 404, which spells the slug ────────────────────────
+# `f"Project '{slug}' not found in store"` — note this handler interpolates the
+# slug where its neighbour `/api/jsonl-content` says only "Project not found in
+# store". Two messages, two handlers, one file.
+J-compare-no-proj   | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-no-such-project-anywhere | -
+
+# ── the unclaimed methods and the neighbouring paths ─────────────────────────
+# GET-only, so FastAPI's router raises `HTTPException(405)` and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON; axum's native 405
+# is an empty body with no content-type. Body is `-` because a 405 is decided
+# before the body is read.
+J-compare-post      | POST   | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-put       | PUT    | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-delete    | DELETE | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# Paths nothing claims — FastAPI's `{"detail":"Not Found"}`, not starlette's
+# plain-text default. The parent collection is the URL a client guesses; the
+# subpath is what a router that matched a prefix would answer.
+J-compare-parent    | GET | /api/sessions | -
+J-compare-subpath   | GET | /api/sessions/compare/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# NO trailing-slash row. `/api/sessions/compare/` is DIV-133 (`!PL-plan-slash`),
+# the architect's `lib.rs` redirect item, and the batch-E claim says not to
+# touch it or extend its blast radius.
+
+# ══ member `misc` ═════════════════════════════════════════════════════════════
+# Batch E / misc — `routes/misc.py` (RS-5-079/080/084).
+#
+# Format and conventions: see the header of `endpoint-cases.txt`. The integrator
+# folds these rows into that file and strips the leading `P-by-dir-known`, which
+# already runs earlier there.
+#
+# ── What these rows do to the existing file ──────────────────────────────────
+#
+# The existing `!M-ollama` row is **REPLACED** by the unmarked `M-ollama` below.
+# It is the batch's one known-open flip. Everything else here is new.
+#
+# ── Why the flip is legitimate, and the one condition it rests on ───────────
+#
+# `/ollama-api/{path}` proxies to `http://localhost:11434/api/{path}` and wraps
+# the whole call in a BARE `except Exception`, whose body is a fixed
+# `502 {"error": "Ollama not available"}`.
+#
+# Port 11434 is CLOSED on this host. Verified three ways before a line was
+# written, and re-verifiable in one command each:
+#
+#     ss -lnt | grep 11434                       # no listener
+#     bash -c 'exec 3<>/dev/tcp/127.0.0.1/11434' # Connection refused
+#     bash -c 'exec 3<>/dev/tcp/::1/11434'       # Connection refused
+#     getent ahosts localhost                    # 127.0.0.1 only
+#     curl -m 5 http://localhost:11434/api/tags  # curl: (7) refused
+#
+# So the ONLY branch either side can reach is the catch-all, and its body is a
+# constant. That is what makes these rows deterministic — not the port, the
+# MACHINE.
+#
+#   ⚠ IF OLLAMA IS EVER RUNNING, EVERY `M-ollama*` ROW BELOW GOES
+#     NONDETERMINISTIC. The bodies become whatever the daemon answers: `/tags`
+#     lists the installed models, `/generate` streams. The rows do not
+#     self-guard, and a green tick produced against a live daemon would be an
+#     accident, not evidence. If they start failing, run `ss -lnt | grep 11434`
+#     BEFORE looking at the Rust.
+#
+# ── Side effects: none, on either side ──────────────────────────────────────
+#
+# LAW 7 audit. A refused connection writes nothing, allocates nothing, and
+# touches no file. These rows are safe anywhere in the file and in any order,
+# and they leave `deps.current_log_path` alone.
+#
+# ── What is deliberately ABSENT, and why it is not an omission ──────────────
+#
+# `GET /api/pricing` and `POST /api/pricing/refresh` (RS-5-079/080) get **NO
+# ROW**, here or in the merged file, ever. Both fetch the LiteLLM price book and
+# `/api/pricing/refresh` writes `$STACKUNDERFLOW_HOME/cache/pricing.json` plus
+# `price_book` rows — and that cache file is the INPUT to all five `PR-doctor*`
+# rows. A `!` row would not help: DIV-059 established that `!` softens the
+# VERDICT and still ISSUES the REQUEST, and this exact pair proved it once
+# already by turning five clean `PR-doctor*` cases into five divergences from a
+# case-file edit with no code change (`REFRESH-DIFFER.md` point 2). They are
+# verified by the isolated procedure in `rust/PRICING-REFRESH-DIFFER.md`.
+#
+# A `transfer-encoding: chunked` row is also absent: law 4 bars rows for
+# streams, and the branch is unreachable behind a closed port anyway.
+#
+# `/ollama-api` with NO trailing slash is absent too. FastAPI's
+# `redirect_slashes` answers 307 there and axum 404s — the same class as
+# DIV-133 / `!PL-plan-slash`, which is the architect's `lib.rs` change and
+# explicitly not in batch E's charter.
+
+
+# ── the flip: replaces `!M-ollama` in endpoint-cases.txt ─────────────────────
+# The GET the dashboard actually issues (the settings page's model list).
+M-ollama            | GET | /ollama-api/tags                   | -
+
+# ── the other three verbs `api_route(methods=[…])` claims ───────────────────
+# Each one proves the METHOD reaches the same handler and the same catch-all.
+# A router that only mounted GET would 405 here instead of 502.
+M-ollama-post       | POST | /ollama-api/generate              | {"model": "llama3", "prompt": "hi"}
+M-ollama-put        | PUT | /ollama-api/blobs/sha256-abc       | {"any": "payload"}
+M-ollama-delete     | DELETE | /ollama-api/delete              | {"model": "llama3"}
+
+# ── the path parameter's two edges ──────────────────────────────────────────
+# `{path:path}` swallows slashes, so a nested rest is ONE parameter and not a
+# 404. axum's `{*path}` had to be spelled as a wildcard to match this.
+M-ollama-nested     | GET | /ollama-api/a/b/c                  | -
+# `{path:path}` also matches the EMPTY rest: `/ollama-api/` is a real request
+# that reaches the handler with `path == ""` and proxies to `…/api/`. axum's
+# `{*path}` requires at least one segment, so this needs its own route or it
+# falls through to the 404 fallback — the same shape `M-assets-bare` pins for
+# `/assets/`.
+M-ollama-empty      | GET | /ollama-api/                       | -
+
+# The upstream URL is `f"http://localhost:11434/api/{path}"` — built from the
+# PATH PARAMETER ONLY. The query string is silently dropped and never reaches
+# Ollama. Unobservable while the port is closed, but the row pins that the query
+# does not change the route match or the body.
+M-ollama-query      | GET | /ollama-api/tags?stream=true&x=1   | -
+
+# A percent-encoded separator, where the two stacks decode at DIFFERENT layers:
+# uvicorn decodes the path before starlette routes it (so starlette matches
+# `/ollama-api/show/name`), while hyper hands axum the raw target and only the
+# `Path` extractor decodes (so matchit matches one segment, then yields
+# `show/name`). Both end up interpolating the same decoded text into the
+# upstream URL — this row pins that the layer difference does not surface.
+M-ollama-encoded    | GET | /ollama-api/show%2Fname            | -
+
 # ── cfg: the WRITER block. LAST in the file, and it self-cleans. ─────────────
 #
 # `POST` sets one alias, `DELETE` removes it. `settings._save` is

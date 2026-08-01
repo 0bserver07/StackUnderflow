@@ -1,0 +1,143 @@
+# Batch E / member `compare` — case rows for `GET /api/sessions/compare`
+# (RS-5-105, the endpoint DIV-070 deferred).
+#
+# Format and conventions: see the header of `parity/endpoint-cases.txt`. The
+# integrator merges these rows into that file, replacing the single existing
+# `!J-compare` row (line 329 at claim time) and stripping the leading
+# `P-by-dir-known` selection row, which already runs earlier there.
+#
+# Side effects: NONE. Every row is a GET or an unclaimed method. The handler
+# opens the store read-write (that is what `store/db.py::connect` does on both
+# sides) and issues only SELECTs — `projects`, `sessions`, `messages`. Nothing
+# under `$STACKUNDERFLOW_HOME` is written, so the rows are idempotent under
+# python-then-rust on one shared home (law 4).
+#
+# ── READ THIS BEFORE BELIEVING THE `!` ROWS ──────────────────────────────────
+#
+# The 200 body of this endpoint is NOT byte-reproducible, and not because the
+# port is incomplete. `diff.tokens` is built by iterating
+# `set(sa["tokens"]) | set(sb["tokens"])` (`routes/sessions.py:405-408`), and
+# CPython randomises `str` hashing per process. `endpoint-parity.sh` does not
+# export `PYTHONHASHSEED` (`parity-cli.sh` does, line 113), so the reference
+# server emits a different `diff.tokens` KEY ORDER on every boot. Three runs of
+# the reference handler over `.parity-state/fresh` gave:
+#
+#   {"cache_read":…,"cache_creation":…,"input":…,"output":…}
+#   {"input":…,"cache_read":…,"cache_creation":…,"output":…}
+#   {"input":…,"cache_creation":…,"cache_read":…,"output":…}
+#
+# — with every other byte of the payload identical across all three. This is
+# DIV-085's class of defect (a payload that cannot agree with itself) arriving
+# through a different door, so the three 200 rows below stay `!`. Everything
+# that is NOT a 200 is fully pinned, which is the whole point of the rest of
+# this file: 14 green rows over 4 status codes.
+#
+# ── A ROW THAT CANNOT BE PLACED HERE — integrator, please read ───────────────
+#
+# `if not path: raise HTTPException(400, "No project selected or log_path
+# provided")` is a real leg and it is verified (400, exact detail) against the
+# reference. It is unreachable in the merged matrix: `P-by-dir-known` selects a
+# project at line 68 and nothing ever deselects, so `deps.current_log_path` is
+# truthy for every row after it. The row belongs in the pre-selection block
+# beside `P-current-none`, NOT here:
+#
+#   J-compare-noproject | GET | /api/sessions/compare?a=x&b=y | -
+#
+# It is left out of the block below rather than placed where it would silently
+# exercise the wrong branch. Covered meanwhile by `routes/sessions.rs`'s unit
+# tests.
+
+# ── the state row this file needs first (integrator strips it) ───────────────
+P-by-dir-known      | POST | /api/project-by-dir | {"dir_name": "-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow"}
+
+# ── the happy path — permanently open, see the banner above ──────────────────
+# The row the claim hands this member. `a` is a 3-message session that cost
+# nothing (so `cost` renders `0.0` and `models_used` is `[]`); `b` is a
+# 1276-message session across two models. Between them they exercise the float
+# zero, the empty model set, the multi-model `by_model` cost fold and a
+# ~95 000 s duration.
+!J-compare          | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# `a == b`. NOT a 404: the `session_id IN (?, ?)` binds the same value twice,
+# SQLite collapses it to one row, and every field of `diff` is zero — which is
+# the row that proves `cost`/`duration_s` still render `0.0` and
+# `commands`/`errors` still render `0`. Open only because `diff.tokens` (four
+# zeros) is ordered by the same randomised set.
+!J-compare-same     | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# `log_path=` overrides the selected project rather than being ignored. Points
+# at the SAME project by its log dir, so the body must equal `!J-compare`'s
+# modulo the token order — i.e. this row and that one diverge in exactly the
+# same place or the override is broken.
+!J-compare-logpath  | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-media-tmos-bumblebe-dev-dev-year26-jul26-StackUnderflow | -
+
+# ── 422: the two required parameters (law 5) ─────────────────────────────────
+# `a: str` and `b: str` have no defaults, so FastAPI's dependency solver 422s
+# before the handler runs. Measured on the harness interpreter (fastapi 0.141.1
+# / pydantic 2.13.4), not transcribed — and NOT law 8's `{"detail":"<field>"}`
+# shape, which is a different bug in four other modules. The body is
+# `{"detail":[{"type":"missing","loc":["query","<f>"],"msg":"Field required",
+# "input":null}]}`.
+J-compare-no-a      | GET | /api/sessions/compare?b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-no-b      | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# BOTH absent: pydantic collects every error, so the list has TWO entries — and
+# they are in the order the handler DECLARES its parameters (`a`, then `b`),
+# not the order of the query string. A port that returns the first error only,
+# or that orders by omission, fails exactly here.
+J-compare-no-ab     | GET | /api/sessions/compare | -
+# Query keys are case-SENSITIVE: `?A=` does not satisfy `a`, and the unknown
+# `A` is silently ignored rather than rejected.
+J-compare-case-key  | GET | /api/sessions/compare?A=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+
+# ── 404 (i): the session lookup, `Session(s) not found: …` ───────────────────
+J-compare-unknown-a | GET | /api/sessions/compare?a=00000000-0000-0000-0000-000000000000&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-unknown-b | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=ffffffff-ffff-ffff-ffff-ffffffffffff | -
+# Both unknown: the two ids are `', '.join`ed in `(a, b)` order.
+J-compare-unknown2  | GET | /api/sessions/compare?a=00000000-0000-0000-0000-000000000000&b=ffffffff-ffff-ffff-ffff-ffffffffffff | -
+# The same unknown id twice. The comprehension walks the TUPLE `(a, b)` and does
+# not deduplicate, so the detail really is `Session(s) not found: zzz, zzz`.
+# A port that built the missing list from a set gets one `zzz` and fails here.
+J-compare-dup-miss  | GET | /api/sessions/compare?a=zzz&b=zzz | -
+# `?a=` is an EMPTY STRING, which is a perfectly valid `str` to pydantic — it
+# passes validation, reaches the handler, and names no session. The detail has
+# a trailing space and nothing after it.
+J-compare-empty-a   | GET | /api/sessions/compare?a=&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-empty-ab  | GET | /api/sessions/compare?a=&b= | -
+# A repeated `?a=` keeps the LAST value (starlette's `QueryParams.get`). The
+# 404 names `zzz`, not the valid first id — the cheapest available proof of
+# last-wins on this endpoint.
+J-compare-a-repeat  | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&a=zzz&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# The session lookup is scoped to the resolved project's ids. Both ids are real
+# sessions — of a DIFFERENT project — so a handler that forgot the
+# `project_id IN (…)` predicate would answer 200 here.
+J-compare-wrong-prj | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-Users-yadkonrad-dev-dev-year26-jun26-worldcup | -
+
+# ── 404 (ii): the SECOND session 404, which is not the first one ─────────────
+# `2c0af9c7-…` is a real `sessions` row of `-home-tmos` with zero `messages`
+# rows, so it clears the id check and then produces no `session_costs` entry —
+# `sa is None` at `routes/sessions.py:398`. This is the only row that reaches
+# that branch; without it the second 404 is an unported leg wearing a green
+# tick. `b` is a 7-message session of the same project, so the OTHER side does
+# resolve and the detail names exactly one id.
+J-compare-no-costs  | GET | /api/sessions/compare?a=2c0af9c7-b01c-45ea-9404-8de61fcb363c&b=02b9d902-3c4c-4553-a47a-5e090d1a8d60&log_path=/home/u/.claude/projects/-home-tmos | -
+
+# ── 404 (iii): the project 404, which spells the slug ────────────────────────
+# `f"Project '{slug}' not found in store"` — note this handler interpolates the
+# slug where its neighbour `/api/jsonl-content` says only "Project not found in
+# store". Two messages, two handlers, one file.
+J-compare-no-proj   | GET | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a&log_path=/home/u/.claude/projects/-no-such-project-anywhere | -
+
+# ── the unclaimed methods and the neighbouring paths ─────────────────────────
+# GET-only, so FastAPI's router raises `HTTPException(405)` and the installed
+# handler renders `{"detail":"Method Not Allowed"}` as JSON; axum's native 405
+# is an empty body with no content-type. Body is `-` because a 405 is decided
+# before the body is read.
+J-compare-post      | POST   | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-put       | PUT    | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+J-compare-delete    | DELETE | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3edfe80e3e2f&b=44b8f238-3609-4445-97a9-37a5a99f1c9a | -
+# Paths nothing claims — FastAPI's `{"detail":"Not Found"}`, not starlette's
+# plain-text default. The parent collection is the URL a client guesses; the
+# subpath is what a router that matched a prefix would answer.
+J-compare-parent    | GET | /api/sessions | -
+J-compare-subpath   | GET | /api/sessions/compare/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+# NO trailing-slash row. `/api/sessions/compare/` is DIV-133 (`!PL-plan-slash`),
+# the architect's `lib.rs` redirect item, and the batch-E claim says not to
+# touch it or extend its blast radius.
