@@ -4,3 +4,66 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+# The wave-6 sync differ. Same placement as `stax-etl`'s four parity binaries:
+# the harness lives in the crate it measures, so `cargo test -p stax-sync`
+# and the differ can never be built against different code.
+[[bin]]
+name = "stax-sync-parity"
+path = "src/bin/sync_parity.rs"
+
+[dependencies]
+# LOCK ADDITION — the largest this campaign has taken, documented per the
+# anti-drift rule and measured before it was accepted.
+#
+# `docs/specs/rust-port.md` §2.5 pre-authorises it: "The sync crate uses `rage`
+# directly — that dependency gets *simpler*." Python reaches `rage` through the
+# `pyrage` binding; this crate is the same Rust code without the FFI hop, so the
+# ciphertext is interoperable by construction rather than by agreement. That
+# interop IS wave 7's runnable proof (a Python-encrypted shard decrypting in
+# Rust and back), and it is the one property a hand-rolled X25519 →
+# HKDF-SHA256 → ChaCha20-Poly1305 STREAM stack could not credibly claim.
+#
+# COST, MEASURED (not estimated): `cargo add age@0.12 --no-default-features`
+# adds **115 entries** to the shared `Cargo.lock` — curve25519-dalek,
+# chacha20poly1305, hkdf, scrypt, the i18n-embed/fluent message bundle age uses
+# for its error strings, and their transitive tails. Build cost from a warm
+# workspace target: **13.4 s** for the whole tree plus this crate
+# (`cargo build -p stax-sync`, 509% cpu, this host). Recorded so the maintainer
+# is deciding against a number: 115 crates and 13 s for the 49 lines of
+# `sync/cipher.py` plus the two `sync/keys.py` functions that need a curve.
+#
+# `default-features = false` drops `armor` (age's PEM wrapper — this crate only
+# ever writes binary blobs), `async`, `cli-common` (which pulls a terminal
+# stack) and `plugin`. x25519 identities and recipients are in the core.
+age = { version = "0.12", default-features = false }
+anyhow.workspace = true
+# `uuid.uuid4().hex` — 122 random bits with the version/variant nibbles pinned.
+# Declared rather than borrowed from `age`'s transitive `rand`: a device UUID is
+# security-relevant state and its entropy source should be a stated dependency,
+# not an accident of another crate's feature resolution. Already in the lock
+# (age → rand → getrandom), so this adds zero entries.
+getrandom = "0.2.17"
+# The reference's `sync_identity` / `sync_outbox` / `sync_cursors` /
+# `<mart>_remote` tables are READ AND WRITTEN by `push` and `pull` — this is a
+# writer crate, so it takes the plain rusqlite workspace dep. Same ruling as
+# `stax-etl` and `stax-hooks`: no feature gate, because feature unification
+# would let another member's build decide whether the write path exists.
+rusqlite.workspace = true
+serde_json.workspace = true
+# `hashlib.sha256` twice over, and both answers are contracts: the truncated
+# digest of the age recipient IS `sync_identity.key_fingerprint` (a stored
+# value another device compares against), and the digest of the canonical shard
+# bytes IS the push/pull watermark. Already in the lock via `age`; pinned to
+# 0.10 explicitly because the lock also carries a 0.11 for another consumer and
+# a silent major bump here would change nothing visible until it changed a hash.
+sha2 = "0.10.9"
+# `pyjson::dumps_http` is `ensure_ascii=False` + `(",", ":")`, which is EXACTLY
+# `Shard.to_bytes`'s writer — and the shard bytes are content-hashed, so a
+# writer that escapes one character differently produces a different SHA-256 and
+# a push that never converges. `dumps_compact` (ensure_ascii=True) is the
+# manifest's writer, and `dumps_pretty` is what `sync pull --json` prints.
+# Three writers, three call sites, all already proven byte-exact in wave 1/5.
+stax-memory = { path = "../stax-memory" }
+# `settings::app_dir()` is `_STATE_DIR`, which is where the 0600 key file lives.
+stax-core.workspace = true

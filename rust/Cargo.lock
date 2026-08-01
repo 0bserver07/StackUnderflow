@@ -1889,8 +1889,10 @@ dependencies = [
  "stax-adapters",
  "stax-core",
  "stax-etl",
+ "stax-hooks",
  "stax-memory",
  "stax-server",
+ "stax-sync",
 ]
 
 [[package]]
@@ -1950,6 +1952,7 @@ dependencies = [
  "stax-core",
  "stax-etl",
  "stax-memory",
+ "stax-sync",
  "tokio",
  "tower",
  "tower-http",

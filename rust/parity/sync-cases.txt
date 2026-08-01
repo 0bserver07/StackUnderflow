@@ -1,0 +1,225 @@
+# The wave-6 sync differ corpus.
+#
+# TAB-separated: <id> <op> <arg>… — one process per implementation per row,
+# stdout compared byte for byte. `rust/sync-parity.sh` runs it; the two halves
+# are `rust/parity/sync_parity.py` and `stax-sync-parity`.
+#
+# Tokens the harness expands to a PRIVATE, per-case, per-implementation path:
+#   @A @B @EMPTY @MERGED   a copy of the matching fixture store
+#   @BUCKET                an empty directory (the object store)
+#   @STATE                 an empty directory (the sync state dir)
+# Nothing here touches the maintainer's store, and no case reaches a network.
+#
+# Binary/whitespace arguments are base64. A `-` means "absent" (argv cannot
+# carry None). Rows are grouped by the reference file they exercise.
+
+# ── sync/keys.py ─────────────────────────────────────────────────────────────
+# The fingerprint is a STORED value another device compares against, so it is
+# the highest-stakes pure function in the crate.
+K-fp-age1	keys-fingerprint	age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+K-fp-short	keys-fingerprint	age1abc
+K-fp-empty	keys-fingerprint	
+K-fp-spaces	keys-fingerprint	 age1abc
+K-fp-unicode	keys-fingerprint	age1—dash
+K-path	keys-identity-path	@STATE
+# env → keychain → file, and the falsy-value fallthrough at each hop.
+K-res-none	keys-resolve	@STATE	-	-	-
+K-res-env	keys-resolve	@STATE	  FROM-ENV  	-	-
+K-res-env-blank	keys-resolve	@STATE	   	-	FROM-FILE
+K-res-chain	keys-resolve	@STATE	-	FROM-KEYCHAIN	-
+K-res-chain-over-file	keys-resolve	@STATE	-	FROM-KEYCHAIN	FROM-FILE
+K-res-file	keys-resolve	@STATE	-	-	FROM-FILE
+K-res-all-three	keys-resolve	@STATE	FROM-ENV	FROM-KEYCHAIN	FROM-FILE
+K-store-file	keys-store-file	@STATE	AGE-SECRET-KEY-1TESTTESTTEST
+K-store-file-pad	keys-store-file	@STATE	  AGE-SECRET-KEY-1PADDED
+
+# ── sync/bucket.py ───────────────────────────────────────────────────────────
+B-url-plain	url-bucket	s3://my-bucket
+B-url-prefix	url-bucket	s3://my-bucket/a/b/c
+B-url-trailing	url-bucket	s3://my-bucket/
+B-url-double	url-bucket	s3://my-bucket//deep//
+B-url-scheme	url-bucket	gs://my-bucket
+B-url-nobucket	url-bucket	s3:///prefix
+B-url-bare	url-bucket	my-bucket
+B-scheme-s3	url-scheme	s3://b
+B-scheme-upper	url-scheme	S3://b
+B-scheme-ssh	url-scheme	ssh://host/srv
+B-scheme-ssh-upper	url-scheme	SSH://host/srv
+B-scheme-none	url-scheme	nocolon
+B-scheme-unknown	url-scheme	gs://b
+B-scheme-double	url-scheme	s3://a://b
+B-from-ssh	url-store-from	ssh://yad@box:2222/srv/sync	-
+B-from-s3	url-store-from	s3://b/p	-
+B-from-s3-endpoint	url-store-from	s3://b/p	https://r2.example
+B-from-bad-scheme	url-store-from	gs://b	-
+B-from-bad-s3	url-store-from	s3:///nope	-
+B-from-bad-ssh	url-store-from	ssh://box	-
+
+# ── sync/ssh_store.py — parsing ──────────────────────────────────────────────
+S-parse-full	ssh-parse	ssh://yad@box:2222/srv/sync/
+S-parse-bare	ssh-parse	ssh://box/srv
+S-parse-deep	ssh-parse	ssh://box/srv/a/b/c
+S-parse-slashes	ssh-parse	ssh://box/srv///
+S-parse-nopath	ssh-parse	ssh://box
+S-parse-rootpath	ssh-parse	ssh://box/
+S-parse-nohost	ssh-parse	ssh:///srv
+S-parse-wrongscheme	ssh-parse	s3://bucket/x
+S-parse-upperhost	ssh-parse	ssh://BOX/srv
+S-parse-userpass	ssh-parse	ssh://yad:pw@box/srv
+S-parse-ipv6	ssh-parse	ssh://[::1]:2200/srv
+
+# ── sync/ssh_store.py — ARGV (the thing this wave promised to differ) ────────
+# The last element of each argv is the remote SHELL command. A quoting
+# difference here is a remote-code-execution difference, not a formatting one.
+S-argv-put	ssh-put	ssh://yad@box/srv/sync	stackunderflow/v1/dev/shards/daily_mart.2026-07.age
+S-argv-put-port	ssh-put	ssh://yad@box:2222/srv/sync	stackunderflow/v1/dev/manifest.age
+S-argv-put-space	ssh-put	ssh://box/srv/my sync	a/b.age
+S-argv-put-quote	ssh-put	ssh://box/srv/it's	a/b.age
+S-argv-put-root	ssh-put	ssh://box/srv/sync	toplevel.age
+S-argv-put-unsafe-abs	ssh-put	ssh://box/srv/sync	/etc/passwd
+S-argv-put-unsafe-dots	ssh-put	ssh://box/srv/sync	a/../../etc/passwd
+S-argv-put-dots-inside	ssh-put	ssh://box/srv/sync	a..b/c.age
+S-argv-get	ssh-get	ssh://yad@box/srv/sync	stackunderflow/v1/dev/manifest.age
+S-argv-get-space	ssh-get	ssh://box/srv/my sync	a/b.age
+S-argv-get-unsafe	ssh-get	ssh://box/srv/sync	../escape
+S-argv-list	ssh-list	ssh://yad@box:2222/srv/sync	stackunderflow/v1/
+S-argv-list-space	ssh-list	ssh://box/srv/my sync	
+S-argv-delete	ssh-delete	ssh://yad@box/srv/sync	stackunderflow/v1/dev/shards/x.age
+S-argv-delete-space	ssh-delete	ssh://box/srv/my sync	a/b.age
+S-argv-badurl	ssh-put	ssh://box	a/b.age
+
+# ── sync/ssh_store.py — the LOCAL half of list ──────────────────────────────
+S-find-mixed	ssh-find	ssh://box/srv/sync	stackunderflow/v1/	L3Nydi9zeW5jL3N0YWNrdW5kZXJmbG93L3YxL2Rldi9tYW5pZmVzdC5hZ2UKL3Nydi9zeW5jL3N0YWNrdW5kZXJmbG93L3YxL2Rldi9zaGFyZHMveC5hZ2UucGFydAovc3J2L3N5bmMvc3RhY2t1bmRlcmZsb3cvdjEvZGV2L3NoYXJkcy94LmFnZQovZWxzZXdoZXJlL25vcGUKCg==
+S-find-nomatch	ssh-find	ssh://box/srv/sync	nothing/	L3Nydi9zeW5jL3N0YWNrdW5kZXJmbG93L3YxL2Rldi9tYW5pZmVzdC5hZ2UKL3Nydi9zeW5jL3N0YWNrdW5kZXJmbG93L3YxL2Rldi9zaGFyZHMveC5hZ2UucGFydAovc3J2L3N5bmMvc3RhY2t1bmRlcmZsb3cvdjEvZGV2L3NoYXJkcy94LmFnZQovZWxzZXdoZXJlL25vcGUKCg==
+S-find-empty	ssh-find	ssh://box/srv/sync		
+S-find-foreign	ssh-find	ssh://box/srv/sync		L290aGVyL3Jvb3QvYQovc3J2L3N5bmMK
+S-find-spaces	ssh-find	ssh://box/srv/sync		ICAvc3J2L3N5bmMvYS9iICAKL3Nydi9zeW5jL2MK
+
+# ── shlex.quote — the character class, both sides of it ─────────────────────
+Q-plain	shlex-quote	L3Nydi9zeW5jL2EtYi5jX2Q=
+Q-space	shlex-quote	YSBi
+Q-shell	shlex-quote	JChybSAtcmYgLyk=
+Q-quote	shlex-quote	aXQncw==
+Q-empty	shlex-quote	
+Q-utf8	shlex-quote	Y2Fmw6k=
+Q-meta	shlex-quote	YTtifGMmZD5l
+Q-dash	shlex-quote	LS1saW5rLWRlc3Q9L3Nydi94
+Q-tab	shlex-quote	YQli
+Q-newline	shlex-quote	YQpi
+
+# ── sync/runner.py — the key layout ─────────────────────────────────────────
+R-keys-daily	object-keys	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	daily_mart.2026-07
+R-keys-all	object-keys	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	project_mart.all
+R-keys-unknown	object-keys	dev	session_mart.unknown
+
+# ── cli.py::_replicate_backup — the rsync argv ──────────────────────────────
+P-plan-first	rsync-plan	2026-07-31T120000	/home/yad/.stackunderflow/backups/2026-07-31T120000	ssh://yad@box/srv/backups	-
+P-plan-incr	rsync-plan	gen-2	/local/backups/gen-2	ssh://box:2222/srv/backups	gen-1
+P-plan-space	rsync-plan	gen	/local/gen	ssh://box/srv/my backups	-
+P-plan-badurl	rsync-plan	gen	/local/gen	ssh://box	-
+P-plan-s3url	rsync-plan	gen	/local/gen	s3://bucket	-
+P-out-zero	rsync-outcome	0	ZmlsZSBoYXMgdmFuaXNoZWQ6IC9ob21lL3kvLmNsYXVkZS90b2Rvcy9hLmpzb24KbGlua19zdGF0ICIvaG9tZS95Ly5jbGF1ZGUvc2hlbGwtc25hcHNob3RzL2IiIGZhaWxlZApyc3luYyBlcnJvcjogc29tZSBmaWxlcyB2YW5pc2hlZCAoY29kZSAyNCkgYXQgbWFpbi5jKDEzMzgpCg==	~/.claude
+P-out-24	rsync-outcome	24	ZmlsZSBoYXMgdmFuaXNoZWQ6IC9ob21lL3kvLmNsYXVkZS90b2Rvcy9hLmpzb24KbGlua19zdGF0ICIvaG9tZS95Ly5jbGF1ZGUvc2hlbGwtc25hcHNob3RzL2IiIGZhaWxlZApyc3luYyBlcnJvcjogc29tZSBmaWxlcyB2YW5pc2hlZCAoY29kZSAyNCkgYXQgbWFpbi5jKDEzMzgpCg==	~/.claude
+P-out-24-bare	rsync-outcome	24	cnN5bmMgZXJyb3I6IHByb3RvY29sIG1pc21hdGNoIChjb2RlIDIpCg==	~/.claude
+P-out-23	rsync-outcome	23	ZmlsZSBoYXMgdmFuaXNoZWQ6IC9ob21lL3kvLmNsYXVkZS90b2Rvcy9hLmpzb24KbGlua19zdGF0ICIvaG9tZS95Ly5jbGF1ZGUvc2hlbGwtc25hcHNob3RzL2IiIGZhaWxlZApyc3luYyBlcnJvcjogc29tZSBmaWxlcyB2YW5pc2hlZCAoY29kZSAyNCkgYXQgbWFpbi5jKDEzMzgpCg==	~/.codex
+P-out-23-empty	rsync-outcome	23		~/.codex
+P-out-12	rsync-outcome	12	ICBwcm90b2NvbCB2ZXJzaW9uIG1pc21hdGNoICA=	~/.claude
+P-out-cap	rsync-outcome	23	bGluZSAxCmxpbmUgMgpsaW5lIDMKbGluZSA0CmxpbmUgNQpsaW5lIDYKbGluZSA3CmxpbmUgOApsaW5lIDk=	~/.claude
+
+# ── sync/serialize.py — the canonical bytes and their SHA-256 ───────────────
+# `canonical` is compared as a STRING, so a divergence names the character.
+Z-shards-a	shards	@A
+Z-shards-b	shards	@B
+Z-shards-empty	shards	@EMPTY
+Z-shards-merged	shards	@MERGED
+Z-round-a	shard-roundtrip	@A
+Z-round-b	shard-roundtrip	@B
+Z-month-date	month-of	"2026-07-31T12:00:00"
+Z-month-exact	month-of	"2026-07"
+Z-month-short	month-of	"2026-0"
+Z-month-null	month-of	null
+Z-month-int	month-of	202607
+Z-month-bigint	month-of	20260731
+Z-month-float	month-of	2026.07
+Z-month-empty	month-of	""
+Z-month-unicode	month-of	"20—26-07"
+
+# ── CPython exception text (`pull` interpolates it) ─────────────────────────
+E-json-garbage	json-loads	bm90IGpzb24=
+E-json-empty	json-loads	
+E-json-binary	json-loads	AMKfEg==
+E-json-partial	json-loads	dHJ1
+E-json-ok	json-loads	eyJzY2hlbWEiOiJzdGFja3VuZGVyZmxvdy5zeW5jLzEifQ==
+E-json-trailing	json-loads	WzEsXQ==
+E-int-int	py-int	7
+E-int-float	py-int	2.9
+E-int-negfloat	py-int	-2.9
+E-int-bool	py-int	true
+E-int-str	py-int	" 12 "
+E-int-badstr	py-int	"abc"
+E-int-null	py-int	null
+E-int-list	py-int	[]
+E-int-dict	py-int	{}
+
+# ── sync/runner.py — push (two-phase commit + idempotency) ──────────────────
+# `counters` proves the ZERO-PUT claim from the store's side, which is a
+# stronger statement than the result object's `uploaded: 0`.
+U-push-a	push	@A	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	1
+U-push-a-twice	push	@A	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	2
+U-push-a-thrice	push	@A	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	3
+U-push-b	push	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	2026-07-31T12:00:00+00:00	1
+U-push-empty	push	@EMPTY	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	1
+U-push-empty-twice	push	@EMPTY	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	2
+U-push-merged	push	@MERGED	@BUCKET	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T12:00:00+00:00	1
+
+# ── sync/runner.py — pull (cursors, replay guard, failure injection) ────────
+V-pull-normal	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	normal
+V-pull-twice	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	twice
+V-pull-into-empty	pull	@EMPTY	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	normal
+V-pull-into-merged	pull	@MERGED	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	normal
+V-pull-self-only	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	self-only
+V-pull-corrupt	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	corrupt-shard
+V-pull-missing-obj	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	missing-object
+V-pull-no-manifest	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	no-manifest
+V-pull-not-json	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	not-json-manifest
+V-pull-empty-manifest	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	empty-manifest
+V-pull-bad-schema	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	bad-schema
+V-pull-no-schema	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	no-schema
+V-pull-stale-gen	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	stale-gen
+V-pull-gen-string	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	gen-string
+V-pull-gen-float	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	gen-float
+V-pull-gen-missing	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	gen-missing
+V-pull-unknown-family	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	unknown-family
+V-pull-column-drift	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	column-mismatch
+V-pull-no-shards	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	no-shards
+
+# ── sync/runner.py — status (DIV-133's expensive read) ──────────────────────
+T-status-off	status	@EMPTY
+T-status-a	status	@A
+T-status-b	status	@B
+T-status-merged	status	@MERGED
+
+# ── sync/merge.py — the union overlay ───────────────────────────────────────
+M-overview-empty	merge-overview	@EMPTY
+M-overview-a	merge-overview	@A
+M-overview-b	merge-overview	@B
+M-overview-merged	merge-overview	@MERGED
+M-parts-empty	merge-parts	@EMPTY
+M-parts-a	merge-parts	@A
+M-parts-merged	merge-parts	@MERGED
+
+# ── infra/egress.py — the outbound shape guard ─────────────────────────────
+G-embed-ok	egress-guard	ollama/embeddings	embed	eyJtb2RlbCI6ICJub21pYy1lbWJlZC10ZXh0IiwgInByb21wdCI6ICJzb21lIHRyYW5zY3JpcHQgdGV4dCJ9
+G-embed-stray	egress-guard	ollama/embeddings	embed	eyJtb2RlbCI6ICJtIiwgInByb21wdCI6ICJwIiwgImVudiI6ICJTRUNSRVQ9MSJ9
+G-embed-two-stray	egress-guard	ollama/embeddings	embed	eyJ6ZXRhIjogbnVsbCwgImFscGhhIjogbnVsbCwgIm1vZGVsIjogIm0ifQ==
+G-embed-empty	egress-guard	ollama/embeddings	embed	e30=
+G-chat-ok	egress-guard	ollama/chat	chat	eyJtb2RlbCI6ICJtIiwgIm1lc3NhZ2VzIjogW3sicm9sZSI6ICJ1c2VyIiwgImNvbnRlbnQiOiAiaGkifV0sICJzdHJlYW0iOiBmYWxzZSwgInRvb2xzIjogW10sICJvcHRpb25zIjogeyJ0ZW1wZXJhdHVyZSI6IDB9LCAia2VlcF9hbGl2ZSI6ICI1bSIsICJmb3JtYXQiOiAianNvbiIsICJ0aGluayI6IHRydWV9
+G-chat-stray	egress-guard	ollama/chat	chat	eyJtb2RlbCI6ICJtIiwgIm1lc3NhZ2VzIjogW10sICJjb250ZXh0IjogeyJjd2QiOiAiL2hvbWUveWFkIn19
+G-chat-wrong-list	egress-guard	ollama/chat	embed	eyJtb2RlbCI6ICJtIiwgIm1lc3NhZ2VzIjogW10sICJjb250ZXh0IjogeyJjd2QiOiAiL2hvbWUveWFkIn19
+G-ser-nested	egress-serialize	eyJwcm9tcHQiOiAicCIsICJtb2RlbCI6ICJtIiwgIm5lc3RlZCI6IHsiYiI6IDEsICJhIjogW3sieSI6IDIsICJ4IjogMX1dfX0=
+G-ser-unicode	egress-serialize	eyJtb2RlbCI6ICJtIiwgInByb21wdCI6ICJlbSBcdTIwMTQgZGFzaCBhbmQgXHUyMDI2IGVsbGlwc2lzIn0=
+G-ser-empty	egress-serialize	e30=
+G-scan-hit	egress-scan	eyJtb2RlbCI6ICJtIiwgIm1lc3NhZ2VzIjogW3sicm9sZSI6ICJ1c2VyIiwgImNvbnRlbnQiOiAibXkga2V5IGlzIHNrLWRlZXAtOSJ9XX0=	WyJzay1kZWVwLTkiXQ==
+G-scan-miss	egress-scan	eyJtb2RlbCI6ICJub21pYy1lbWJlZC10ZXh0IiwgInByb21wdCI6ICJzb21lIHRyYW5zY3JpcHQgdGV4dCJ9	WyJzay1saXZlLTEyMyIsICIiLCAiYWJzZW50Il0=
+G-scan-none	egress-scan	eyJtb2RlbCI6ICJtIiwgIm1lc3NhZ2VzIjogW3sicm9sZSI6ICJ1c2VyIiwgImNvbnRlbnQiOiAibXkga2V5IGlzIHNrLWRlZXAtOSJ9XX0=	W10=
+G-scan-unicode	egress-scan	eyJtb2RlbCI6ICJtIiwgInByb21wdCI6ICJlbSBcdTIwMTQgZGFzaCBhbmQgXHUyMDI2IGVsbGlwc2lzIn0=	WyJcdTIwMjYiXQ==

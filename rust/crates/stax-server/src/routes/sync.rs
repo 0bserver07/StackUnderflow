@@ -2,7 +2,7 @@
 //!
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
-//! | `RS-5-108` | `GET` | `/api/sync/status  ` | `/api/sync/status`   | **open** — DIV-133 |
+//! | `RS-5-108` | `GET` | `/api/sync/status  ` | `/api/sync/status`   | ported (wave 6) |
 //! | `RS-5-109` | `GET` | `/api/sync/overview` | `/api/sync/overview` | ported |
 //!
 //! # `/api/sync/overview` — the default leg is the point
@@ -28,21 +28,37 @@
 //! `Y-overview-all` is a `!` row whose diff can only ever be that timestamp —
 //! which is itself the evidence that every field before it agreed.
 //!
-//! # `/api/sync/status` — DIV-133, deferred with its reason
+//! # `/api/sync/status` — DIV-133, CLOSED by the wave-6 sync crate
 //!
-//! `runner.status()` is not a status read. On a store carrying a `sync_identity`
-//! row — which the harness home does — it calls `serialize.build_shards(conn)`
-//! (`sync/serialize.py`, 227 lines): re-serialise every mart into shard
-//! documents, content-hash each one, diff against `sync_outbox`. That is a
-//! byte-exact canonicalisation-and-hash port, an order of magnitude more work
-//! than the route it feeds, and it belongs to whichever wave ports the sync
-//! *writer*. The endpoint also stamps `scanned_at = datetime.now(UTC)`, so even
-//! a perfect port could not produce a green row.
+//! `runner.status()` is not a status read. On a store carrying a
+//! `sync_identity` row — which the harness home does — it calls
+//! `serialize.build_shards(conn)` (`sync/serialize.py`, 227 lines): re-serialise
+//! every mart into shard documents, content-hash each one, diff against
+//! `sync_outbox`. Batch D deferred it because that is a byte-exact
+//! canonicalisation-and-hash port belonging to whichever wave ported the sync
+//! *writer*.
 //!
-//! Left unmounted, so Rust 404s and `!Y-status` reports it every run. Safe to
-//! execute: both sides only ever read.
+//! That wave has landed. [`stax_sync::runner::status`] and
+//! [`stax_sync::serialize::build_shards`] are proven byte-identical against
+//! CPython by `rust/sync-parity.sh` (the `T-status-*` and `Z-shards-*` rows, on
+//! four synthetic stores), so this endpoint now delegates rather than
+//! reimplements. The route keeps only what is the route's: the peer list, the
+//! `remote_rows` count, the `all_devices_available` flag, and the `scanned_at`
+//! stamp.
+//!
+//! `scanned_at` is `datetime.now(UTC)`, so `!SY-status` stays a `!` row whose
+//! diff can only ever be that timestamp — which is the evidence that every
+//! field before it agreed.
+//!
+//! # One owner per helper (the wave-5 dedup law)
+//!
+//! `merged_overview` and the four union queries used to live in this file
+//! because batch D was not permitted to add a manifest dependency. `stax-sync`
+//! is that dependency now, and it owns them; this module calls
+//! [`stax_sync::merge::merged_overview`]. The SQL did not move a byte — the
+//! same text, now with a differ of its own (`M-overview-*`, `M-parts-*`) on top
+//! of the endpoint matrix.
 
-use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
@@ -50,9 +66,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use rusqlite::Connection;
-use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
-use stax_etl::stats::aggregator::{Neumaier, PyNum};
 
 use crate::currency::active_currency_payload;
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
@@ -62,10 +76,97 @@ use crate::state::AppState;
 use stax_etl::stats::pydatetime::civil_from_epoch;
 
 /// Mount this module's endpoints onto `router`.
-///
-/// `/api/sync/status` is deliberately absent — see the module docs (DIV-133).
 pub fn register(router: Router<AppState>) -> Router<AppState> {
-    router.route("/api/sync/overview", get(get_sync_overview))
+    router
+        .route("/api/sync/status", get(get_sync_status))
+        .route("/api/sync/overview", get(get_sync_overview))
+}
+
+// ── GET /api/sync/status ─────────────────────────────────────────────────────
+
+/// `get_sync_status` — local config + peers + whether cross-device data exists.
+///
+/// Purely local; never hits the network or a bucket. The key order is the
+/// reference's: `SyncStatus.as_dict()`'s nine keys, then the four the handler
+/// appends.
+async fn get_sync_status(State(state): State<AppState>) -> HandlerResult {
+    let worker = state.clone();
+    let mut payload =
+        tokio::task::spawn_blocking(move || -> Result<Map<String, Value>, HttpError> {
+            let conn = worker.connect().map_err(|err| any_500(&err))?;
+            let status = stax_sync::runner::status(&conn).map_err(sql_500)?;
+            let Value::Object(mut payload) = status.to_json() else {
+                unreachable!("SyncStatus::to_json is an object");
+            };
+            let peers = list_peers(&conn).map_err(sql_500)?;
+            let remote_rows = stax_sync::merge::remote_row_count(&conn).map_err(sql_500)?;
+            let enabled = payload
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            // The reference's assignment order IS the wire order: `peers`,
+            // `peer_count`, `remote_rows`, `all_devices_available`, then
+            // `scanned_at` in the handler. A dict assignment appends at first
+            // write, and `SyncStatus.as_dict()` contains none of these five, so
+            // every one of them appends. The endpoint differ caught this: the
+            // bodies were 537 bytes on both sides and diverged at byte 418,
+            // purely on the order of four keys.
+            payload.insert("peer_count".to_owned(), Value::from(peers.len()));
+            payload.insert("peers".to_owned(), Value::Array(peers));
+            reorder_peers(&mut payload);
+            payload.insert("remote_rows".to_owned(), Value::from(remote_rows));
+            // `bool(status["enabled"] and remote_rows > 0)` — the FE shows the
+            // all-devices toggle only when there is something to merge.
+            payload.insert(
+                "all_devices_available".to_owned(),
+                Value::Bool(enabled && remote_rows > 0),
+            );
+            Ok(payload)
+        })
+        .await
+        .map_err(|err| join_failure(&err))??;
+
+    payload.insert("scanned_at".to_owned(), Value::from(now_iso()));
+    Ok(JsonBody::ok(Value::Object(payload)))
+}
+
+/// Put `peers` back in front of `peer_count`, which is where Python writes it.
+fn reorder_peers(payload: &mut Map<String, Value>) {
+    let Some(peers) = payload.shift_remove("peers") else {
+        return;
+    };
+    let Some(count) = payload.shift_remove("peer_count") else {
+        payload.insert("peers".to_owned(), peers);
+        return;
+    };
+    payload.insert("peers".to_owned(), peers);
+    payload.insert("peer_count".to_owned(), count);
+}
+
+/// `_list_peers(conn)` — known peers from `sync_remote_devices`.
+fn list_peers(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
+    if !table_exists(conn, "sync_remote_devices")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT remote_device_uuid, alias, key_fingerprint, \
+                first_seen, last_seen, last_generation \
+         FROM sync_remote_devices ORDER BY remote_device_uuid",
+    )?;
+    let names: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let mut obj = Map::new();
+        for (index, name) in names.iter().enumerate() {
+            obj.insert(
+                name.clone(),
+                stax_sync::pyvalue::PyValue::from_sqlite(row.get_ref(index)?).to_json(),
+            );
+        }
+        out.push(Value::Object(obj));
+    }
+    Ok(out)
 }
 
 // ── GET /api/sync/overview ───────────────────────────────────────────────────
@@ -157,291 +258,11 @@ fn is_enabled(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(rows.next()?.is_some())
 }
 
-// ── merge.merged_overview ────────────────────────────────────────────────────
+// ── merge.merged_overview — delegated to stax-sync (one owner) ──────────────
 
-/// `_UNIONED_DAILY` — local `daily_mart` JOIN `projects`, UNION ALL the remote.
-const UNIONED_DAILY: &str = "
-SELECT day, provider, slug, model, speed,
-       SUM(input_tokens)  AS input_tokens,
-       SUM(output_tokens) AS output_tokens,
-       SUM(cache_read)    AS cache_read,
-       SUM(cache_create)  AS cache_create,
-       SUM(message_count) AS message_count,
-       SUM(session_count) AS session_count,
-       SUM(cost_usd)      AS cost_usd
-FROM (
-    SELECT d.day, d.provider, p.slug, d.model, d.speed,
-           d.input_tokens, d.output_tokens, d.cache_read, d.cache_create,
-           d.message_count, d.session_count, d.cost_usd
-    FROM daily_mart d JOIN projects p ON p.id = d.project_id
-    UNION ALL
-    SELECT day, provider, slug, model, speed,
-           input_tokens, output_tokens, cache_read, cache_create,
-           message_count, session_count, cost_usd
-    FROM daily_mart_remote
-)
-GROUP BY day, provider, slug, model, speed
-ORDER BY day, provider, slug, model, speed
-";
-
-/// `_UNIONED_PROVIDER_DAY`.
-const UNIONED_PROVIDER_DAY: &str = "
-SELECT day, provider,
-       SUM(cost_usd)       AS cost_usd,
-       SUM(message_count)  AS message_count,
-       SUM(session_count)  AS session_count,
-       SUM(project_count)  AS project_count
-FROM (
-    SELECT day, provider, cost_usd, message_count, session_count, project_count
-    FROM provider_day_mart
-    UNION ALL
-    SELECT day, provider, cost_usd, message_count, session_count, project_count
-    FROM provider_day_mart_remote
-)
-GROUP BY day, provider
-ORDER BY day, provider
-";
-
-/// `_UNIONED_PROJECTS`.
-const UNIONED_PROJECTS: &str = "
-SELECT provider, slug,
-       MAX(display_name)         AS display_name,
-       MIN(first_ts)             AS first_ts,
-       MAX(last_ts)              AS last_ts,
-       SUM(total_messages)       AS total_messages,
-       SUM(total_sessions)       AS total_sessions,
-       SUM(total_input_tokens)   AS total_input_tokens,
-       SUM(total_output_tokens)  AS total_output_tokens,
-       SUM(total_cache_read)     AS total_cache_read,
-       SUM(total_cache_create)   AS total_cache_create,
-       SUM(total_cost_usd)       AS total_cost_usd
-FROM (
-    SELECT provider, slug, display_name, first_ts, last_ts,
-           total_messages, total_sessions, total_input_tokens, total_output_tokens,
-           total_cache_read, total_cache_create, total_cost_usd
-    FROM project_mart
-    UNION ALL
-    SELECT provider, slug, display_name, first_ts, last_ts,
-           total_messages, total_sessions, total_input_tokens, total_output_tokens,
-           total_cache_read, total_cache_create, total_cost_usd
-    FROM project_mart_remote
-)
-GROUP BY provider, slug
-ORDER BY provider, slug
-";
-
-/// `_UNIONED_SESSIONS` — the one non-additive family.
-///
-/// The local arm hardcodes `device_uuid = ''`, which sorts before any hex UUID,
-/// so `ORDER BY session_id, device_uuid` makes **local win** the dedup tiebreak
-/// with no wall clock involved. Reproduced verbatim, including the column list.
-const UNIONED_SESSIONS: &str = "
-SELECT '' AS device_uuid, s.session_id, s.provider, p.slug, s.primary_model,
-       s.first_ts, s.last_ts, s.message_count, s.user_message_count,
-       s.assistant_message_count, s.input_tokens, s.output_tokens,
-       s.cache_read, s.cache_create, s.cost_usd, s.is_one_shot
-FROM session_mart s JOIN projects p ON p.id = s.project_id
-UNION ALL
-SELECT device_uuid, session_id, provider, slug, primary_model,
-       first_ts, last_ts, message_count, user_message_count,
-       assistant_message_count, input_tokens, output_tokens,
-       cache_read, cache_create, cost_usd, is_one_shot
-FROM session_mart_remote
-ORDER BY session_id, device_uuid
-";
-
-/// `merge.merged_overview` — key order `totals`, `by_day`, `by_project`,
-/// `by_provider_day`, `devices`, `merge_warnings`.
+/// `merge.merged_overview(conn)`.
 fn merged_overview(conn: &Connection) -> rusqlite::Result<Map<String, Value>> {
-    let daily = query_rows(conn, UNIONED_DAILY)?;
-    let projects = query_rows(conn, UNIONED_PROJECTS)?;
-    let provider_day = query_rows(conn, UNIONED_PROVIDER_DAY)?;
-    let (session_count, merge_warnings) = deduped_session_count(conn)?;
-    let devices = device_breakdown(conn)?;
-
-    // `sum(r["cost_usd"] for r in daily)` — a generator into `builtins.sum`,
-    // which is Neumaier-compensated on the float fast path and returns the
-    // `int` 0 for an empty iterable. Both halves matter (DIV-057).
-    let mut cost = Neumaier::default();
-    for row in &daily {
-        cost.add(number_at(row, "cost_usd"));
-    }
-    let mut totals = Map::new();
-    totals.insert("cost_usd".to_owned(), cost.finish_pynum().to_json());
-    for key in [
-        "input_tokens",
-        "output_tokens",
-        "cache_read",
-        "cache_create",
-        "message_count",
-    ] {
-        // The token/message sums are over `int`s, where CPython's `sum` is
-        // exact and an empty iterable is likewise the `int` 0 — so a plain
-        // integer accumulator IS the faithful port here.
-        let total: i64 = daily.iter().map(|row| integer_at(row, key)).sum();
-        totals.insert((*key).to_owned(), Value::from(total));
-    }
-    // NOT from `daily`: the deduped unique session count across devices.
-    totals.insert("session_count".to_owned(), Value::from(session_count));
-
-    // `by_day` accumulates with `+=` from a literal `0.0` / `0`. Plain, on
-    // purpose — this is the counter-example sitting four lines from the `sum()`.
-    let mut by_day: BTreeMap<String, (f64, i64, i64, i64)> = BTreeMap::new();
-    for row in &daily {
-        let day = string_at(row, "day");
-        let bucket = by_day.entry(day).or_insert((0.0, 0, 0, 0));
-        bucket.0 += number_at(row, "cost_usd");
-        bucket.1 += integer_at(row, "input_tokens");
-        bucket.2 += integer_at(row, "output_tokens");
-        bucket.3 += integer_at(row, "message_count");
-    }
-    // `[by_day[d] for d in sorted(by_day)]`. The keys are `YYYY-MM-DD` strings,
-    // so a `BTreeMap`'s byte order is `sorted()`'s order.
-    let by_day_rows: Vec<Value> = by_day
-        .into_iter()
-        .map(|(day, (cost_usd, input, output, messages))| {
-            let mut obj = Map::new();
-            obj.insert("day".to_owned(), Value::from(day));
-            obj.insert("cost_usd".to_owned(), PyNum::Float(cost_usd).to_json());
-            obj.insert("input_tokens".to_owned(), Value::from(input));
-            obj.insert("output_tokens".to_owned(), Value::from(output));
-            obj.insert("message_count".to_owned(), Value::from(messages));
-            Value::Object(obj)
-        })
-        .collect();
-
-    let mut payload = Map::new();
-    payload.insert("totals".to_owned(), Value::Object(totals));
-    payload.insert("by_day".to_owned(), Value::Array(by_day_rows));
-    payload.insert(
-        "by_project".to_owned(),
-        Value::Array(projects.into_iter().map(Value::Object).collect()),
-    );
-    payload.insert(
-        "by_provider_day".to_owned(),
-        Value::Array(provider_day.into_iter().map(Value::Object).collect()),
-    );
-    payload.insert("devices".to_owned(), Value::Array(devices));
-    payload.insert("merge_warnings".to_owned(), Value::from(merge_warnings));
-    Ok(payload)
-}
-
-/// `unioned_sessions` — the deduped count and the dropped-duplicate tally.
-///
-/// The route only ever reads `len(sessions)` and the warning count, so the rows
-/// themselves are not materialised; the dedup rule (first sighting in
-/// `session_id, device_uuid` order wins) is what has to be identical, and it is.
-fn deduped_session_count(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
-    let mut stmt = conn.prepare(UNIONED_SESSIONS)?;
-    let mut rows = stmt.query([])?;
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut warnings = 0_i64;
-    while let Some(row) = rows.next()? {
-        let session_id: String = row.get("session_id")?;
-        if !seen.insert(session_id) {
-            warnings += 1;
-        }
-    }
-    Ok((i64::try_from(seen.len()).unwrap_or(i64::MAX), warnings))
-}
-
-/// `merge.device_breakdown` — the local row, then one per pulled peer.
-fn device_breakdown(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
-    let mut out = Vec::new();
-    let (projects, cost) = conn.query_row(
-        "SELECT COUNT(*) AS projects, COALESCE(SUM(total_cost_usd), 0.0) AS cost_usd \
-         FROM project_mart",
-        [],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
-    )?;
-    let mut local = Map::new();
-    local.insert("device_uuid".to_owned(), Value::from("(local)"));
-    local.insert("alias".to_owned(), Value::Null);
-    local.insert("is_local".to_owned(), Value::Bool(true));
-    local.insert("projects".to_owned(), Value::from(projects));
-    // `float(local["cost_usd"])` — a float even when the sum is 0.
-    local.insert("cost_usd".to_owned(), PyNum::Float(cost).to_json());
-    out.push(Value::Object(local));
-
-    let mut stmt = conn.prepare(
-        "SELECT r.device_uuid AS device_uuid, d.alias AS alias, \
-                COUNT(*) AS projects, COALESCE(SUM(r.total_cost_usd), 0.0) AS cost_usd \
-         FROM project_mart_remote r \
-         LEFT JOIN sync_remote_devices d ON d.remote_device_uuid = r.device_uuid \
-         GROUP BY r.device_uuid, d.alias \
-         ORDER BY r.device_uuid",
-    )?;
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let mut peer = Map::new();
-        peer.insert(
-            "device_uuid".to_owned(),
-            Value::from(row.get::<_, String>(0)?),
-        );
-        peer.insert(
-            "alias".to_owned(),
-            row.get::<_, Option<String>>(1)?
-                .map_or(Value::Null, Value::from),
-        );
-        peer.insert("is_local".to_owned(), Value::Bool(false));
-        peer.insert("projects".to_owned(), Value::from(row.get::<_, i64>(2)?));
-        peer.insert(
-            "cost_usd".to_owned(),
-            PyNum::Float(row.get::<_, f64>(3)?).to_json(),
-        );
-        out.push(Value::Object(peer));
-    }
-    Ok(out)
-}
-
-// ── row plumbing ─────────────────────────────────────────────────────────────
-
-/// `[dict(r) for r in conn.execute(SQL)]` — column order preserved, storage
-/// class preserved.
-///
-/// The storage class matters: `sqlite3.Row` hands Python whatever SQLite stored,
-/// so an `INTEGER` column comes back as an `int` and renders without a decimal
-/// point. Mapping everything to `f64` would put `.0` on every token count.
-fn query_rows(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<Map<String, Value>>> {
-    let mut stmt = conn.prepare(sql)?;
-    let names: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let mut obj = Map::new();
-        for (index, name) in names.iter().enumerate() {
-            obj.insert(name.clone(), sqlite_value(row.get_ref(index)?));
-        }
-        out.push(obj);
-    }
-    Ok(out)
-}
-
-fn sqlite_value(value: ValueRef<'_>) -> Value {
-    match value {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(i) => Value::from(i),
-        ValueRef::Real(f) => PyNum::Float(f).to_json(),
-        ValueRef::Text(bytes) => Value::from(String::from_utf8_lossy(bytes).into_owned()),
-        // No BLOB column appears in any of these marts; `str` is what
-        // `sqlite3.Row` would surface for text and this is the honest fallback.
-        ValueRef::Blob(bytes) => Value::from(String::from_utf8_lossy(bytes).into_owned()),
-    }
-}
-
-fn number_at(row: &Map<String, Value>, key: &str) -> f64 {
-    row.get(key).and_then(Value::as_f64).unwrap_or(0.0)
-}
-
-fn integer_at(row: &Map<String, Value>, key: &str) -> i64 {
-    row.get(key).and_then(Value::as_i64).unwrap_or(0)
-}
-
-fn string_at(row: &Map<String, Value>, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
+    stax_sync::merge::merged_overview(conn)
 }
 
 fn sql_500(err: rusqlite::Error) -> HttpError {
@@ -498,27 +319,23 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_daily_union_sums_to_the_integer_zero() {
-        // DIV-057, in the shape this module meets it: `sum([])` is `int` 0, so
-        // an empty store renders `"cost_usd":0` and NOT `0.0`.
-        assert_eq!(Neumaier::default().finish_pynum(), PyNum::Int(0));
-        assert_eq!(Neumaier::default().finish_pynum().to_json(), Value::from(0));
-        // …while a `by_day` bucket starts at a literal `0.0` and stays a float.
-        assert_eq!(PyNum::Float(0.0).to_json().to_string(), "0.0");
-    }
-
-    #[test]
-    fn the_totals_cost_is_compensated_and_the_by_day_cost_is_not() {
-        // The two accumulations are four lines apart in `merged_overview` and
-        // they disagree by design on a list long enough to lose bits.
-        let values = [1e16, 1.0, -1e16, 1.0];
-        let mut acc = Neumaier::default();
-        for v in values {
-            acc.add(v);
-        }
+    fn the_arithmetic_traps_moved_to_their_owner_and_are_still_pinned_there() {
+        // `sum([])` is the `int` 0 (DIV-057) and `by_day`'s `+=` is deliberately
+        // NOT compensated. Both used to be asserted here against a file-local
+        // copy of `merged_overview`; the copy is gone and `stax_sync::merge`
+        // owns them, with its own unit tests plus the `M-overview-*` differ
+        // rows. This is the drift alarm for the crate boundary — if the shared
+        // implementation ever stops answering `0` for an empty union, the
+        // endpoint's contract has changed and this fails first.
+        assert_eq!(
+            stax_sync::merge::Neumaier::default().to_json(),
+            Value::from(0)
+        );
+        let mut acc = stax_sync::merge::Neumaier::default();
         let mut plain = 0.0_f64;
-        for v in values {
-            plain += v;
+        for value in [1e16, 1.0, -1e16, 1.0] {
+            acc.add(value);
+            plain += value;
         }
         assert!((acc.finish() - 2.0).abs() < f64::EPSILON, "sum() is exact");
         assert!(
@@ -528,12 +345,28 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_storage_classes_survive_into_the_payload() {
-        // An `INTEGER` token count must not acquire a `.0`, and a `REAL` cost
-        // must not lose one.
-        assert_eq!(sqlite_value(ValueRef::Integer(7)), Value::from(7));
-        assert_eq!(sqlite_value(ValueRef::Real(0.0)).to_string(), "0.0");
-        assert_eq!(sqlite_value(ValueRef::Null), Value::Null);
+    fn the_status_payload_keeps_the_references_assignment_order() {
+        // The endpoint differ found this: identical 537-byte bodies that
+        // diverged at byte 418 purely on where `peers` / `peer_count` sat.
+        // `SyncStatus.as_dict()`'s nine keys, then the handler's four, then
+        // `scanned_at`.
+        let mut payload = Map::new();
+        payload.insert("enabled".to_owned(), Value::Bool(true));
+        payload.insert("peer_count".to_owned(), Value::from(0));
+        payload.insert("peers".to_owned(), Value::Array(vec![]));
+        reorder_peers(&mut payload);
+        payload.insert("remote_rows".to_owned(), Value::from(0));
+        payload.insert("all_devices_available".to_owned(), Value::Bool(false));
+        assert_eq!(
+            payload.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "enabled",
+                "peers",
+                "peer_count",
+                "remote_rows",
+                "all_devices_available"
+            ]
+        );
     }
 
     #[test]

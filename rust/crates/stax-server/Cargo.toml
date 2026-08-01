@@ -38,6 +38,10 @@ stax-core = { workspace = true }
 stax-adapters = { path = "../stax-adapters" }
 stax-etl = { path = "../stax-etl" }
 stax-memory = { path = "../stax-memory" }
+# `routes/sync.rs` delegates BOTH its endpoints here — `merge::merged_overview`
+# (the SQL batch D had to inline because it could not edit this manifest) and
+# `runner::status`, which closes DIV-133. One owner per helper, the wave-5 law.
+stax-sync = { path = "../stax-sync" }
 # `ServiceExt::map_response` — the one-line layer that restores starlette's
 # `; charset=utf-8` on `text/*` static responses.
 tower = { version = "0.5.2", features = ["util"] }

@@ -18,13 +18,19 @@ clap.workspace = true
 # the verb runners take — the store handle itself still comes from `stax-core`,
 # read-only. Declared as path deps rather than in `[workspace.dependencies]`
 # because the workspace manifest is the architect's this wave.
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["backup"] }
 serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
 # `resume` renders each agent's real invocation from `adapters/capabilities.json`
 # — the templates are data, so the loader (not a transcription) is the dependency.
 stax-adapters = { path = "../stax-adapters" }
 stax-core.workspace = true
 stax-memory = { path = "../stax-memory" }
+# The `sync` verb group is a thin shell over this crate: `runner::status` /
+# `run_push` / `run_pull` and the `age` identity helpers. It also brings `age`
+# and its 115 lock entries into the CLI binary — documented in stax-sync's
+# manifest, and the reason `stax-hooks` is still a SEPARATE binary (a hook pays
+# for what it links at every spawn; a human-run CLI verb does not).
+stax-sync = { path = "../stax-sync" }
 # WAVE 8 — `status` prices and aggregates through the SAME functions the HTTP
 # surface does. `stax_server::services` is where wave-5 batch C deliberately put
 # the `reports/*.py` + `services/*.py` layer, and its module doc names this wave
@@ -41,3 +47,9 @@ stax-server = { path = "../stax-server" }
 # `build_report`'s pre-backfill fallback path re-derives cost, and the CLI's
 # engine is the MANIFEST one (`cli.py` never calls `use_price_book_store`).
 stax-etl = { path = "../stax-etl" }
+# WAVE 8 TRANCHE 2 — `hooks install|uninstall|status|repair|run` are thin
+# wrappers over the wave-6 sidecar crate: the templates, the handlers and the
+# installer live there, exactly as `stackunderflow/hooks/` owns them in Python.
+# The standalone `stax-hooks` BINARY stays the hot path Claude Code spawns;
+# this dependency is what makes the human-facing verbs exist at all.
+stax-hooks = { path = "../stax-hooks" }

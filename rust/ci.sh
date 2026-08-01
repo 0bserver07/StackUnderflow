@@ -99,6 +99,17 @@ gate() {
 # `rust/`. Reproduced 2026-07-31 by extracting without it:
 #   error: couldn't read …/stackunderflow/data/models.toml (os error 2)
 # If another crate ever `include_str!`s outside `rust/`, its path goes here too.
+# STANDALONE, NOT A GATE (same ruling as `hooks-parity.sh`): `sync-parity.sh`
+# copies four SQLite fixtures per case per implementation across 173 corpus rows
+# and spawns two processes for each, plus nine `age` round trips and ten CLI
+# invocations. Measured wall time is well past the 10 s per-gate threshold this
+# file holds itself to, and none of it is a regression surface the other gates
+# do not already cover (`stax-sync`'s 101 unit tests run in gate 3, and
+# `endpoint-parity.sh`'s `SY-*` rows cover both sync endpoints in gate 6).
+# Run it directly:
+#   rust/sync-parity.sh                # 192 identical / 0 divergent
+#   rust/sync-parity.sh --build-state  # rebuild the synthetic multi-device stores
+
 echo "=== gate 0/7  clean-checkout build (git archive HEAD) ==="
 _cc_tmp="$(mktemp -d)"
 ( cd "$(git rev-parse --show-toplevel)" \

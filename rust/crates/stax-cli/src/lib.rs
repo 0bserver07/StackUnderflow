@@ -18,10 +18,12 @@ mod click;
 mod discovery;
 mod embeddings;
 mod memory;
+mod pyclock;
 mod resume;
 pub mod settings;
 mod status;
 mod store;
+mod sync;
 
 use std::process::ExitCode;
 
@@ -42,6 +44,7 @@ pub use memory::{MemoryArgs, MemoryVerb, run_memory};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
 pub use status::{StatusArgs, run_status};
 pub use store::{StoreArgs, render_store, run_store};
+pub use sync::{SyncArgs, SyncInitArgs, SyncJsonArgs, SyncVerb, run_sync};
 
 /// `stax` — the Rust port of StackUnderflow.
 ///
@@ -143,6 +146,9 @@ pub enum Command {
     Status(StatusArgs),
     /// Open the store read-only and print its schema version and row counts.
     Store(StoreArgs),
+    /// Encrypted, bring-your-own-bucket backup of your analytics aggregates
+    /// (opt-in).
+    Sync(SyncArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -187,6 +193,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         }
         Command::Status(args) => run_status(args)?.emit(),
         Command::Store(args) => run_store(args).map(|()| ExitCode::SUCCESS)?,
+        Command::Sync(args) => run_sync(args).map(|()| ExitCode::SUCCESS)?,
     };
     Ok(code)
 }
