@@ -46,6 +46,10 @@ tokio = { version = "1.52.3", features = [
     "macros",
     "net",
     "signal",
+    # `time`: non-test code uses tokio::time (DIV-203 found it declared only
+    # under dev-dependencies, surviving on feature unification — the same
+    # correctness-by-accident class the workspace serde_json note forbids).
+    "time",
 ] }
 # `fs` only: `ServeDir` is the `StaticFiles` mount, and nothing else in this
 # crate wants a middleware stack Python does not have.
