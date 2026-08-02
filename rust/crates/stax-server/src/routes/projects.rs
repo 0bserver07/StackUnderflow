@@ -2,13 +2,21 @@
 //!
 //! | Item | Method | FastAPI path | axum path | State |
 //! |---|---|---|---|---|
-//! | `RS-5-095` | `POST` | `/api/project` | `/api/project` | **open** — needs `infra/discovery.locate_logs` |
+//! | `RS-5-095` | `POST` | `/api/project` | `/api/project` | ported |
 //! | `RS-5-096` | `GET` | `/api/project` | `/api/project` | ported |
 //! | `RS-5-097` | `POST` | `/api/project-by-dir` | `/api/project-by-dir` | ported |
 //! | `RS-5-098` | `GET` | `/api/recent-projects` | `/api/recent-projects` | ported |
 //! | `RS-5-099` | `GET` | `/api/projects` | `/api/projects` | ported |
 //! | `RS-5-100` | `GET` | `/api/providers` | `/api/providers` | ported |
-//! | `RS-5-101` | `GET` | `/api/global-stats` | `/api/global-stats` | **open** — needs `queries.get_global_stats` |
+//! | `RS-5-101` | `GET` | `/api/global-stats` | `/api/global-stats` | ported |
+//!
+//! `POST /api/project` and `GET /api/global-stats` closed DIV-341 — the two
+//! endpoints a 716-row matrix never sent a byte at. The `POST` is the only
+//! handler in this module besides `POST /api/project-by-dir` that mutates
+//! process-global state, and its success leg is proved by
+//! `rust/PROJECT-SET-DIFFER.md` (two servers, two homes) rather than by a case
+//! row, because a case row would re-point the *reference's* current project
+//! mid-run and change what every later row means on one side only.
 //!
 //! `GET /api/projects` is the wave's flagship, and not because it is the
 //! prettiest: it is the endpoint the July perf campaign nearly lost. Its
@@ -55,11 +63,161 @@ const WORKTREE_SLUG_MARKERS: [&str; 2] = ["--claude-worktrees-", "--worktrees-"]
 /// Mount this module's endpoints onto `router`.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
     router
-        .route("/api/project", get(get_current_project))
+        // ONE `MethodRouter`, `post` before `get`, and the order is the
+        // contract rather than a style choice: `method_semantics` derives
+        // starlette's single-token `Allow` from axum's registration order, and
+        // `projects.py` declares `POST` at line 44 and `GET` at line 76. Two
+        // separate `.route()` calls for the same path would merge into the same
+        // router but the pair reads as one declaration here, matching the
+        // Python file it is transliterating.
+        .route("/api/project", post(set_project).get(get_current_project))
         .route("/api/project-by-dir", post(set_project_by_dir))
         .route("/api/recent-projects", get(get_recent_projects))
         .route("/api/projects", get(get_projects))
         .route("/api/providers", get(get_providers))
+        .route("/api/global-stats", get(get_global_stats))
+}
+
+// ── POST /api/project ────────────────────────────────────────────────────────
+
+/// `set_project` — the second of the two handlers that write the current
+/// project, and the one that takes a real filesystem path.
+///
+/// Guard order is load-bearing and is the reason three of its four legs can be
+/// ordinary case rows: every `raise` below happens *before* the assignment, so
+/// those legs are provably side-effect-free. Only the success leg mutates, and
+/// it is proved by `rust/PROJECT-SET-DIFFER.md`.
+async fn set_project(State(state): State<AppState>, body: Bytes) -> HandlerResult {
+    // `data: dict[str, str]` — same extractor shape as `set_project_by_dir`,
+    // same DIV-053 caveat about the 422 body.
+    let parsed: Value = serde_json::from_slice(&body).map_err(|_| {
+        HttpError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid JSON body".to_owned(),
+        )
+    })?;
+    // `project_path = data.get("project_path")`, then `if not project_path`.
+    // Truthiness, so a missing key and `""` take the same leg — the
+    // `--project ''` class the wave-8 findings put on every string option.
+    let project_path = parsed
+        .get("project_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if project_path.is_empty() {
+        return Err(HttpError::bad_request("Project path is required"));
+    }
+
+    let worker_path = project_path.clone();
+    let log_path = tokio::task::spawn_blocking(move || resolve_project_logs(&worker_path))
+        .await
+        .map_err(|err| join_failure(&err))??;
+
+    state.set_current_project(CurrentProject {
+        project_path: Some(project_path.clone()),
+        log_path: Some(log_path.clone()),
+    });
+
+    let mut obj = Map::new();
+    obj.insert("status".to_owned(), Value::from("success"));
+    obj.insert("project_path".to_owned(), Value::from(project_path));
+    obj.insert("log_path".to_owned(), Value::from(log_path));
+    obj.insert(
+        "message".to_owned(),
+        Value::from("Project set successfully. You can now view the dashboard."),
+    );
+    Ok(JsonBody::ok(Value::Object(obj)))
+}
+
+/// The blocking half of `set_project`: the two filesystem guards.
+fn resolve_project_logs(project_path: &str) -> Result<String, HttpError> {
+    if !Path::new(project_path).exists() {
+        return Err(HttpError::bad_request(format!(
+            "Project path does not exist: {project_path}"
+        )));
+    }
+    // `if not log_path or not os.path.exists(log_path)` — the second test is
+    // redundant (`locate_logs` only returns a directory it just stat'ed) but it
+    // is a separate `or` leg in the reference and a TOCTOU window is exactly
+    // where it would show, so it is ported as written.
+    let log_path = locate_logs(project_path).filter(|path| Path::new(path).exists());
+    log_path.ok_or_else(|| {
+        HttpError::not_found(format!(
+            "Claude logs not found for project: {project_path}. \
+             Make sure you have used Claude with this project."
+        ))
+    })
+}
+
+/// `infra/discovery.py::locate_logs` — a real project root → its claude log dir.
+fn locate_logs(project_dir: &str) -> Option<String> {
+    let root = claude_projects_root();
+    // `if not root.exists(): return None` — a machine that has never run Claude
+    // answers `None` rather than walking candidate names under a missing root.
+    if !root.exists() {
+        return None;
+    }
+    let slug = project_path_to_slug(project_dir);
+    for name in candidate_dirs(&slug) {
+        let target = root.join(&name);
+        if target.is_dir() && (has_jsonl(&target) || is_legacy_project(&target)) {
+            return Some(target.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// `_project_path_to_slug` — `abspath`, strip trailing separators, `/`→`-`, `_`→`-`.
+///
+/// Both replacements, in that order: a project called `my_app` lands in
+/// `-Users-me-code-my-app`, so a port that only translated the separator would
+/// miss every underscore-bearing project.
+fn project_path_to_slug(project_dir: &str) -> String {
+    let sep = std::path::MAIN_SEPARATOR;
+    abspath(project_dir)
+        .trim_end_matches(sep)
+        .replace([sep, '_'], "-")
+}
+
+/// `os.path.abspath` — `normpath(join(cwd, path))`, purely lexical.
+///
+/// No symlink resolution and no disk access, which is what makes it safe to run
+/// on a path that does not exist. `normpath` collapses `.`, `..` and repeated
+/// separators and drops a trailing separator (except on the root itself).
+fn abspath(path: &str) -> String {
+    let joined = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(path)
+    };
+    let normalised = resolve_lexically(&joined);
+    let text = normalised.to_string_lossy().into_owned();
+    if text.is_empty() {
+        std::path::MAIN_SEPARATOR.to_string()
+    } else {
+        text
+    }
+}
+
+/// `_candidate_dirs` — the slug, plus its leading-hyphen-stripped form when
+/// that differs (older Claude versions omitted the leading separator).
+fn candidate_dirs(slug: &str) -> Vec<String> {
+    let mut candidates = vec![slug.to_owned()];
+    let stripped = slug.trim_start_matches('-');
+    if stripped != slug {
+        candidates.push(stripped.to_owned());
+    }
+    candidates
+}
+
+/// `_is_legacy_project` — a `.continuation_cache.json` and NO jsonl.
+///
+/// The `and not _contains_logs` half matters: a directory holding both is a
+/// normal project, and the first disjunct has already claimed it.
+fn is_legacy_project(dir: &Path) -> bool {
+    dir.join(".continuation_cache.json").exists() && !has_jsonl(dir)
 }
 
 // ── the store row ────────────────────────────────────────────────────────────
@@ -276,14 +434,22 @@ fn decode_slug(dir_name: &str) -> String {
 }
 
 /// `Path.glob("*.jsonl")` — does the directory hold at least one transcript?
+///
+/// Serves both callers: `set_project_by_dir`'s "does this dir have log files"
+/// check and `discovery._contains_logs`.
+///
+/// The test is on the **name suffix**, not on `Path::extension`, and that is
+/// the transliteration rather than a shortcut. `pathlib.glob` compiles
+/// `*.jsonl` through `fnmatch` and matches it against `entry.name`, which on
+/// POSIX is case-SENSITIVE (so `A.JSONL` is not a log) and does not special-case
+/// a leading dot (so a bare `.jsonl` IS one). `extension()` disagrees on both:
+/// it has no case, and it returns `None` for `.jsonl` because that name is all
+/// stem. Neither file is likely; matching the reference costs one line.
 fn has_jsonl(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-        })
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".jsonl"))
     })
 }
 
@@ -457,6 +623,403 @@ fn providers_error(message: &str) -> JsonBody {
         Value::from(format!("Failed to list providers: {message}")),
     );
     JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
+}
+
+// ── GET /api/global-stats ────────────────────────────────────────────────────
+
+/// `get_global_stats` — the Overview tab's one request.
+///
+/// Python runs the whole blocking body in `run_in_threadpool` under a bare
+/// `except Exception`, so *every* failure — a missing store, an unsupported
+/// currency, a SQLite error mid-scan — comes back as a `500` carrying
+/// `{"error": "Failed to get global stats: …"}` rather than as FastAPI's
+/// `{"detail": …}`. Both halves are reproduced: the threadpool hop and the
+/// funnel.
+async fn get_global_stats(State(state): State<AppState>) -> JsonBody {
+    match tokio::task::spawn_blocking(move || compute_global_stats(&state)).await {
+        Ok(Ok(payload)) => JsonBody::ok(payload),
+        Ok(Err(err)) => global_stats_error(&err),
+        Err(err) => global_stats_error(&err.to_string()),
+    }
+}
+
+fn global_stats_error(message: &str) -> JsonBody {
+    let mut obj = Map::new();
+    obj.insert(
+        "error".to_owned(),
+        Value::from(format!("Failed to get global stats: {message}")),
+    );
+    JsonBody::with_status(StatusCode::INTERNAL_SERVER_ERROR, Value::Object(obj))
+}
+
+/// `_compute_global_stats` — store read, currency conversion, config stamp.
+fn compute_global_stats(state: &AppState) -> Result<Value, String> {
+    let conn = state.connect().map_err(|err| err.to_string())?;
+    let mut stats = global_stats(state, &conn).map_err(|err| err.to_string())?;
+    drop(conn);
+
+    let currency =
+        active_currency_payload(&state.config().currency).map_err(|err| err.to_string())?;
+    // `if rate != 1.0: _convert_global_stats_costs(stats, rate)`. DIV-052 keeps
+    // every non-USD code unreachable — `active_currency_payload` refuses rather
+    // than inventing a rate — so the rate here is always 1.0 and the walker is
+    // not ported blind. It is the same call the cost/commands/forks routes make.
+    stats.insert("currency".to_owned(), currency);
+
+    let mut config = Map::new();
+    config.insert(
+        "max_date_range_days".to_owned(),
+        Value::from(state.config().max_date_range_days),
+    );
+    stats.insert("config".to_owned(), Value::Object(config));
+    Ok(Value::Object(stats))
+}
+
+/// `queries.get_global_stats` — the mart fast path, or the raw-scan fallback.
+///
+/// The gate is row PRESENCE in `daily_mart`, not table existence: the migration
+/// creates the table empty, so a store that has never run the ETL backfill must
+/// fall through. Both paths emit the identical key order; on a mixed real store
+/// they emit different NUMBERS on purpose (the marts exclude non-billable rows),
+/// which is the reference's documented behaviour, not a rounding difference.
+fn global_stats(state: &AppState, conn: &Connection) -> anyhow::Result<Map<String, Value>> {
+    if has_daily_mart_rows(conn)? {
+        return Ok(global_stats_from_marts(conn)?);
+    }
+    global_stats_raw_scan(state, conn)
+}
+
+/// `_has_daily_mart_rows` — the table exists AND holds at least one row.
+fn has_daily_mart_rows(conn: &Connection) -> rusqlite::Result<bool> {
+    let exists = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_mart'")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .next()
+        .transpose()?
+        .is_some();
+    if !exists {
+        return Ok(false);
+    }
+    Ok(conn
+        .prepare("SELECT 1 FROM daily_mart LIMIT 1")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .next()
+        .transpose()?
+        .is_some())
+}
+
+/// The seven keys both store paths build, in the reference's literal order.
+struct GlobalStats {
+    first_use_date: String,
+    last_use_date: String,
+    /// `daily_token_usage`, in day-of-first-appearance order.
+    daily_tokens: Map<String, Value>,
+    /// `daily_costs`, same ordering rule.
+    daily_costs: Map<String, Value>,
+    /// `models`, in model-of-first-appearance order.
+    models: Map<String, Value>,
+    cache_read: i64,
+    cache_write: i64,
+}
+
+impl GlobalStats {
+    /// The `return {...}` literal — key order is the byte contract.
+    fn into_map(self) -> Map<String, Value> {
+        let mut out = Map::new();
+        out.insert(
+            "first_use_date".to_owned(),
+            Value::from(self.first_use_date),
+        );
+        out.insert("last_use_date".to_owned(), Value::from(self.last_use_date));
+        // `list(map.values())` — the dicts are insertion-ordered and
+        // `serde_json`'s `preserve_order` makes `Map` the same, so this is the
+        // same walk rather than a re-sort.
+        out.insert(
+            "daily_token_usage".to_owned(),
+            Value::Array(self.daily_tokens.into_iter().map(|(_, v)| v).collect()),
+        );
+        out.insert(
+            "daily_costs".to_owned(),
+            Value::Array(self.daily_costs.into_iter().map(|(_, v)| v).collect()),
+        );
+        out.insert("models".to_owned(), Value::Object(self.models));
+        out.insert(
+            "total_cache_read_tokens".to_owned(),
+            Value::from(self.cache_read),
+        );
+        out.insert(
+            "total_cache_write_tokens".to_owned(),
+            Value::from(self.cache_write),
+        );
+        out
+    }
+
+    /// `daily_tokens_map.setdefault(day, …)` then `+=` on both counters.
+    ///
+    /// The mart path only; the raw path builds `daily_token_usage` from its own
+    /// dedicated scan so a day with no priced rows still appears.
+    fn add_tokens(&mut self, day: &str, inp: i64, out: i64) {
+        let entry = self
+            .daily_tokens
+            .entry(day.to_owned())
+            .or_insert_with(|| json_day_tokens(day));
+        add_i64(entry, "input", inp);
+        add_i64(entry, "output", out);
+    }
+
+    /// The `daily_costs` / `models` accumulation, identical in both paths.
+    ///
+    /// `+=` on a plain `f64`, never a compensated sum: the reference walks a
+    /// Python `dict` with `bucket["cost"] += cost`, and Neumaier here would
+    /// produce a *better* number that does not match.
+    fn add_cost(&mut self, day: &str, model: &str, n: i64, cost: f64) {
+        let bucket = self
+            .daily_costs
+            .entry(day.to_owned())
+            .or_insert_with(|| json_day_cost(day));
+        add_f64(bucket, "cost", cost);
+        if !model.is_empty() {
+            let by_model = bucket
+                .get_mut("by_model")
+                .and_then(Value::as_object_mut)
+                .expect("by_model is an object");
+            add_f64_key(by_model, model, cost);
+
+            let entry = self
+                .models
+                .entry(model.to_owned())
+                .or_insert_with(json_model_zero);
+            add_i64(entry, "count", n);
+            add_f64(entry, "cost", cost);
+        }
+    }
+}
+
+fn json_day_tokens(day: &str) -> Value {
+    let mut obj = Map::new();
+    obj.insert("date".to_owned(), Value::from(day));
+    obj.insert("input".to_owned(), Value::from(0_i64));
+    obj.insert("output".to_owned(), Value::from(0_i64));
+    Value::Object(obj)
+}
+
+fn json_day_cost(day: &str) -> Value {
+    let mut obj = Map::new();
+    obj.insert("date".to_owned(), Value::from(day));
+    obj.insert("cost".to_owned(), Value::from(0.0_f64));
+    obj.insert("by_model".to_owned(), Value::Object(Map::new()));
+    Value::Object(obj)
+}
+
+fn json_model_zero() -> Value {
+    let mut obj = Map::new();
+    obj.insert("count".to_owned(), Value::from(0_i64));
+    obj.insert("cost".to_owned(), Value::from(0.0_f64));
+    Value::Object(obj)
+}
+
+fn add_i64(target: &mut Value, key: &str, delta: i64) {
+    if let Some(slot) = target.get_mut(key) {
+        *slot = Value::from(slot.as_i64().unwrap_or(0) + delta);
+    }
+}
+
+fn add_f64(target: &mut Value, key: &str, delta: f64) {
+    if let Some(slot) = target.get_mut(key) {
+        *slot = Value::from(slot.as_f64().unwrap_or(0.0) + delta);
+    }
+}
+
+fn add_f64_key(target: &mut Map<String, Value>, key: &str, delta: f64) {
+    let slot = target
+        .entry(key.to_owned())
+        .or_insert_with(|| Value::from(0.0_f64));
+    *slot = Value::from(slot.as_f64().unwrap_or(0.0) + delta);
+}
+
+/// `_global_stats_from_marts` — one indexed scan of each mart.
+fn global_stats_from_marts(conn: &Connection) -> rusqlite::Result<Map<String, Value>> {
+    // Lifetime totals + billable date range. An aggregate over an EMPTY table
+    // still returns one all-NULL row, so `prow` is never `None` — the
+    // reference's `if prow else 0` guard is dead and reproduced as such.
+    let (first_ts, last_ts, cache_read, cache_write) = conn.query_row(
+        "SELECT MIN(first_ts) AS first_ts, MAX(last_ts) AS last_ts, \
+                SUM(total_cache_read)   AS cache_read, \
+                SUM(total_cache_create) AS cache_write \
+         FROM project_mart",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        },
+    )?;
+
+    let mut stats = GlobalStats {
+        // `(prow["first_ts"] or "")[:10]` — a NULL and an empty string take the
+        // same leg, and the slice is on characters, not bytes.
+        first_use_date: first_ten(first_ts.as_deref()),
+        last_use_date: first_ten(last_ts.as_deref()),
+        daily_tokens: Map::new(),
+        daily_costs: Map::new(),
+        models: Map::new(),
+        cache_read: cache_read.unwrap_or(0),
+        cache_write: cache_write.unwrap_or(0),
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT day, COALESCE(model, '') AS model, \
+                SUM(input_tokens)  AS inp, SUM(output_tokens) AS out, \
+                SUM(cost_usd)      AS cost, SUM(message_count) AS n \
+         FROM daily_mart GROUP BY day, model ORDER BY day",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let day: String = row.get(0)?;
+        let model: String = row.get(1)?;
+        let inp: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+        let out: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+        let cost: f64 = row.get::<_, Option<f64>>(4)?.unwrap_or(0.0);
+        let n: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+        // "Empty-model rows carry tokens but no priced cost" — the `if model`
+        // guard, mirrored from the raw path so an unpriced row never inflates
+        // spend. The tokens still land in `daily_token_usage`.
+        let cost = if model.is_empty() { 0.0 } else { cost };
+        stats.add_tokens(&day, inp, out);
+        stats.add_cost(&day, &model, n, cost);
+    }
+    Ok(stats.into_map())
+}
+
+/// `_global_stats_raw_scan` — the pre-mart fallback, three scans of `messages`.
+///
+/// Unreachable on any backfilled store, which is why it is ported rather than
+/// stubbed: "the fallback is not ported" would be a divergence that only shows
+/// up on a fresh install, and the campaign has already been bitten once by a
+/// differ that agreed by vacuum. Proved by pointing the differ at a copy of the
+/// parity home with `daily_mart` emptied.
+fn global_stats_raw_scan(
+    state: &AppState,
+    conn: &Connection,
+) -> anyhow::Result<Map<String, Value>> {
+    let (first_ts, last_ts, cache_read, cache_write) = conn.query_row(
+        "SELECT MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts, \
+                SUM(cache_read_tokens)   AS cache_read, \
+                SUM(cache_create_tokens) AS cache_write \
+         FROM messages",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        },
+    )?;
+
+    let mut stats = GlobalStats {
+        first_use_date: first_ten(first_ts.as_deref()),
+        last_use_date: first_ten(last_ts.as_deref()),
+        daily_tokens: Map::new(),
+        daily_costs: Map::new(),
+        models: Map::new(),
+        cache_read: cache_read.unwrap_or(0),
+        cache_write: cache_write.unwrap_or(0),
+    };
+
+    // Scan 2 — `daily_token_usage` is built by ITS OWN query here, not by the
+    // per-model rollup, so a day whose only rows are unpriced still appears.
+    // Kept as a separate scan for that reason, not for symmetry with the marts.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT substr(timestamp,1,10) AS day, \
+                    SUM(input_tokens) AS inp, SUM(output_tokens) AS out \
+             FROM messages GROUP BY day ORDER BY day",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let day: String = row.get(0)?;
+            let mut obj = Map::new();
+            obj.insert("date".to_owned(), Value::from(day.clone()));
+            obj.insert(
+                "input".to_owned(),
+                Value::from(row.get::<_, Option<i64>>(1)?.unwrap_or(0)),
+            );
+            obj.insert(
+                "output".to_owned(),
+                Value::from(row.get::<_, Option<i64>>(2)?.unwrap_or(0)),
+            );
+            stats.daily_tokens.insert(day, Value::Object(obj));
+        }
+    }
+
+    // Scan 3 — per-(day, provider, model, speed). `speed` is in the GROUP BY so
+    // the Anthropic priority multiplier reaches the right subset of tokens; the
+    // `models` map still aggregates across speeds because the public shape has
+    // no speed dimension.
+    let engine = crate::pricing::engine(conn, state.package_dir())?;
+    let mut stmt = conn.prepare(
+        "SELECT substr(m.timestamp,1,10) AS day, \
+                p.provider AS provider, \
+                COALESCE(m.model,'') AS model, \
+                COALESCE(m.speed,'standard') AS speed, \
+                SUM(m.input_tokens) AS inp, SUM(m.output_tokens) AS out, \
+                SUM(m.cache_create_tokens) AS cache_create, \
+                SUM(m.cache_read_tokens) AS cache_read, \
+                COUNT(*) AS n \
+         FROM messages m \
+         JOIN sessions s ON s.id = m.session_fk \
+         JOIN projects p ON p.id = s.project_id \
+         GROUP BY day, provider, model, speed ORDER BY day",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let day: String = row.get(0)?;
+        let provider: Option<String> = row.get(1)?;
+        let model: String = row.get(2)?;
+        let speed: String = row.get(3)?;
+        let inp: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+        let out: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+        let cache_create: i64 = row.get::<_, Option<i64>>(6)?.unwrap_or(0);
+        let cache_read_row: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(0);
+        let n: i64 = row.get(8)?;
+
+        let provider = engine.resolve_pricing_provider(provider.as_deref(), &model);
+        let cost = if model.is_empty() {
+            0.0
+        } else {
+            engine
+                .compute_cost(
+                    &stax_etl::pricing::RawTokens::canonical(
+                        inp,
+                        out,
+                        cache_create,
+                        cache_read_row,
+                    ),
+                    &model,
+                    &provider,
+                    &speed,
+                    None,
+                )
+                .total_cost
+        };
+        // The reference does NOT touch `daily_token_usage` in this loop — scan 2
+        // already owns it — so only the cost half is accumulated here.
+        stats.add_cost(&day, &model, n, cost);
+    }
+    Ok(stats.into_map())
+}
+
+/// `(value or "")[:10]` — the day part of an ISO timestamp.
+///
+/// Character-based, like Python's slice: a store whose `first_ts` somehow held
+/// multi-byte text must not be cut mid-codepoint.
+fn first_ten(value: Option<&str>) -> String {
+    value.unwrap_or_default().chars().take(10).collect()
 }
 
 // ── GET /api/projects ────────────────────────────────────────────────────────
@@ -1562,6 +2125,152 @@ mod tests {
         assert!(filter.contains("cursor") && filter.contains("cline"));
         assert!(normalise_provider_filter(Some(&["".to_owned()])).is_none());
         assert!(normalise_provider_filter(None).is_none());
+    }
+
+    // ── POST /api/project (RS-5-095) ─────────────────────────────────────────
+
+    #[test]
+    fn the_slug_replaces_underscores_as_well_as_separators() {
+        // `_project_path_to_slug` does BOTH replacements, and the underscore one
+        // is the easy half to miss: `/Users/me/code/my_app` lives in
+        // `-Users-me-code-my-app`, so a port that only translated `/` would
+        // fail to find every underscore-bearing project on the machine.
+        assert_eq!(
+            project_path_to_slug("/Users/me/code/my_app"),
+            "-Users-me-code-my-app"
+        );
+        // `abspath` normalises before the replacement, so `..` never reaches
+        // the slug — a `..` in a slug would match no directory at all.
+        assert_eq!(project_path_to_slug("/a/b/../c"), "-a-c");
+        // `.rstrip(os.sep)` after `normpath`: a trailing separator is gone
+        // either way, and the root degenerates to the empty slug.
+        assert_eq!(project_path_to_slug("/a/b/"), "-a-b");
+        assert_eq!(project_path_to_slug("/"), "");
+    }
+
+    #[test]
+    fn the_candidate_list_carries_the_leading_hyphen_variant_only_when_it_differs() {
+        assert_eq!(
+            candidate_dirs("-a-b"),
+            vec!["-a-b".to_owned(), "a-b".to_owned()]
+        );
+        // `stripped != slug` — no duplicate entry for a slug with no leading
+        // separator, which would double every stat call for no gain.
+        assert_eq!(candidate_dirs("a-b"), vec!["a-b".to_owned()]);
+    }
+
+    #[test]
+    fn a_jsonl_is_matched_by_name_the_way_glob_matches_it() {
+        let dir = std::env::temp_dir().join(format!("stax-jsonl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        assert!(!has_jsonl(&dir));
+        // POSIX `glob("*.jsonl")` is case-sensitive: this is NOT a log file,
+        // and `Path::extension().eq_ignore_ascii_case` would have said it was.
+        std::fs::write(dir.join("A.JSONL"), b"").expect("write");
+        assert!(!has_jsonl(&dir));
+        // `.jsonl` with no stem IS matched by `fnmatch` (`*` takes the empty
+        // string and pathlib does not hide dotfiles) — `extension()` returns
+        // `None` here and would have said it was not.
+        std::fs::write(dir.join(".jsonl"), b"").expect("write");
+        assert!(has_jsonl(&dir));
+
+        // A `.continuation_cache.json` alongside a jsonl is a normal project,
+        // not a legacy one — `_is_legacy_project`'s `and not _contains_logs`.
+        std::fs::write(dir.join(".continuation_cache.json"), b"{}").expect("write");
+        assert!(!is_legacy_project(&dir));
+        std::fs::remove_file(dir.join(".jsonl")).expect("rm");
+        assert!(is_legacy_project(&dir));
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn locate_logs_answers_none_when_the_root_does_not_exist() {
+        // `if not root.exists(): return None`. Pointed at a directory that
+        // cannot exist, so no candidate name is ever built.
+        let missing = std::env::temp_dir().join(format!("stax-no-claude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        // The public entry reads the environment, so exercise the guard
+        // through the piece that does not: an absent root has no candidates.
+        assert!(!missing.exists());
+        assert!(!has_jsonl(&missing));
+        assert!(!is_legacy_project(&missing));
+    }
+
+    // ── GET /api/global-stats (RS-5-101) ─────────────────────────────────────
+
+    #[test]
+    fn the_global_stats_key_order_is_the_return_literal() {
+        let stats = GlobalStats {
+            first_use_date: "2025-02-21".to_owned(),
+            last_use_date: "2026-08-01".to_owned(),
+            daily_tokens: Map::new(),
+            daily_costs: Map::new(),
+            models: Map::new(),
+            cache_read: 7,
+            cache_write: 9,
+        };
+        assert_eq!(
+            stax_memory::pyjson::dumps_http(&Value::Object(stats.into_map())),
+            r#"{"first_use_date":"2025-02-21","last_use_date":"2026-08-01","daily_token_usage":[],"daily_costs":[],"models":{},"total_cache_read_tokens":7,"total_cache_write_tokens":9}"#
+        );
+    }
+
+    #[test]
+    fn an_empty_model_contributes_tokens_but_never_cost_or_a_models_entry() {
+        let mut stats = GlobalStats {
+            first_use_date: String::new(),
+            last_use_date: String::new(),
+            daily_tokens: Map::new(),
+            daily_costs: Map::new(),
+            models: Map::new(),
+            cache_read: 0,
+            cache_write: 0,
+        };
+        // The mart path zeroes an empty-model row's cost before it gets here;
+        // `add_cost` still has to keep it out of `by_model` and `models`.
+        stats.add_tokens("2026-01-01", 10, 2);
+        stats.add_cost("2026-01-01", "", 3, 0.0);
+        stats.add_tokens("2026-01-01", 5, 1);
+        stats.add_cost("2026-01-01", "opus", 4, 1.5);
+
+        let rendered = stax_memory::pyjson::dumps_http(&Value::Object(stats.into_map()));
+        // Tokens accumulate across both rows; the day appears once.
+        assert!(
+            rendered
+                .contains(r#""daily_token_usage":[{"date":"2026-01-01","input":15,"output":3}]"#)
+        );
+        // `cost` is a float from the moment the bucket is created, so a
+        // zero-cost day renders `0.0` and not `0`.
+        assert!(rendered.contains(r#""by_model":{"opus":1.5}"#));
+        assert!(rendered.contains(r#""models":{"opus":{"count":4,"cost":1.5}}"#));
+    }
+
+    #[test]
+    fn a_zero_cost_day_still_renders_a_float() {
+        let mut stats = GlobalStats {
+            first_use_date: String::new(),
+            last_use_date: String::new(),
+            daily_tokens: Map::new(),
+            daily_costs: Map::new(),
+            models: Map::new(),
+            cache_read: 0,
+            cache_write: 0,
+        };
+        stats.add_cost("2026-01-01", "", 1, 0.0);
+        let rendered = stax_memory::pyjson::dumps_http(&Value::Object(stats.into_map()));
+        assert!(rendered.contains(r#"{"date":"2026-01-01","cost":0.0,"by_model":{}}"#));
+    }
+
+    #[test]
+    fn the_date_slice_is_ten_characters_and_null_is_the_empty_string() {
+        assert_eq!(first_ten(Some("2026-08-01T12:34:56Z")), "2026-08-01");
+        assert_eq!(first_ten(None), "");
+        assert_eq!(first_ten(Some("")), "");
+        // Shorter than ten is returned whole — Python's slice never pads.
+        assert_eq!(first_ten(Some("2026")), "2026");
     }
 
     #[test]

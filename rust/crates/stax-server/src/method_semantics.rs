@@ -60,14 +60,22 @@
 //! `{"detail":"Method Not Allowed"}`, and hyper strips the body of a `HEAD`
 //! response while keeping the `content-length` — exactly what uvicorn does.
 //!
-//! ## The one case this cannot reach, and why it is honest
+//! ## The one case this could not reach — CLOSED, and not by this file
 //!
 //! `/api/project` declares `POST` first and `GET` second in `projects.py`, so
-//! the reference answers `allow: POST`. The port registers only the `GET` (the
-//! `POST` is unported — **DIV-341**) and therefore answers `allow: GET`. That is
-//! not a defect of this layer: a router cannot name a method it does not have.
-//! It closes when `RS-5-095` lands, and `!AL-project-head` in the case file
-//! reports it every run until then.
+//! the reference answers `allow: POST`. The port registered only the `GET` (the
+//! `POST` was unported — **DIV-341**) and therefore answered `allow: GET`. That
+//! was never a defect of this layer: a router cannot name a method it does not
+//! have.
+//!
+//! `RS-5-095` landed the `POST` on 2026-08-01 and the row (`H-head-project`)
+//! went green with **no edit here**. Rule 2 keeps the first non-`HEAD` token of
+//! axum's `Allow`, axum lists methods in registration order, and
+//! `routes::projects::register` now spells
+//! `post(set_project).get(get_current_project)` in one `MethodRouter`. So the
+//! wave-5 law — *register in the Python module's declaration order* — is not a
+//! tidiness convention: it is the input this rule computes from, and
+//! `H-head-project` is the one row in 735 that would notice it being broken.
 
 use axum::extract::Request;
 use axum::http::{HeaderValue, Method, StatusCode, header};

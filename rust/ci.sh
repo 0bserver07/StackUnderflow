@@ -55,6 +55,20 @@
 #                               this is 3.7x over it, so it stays out and
 #                               `cargo test -p stax-hooks` (75 tests, 0.02 s)
 #                               carries the per-commit half.
+#   rust/project-set-differ.sh  `POST /api/project`'s SUCCESS leg (RS-5-095).
+#                               Out of gate 6 for a reason of KIND, not of
+#                               speed: it needs TWO homes. What the endpoint
+#                               mutates is process-global server state, so a
+#                               row in the shared-home matrix would re-point
+#                               the reference's current project mid-run — and
+#                               only the reference's — silently changing what
+#                               every row after it means. Six requests per
+#                               side, raw sockets, transcripts diffed;
+#                               ~15 s. The three ERROR legs are ordinary rows
+#                               in gate 6, because the guard order in
+#                               `projects.py:44` proves they return before the
+#                               assignment. `rust/PROJECT-SET-DIFFER.md` is
+#                               the argument in full.
 #
 # Usage:  rust/ci.sh                (runs all seven)
 #         rust/ci.sh --skip-parity  (gates 0-3 only; boxes without the venv)

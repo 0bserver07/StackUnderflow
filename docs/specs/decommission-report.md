@@ -133,12 +133,25 @@ Idempotence was proven on all three reindex writers, both sides
 DIV-146's law.
 
 **The two that have no row, no reason, and no implementation** — this is a gap
-the 716-row tally cannot see, filed here as **DIV-341**:
+the 716-row tally cannot see, filed here as **DIV-341**. *(CLOSED 2026-08-01 —
+both ported and byte-identical; see the note after this list.)*
 
 * `POST /api/project` (RS-5-095) — open, needs `infra/discovery.locate_logs`.
 * `GET /api/global-stats` (RS-5-101) — open, needs `queries.get_global_stats`.
 
-Both are recorded as `**open**` in `routes/projects.rs`'s own module doc table,
+**DIV-341 closed, 2026-08-01.** `RS-5-101` is byte-identical at 38,146 bytes —
+the figure the closing pass had measured on the reference before the port
+existed — on both of `get_global_stats`'s store paths (the mart fast path in
+gate 6, and `_global_stats_raw_scan` on a `daily_mart`-emptied copy, off-matrix:
+DIV-366). `RS-5-095`'s three error legs are ordinary gate-6 rows and its success
+leg is `rust/project-set-differ.sh`, **6/6 byte-identical on two homes**. The
+matrix went 657 → **662 identical, 76 → 71 known-open, still 0 divergent of
+735**, and `H-head-project` — the free completeness check this report predicted
+— went green with it. One incidental defect fell out: **DIV-365**, `has_jsonl`
+was `Path::extension().eq_ignore_ascii_case`, which is neither of the two things
+`Path.glob("*.jsonl")` does.
+
+Both were recorded as `**open**` in `routes/projects.rs`'s own module doc table,
 so nobody hid them; but they are absent from the case file entirely, carry no
 `!` row and no DIV, and the matrix therefore reports `0 divergent` while two
 endpoints answer 404 on the port. The other two unmounted routes *are* visible:
