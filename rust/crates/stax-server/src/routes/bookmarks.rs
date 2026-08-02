@@ -139,16 +139,14 @@ fn http_detail(status: StatusCode, detail: &str) -> JsonBody {
 }
 
 /// `data: dict[str, Any]` — a JSON **object** or FastAPI's `422`.
+///
+/// `Any` means the VALUES are unconstrained: `{"notes": 3}` is valid and reaches
+/// the handler, where `dict[str, str]` would have rejected it (DIV-367). The
+/// container half is the shared one — this module used to render every
+/// rejection as `{"detail":"Invalid JSON body"}`, which is neither the reference
+/// `dict_type` nor its `missing` nor its `json_invalid`.
 fn parse_object_body(body: &Bytes) -> Result<Map<String, Value>, JsonBody> {
-    match serde_json::from_slice::<Value>(body) {
-        Ok(Value::Object(map)) => Ok(map),
-        // The pydantic `detail` list is not reproduced byte-for-byte (DIV-053);
-        // the status is, and that is what the frontend branches on.
-        _ => Err(http_detail(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body",
-        )),
-    }
+    crate::json::dict_body(body)
 }
 
 // ── GET /api/bookmarks ───────────────────────────────────────────────────────

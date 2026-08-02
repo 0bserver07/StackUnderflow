@@ -3276,51 +3276,127 @@ AL-static-post-miss | POST   | /static/react/nope.js            | {}
 !AL-static-root-head| HEAD   | /static                          | -
 !AL-static-root-put | PUT    | /static                          | {}
 
-# ── DIV-367: `dict[str, str]` is a VALIDATOR, and the port has never run it ──
-#
-# Found while closing DIV-341, by asking the question the three `P-set-*` rows
-# do not: what does the endpoint do with a `project_path` that is not a string?
+# ── DIV-367 — CLOSED. The `dict`-bodied handler class, byte-for-byte ────────
 #
 # `set_project(data: dict[str, str])` is not "give me the parsed body". FastAPI
-# hands it to pydantic, which checks BOTH the container and every value, and a
-# failure never reaches the handler — it is a `422` from the installed
-# `request_validation_exception_handler`. The port parses with `serde_json`,
-# reads `.get(key).and_then(as_str)`, and a non-string therefore falls through
-# to the handler's OWN `if not project_path` guard: a `400`, with a plausible
-# message, for a request the reference never let in.
+# hands the body to pydantic, which checks BOTH the container and every value,
+# and a failure never reaches the handler — it is a `422` from the installed
+# `request_validation_exception_handler`. The port used to parse with
+# `serde_json`, read `.get(key).and_then(as_str)`, and let a non-string fall
+# through to the handler's OWN `if not project_path` guard: a `400`, with a
+# plausible message, for a request the reference never let in. A status is what
+# a caller branches on, so that was strictly worse than DIV-053.
 #
-# This is DIV-053's family but it is strictly worse than DIV-053, which recorded
-# only that the 422 BODY is not reproduced byte-for-byte. Here the STATUS
-# diverges too, and a status divergence is the kind a caller branches on.
+# THE CLASS, ENUMERATED FROM THE PYTHON TREE (ast, every `@router.*` handler
+# whose body parameter mentions `dict`) — ten handlers, three annotations:
 #
-# Measured 2026-08-01 on `.parity-state/fresh`, reference bodies transcribed
-# verbatim (they are short, and a transcription nobody can check is how the
-# wave-8 docstring bug survived):
+#   dict[str, str]        projects.py:45   POST /api/project
+#   (container + VALUES)  projects.py:96   POST /api/project-by-dir
+#                         tags.py:43       POST /api/tags/session/{id}
 #
-#   {"project_path": 123}   422 {"detail":[{"type":"string_type","loc":["body",
-#                               "project_path"],"msg":"Input should be a valid
-#                               string","input":123}]}          port: 400
-#   {"project_path": null}  422, same shape, `"input":null`      port: 400
-#   []                      422 {"detail":[{"type":"dict_type","loc":["body"],
-#                               "msg":"Input should be a valid dictionary",
-#                               "input":[]}]}                    port: 400
-#   {"dir_name": 123}       422, `string_type`, `loc: ["body","dir_name"]`
-#                                                                port: 400
+#   dict[str, Any]        bookmarks.py:56  POST /api/bookmarks
+#   (container only)      bookmarks.py:107 PUT  /api/bookmarks/{id}
+#                         bookmarks.py:146 POST /api/bookmarks/toggle
 #
-# NOT SCOPED TO THIS MODULE, which is why these rows record it rather than a
-# patch closing it. Three handlers in the reference take `dict[str, str]` —
-# `projects.py:45`, `projects.py:96` and `tags.py:43` — and several more take a
-# bare `dict`, which enforces the container half alone. Closing it in
-# `routes/projects.rs` only would leave the class half-shut, and the campaign
-# has a name for that (DIV-361's three rows exist for the same reason). The fix
-# is one shared body extractor that speaks pydantic's error shape, applied to
-# every such handler at once; it is a bounded, fully-specified item and it is
-# the architect's to schedule.
+#   dict (bare)           cfg.py:83        POST /api/cfg/currency
+#   (container only)      cfg.py:119       POST /api/cfg/model-aliases
+#                         data.py:1104     POST /api/refresh          — NO ROW
 #
-# Side-effect-free by construction: every leg below returns either in FastAPI's
-# validator (before the handler exists) or on the handler's FIRST guard, in both
-# implementations. Nothing follows them.
-!V-set-int          | POST | /api/project                       | {"project_path": 123}
-!V-set-null         | POST | /api/project                       | {"project_path": null}
-!V-set-list         | POST | /api/project                       | []
-!V-by-dir-int       | POST | /api/project-by-dir                | {"dir_name": 123}
+#   dict | None = None    etl.py:86        POST /api/etl/backfill     — NO ROW
+#
+# The two "NO ROW" members keep their standing rulings: both are writers whose
+# 422 legs are safe *only if the port rejects*, and "a port bug that failed to
+# reject `[]` would turn the safe row into a live mart rebuild". They inherit
+# the shared extractor without a row, and `routes/data.rs`'s unit test is what
+# stands in for one. Everything else below is rowed.
+#
+# All ten used to have their own private check — SIX distinct spellings, four of
+# which answered a `400`. There is now ONE: `crate::json::{dict_body,
+# str_dict_body, optional_dict_body}`.
+#
+# EVERY SHAPE BELOW WAS MEASURED against the reference on `.parity-state/fresh`
+# (2026-08-02, fastapi + pydantic v2), never transcribed — DIV-127's lesson is
+# that an error shape no probe issued is a guess, and `routes/data.rs` had been
+# carrying four guessed ones for two waves. Three findings came out of the
+# probe:
+#
+#   1. A body of the four bytes `null` is **`missing`**, not `dict_type`.
+#      FastAPI hands pydantic `None`, and `None` against a required field is
+#      "no value supplied" — the container check never runs. No transcription
+#      had this. `V-set-json-null` is the row.
+#   2. `dict[str, str]` reports EVERY offending key, in **body order**, not the
+#      first. `V-set-two-bad` sends `{"z": 1, "a": 2}` and gets `z` then `a`,
+#      which is insertion order and not sorted order — the row that makes
+#      `serde_json`'s `preserve_order` feature load-bearing rather than
+#      incidental.
+#   3. The malformed-body leg is **not pydantic's at all**. `fastapi/routing.py`
+#      calls `await request.json()` and catches CPython's `JSONDecodeError`
+#      itself, so `loc` carries `e.pos` and `ctx.error` carries `e.msg` — and
+#      that is true for a `BaseModel` body exactly as for a `dict` one. The
+#      three model-bodied handlers therefore join the class for this one leg;
+#      see the `V-*-bad-json` rows at the bottom.
+#
+# SIDE-EFFECT-FREE BY CONSTRUCTION, and it is checked per row rather than
+# assumed: every leg returns either inside FastAPI's validator (before the
+# handler exists) or on the handler's FIRST guard, on BOTH implementations.
+# `V-bm-put-*` are aimed at a bookmark id that does not exist, so even the leg
+# that is *supposed* to reach the handler stops at its 404.
+
+# `dict[str, str]` — the value half. `{"project_path": 123}` used to be a 400.
+V-set-int           | POST | /api/project                       | {"project_path": 123}
+V-set-null          | POST | /api/project                       | {"project_path": null}
+V-by-dir-int        | POST | /api/project-by-dir                | {"dir_name": 123}
+V-by-dir-null       | POST | /api/project-by-dir                | {"dir_name": null}
+V-tag-null          | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | {"tag": null}
+# Finding 2: every offending key, in body order. Sorted order would say `a, z`.
+V-set-two-bad       | POST | /api/project                       | {"z": 1, "a": 2}
+# A valid value beside an invalid one still fails, and only the bad key reports.
+V-set-mixed         | POST | /api/project                       | {"project_path": "", "x": 3}
+# `dict[str, str]` — the container half, shared with the other two annotations.
+V-set-list          | POST | /api/project                       | []
+V-set-num           | POST | /api/project                       | 3
+V-set-str           | POST | /api/project                       | "x"
+V-by-dir-list       | POST | /api/project-by-dir                | []
+V-tag-list          | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | []
+# Finding 1: `null` and an absent body are the SAME answer, and it is `missing`.
+V-set-json-null     | POST | /api/project                       | null
+V-set-nobody        | POST | /api/project                       | -
+V-tag-nobody        | POST | /api/tags/session/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
+V-cur-nobody        | POST | /api/cfg/currency                  | -
+# `dict[str, Any]` — the container is checked, the VALUES are not. `V-bm-put-int`
+# is the row that proves the difference: `{"notes": 3}` is legal, reaches the
+# handler, and stops at the 404 for a bookmark that does not exist. Without it,
+# an over-eager shared extractor that string-checked everything would pass every
+# other row in this block.
+V-bm-list           | POST | /api/bookmarks                     | []
+V-bm-toggle-list    | POST | /api/bookmarks/toggle              | []
+V-bm-put-list       | PUT  | /api/bookmarks/no-such-bookmark    | []
+V-bm-put-int        | PUT  | /api/bookmarks/no-such-bookmark    | {"notes": 3}
+# bare `dict` — container only, which is why `K-cur-not-string` ({"code": 3})
+# reaches the handler and takes its 400 two hundred rows above this one.
+V-cur-list          | POST | /api/cfg/currency                  | []
+V-alias-list        | POST | /api/cfg/model-aliases             | []
+# Finding 3: the malformed-body leg is FastAPI's own, built before pydantic is
+# reached, and CPython's decoder is underneath it. Two offsets and two of the
+# nine messages, because a single `nope` at offset 0 would pass against a
+# hard-coded `(0, "Expecting value")` — which is exactly what three route
+# modules had.
+V-set-bad-json      | POST | /api/project                       | nope
+V-bm-bad-json       | POST | /api/bookmarks                     | nope
+V-alias-bad-json    | POST | /api/cfg/model-aliases             | {oops
+# The same leg on the three pydantic-`BaseModel` bodies (`BudgetBody`,
+# `DismissRequest`, `ClaudeMdPreviewBody`). The annotation does not reach this
+# code path, so the bytes are identical to the dict-bodied ones — and
+# `routes/optimize.rs` had written the opposite in a doc comment.
+#
+# `POST /api/patterns/dismiss` has no row at any other status (it bumps a
+# counter in `proactive_state.json`, non-idempotent under one shared home), and
+# `DIV-e-patterns.md` finding 10 named its four 422 legs as an instructed
+# law-5 gap. This one is closable because it is the ONLY leg where both
+# implementations refuse in the JSON decoder: `{oops` cannot be parsed by
+# CPython or by `serde_json`, so `record_dismissal` is unreachable from this row
+# no matter which side has the bug. The other three legs are pydantic's and stay
+# unprobed.
+V-budget-bad-json   | PUT  | /api/budgets                       | {oops
+V-dismiss-bad-json  | POST | /api/patterns/dismiss              | {oops
+V-preview-bad-json  | POST | /api/optimize/claudemd-preview     | {oops

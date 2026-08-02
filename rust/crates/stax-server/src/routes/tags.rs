@@ -345,22 +345,14 @@ async fn add_manual_tag_route(
 ) -> JsonBody {
     // `data: dict[str, str]` — pydantic requires an object whose values are ALL
     // strings, so `{"tag": 3}` is a 422 and never reaches the handler's own 400.
-    let data = match serde_json::from_slice::<Value>(&body) {
-        Ok(Value::Object(map)) if map.values().all(Value::is_string) => map,
-        Ok(Value::Object(map)) => {
-            return JsonBody::with_status(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                string_type_detail(&map),
-            );
-        }
-        // Not an object at all: pydantic reports `model_attributes_type` with a
-        // `loc` of `["body"]`, which this port does not reproduce byte for byte
-        // (DIV-053). The status is the part clients branch on.
-        _ => {
-            let mut obj = Map::new();
-            obj.insert("detail".to_owned(), Value::from("Invalid JSON body"));
-            return JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj));
-        }
+    // The whole check is `crate::json::str_dict_body` (DIV-367): this module was
+    // the only one of the ten dict-bodied handlers that got the VALUE half
+    // right, and it still guessed the container half — it predicted
+    // `model_attributes_type` where the reference answers `dict_type`, and
+    // rendered `{"detail":"Invalid JSON body"}` for both.
+    let data = match crate::json::str_dict_body(&body) {
+        Ok(map) => map,
+        Err(rejection) => return rejection,
     };
     let tag = data
         .get("tag")
@@ -379,36 +371,6 @@ async fn add_manual_tag_route(
         Ok(Err(err)) => failure(format!("Failed to add tag: {err}")),
         Err(err) => failure(format!("Failed to add tag: {err}")),
     }
-}
-
-/// pydantic's `422` for `dict[str, str]` handed a non-string value.
-///
-/// One entry per offending key, in body order — pydantic validates the whole
-/// mapping and reports every failure, not just the first. Verified against the
-/// reference on `{"tag": 3}`, byte-identical, `input` included (the value is
-/// echoed as itself, so an integer stays an integer in the error body).
-fn string_type_detail(body: &Map<String, Value>) -> Value {
-    let entries: Vec<Value> = body
-        .iter()
-        .filter(|(_, value)| !value.is_string())
-        .map(|(key, value)| {
-            let mut entry = Map::new();
-            entry.insert("type".to_owned(), Value::from("string_type"));
-            entry.insert(
-                "loc".to_owned(),
-                Value::Array(vec![Value::from("body"), Value::from(key.clone())]),
-            );
-            entry.insert(
-                "msg".to_owned(),
-                Value::from("Input should be a valid string"),
-            );
-            entry.insert("input".to_owned(), value.clone());
-            Value::Object(entry)
-        })
-        .collect();
-    let mut obj = Map::new();
-    obj.insert("detail".to_owned(), Value::Array(entries));
-    Value::Object(obj)
 }
 
 /// `TagService.add_manual_tag`.

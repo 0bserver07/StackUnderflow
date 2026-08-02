@@ -253,6 +253,214 @@ pub fn method_not_allowed() -> JsonBody {
     HttpError::new(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed").body()
 }
 
+// ── the `dict`-annotated body parameter — DIV-367 ────────────────────────────
+//
+// `async def set_project(data: dict[str, str])` is NOT "give me the parsed
+// body". It is a validator, and it runs BEFORE the handler exists:
+//
+//   fastapi/routing.py   body_bytes = await request.body()
+//                        if body_bytes: body = json.loads(...)   # else None
+//                        except json.JSONDecodeError: -> json_invalid
+//   fastapi/_compat      field.validate(body) -> pydantic
+//                        None + required     -> missing
+//                        not a mapping       -> dict_type
+//                        dict[str, str]      -> string_type per bad VALUE
+//
+// Every failure comes back `422` from the installed
+// `request_validation_exception_handler`. Ten reference handlers carry such a
+// parameter (enumerated in the ledger at DIV-367), and before this the port had
+// SIX private spellings of the check between them — four of which answered a
+// `400` from the handler's own guard for a request the reference never let in.
+// A status is what a caller branches on, so that was strictly worse than
+// DIV-053's "the 422 body is approximate".
+//
+// **Every shape below was MEASURED against the reference on `.parity-state/
+// fresh` (2026-08-02), never transcribed** — DIV-127's lesson is that an error
+// shape no probe issued is a guess, and this file had been carrying one for two
+// waves. The probe that produced them is `parity/endpoint-cases.txt`'s `V-*`
+// block, which re-measures them on every gate run.
+//
+// The one that could not have been guessed: a body of the four bytes `null` is
+// **`missing`**, not `dict_type`. FastAPI hands pydantic `None`, and `None`
+// against a required field is "no value supplied" — the container check never
+// runs. An empty body is the same answer by a different road.
+
+/// One pydantic error object, in pydantic's own key order.
+fn error_entry(kind: &str, loc: Vec<Value>, msg: &str, input: Value, ctx: Option<Value>) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("type".to_owned(), Value::from(kind));
+    entry.insert("loc".to_owned(), Value::Array(loc));
+    entry.insert("msg".to_owned(), Value::from(msg));
+    entry.insert("input".to_owned(), input);
+    if let Some(ctx) = ctx {
+        entry.insert("ctx".to_owned(), ctx);
+    }
+    Value::Object(entry)
+}
+
+/// `{"detail": [ … ]}` — the body `request_validation_exception_handler`
+/// renders.
+fn detail_object(entries: Vec<Value>) -> Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("detail".to_owned(), Value::Array(entries));
+    Value::Object(obj)
+}
+
+/// [`detail_object`] at `422` — the whole response.
+fn detail_list(entries: Vec<Value>) -> JsonBody {
+    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, detail_object(entries))
+}
+
+/// `missing` — no body at all, or the literal `null`, for a REQUIRED parameter.
+fn missing_body() -> JsonBody {
+    detail_list(vec![error_entry(
+        "missing",
+        vec![Value::from("body")],
+        "Field required",
+        Value::Null,
+        None,
+    )])
+}
+
+/// `json_invalid` — the one FastAPI builds by hand, not pydantic.
+///
+/// `loc` carries CPython's character offset `e.pos` and `ctx.error` carries
+/// `e.msg`; [`crate::services::json_error`] is the deduped owner of both (law
+/// 9). `input` is a hard-coded empty OBJECT, not the unparseable text.
+///
+/// **This leg does not care what the parameter is annotated as.**
+/// `fastapi/routing.py` calls `await request.json()` for every JSON body it is
+/// handed — `dict`, `dict[str, str]` and a pydantic `BaseModel` alike — and
+/// catches CPython's `JSONDecodeError` itself, before pydantic is reached at
+/// all. So the three model-bodied handlers (`PUT /api/budgets`,
+/// `POST /api/patterns/dismiss`, `POST /api/optimize/claudemd-preview`) share
+/// this exact shape with the ten dict-bodied ones, and `optimize.rs`'s note
+/// that "both the offset and the message come from pydantic-core's own parser"
+/// was a reasonable guess that the probe disproved.
+#[must_use]
+pub fn json_invalid_body(raw: &[u8]) -> JsonBody {
+    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, json_invalid_detail(raw))
+}
+
+/// [`json_invalid_body`]'s `{"detail": [ … ]}` object, for the one caller that
+/// wraps its own response (`routes/optimize.rs` collects a whole error list).
+#[must_use]
+pub fn json_invalid_detail(raw: &[u8]) -> Value {
+    let text = String::from_utf8_lossy(raw);
+    // Unreachable in practice: this runs only because `serde_json` refused the
+    // body, and everything it refuses CPython refuses too EXCEPT the three
+    // extended literals (`NaN`, `Infinity`, `-Infinity`), which CPython accepts.
+    // Those arrive with no CPython error to report — a recorded narrowing, not a
+    // panic.
+    let (pos, message) = crate::services::json_error::decode_error(&text)
+        .unwrap_or((0, "Expecting value".to_owned()));
+    let mut ctx = serde_json::Map::new();
+    ctx.insert("error".to_owned(), Value::from(message));
+    detail_object(vec![error_entry(
+        "json_invalid",
+        vec![
+            Value::from("body"),
+            Value::from(i64::try_from(pos).unwrap_or(i64::MAX)),
+        ],
+        "JSON decode error",
+        Value::Object(serde_json::Map::new()),
+        Some(Value::Object(ctx)),
+    )])
+}
+
+/// The shared walk. `optional` is `body: dict | None = None`; `string_values`
+/// is `dict[str, str]` rather than `dict` / `dict[str, Any]`.
+fn parse_dict_body(
+    raw: &[u8],
+    string_values: bool,
+    optional: bool,
+) -> Result<Option<serde_json::Map<String, Value>>, JsonBody> {
+    // `if body_bytes:` — an absent body is NO VALUE, and never reaches the
+    // decoder. A body of two spaces is not absent: it is a `json_invalid` at
+    // offset 2, which is why this is `is_empty` and not a trim.
+    if raw.is_empty() {
+        return if optional {
+            Ok(None)
+        } else {
+            Err(missing_body())
+        };
+    }
+    let parsed: Value = match serde_json::from_slice(raw) {
+        Ok(value) => value,
+        Err(_) => return Err(json_invalid_body(raw)),
+    };
+    match parsed {
+        // MEASURED: `null` is `missing`, not `dict_type` — see the note above.
+        Value::Null => {
+            if optional {
+                Ok(None)
+            } else {
+                Err(missing_body())
+            }
+        }
+        Value::Object(map) => {
+            if string_values {
+                // pydantic validates the WHOLE mapping and reports every
+                // failure, in body order — not just the first. Measured on
+                // `{"z": 1, "a": 2}`, which comes back `z` then `a` and so
+                // depends on `serde_json`'s `preserve_order` feature being on.
+                let entries: Vec<Value> = map
+                    .iter()
+                    .filter(|(_, value)| !value.is_string())
+                    .map(|(key, value)| {
+                        error_entry(
+                            "string_type",
+                            vec![Value::from("body"), Value::from(key.clone())],
+                            "Input should be a valid string",
+                            value.clone(),
+                            None,
+                        )
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    return Err(detail_list(entries));
+                }
+            }
+            Ok(Some(map))
+        }
+        other => Err(detail_list(vec![error_entry(
+            "dict_type",
+            vec![Value::from("body")],
+            "Input should be a valid dictionary",
+            other,
+            None,
+        )])),
+    }
+}
+
+/// `data: dict` / `data: dict[str, Any]` — a required JSON **object**.
+///
+/// The values are unconstrained: `{"session_id": 3}` reaches the handler, and
+/// the row that proves it is `V-bm-put-int`.
+///
+/// # Errors
+/// The rendered `422`, ready to return as the response.
+pub fn dict_body(raw: &[u8]) -> Result<serde_json::Map<String, Value>, JsonBody> {
+    parse_dict_body(raw, false, false).map(|parsed| parsed.unwrap_or_default())
+}
+
+/// `data: dict[str, str]` — an object whose every VALUE is a string.
+///
+/// # Errors
+/// The rendered `422`, ready to return as the response.
+pub fn str_dict_body(raw: &[u8]) -> Result<serde_json::Map<String, Value>, JsonBody> {
+    parse_dict_body(raw, true, false).map(|parsed| parsed.unwrap_or_default())
+}
+
+/// `body: dict | None = None` — an absent body and a `null` body are both legal
+/// and both mean `None`.
+///
+/// # Errors
+/// The rendered `422`, ready to return as the response.
+pub fn optional_dict_body(raw: &[u8]) -> Result<Option<serde_json::Map<String, Value>>, JsonBody> {
+    parse_dict_body(raw, false, true)
+}
+
 /// Turn a panicking-or-failing blocking task into the 500 Python would produce.
 ///
 /// The ported handlers that wrap their body in `try/except Exception` and return
@@ -272,6 +480,102 @@ pub fn join_failure(err: &tokio::task::JoinError) -> HttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every byte below was measured against the reference on 2026-08-02 and is
+    /// re-measured on every gate run by the `V-*` rows — see the DIV-367 block
+    /// in `parity/endpoint-cases.txt`. The point of the test is that the class
+    /// has ONE implementation now, so this is the only place the shapes live.
+    #[test]
+    fn the_dict_body_validator_is_pydantics_shapes_and_not_a_handlers_four_hundred() {
+        let reject = |raw: &[u8]| str_dict_body(raw).expect_err("rejected").render();
+
+        // `dict[str, str]` — one entry per offending VALUE, in body order.
+        assert_eq!(
+            reject(br#"{"project_path": 123}"#),
+            r#"{"detail":[{"type":"string_type","loc":["body","project_path"],"msg":"Input should be a valid string","input":123}]}"#
+        );
+        assert_eq!(
+            reject(br#"{"project_path": null}"#),
+            r#"{"detail":[{"type":"string_type","loc":["body","project_path"],"msg":"Input should be a valid string","input":null}]}"#
+        );
+        // Insertion order, not sorted order — this is what the workspace's
+        // `preserve_order` feature is load-bearing for. Measured: `z` then `a`.
+        assert_eq!(
+            reject(br#"{"z": 1, "a": 2}"#),
+            r#"{"detail":[{"type":"string_type","loc":["body","z"],"msg":"Input should be a valid string","input":1},{"type":"string_type","loc":["body","a"],"msg":"Input should be a valid string","input":2}]}"#
+        );
+        // A valid value alongside an invalid one still fails, and only the
+        // invalid key is reported.
+        assert_eq!(
+            reject(br#"{"project_path": "", "x": 3}"#),
+            r#"{"detail":[{"type":"string_type","loc":["body","x"],"msg":"Input should be a valid string","input":3}]}"#
+        );
+
+        // The container half, shared with `dict` and `dict[str, Any]`.
+        assert_eq!(
+            reject(b"[]"),
+            r#"{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":[]}]}"#
+        );
+        assert_eq!(
+            reject(b"3"),
+            r#"{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":3}]}"#
+        );
+        assert_eq!(
+            reject(b"true"),
+            r#"{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":true}]}"#
+        );
+
+        // An object whose values are all strings gets through — including `{}`.
+        assert!(str_dict_body(br#"{"project_path": "/tmp"}"#).is_ok());
+        assert!(str_dict_body(b"{}").is_ok());
+    }
+
+    /// The two shapes that are NOT pydantic's: FastAPI builds both by hand,
+    /// before the annotation matters at all.
+    #[test]
+    fn an_absent_body_and_a_null_body_are_both_missing_and_never_dict_type() {
+        let missing =
+            r#"{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}"#;
+        assert_eq!(dict_body(b"").expect_err("rejected").render(), missing);
+        assert_eq!(str_dict_body(b"").expect_err("rejected").render(), missing);
+        // The four bytes `null`. pydantic is handed `None`, and `None` against a
+        // required field is "no value supplied" — the container check never
+        // runs. This is the shape no transcription had got right.
+        assert_eq!(dict_body(b"null").expect_err("rejected").render(), missing);
+        assert_eq!(
+            str_dict_body(b"null").expect_err("rejected").render(),
+            missing
+        );
+
+        // `body: dict | None = None` — the same two inputs are LEGAL, and there
+        // is no `missing` leg on that endpoint at all.
+        assert_eq!(optional_dict_body(b"").expect("legal"), None);
+        assert_eq!(optional_dict_body(b"null").expect("legal"), None);
+        assert_eq!(
+            optional_dict_body(b"[]").expect_err("rejected").render(),
+            r#"{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":[]}]}"#
+        );
+    }
+
+    #[test]
+    fn json_invalid_carries_cpythons_offset_and_cpythons_wording() {
+        let reject = |raw: &[u8]| dict_body(raw).expect_err("rejected").render();
+        assert_eq!(
+            reject(b"nope"),
+            r#"{"detail":[{"type":"json_invalid","loc":["body",0],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting value"}}]}"#
+        );
+        // Offset 1 and a different one of the nine messages — the pair the
+        // hard-coded `(0, "Expecting value")` in `routes/optimize.rs` got wrong.
+        assert_eq!(
+            reject(b"{oops"),
+            r#"{"detail":[{"type":"json_invalid","loc":["body",1],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting property name enclosed in double quotes"}}]}"#
+        );
+        // Whitespace is not an absent body: two spaces fail at offset 2.
+        assert_eq!(
+            reject(b"  "),
+            r#"{"detail":[{"type":"json_invalid","loc":["body",2],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting value"}}]}"#
+        );
+    }
 
     #[test]
     fn bodies_render_with_starlettes_flags() {

@@ -131,14 +131,15 @@ async fn post_etl_backfill(
     // validates before the handler runs, so a rejection here never reaches
     // `start_job` and never schedules anything — which is what makes the 422
     // probes in `ETL-BACKFILL-DIFFER.md` safe to issue against a live server.
-    let parsed: Option<Value> = if body.is_empty() {
-        None
-    } else {
-        match serde_json::from_slice::<Value>(&body) {
-            Ok(Value::Object(map)) => Some(Value::Object(map)),
-            Ok(Value::Null) => None,
-            parsed => return Ok(optional_dict_body(&body, parsed.ok().as_ref())),
-        }
+    // `body: dict | None = None` — the OPTIONAL member of DIV-367's class: an
+    // absent body and a literal `null` are both legal and both mean `None`, and
+    // only valid JSON of the wrong shape (`dict_type`) or no JSON at all
+    // (`json_invalid`) is rejected. `missing` therefore does not exist on this
+    // endpoint, which is the whole difference the shared helper's `optional`
+    // flag encodes.
+    let parsed = match crate::json::optional_dict_body(&body) {
+        Ok(parsed) => parsed,
+        Err(rejection) => return Ok(rejection),
     };
 
     // `bool((body or {}).get("force", False))` — Python truthiness over whatever
@@ -146,7 +147,7 @@ async fn post_etl_backfill(
     // `"force": 0` is false. A `bool()` cast, not a type check.
     let force = parsed
         .as_ref()
-        .and_then(|value| value.get("force"))
+        .and_then(|map| map.get("force"))
         .is_some_and(py_truthy);
 
     let job = match start_job(force, pytime::now_micros()) {
@@ -232,60 +233,15 @@ fn run_backfill_in_background(state: &AppState, job_id: &str, force: bool) {
     }
 }
 
-/// FastAPI's `RequestValidationError` for a `body: dict | None = None`
-/// parameter.
-///
-/// Two reachable shapes, not three: an absent body is *legal* here (the default
-/// is `None`), so `/api/refresh`'s `missing` leg does not exist on this
-/// endpoint. What is left is valid JSON that is neither an object nor `null`
-/// (`dict_type`) and a body that is not JSON at all (`json_invalid`).
-///
-/// **MEASURED, not transcribed** — `rust/ETL-BACKFILL-DIFFER.md` step 2 issues
-/// both against the reference, which is safe precisely because validation runs
-/// before the handler. That is the DIV-127 lesson applied in advance: the
-/// `dict_type` `msg` for an *optional* dict was the specific thing worth
-/// measuring, because pydantic renders a nullable union's failure differently
-/// from a bare one in some versions.
-fn optional_dict_body(raw: &[u8], parsed: Option<&Value>) -> JsonBody {
-    let mut entry = Map::new();
-    if let Some(value) = parsed {
-        entry.insert("type".to_owned(), Value::from("dict_type"));
-        entry.insert("loc".to_owned(), Value::Array(vec![Value::from("body")]));
-        entry.insert(
-            "msg".to_owned(),
-            Value::from("Input should be a valid dictionary"),
-        );
-        entry.insert("input".to_owned(), value.clone());
-    } else {
-        // `except json.JSONDecodeError as e:` in `fastapi/routing.py` builds this
-        // by hand: `loc` carries `e.pos` and `ctx.error` carries `e.msg`, both
-        // CPython's. `services::json_error` is the deduped owner of that
-        // reproduction (law 9) — `routes/data.rs` reaches for the same one.
-        let text = String::from_utf8_lossy(raw);
-        let (pos, message) = crate::services::json_error::decode_error(&text)
-            .unwrap_or((0, "Expecting value".to_owned()));
-        entry.insert("type".to_owned(), Value::from("json_invalid"));
-        entry.insert(
-            "loc".to_owned(),
-            Value::Array(vec![
-                Value::from("body"),
-                Value::from(i64::try_from(pos).unwrap_or(i64::MAX)),
-            ]),
-        );
-        entry.insert("msg".to_owned(), Value::from("JSON decode error"));
-        // `"input": {}` — an empty OBJECT, not the unparseable text and not null.
-        entry.insert("input".to_owned(), Value::Object(Map::new()));
-        let mut ctx = Map::new();
-        ctx.insert("error".to_owned(), Value::from(message));
-        entry.insert("ctx".to_owned(), Value::Object(ctx));
-    }
-    let mut out = Map::new();
-    out.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(out))
-}
+// The 422s for this endpoint's `body: dict | None = None` live in
+// [`crate::json::optional_dict_body`] — DIV-367's shared extractor.
+//
+// `ETL-BACKFILL-DIFFER.md` step 2 had already MEASURED both reachable shapes
+// here (five byte-identical 422s, 2026-07-31), which is why this module's copy
+// was the one worth keeping when the class was collapsed: it was evidence, not
+// a transcription. What the shared version adds is the `null` body, which the
+// isolated differ had not sent and which the required members answer
+// differently (`missing`, not `dict_type`).
 
 fn sql_500(err: rusqlite::Error) -> HttpError {
     HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())

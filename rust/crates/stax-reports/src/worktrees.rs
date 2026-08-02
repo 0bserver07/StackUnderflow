@@ -1168,16 +1168,14 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
 // `stax-server` (DIV-279), and `stax-reports` is the crate both consumers
 // already share.
 //
-// **DIV-375 — this is a SECOND implementation until the route is re-pointed.**
-// `crates/stax-server/src/routes/worktrees.rs` keeps its own private `scan` /
-// `summarise` / `verdict_counter`, which is exactly what this pair of functions
-// is. Collapsing them means editing that file, which this session does not own
-// (the endpoint agent has it). The two were written against the same reference
-// and the summary key order, the un-compensated `+=` fold and the untallied
-// unknown verdict are reproduced identically here — but two copies of a byte
-// contract is a drift hazard, and closing it is a two-line change in the route:
-// delete the private pair and call `stax_reports::worktrees::{summarise_infos,
-// assemble_worktrees_payload}`.
+// **DIV-375 — CLOSED 2026-08-02. There is exactly one implementation again.**
+// `crates/stax-server/src/routes/worktrees.rs` used to keep a private `scan` /
+// `summarise` / `verdict_counter` triple that was this code letter for letter;
+// `GET /api/worktrees` now calls [`assemble_worktrees_payload`] like the CLI
+// does, which is the property `cli.py` gets for free by importing the route's
+// own assembler. Closing it cost one thing that a `String` parameter had hidden
+// — the clock. See the `scanned_at` thunk note on [`assemble_worktrees_payload`]
+// and DIV-378.
 
 /// `_VERDICT_COUNTERS` — verdict → the `summary` key it increments.
 #[must_use]
@@ -1230,6 +1228,17 @@ pub fn summarise_infos(infos: &[WorktreeInfo]) -> Value {
 /// a wall-clock read the caller has to own (the harness normalises it), and the
 /// currency block is resolved from the caller's settings.
 ///
+/// # `scanned_at` is a THUNK, and that is the reference's read order
+///
+/// `datetime.now(UTC).isoformat()` sits in the returned dict *literal*, i.e. it
+/// is evaluated after `list_worktrees` has finished — the stamp is the scan's
+/// END, and a scan of thirty worktrees is seconds of `git`. A `String`
+/// parameter forces every caller to read the clock BEFORE the fan-out, which is
+/// a whole scan-duration early; `impl FnOnce() -> String` lets the caller own
+/// the clock and still have it read where Python reads it. No differ can see
+/// the difference (the field never matches), which is exactly why it had to be
+/// fixed deliberately rather than noticed.
+///
 /// The `rate != 1.0` re-scaling loop is reproduced but is unreachable while
 /// [`usd_currency_payload`] is the only producer — see DIV-052/DIV-112.
 #[must_use]
@@ -1238,7 +1247,7 @@ pub fn assemble_worktrees_payload(
     project_root: Option<&str>,
     host: &dyn Host,
     currency: Value,
-    scanned_at: String,
+    scanned_at: impl FnOnce() -> String,
 ) -> Value {
     let infos = list_worktrees(conn, project_root, host);
     let mut worktrees: Vec<Value> = infos.iter().map(WorktreeInfo::to_dict).collect();
@@ -1285,7 +1294,8 @@ pub fn assemble_worktrees_payload(
     );
     payload.insert("worktrees".to_owned(), Value::Array(worktrees));
     payload.insert("summary".to_owned(), summary);
-    payload.insert("scanned_at".to_owned(), Value::String(scanned_at));
+    // Read HERE, after the fan-out — see the `scanned_at` note above.
+    payload.insert("scanned_at".to_owned(), Value::String(scanned_at()));
     payload.insert("currency".to_owned(), currency);
     Value::Object(payload)
 }
@@ -1986,6 +1996,93 @@ mod tests {
         let found = list_worktrees(&conn, Some("/repo"), &host);
         let paths: Vec<&str> = found.iter().map(|info| info.path.as_str()).collect();
         assert_eq!(paths, vec!["/a", "/z"]);
+    }
+
+    // ── assemble_worktrees_payload — the one assembler (DIV-375) ────────────
+
+    /// The `scanned_at` thunk is evaluated AFTER the git fan-out, because that
+    /// is where `datetime.now(UTC)` sits in the reference's returned literal.
+    ///
+    /// This is the branch a differ can never reach: `scanned_at` is a wall
+    /// clock, so the field is known-open on every surface that prints it and
+    /// the ORDER of the read is invisible on the wire. It is therefore exactly
+    /// the shape wave 6 named — a thing nothing crosses — and it gets a test
+    /// rather than a comment. When the parameter was a `String`, both callers
+    /// read the clock a whole scan-duration early and the CLI's own comment
+    /// said the opposite (DIV-378).
+    #[test]
+    fn the_scanned_at_thunk_is_read_after_the_scan_and_exactly_once() {
+        let conn = seeded();
+        let mut host = FakeHost {
+            mtime: Some(0.0),
+            now: 86_400.0 * 30.0,
+            ..FakeHost::default()
+        };
+        host.dirs.insert("/repo".to_owned());
+        host.replies.insert(
+            "rev-parse --git-common-dir".to_owned(),
+            "/repo/.git".to_owned(),
+        );
+        host.replies.insert(
+            "worktree list --porcelain".to_owned(),
+            "worktree /repo\nHEAD aaa\n\nworktree /w\nHEAD bbb\n\n".to_owned(),
+        );
+
+        let reads = std::cell::Cell::new(0_u32);
+        let payload = assemble_worktrees_payload(
+            &conn,
+            Some("/repo"),
+            &host,
+            usd_currency_payload("USD").expect("usd"),
+            || {
+                reads.set(reads.get() + 1);
+                // The fan-out has already happened when the clock is read.
+                assert!(
+                    !host.calls.borrow().is_empty(),
+                    "the stamp is the scan's END, not its start"
+                );
+                "STAMP".to_owned()
+            },
+        );
+        assert_eq!(
+            reads.get(),
+            1,
+            "one clock read per payload, never zero or two"
+        );
+        assert_eq!(
+            payload.get("scanned_at").and_then(Value::as_str),
+            Some("STAMP")
+        );
+        // And the rest of the payload is the endpoint's key order.
+        let keys: Vec<&str> = payload
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["scope", "worktrees", "summary", "scanned_at", "currency"]
+        );
+    }
+
+    /// An empty scan is `0.0` and the scope is the literal `"store"` — the two
+    /// facts `routes/worktrees.rs` used to assert against its own private copy.
+    #[test]
+    fn an_empty_scan_is_the_store_scope_with_a_float_zero_total() {
+        let conn = seeded();
+        let host = FakeHost::default();
+        let payload = assemble_worktrees_payload(
+            &conn,
+            None,
+            &host,
+            usd_currency_payload("USD").expect("usd"),
+            || "STAMP".to_owned(),
+        );
+        assert_eq!(
+            stax_memory::pyjson::dumps_http(&payload),
+            r#"{"scope":"store","worktrees":[],"summary":{"total":0,"safe_to_prune":0,"has_unique_work":0,"active":0,"attributed_cost_usd":0.0},"scanned_at":"STAMP","currency":{"code":"USD","symbol":"$","rate_from_usd":1.0,"warning":null}}"#
+        );
     }
 
     #[test]

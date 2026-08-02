@@ -79,12 +79,15 @@ async fn put_budget(
     body: Bytes,
 ) -> HandlerResult {
     let tz = timezone_offset(&raw)?;
-    let parsed: Value = serde_json::from_slice(&body).map_err(|_| {
-        HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body".to_owned(),
-        )
-    })?;
+    // The malformed-body leg is FastAPI's own hand-built `json_invalid`, shared
+    // with every other body-bearing handler and measured under DIV-367 — a
+    // `BaseModel` annotation does not change it, because `request.json()` raises
+    // before pydantic is reached. The per-field errors below are still DIV-053's
+    // approximation.
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return Ok(crate::json::json_invalid_body(&body)),
+    };
     let Value::Object(fields) = parsed else {
         // A non-object body fails pydantic's model validation — 422 (DIV-053
         // already records that the `detail` list is not reproduced field-wise).

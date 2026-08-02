@@ -273,13 +273,16 @@ fn coerce_int(value: &Value) -> i64 {
 
 async fn dismiss_pattern(State(state): State<AppState>, body: Bytes) -> HandlerResult {
     // Everything from here to `record_dismissal` is pydantic's job in Python.
-    // The `detail` strings are DIV-053's convention, not measured shapes.
-    let parsed: Value = serde_json::from_slice(&body).map_err(|_| {
-        HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body".to_owned(),
-        )
-    })?;
+    // The per-FIELD `detail` strings below are still DIV-053's convention rather
+    // than measured shapes (`DismissRequest` is a `BaseModel`, not a `dict`, and
+    // its errors are a different catalogue). The MALFORMED-body leg is not: that
+    // one is FastAPI's own, built before pydantic is reached, and it is the same
+    // for every body-bearing handler in the app — DIV-367's shared, measured
+    // `json_invalid` (row `V-dismiss-bad-json`).
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return Ok(crate::json::json_invalid_body(&body)),
+    };
     let Value::Object(fields) = parsed else {
         return Err(HttpError::new(
             StatusCode::UNPROCESSABLE_ENTITY,

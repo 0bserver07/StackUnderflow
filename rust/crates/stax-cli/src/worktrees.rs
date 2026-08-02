@@ -97,13 +97,16 @@ fn run_list(args: &ListArgs) -> Result<Output> {
     let conn = open_store()?;
     // `datetime.now(UTC).isoformat()` is read INSIDE the assembler, i.e. after
     // the git fan-out — a scan of thirty worktrees can take seconds and the
-    // stamp is the scan's end, not its start.
+    // stamp is the scan's end, not its start. Passed as a THUNK so that stays
+    // true: an eagerly-evaluated `Instant::now_utc()` here would be read before
+    // the assembler had opened its first `git`, which is what this comment used
+    // to claim it was not (DIV-378).
     let payload = assemble_worktrees_payload(
         &conn,
         args.project.as_deref(),
         &SystemHost,
         currency,
-        Instant::now_utc().isoformat(),
+        || Instant::now_utc().isoformat(),
     );
     drop(conn);
 

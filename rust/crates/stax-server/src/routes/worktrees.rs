@@ -44,36 +44,26 @@
 //! 4. **`attributed_cost_usd` is a `+=` chain seeded with the float `0.0`** —
 //!    LAW 3. No `sum()`, therefore no Neumaier compensation, and an empty scan
 //!    renders `0.0` rather than an int `0`.
+//!
+//! Details 3 and 4 are not implemented here. They live in
+//! [`stax_reports::worktrees::assemble_worktrees_payload`], which `cli.py`
+//! reaches by importing this very route module — one assembler, two surfaces,
+//! which is the reference's own arrangement (DIV-375, closed 2026-08-02). They
+//! are still documented at this address because this is where the endpoint's
+//! byte contract is read.
 
 use axum::Router;
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde_json::{Map, Value};
-use stax_etl::stats::aggregator::jf;
 
 use crate::currency::active_currency_payload;
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
 use crate::qs::Query;
 use crate::services::scope::Instant;
-use crate::services::worktrees::{
-    self, Host, SystemHost, VERDICT_ACTIVE, VERDICT_HAS_UNIQUE_WORK, VERDICT_MERGED_SAFE_TO_PRUNE,
-};
+use crate::services::worktrees::{self, SystemHost};
 use crate::state::AppState;
-
-/// `_VERDICT_COUNTERS` — verdict → the `summary` key it increments.
-///
-/// Kept explicit so an unknown verdict from the service cannot silently skew the
-/// counts; it simply is not tallied. Order is irrelevant here (the summary's key
-/// order comes from its own literal), but the mapping is not.
-fn verdict_counter(verdict: &str) -> Option<&'static str> {
-    match verdict {
-        VERDICT_ACTIVE => Some("active"),
-        VERDICT_MERGED_SAFE_TO_PRUNE => Some("safe_to_prune"),
-        VERDICT_HAS_UNIQUE_WORK => Some("has_unique_work"),
-        _ => None,
-    }
-}
 
 /// Mount this module's endpoints onto `router`.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
@@ -100,98 +90,50 @@ async fn get_worktrees(State(state): State<AppState>, RawQuery(raw): RawQuery) -
         Some(from_query.to_owned())
     };
 
-    // `datetime.now(UTC)` is read in `assemble_worktrees_payload` AFTER the
-    // scan, so it is read after the scan here too. The scan is where the seconds
-    // go (1.4 s on the harness store), and stamping before it would put
-    // `scanned_at` a whole scan-duration in the past — a difference no differ
-    // could ever see, since the field cannot match anyway, but the order is the
-    // reference's and there is no reason to invent a different one.
-    let worker = state.clone();
-    let scan_path = path.clone();
-    let (worktrees, summary) =
-        tokio::task::spawn_blocking(move || scan(&worker, scan_path.as_deref(), &SystemHost))
-            .await
-            .map_err(|err| join_failure(&err))??;
-    let scanned_at = Instant::now_utc().isoformat();
-
+    // `active_currency_payload()` is read INSIDE the assembler in Python, i.e.
+    // after the scan. It has to be resolved before the call here because the
+    // shared assembler takes the block as a value — see DIV-378, which measures
+    // what that hoist can and cannot change (nothing on the wire; only which
+    // 500 wins when a non-USD currency is configured AND the store will not
+    // open, and the non-USD leg is DIV-052's already).
     let currency = active_currency_payload(&state.config().currency)
         .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     // `if rate != 1.0:` then a walk over every `cost_usd` and the summary total.
     // DIV-052 makes `active_currency_payload` USD-only, so the branch cannot
-    // fire; recorded rather than ported blind, exactly as `routes/cost.rs` and
-    // `routes/yield_route.rs` already do.
+    // fire; it lives in the shared assembler, which is where the reference has
+    // it, exactly as `routes/cost.rs` and `routes/yield_route.rs` record theirs.
 
-    let mut payload = Map::new();
-    // `project_root if project_root else "store"` — truthiness, and `path` has
-    // already had the empty string normalised away above.
-    payload.insert(
-        "scope".to_owned(),
-        Value::String(path.unwrap_or_else(|| "store".to_owned())),
-    );
-    payload.insert("worktrees".to_owned(), Value::Array(worktrees));
-    payload.insert("summary".to_owned(), summary);
-    payload.insert("scanned_at".to_owned(), Value::String(scanned_at));
-    payload.insert("currency".to_owned(), currency);
-    Ok(JsonBody::ok(Value::Object(payload)))
-}
+    let worker = state.clone();
+    let scan_path = path;
+    let payload = tokio::task::spawn_blocking(move || {
+        let conn = worker
+            .connect()
+            .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        // DIV-375: ONE assembler. `cli.py` imports this route's own
+        // `assemble_worktrees_payload` so the two surfaces "can never disagree"
+        // (its words); the port keeps that by having both call
+        // `stax_reports::worktrees`, which is the crate `stax-cli` may link
+        // (DIV-279). The summary's key order, the un-compensated `+=` fold
+        // (LAW 3 — an empty scan is `0.0`, never an int `0`) and the untallied
+        // unknown verdict all live there now, in one copy.
+        //
+        // `scanned_at` is a THUNK: `datetime.now(UTC)` sits in the returned
+        // dict literal, so it is read AFTER the git fan-out — the stamp is the
+        // scan's end, not its start. Passing a `String` would have moved it a
+        // whole scan-duration (1.4 s on the harness store) earlier, and no
+        // differ could ever have seen that, because the field cannot match.
+        Ok::<Value, HttpError>(worktrees::assemble_worktrees_payload(
+            &conn,
+            scan_path.as_deref(),
+            &SystemHost,
+            currency,
+            || Instant::now_utc().isoformat(),
+        ))
+    })
+    .await
+    .map_err(|err| join_failure(&err))??;
 
-/// The blocking body of `assemble_worktrees_payload`: the store read plus the
-/// git fan-out, then the summary fold.
-///
-/// Returns `(worktrees, summary)` rather than the whole payload so the route
-/// keeps ownership of the clock stamp and the currency block — the two things
-/// that are not a function of the scan.
-fn scan(
-    state: &AppState,
-    project_root: Option<&str>,
-    host: &dyn Host,
-) -> Result<(Vec<Value>, Value), HttpError> {
-    let conn = state
-        .connect()
-        .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    let infos = worktrees::list_worktrees(&conn, project_root, host);
-    let worktrees: Vec<Value> = infos.iter().map(worktrees::WorktreeInfo::to_dict).collect();
-    Ok((worktrees, summarise(&infos)))
-}
-
-/// The `summary` dict, in its literal's key order.
-///
-/// **LAW 3.** `attributed_cost_usd` is seeded with the float `0.0` and stepped
-/// with `+=`; there is no `sum()` in this function, so the accumulation is NOT
-/// Neumaier-compensated and an empty scan renders `0.0`, not `0`. Compensating
-/// it, or emitting an int zero, would each be a divergence in the other
-/// direction.
-///
-/// The fold reads `wt.get("cost_usd")` off the already-built dicts in Python; it
-/// reads the same field off the structs here, which is the same number by
-/// construction ([`worktrees::WorktreeInfo::to_dict`] copies it).
-fn summarise(infos: &[worktrees::WorktreeInfo]) -> Value {
-    let mut safe_to_prune = 0_i64;
-    let mut has_unique_work = 0_i64;
-    let mut active = 0_i64;
-    let mut attributed_cost_usd = 0.0_f64;
-    for info in infos {
-        match verdict_counter(&info.verdict) {
-            Some("safe_to_prune") => safe_to_prune += 1,
-            Some("has_unique_work") => has_unique_work += 1,
-            Some("active") => active += 1,
-            // An unrecognised verdict is not tallied — but its cost still is.
-            _ => {}
-        }
-        // `float(wt.get("cost_usd") or 0.0)` — a plain `+=` chain.
-        attributed_cost_usd += info.cost_usd;
-    }
-
-    let mut summary = Map::new();
-    summary.insert(
-        "total".to_owned(),
-        Value::from(i64::try_from(infos.len()).unwrap_or(i64::MAX)),
-    );
-    summary.insert("safe_to_prune".to_owned(), Value::from(safe_to_prune));
-    summary.insert("has_unique_work".to_owned(), Value::from(has_unique_work));
-    summary.insert("active".to_owned(), Value::from(active));
-    summary.insert("attributed_cost_usd".to_owned(), jf(attributed_cost_usd));
-    Value::Object(summary)
+    Ok(JsonBody::ok(payload))
 }
 
 // ── POST /api/worktrees/attribute ────────────────────────────────────────────
@@ -461,6 +403,11 @@ mod tests {
         assert_eq!(body, r#"{"updated":1}"#);
     }
 
+    /// The endpoint's `summary` contract, asserted through the SHARED assembler
+    /// (DIV-375). The test stays at this address because the contract is this
+    /// endpoint's; what changed is that a regression in
+    /// `stax_reports::worktrees` now fails it, which is the whole point of
+    /// deleting the route's private copy.
     #[test]
     fn an_unknown_verdict_is_untallied_but_still_contributes_its_cost() {
         let info = |verdict: &str, cost: f64| WorktreeInfo {
@@ -478,10 +425,10 @@ mod tests {
             prune_commands: vec![],
             note: None,
         };
-        let summary = summarise(&[
-            info(VERDICT_ACTIVE, 1.5),
+        let summary = worktrees::summarise_infos(&[
+            info(worktrees::VERDICT_ACTIVE, 1.5),
             info("SOMETHING_NEW", 2.5),
-            info(VERDICT_MERGED_SAFE_TO_PRUNE, 0.0),
+            info(worktrees::VERDICT_MERGED_SAFE_TO_PRUNE, 0.0),
         ]);
         assert_eq!(
             stax_memory::pyjson::dumps_http(&summary),
@@ -491,13 +438,14 @@ mod tests {
 
     #[test]
     fn the_verdict_counter_map_is_the_three_literals_and_nothing_else() {
-        assert_eq!(verdict_counter(VERDICT_ACTIVE), Some("active"));
+        use worktrees::verdict_counter;
+        assert_eq!(verdict_counter(worktrees::VERDICT_ACTIVE), Some("active"));
         assert_eq!(
-            verdict_counter(VERDICT_MERGED_SAFE_TO_PRUNE),
+            verdict_counter(worktrees::VERDICT_MERGED_SAFE_TO_PRUNE),
             Some("safe_to_prune")
         );
         assert_eq!(
-            verdict_counter(VERDICT_HAS_UNIQUE_WORK),
+            verdict_counter(worktrees::VERDICT_HAS_UNIQUE_WORK),
             Some("has_unique_work")
         );
         assert_eq!(verdict_counter("active"), None);

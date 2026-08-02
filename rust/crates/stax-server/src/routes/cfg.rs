@@ -337,7 +337,10 @@ fn is_iso_code(code: &str) -> bool {
 // ── POST /api/cfg/currency ───────────────────────────────────────────────────
 
 async fn set_currency(State(state): State<AppState>, body: Bytes) -> Result<JsonBody, HttpError> {
-    let data = parse_object_body(&body)?;
+    let data = match parse_object_body(&body) {
+        Ok(map) => map,
+        Err(rejection) => return Ok(rejection),
+    };
     // `data.get("code") or data.get("currency")` — `or`, so an empty-string
     // `code` falls through to `currency` before the isinstance check.
     let code = truthy(data.get("code")).or_else(|| truthy(data.get("currency")));
@@ -388,7 +391,10 @@ async fn set_model_alias(
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<JsonBody, HttpError> {
-    let data = parse_object_body(&body)?;
+    let data = match parse_object_body(&body) {
+        Ok(map) => map,
+        Err(rejection) => return Ok(rejection),
+    };
     let src = require_non_empty_string(data.get("from"), "'from' must be a non-empty string.")?;
     let dst = require_non_empty_string(data.get("to"), "'to' must be a non-empty string.")?;
 
@@ -478,23 +484,21 @@ fn currency_payload_for(app_dir: &Path, state: &AppState) -> Result<Value, HttpE
         .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
-/// The `data: dict` body parameter, with FastAPI's two rejections.
+/// The bare `data: dict` body parameter — DIV-367's container-only member.
 ///
-/// DIV-053 already records that a 422 `detail` list is only APPROXIMATED here;
-/// the case matrix sends well-formed objects, so the exact leg it exercises is
-/// each handler's own 400.
-fn parse_object_body(body: &Bytes) -> Result<Map<String, Value>, HttpError> {
-    match serde_json::from_slice::<Value>(body) {
-        Ok(Value::Object(map)) => Ok(map),
-        Ok(_) => Err(HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Input should be a valid dictionary",
-        )),
-        Err(_) => Err(HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body",
-        )),
-    }
+/// A bare `dict` is `dict[Any, Any]`: pydantic checks that the body IS a
+/// mapping and nothing about its values, which is why `{"code": 3}`
+/// (`K-cur-not-string`) reaches the handler and takes its `400`. The rejection
+/// is [`crate::json::dict_body`]'s, shared with the other nine handlers; the
+/// two spellings this module used to carry (`"Input should be a valid
+/// dictionary"` and `"Invalid JSON body"`, both as a single-string `detail`)
+/// had the status right and the body wrong, and neither had ever been probed.
+///
+/// # Errors
+/// The rendered `422` — a `JsonBody` and not an [`HttpError`], because a
+/// validation `detail` is a LIST and `HttpError` models the single-string form.
+fn parse_object_body(body: &Bytes) -> Result<Map<String, Value>, JsonBody> {
+    crate::json::dict_body(body)
 }
 
 /// Python truthiness for the `or` chain: `None`, `""`, `{}`, `[]`, `0`, `false`

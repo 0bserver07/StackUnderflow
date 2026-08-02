@@ -88,14 +88,13 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
 /// those legs are provably side-effect-free. Only the success leg mutates, and
 /// it is proved by `rust/PROJECT-SET-DIFFER.md`.
 async fn set_project(State(state): State<AppState>, body: Bytes) -> HandlerResult {
-    // `data: dict[str, str]` — same extractor shape as `set_project_by_dir`,
-    // same DIV-053 caveat about the 422 body.
-    let parsed: Value = serde_json::from_slice(&body).map_err(|_| {
-        HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body".to_owned(),
-        )
-    })?;
+    // `data: dict[str, str]` is a VALIDATOR and it runs before this handler
+    // exists — DIV-367. `{"project_path": 123}` is pydantic's `422`, never the
+    // `400` below. Shared with the other nine dict-bodied handlers.
+    let parsed = match crate::json::str_dict_body(&body) {
+        Ok(map) => map,
+        Err(rejection) => return Ok(rejection),
+    };
     // `project_path = data.get("project_path")`, then `if not project_path`.
     // Truthiness, so a missing key and `""` take the same leg — the
     // `--project ''` class the wave-8 findings put on every string option.
@@ -316,17 +315,14 @@ async fn get_current_project(State(state): State<AppState>) -> JsonBody {
 ///
 /// The body is read raw rather than through an extractor so a malformed one
 /// fails the way FastAPI fails it. `data: dict[str, str]` means: a JSON object
-/// is required, `dir_name` is looked up with `.get`, and a missing/empty value
-/// is the handler's own `400`, not a `422`.
+/// whose every value is a string is required (a non-string is pydantic's `422`,
+/// DIV-367), `dir_name` is then looked up with `.get`, and a missing or empty
+/// value is the handler's own `400`.
 async fn set_project_by_dir(State(state): State<AppState>, body: Bytes) -> HandlerResult {
-    let parsed: Value = serde_json::from_slice(&body).map_err(|_| {
-        // FastAPI's RequestValidationError -> 422. The `detail` list pydantic
-        // builds is not reproduced byte-for-byte (DIV-053); the status is.
-        HttpError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid JSON body".to_owned(),
-        )
-    })?;
+    let parsed = match crate::json::str_dict_body(&body) {
+        Ok(map) => map,
+        Err(rejection) => return Ok(rejection),
+    };
     let dir_name = parsed
         .get("dir_name")
         .and_then(Value::as_str)

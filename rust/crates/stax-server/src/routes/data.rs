@@ -2024,14 +2024,11 @@ async fn refresh_data(State(state): State<AppState>, body: axum::body::Bytes) ->
     // error shape. FastAPI validates `request: dict` BEFORE the handler runs, so
     // a rejection here never reaches the ingest pass — which is what makes a 422
     // probe safe to issue against a live server.
-    match serde_json::from_slice::<Value>(&body) {
-        Ok(Value::Object(_)) => {}
-        // Returned as `Ok` rather than `Err` on purpose: the wire bytes are a
-        // 422 either way, and `HttpError` models FastAPI's *single-string*
-        // `detail`, while a validation error's `detail` is a LIST. Widening
-        // `HttpError` would mean editing `json.rs`, which is shared wave-5
-        // foundation outside batch C's claim.
-        parsed => return Ok(dict_body_required(&body, parsed.ok().as_ref())),
+    // Returned as `Ok` rather than `Err` on purpose: the wire bytes are a 422
+    // either way, and `HttpError` models FastAPI's *single-string* `detail`,
+    // while a validation error's `detail` is a LIST.
+    if let Err(rejection) = crate::json::dict_body(&body) {
+        return Ok(rejection);
     }
 
     let per_project = state
@@ -2045,75 +2042,20 @@ async fn refresh_data(State(state): State<AppState>, body: axum::body::Bytes) ->
     Ok(JsonBody::ok(payload))
 }
 
-/// FastAPI's `RequestValidationError` for a `request: dict` parameter.
-///
-/// FastAPI's handler renders `{"detail": exc.errors()}` at 422 — a LIST of
-/// pydantic error objects, not the single-string `detail` every other error in
-/// this module produces. The three reachable shapes are an absent body
-/// (`missing`), a body that is not JSON at all (`json_invalid`), and valid JSON
-/// that is not an object (`dict_type`).
-///
-/// **UNVERIFIED AGAINST THE REFERENCE.** These bytes are transcribed from
-/// pydantic v2's error catalogue, not measured — `/api/refresh` has no case row
-/// (DIV-059), so nothing in the shared harness exercises them. The isolated
-/// procedure in `rust/REFRESH-DIFFER.md` includes a 422 probe precisely because
-/// a validation failure never reaches the ingest pass and so is safe to issue.
-/// Filed as DIV-127 until that probe has run.
-fn dict_body_required(raw: &[u8], parsed: Option<&Value>) -> JsonBody {
-    let mut entry = Map::new();
-    if raw.is_empty() {
-        // `field_required` — FastAPI never reaches the JSON decoder.
-        entry.insert("type".to_owned(), Value::from("missing"));
-        entry.insert("loc".to_owned(), Value::Array(vec![Value::from("body")]));
-        entry.insert("msg".to_owned(), Value::from("Field required"));
-        entry.insert("input".to_owned(), Value::Null);
-    } else if let Some(value) = parsed {
-        // Valid JSON, wrong shape — this one IS pydantic's, and it is the only
-        // one of the three that is.
-        entry.insert("type".to_owned(), Value::from("dict_type"));
-        entry.insert("loc".to_owned(), Value::Array(vec![Value::from("body")]));
-        entry.insert(
-            "msg".to_owned(),
-            Value::from("Input should be a valid dictionary"),
-        );
-        entry.insert("input".to_owned(), value.clone());
-    } else {
-        // `except json.JSONDecodeError as e:` in `fastapi/routing.py` builds
-        // this by hand, so `loc` carries **`e.pos`** as a second element and
-        // `ctx.error` carries **`e.msg`** — CPython's, not serde's.
-        // `crate::services::json_error` reproduces both; see its module docs
-        // and DIV-127.
-        let text = String::from_utf8_lossy(raw);
-        let (pos, message) = crate::services::json_error::decode_error(&text)
-            // Unreachable: this arm runs only because `serde_json` refused the
-            // body, and everything it refuses CPython refuses too EXCEPT the
-            // three extended literals (`NaN`, `Infinity`, `-Infinity`), which
-            // CPython accepts. Those would arrive here with no CPython error to
-            // report — a real, recorded narrowing rather than a panic.
-            .unwrap_or((0, "Expecting value".to_owned()));
-        entry.insert("type".to_owned(), Value::from("json_invalid"));
-        entry.insert(
-            "loc".to_owned(),
-            Value::Array(vec![
-                Value::from("body"),
-                Value::from(i64::try_from(pos).unwrap_or(i64::MAX)),
-            ]),
-        );
-        entry.insert("msg".to_owned(), Value::from("JSON decode error"));
-        // `"input": {}` — an empty OBJECT, not the unparseable text and not
-        // null. FastAPI hard-codes it.
-        entry.insert("input".to_owned(), Value::Object(Map::new()));
-        let mut ctx = Map::new();
-        ctx.insert("error".to_owned(), Value::from(message));
-        entry.insert("ctx".to_owned(), Value::Object(ctx));
-    }
-    let mut body = Map::new();
-    body.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(body))
-}
+// DIV-127 IS CLOSED, and DIV-367 is why.
+//
+// `dict_body_required` used to live here: FastAPI's three rejections for a
+// `request: dict` parameter (`missing`, `json_invalid`, `dict_type`),
+// **transcribed from pydantic's error catalogue and never measured**, because
+// `/api/refresh` has no case row and never will (it re-runs ingest). The
+// closing pass measured the whole class on endpoints that CAN be rowed — nine
+// other handlers carry the same annotation — and the three shapes came back
+// byte-for-byte as written, with one exception no transcription had caught:
+// a body of the literal `null` is `missing`, not `dict_type`.
+//
+// The check is now [`crate::json::dict_body`], measured every gate run by the
+// `V-*` rows. This endpoint inherits it without owning a copy, which is the
+// only way an unrowable endpoint can be right about a shape.
 
 /// The blocking body shared by `_refresh_current_project_impl` and
 /// `_refresh_all_projects_impl` — the ingest pass itself is identical in both;
@@ -2637,28 +2579,47 @@ mod tests_batch_c {
     #[test]
     fn the_refresh_validation_body_is_a_detail_list_not_a_detail_string() {
         // Every other error in this module renders `{"detail":"..."}`; a
-        // pydantic validation failure renders a LIST. DIV-127 — these exact
-        // bytes are transcribed, not measured, and REFRESH-DIFFER.md's step
-        // 3(a) is the probe that closes the row.
+        // pydantic validation failure renders a LIST. **DIV-127 is closed**:
+        // these bytes were transcribed when this endpoint owned its own copy of
+        // the check, and the DIV-367 pass MEASURED every one of them against the
+        // reference on rowable siblings that carry the identical annotation.
+        // The assertions stayed at this address because `/api/refresh` has no
+        // case row and never will — this test is the only thing standing
+        // between the shared helper and an endpoint nobody can probe.
+        let reject = |raw: &[u8]| {
+            crate::json::dict_body(raw)
+                .expect_err("a rejection")
+                .render()
+        };
         assert_eq!(
-            dict_body_required(b"", None).render(),
+            reject(b""),
             r#"{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}"#
         );
-        // Measured against the reference by `parity/refresh-differ.sh`, not
-        // transcribed — the `loc` offset, the empty-object `input` and the
-        // `ctx.error` wording are all FastAPI's own hand-built shape.
+        // A literal `null` is `missing` too, NOT `dict_type` — pydantic never
+        // reaches the container check, because `None` is "no value supplied".
+        // The one shape in the class that a transcription got wrong.
         assert_eq!(
-            dict_body_required(b"nope", None).render(),
+            reject(b"null"),
+            r#"{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}"#
+        );
+        // The `loc` offset, the empty-object `input` and the `ctx.error`
+        // wording are all FastAPI's own hand-built shape, CPython's decoder
+        // underneath.
+        assert_eq!(
+            reject(b"nope"),
             r#"{"detail":[{"type":"json_invalid","loc":["body",0],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting value"}}]}"#
         );
         assert_eq!(
-            dict_body_required(b"{\"a\"", None).render(),
+            reject(b"{\"a\""),
             r#"{"detail":[{"type":"json_invalid","loc":["body",4],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting ':' delimiter"}}]}"#
         );
         assert_eq!(
-            dict_body_required(b"[]", Some(&json!([]))).render(),
+            reject(b"[]"),
             r#"{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":[]}]}"#
         );
+        // A bare `dict` constrains the container only: the values are `Any`,
+        // so this reaches the handler.
+        assert!(crate::json::dict_body(br#"{"x": 3}"#).is_ok());
     }
 
     #[test]

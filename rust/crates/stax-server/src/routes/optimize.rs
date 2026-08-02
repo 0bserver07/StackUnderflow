@@ -624,16 +624,15 @@ fn parse_preview_body(body: &Bytes) -> Result<PreviewBody, Value> {
         )]));
     }
     let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
-        // Best effort — see the doc comment.
-        let mut ctx = Map::new();
-        ctx.insert("error".to_owned(), Value::from("Expecting value"));
-        return Err(detail_list(vec![error_entry(
-            "json_invalid",
-            vec![Value::from("body"), Value::from(0)],
-            "JSON decode error",
-            Value::Object(Map::new()),
-            Some(Value::Object(ctx)),
-        )]));
+        // NOT best effort any more, and not pydantic-core's parser either: the
+        // doc comment's guess was wrong. `fastapi/routing.py` calls
+        // `await request.json()` for a `BaseModel` body exactly as it does for a
+        // `dict` one, and catches CPython's `JSONDecodeError` before pydantic
+        // sees a byte — so the offset and the message are CPython's, and this
+        // shape is the one DIV-367 measured and shares with the ten dict-bodied
+        // handlers. Hard-coding `0` / `"Expecting value"` was right only for a
+        // body that fails at its first character.
+        return Err(crate::json::json_invalid_detail(body));
     };
     let Some(obj) = parsed.as_object() else {
         return Err(detail_list(vec![error_entry(
