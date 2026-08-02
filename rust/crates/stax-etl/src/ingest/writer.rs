@@ -723,10 +723,21 @@ fn rebuild_messages_insert_trigger(conn: &Connection) -> Result<()> {
          WHERE {fallback_where};"
     ));
 
-    let bump_sql = "UPDATE _messages_id_seq SET next_id = MAX(\
-          next_id + (CASE WHEN NEW.id IS NULL THEN 1 ELSE 0 END),\
-          COALESCE(NEW.id + 1, next_id)\
-        ) WHERE rowid_kind = 1;";
+    // DIV-456. `concat!`, not a `\` line continuation: the reference builds this
+    // from four adjacent string literals whose 2nd and 3rd carry a LEADING TWO
+    // SPACES, and a `\` continuation eats exactly those. The trigger's text is
+    // stored verbatim in `sqlite_master`, so the difference is permanent in
+    // every store the port's WRITER extended — invisible to `ingest-parity.sh`
+    // (which diffs rows) and to `schema-differ.sh` (which never adds a
+    // partition, and whose `v008.rs` copy has always had the spaces). The
+    // import differ is the first thing that compared `sqlite_master` between two
+    // independently WRITTEN stores, and it found this on its first run.
+    let bump_sql = concat!(
+        "UPDATE _messages_id_seq SET next_id = MAX(",
+        "  next_id + (CASE WHEN NEW.id IS NULL THEN 1 ELSE 0 END),",
+        "  COALESCE(NEW.id + 1, next_id)",
+        ") WHERE rowid_kind = 1;"
+    );
     let body = format!("{bump_sql}{}", inserts.join(""));
 
     conn.execute("DROP TRIGGER IF EXISTS messages_insert_route", [])?;

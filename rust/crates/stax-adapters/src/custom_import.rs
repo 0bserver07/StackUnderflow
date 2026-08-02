@@ -229,30 +229,29 @@ pub fn resolve_manifest_path(
     search_roots: &[PathBuf],
     home: Option<&Path>,
 ) -> Result<PathBuf, String> {
-    let candidate = expand_user(Path::new(name), home);
+    // Every path here goes through `py_path_str`, because every path here is
+    // eventually PRINTED — the candidate in this function's own message, the
+    // returned one in `parse_manifest`'s `where` — and `str(Path(...))` is
+    // normalised where `PathBuf::display()` is verbatim (DIV-457).
+    let candidate = py_path(&expand_user(Path::new(name), home));
     if candidate.is_file() {
         return Ok(candidate);
     }
     if candidate.is_dir() {
-        let inner = candidate.join(MANIFEST_FILENAME);
+        let inner = py_path(&candidate.join(MANIFEST_FILENAME));
         if inner.is_file() {
             return Ok(inner);
         }
     }
     for root in search_roots {
-        let inner = root.join(name).join(MANIFEST_FILENAME);
+        let inner = py_path(&root.join(name).join(MANIFEST_FILENAME));
         if inner.is_file() {
             return Ok(inner);
         }
     }
     let searched = search_roots
         .iter()
-        .map(|root| {
-            root.join(name)
-                .join(MANIFEST_FILENAME)
-                .to_string_lossy()
-                .into_owned()
-        })
+        .map(|root| py_path_str(&root.join(name).join(MANIFEST_FILENAME)))
         .collect::<Vec<_>>()
         .join(", ");
     let searched = if searched.is_empty() {
@@ -260,12 +259,54 @@ pub fn resolve_manifest_path(
     } else {
         searched
     };
-    // `{name!r}` is repr, not str — the quotes are part of the message.
+    // `{name!r}` is repr, not str — the quotes are part of the message. The
+    // candidate is `str(Path(...))`, which is NORMALISED (DIV-457).
     Err(format!(
         "no history-source manifest for {}. Looked for a file/dir at {}, then: {searched}",
         pyval::py_repr(&Value::from(name)),
-        candidate.display()
+        py_path_str(&candidate)
     ))
+}
+
+/// `str(PurePosixPath(p))` — the message's candidate, normalised as pathlib
+/// normalises it (DIV-457).
+///
+/// `Path("")` is `PosixPath('.')`, and `--history-source ''` prints that `.` on
+/// the reference where `PathBuf::from("")` displays as nothing at all. Found by
+/// the import leg's empty-string row, which is the `--project ''` class the
+/// ledger has now caught four times: **every string option needs a row that
+/// passes it the empty string.**
+///
+/// The rules are pathlib's and nothing more: empty and `.` components are
+/// dropped, a trailing separator goes with them, `..` is KEPT (pathlib does not
+/// resolve it), and a leading `//` — exactly two — is POSIX's own double-slash
+/// root and survives where `///` collapses to `/`.
+fn py_path(path: &Path) -> PathBuf {
+    PathBuf::from(py_path_str(path))
+}
+
+/// `str(PurePosixPath(p))` — see [`py_path`].
+fn py_path_str(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let root = if raw.starts_with("//") && !raw.starts_with("///") {
+        "//"
+    } else if raw.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
+    let parts: Vec<&str> = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.is_empty() {
+        return if root.is_empty() {
+            ".".to_string()
+        } else {
+            root.to_string()
+        };
+    }
+    format!("{root}{}", parts.join("/"))
 }
 
 /// Expand a leading `~` against `home`, as `Path.expanduser()` does.
@@ -1078,5 +1119,27 @@ mod tests {
         // With no search roots the message says so rather than trailing off.
         let err = resolve_manifest_path("nope", &[], None).expect_err("missing");
         assert!(err.ends_with("(no search roots)"), "{err}");
+
+        // DIV-457: the candidate is `str(Path(name))`, and pathlib normalises.
+        // `--history-source ''` prints `.`, not nothing; every row below is
+        // transcribed from `str(Path(s))` under the campaign's interpreter.
+        let err = resolve_manifest_path("", &[], None).expect_err("missing");
+        assert!(err.contains("Looked for a file/dir at ., then:"), "{err}");
+        for (input, expected) in [
+            ("", "."),
+            (".", "."),
+            ("./a", "a"),
+            ("a//b", "a/b"),
+            ("/a/", "/a"),
+            ("//a", "//a"),
+            ("///a", "/a"),
+            ("../a", "../a"),
+            ("a/.", "a"),
+            ("./", "."),
+            ("a/./b/", "a/b"),
+            ("x/..", "x/.."),
+        ] {
+            assert_eq!(py_path_str(Path::new(input)), expected, "input {input:?}");
+        }
     }
 }

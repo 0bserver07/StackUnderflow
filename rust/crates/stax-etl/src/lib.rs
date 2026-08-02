@@ -17,3 +17,8 @@ pub mod marts;
 pub mod normalize;
 pub mod pricing;
 pub mod stats;
+// ── RS-8-101 / RS-2-006 (the import leg) — appended, never interleaved ──────
+/// `import_history_source` — the orchestration half of the history-plugin
+/// contract. Here rather than in `stax-adapters` because it drives
+/// `ingest::writer::ingest_file`, and adapters stay storage-free.
+pub mod history_import;

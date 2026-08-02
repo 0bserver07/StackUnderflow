@@ -55,6 +55,17 @@
 #                               this is 3.7x over it, so it stays out and
 #                               `cargo test -p stax-hooks` (75 tests, 0.02 s)
 #                               carries the per-commit half.
+#   rust/import-differ.sh       `import`'s SUCCESS leg (RS-8-101) — and the
+#                               proof that its REJECTIONS did nothing. Out for
+#                               the same reason as `backup-differ.sh`: the verb
+#                               writes `store.db`, so it needs two homes and a
+#                               row-level store comparison rather than a stdout
+#                               diff. The 47 `T7-imp-*` rows in gate 4 are all
+#                               rejections, by design (DIV-078: a case row is
+#                               side-effect-free); this is where the writes,
+#                               the cursor sidecar, and the argv + cwd +
+#                               environment the export command actually saw are
+#                               compared. ~20 s, ten scenarios.
 #   rust/project-set-differ.sh  `POST /api/project`'s SUCCESS leg (RS-5-095).
 #                               Out of gate 6 for a reason of KIND, not of
 #                               speed: it needs TWO homes. What the endpoint

@@ -1,0 +1,9 @@
+{
+  "schema": "stackunderflow-history-jsonl-v1",
+  "source_id": "amp",
+  "command": [
+    "sh",
+    "export.sh"
+  ],
+  "max_output_bytes": 1024
+}

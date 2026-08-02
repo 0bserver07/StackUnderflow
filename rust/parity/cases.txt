@@ -931,3 +931,85 @@ T2-embed-noollama     | repo | memory embed
 T2-embed-batch        | repo | memory embed --batch 8
 T2-embed-batch-neg    | repo | memory embed --batch -1
 T2-embed-cwd-tmp      | tmp  | memory embed --batch 1
+
+# ── import (RS-8-101) — the history-plugin verb, rejection legs only ─────────
+#
+# `T7-imp-*`. Every row here is a REJECTION, and that is a design decision, not
+# a gap: `import`'s success leg WRITES the store, and DIV-078's law says a case
+# row must be side-effect-free. The writes are proved by `rust/import-differ.sh`
+# instead — two homes, a store diff, and the argv/env/cwd the export command
+# actually saw.
+#
+# What makes these rows safe on the SHARED state home is the reference's own
+# order: `resolve_manifest_path` runs before `_open_store`, and every other leg
+# is fail-closed by construction (the whole stream is validated before a single
+# row is written, and the cursor sidecar is written last of all). Both sides
+# open the store, neither writes a byte.
+#
+# The manifests and export commands are checked-in fixtures under
+# `rust/parity/history-plugins/`. Every export script is a pure stdout emitter
+# with no side effect of its own, for the same DIV-078 reason; the ONE script
+# that records what it was handed (`record`) is the differ's and is never named
+# here. `--history-source` is given as a REPO-RELATIVE path, so the message text
+# is identical on both sides without a normalisation.
+#
+# Three classes, and the class is the point (DIV-447: a rejection must be proven
+# not to have run):
+#   m-*  the MANIFEST is refused — the export command never executes
+#   s-*  the STREAM is refused — the command ran, the store is untouched
+#   r-*  the RUNNER refuses — non-zero exit, a signal, the byte cap, the clock
+
+# resolution: the order is the contract, and every branch of it
+T7-imp-missing        | repo | import --history-source nope
+T7-imp-missing-json   | repo | import --history-source nope --format json
+T7-imp-empty          | repo | import --history-source ''
+T7-imp-abs-missing    | repo | import --history-source /nonexistent/x.json
+T7-imp-tilde          | repo | import --history-source '~/nope-plugin'
+T7-imp-dir-noplugin   | repo | import --history-source parity/history-plugins
+T7-imp-file-form      | repo | import --history-source parity/history-plugins/m-cursor/stackunderflow-history-plugin.json
+T7-imp-dot-slash      | repo | import --history-source ./parity/history-plugins/m-cursor
+T7-imp-double-slash   | repo | import --history-source parity//history-plugins//nope
+T7-imp-trailing-slash | repo | import --history-source parity/history-plugins/m-cursor/
+T7-imp-cwd-tmp        | tmp  | import --history-source nope
+
+# manifest validation — the command must NEVER run
+T7-imp-m-badjson      | repo | import --history-source parity/history-plugins/m-badjson
+T7-imp-m-notobject    | repo | import --history-source parity/history-plugins/m-notobject
+T7-imp-m-schema       | repo | import --history-source parity/history-plugins/m-schema
+T7-imp-m-sourceid     | repo | import --history-source parity/history-plugins/m-sourceid
+T7-imp-m-sourceid-e   | repo | import --history-source parity/history-plugins/m-sourceid-empty
+T7-imp-m-nocommand    | repo | import --history-source parity/history-plugins/m-nocommand
+T7-imp-m-emptyargv    | repo | import --history-source parity/history-plugins/m-emptyargv
+T7-imp-m-cursor       | repo | import --history-source parity/history-plugins/m-cursor
+T7-imp-m-cursor-json  | repo | import --history-source parity/history-plugins/m-cursor --format json
+T7-imp-m-tmout-bool   | repo | import --history-source parity/history-plugins/m-timeout-bool
+T7-imp-m-tmout-zero   | repo | import --history-source parity/history-plugins/m-timeout-zero
+T7-imp-m-tmout-str    | repo | import --history-source parity/history-plugins/m-timeout-str
+T7-imp-m-bytes-neg    | repo | import --history-source parity/history-plugins/m-bytes-neg
+T7-imp-m-passthrough  | repo | import --history-source parity/history-plugins/m-passthrough
+T7-imp-m-nocmd        | repo | import --history-source parity/history-plugins/m-nocmd-onpath
+
+# stream validation — the command RAN, the store stays empty
+T7-imp-s-badjson      | repo | import --history-source parity/history-plugins/s-badjson
+T7-imp-s-notobject    | repo | import --history-source parity/history-plugins/s-notobject
+T7-imp-s-unknown      | repo | import --history-source parity/history-plugins/s-unknowntype
+T7-imp-s-notype       | repo | import --history-source parity/history-plugins/s-notype
+T7-imp-s-badrole      | repo | import --history-source parity/history-plugins/s-badrole
+T7-imp-s-badseq       | repo | import --history-source parity/history-plugins/s-badseq
+T7-imp-s-boolseq      | repo | import --history-source parity/history-plugins/s-boolseq
+T7-imp-s-dupseq       | repo | import --history-source parity/history-plugins/s-dupseq
+T7-imp-s-badtools     | repo | import --history-source parity/history-plugins/s-badtools
+T7-imp-s-badcontent   | repo | import --history-source parity/history-plugins/s-badcontent
+T7-imp-s-nosession    | repo | import --history-source parity/history-plugins/s-nosession
+T7-imp-s-badcursor    | repo | import --history-source parity/history-plugins/s-badcursor
+T7-imp-s-badtokens    | repo | import --history-source parity/history-plugins/s-badtokens
+T7-imp-s-nopath       | repo | import --history-source parity/history-plugins/s-nopath
+T7-imp-s-badutf8      | repo | import --history-source parity/history-plugins/s-badutf8
+T7-imp-s-badutf8-json | repo | import --history-source parity/history-plugins/s-badutf8 --format json
+
+# the runner's own four refusals
+T7-imp-r-exit3        | repo | import --history-source parity/history-plugins/r-exit3
+T7-imp-r-exit4-quiet  | repo | import --history-source parity/history-plugins/r-exit4-quiet
+T7-imp-r-signal       | repo | import --history-source parity/history-plugins/r-signal
+T7-imp-r-overcap      | repo | import --history-source parity/history-plugins/r-overcap
+T7-imp-r-timeout      | repo | import --history-source parity/history-plugins/r-timeout

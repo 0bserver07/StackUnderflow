@@ -61,6 +61,11 @@ mod etl;
 mod memory_embed;
 mod pricing;
 mod reindex;
+// ── RS-8-101 (the import leg) — appended at the tail, never interleaved ──────
+/// `stax import` — the history-plugin verb. Named `import_history` rather than
+/// `import` so the module name matches `cli.py`'s function
+/// (`import_history_cmd`) and reads unambiguously beside `use`.
+mod import_history;
 
 use std::process::ExitCode;
 
@@ -144,6 +149,11 @@ pub use etl::{
 pub use memory_embed::{EmbedArgs, embed_new_messages, pack_vector, run_memory_embed};
 pub use pricing::{DoctorArgs, PricingArgs, PricingVerb, render_pricing_doctor_text, run_pricing};
 pub use reindex::{ReindexArgs, render_counts, run_reindex};
+// ── RS-8-101 (the import leg) ────────────────────────────────────────────────
+pub use import_history::{
+    HISTORY_PLUGIN_DIRNAME, ImportArgs, render_text as render_import_text, result_payload,
+    run_import, search_roots,
+};
 
 /// `stax` — the Rust port of StackUnderflow.
 ///
@@ -382,6 +392,23 @@ pub enum Command {
         long_about = None
     )]
     Ingest(IngestArgs),
+    // ── RS-8-101 (the import leg) — appended at the tail ────────────────────
+    /// Import external agent history via a user-supplied export command.
+    ///
+    /// For sources with no local transcript (cloud-gated tools), you supply an
+    /// export command in a ``stackunderflow-history-plugin.json`` manifest; we own
+    /// only the ``stackunderflow-history-jsonl-v1`` stream format. The command is
+    /// run with **no shell**, a cleared + allowlisted environment, and byte + time
+    /// caps; its stream is validated whole and upserted under the ``custom``
+    /// provider (namespaced by the manifest's ``source_id``). Resumption uses an
+    /// opaque cursor we store and replay but never interpret.
+    ///
+    /// Fail-closed: a non-zero exit, a timeout, or a malformed line aborts the
+    /// whole import and leaves the stored cursor un-advanced. Re-running an
+    /// unchanged export is an idempotent no-op (content-addressed ids).
+    ///
+    /// Also available as ``stax import``.
+    Import(ImportArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -456,6 +483,8 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         // ── TELEPHONE (this leg) — appended at the tail, never interleaved ──
         Command::Msg(args) => run_msg(args)?.emit(),
         Command::Ingest(args) => run_ingest(args)?.emit(),
+        // ── RS-8-101 (the import leg) — appended at the tail ────────────────
+        Command::Import(args) => run_import(args)?.emit(),
     };
     Ok(code)
 }

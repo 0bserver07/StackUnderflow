@@ -1,0 +1,13 @@
+{
+  printf 'cwd\t%s\n' "$(pwd)"
+  printf 'argv0\t%s\n' "$0"
+  for a in "$@"; do printf 'arg\t%s\n' "$a"; done
+  env | LC_ALL=C sort | sed 's/^/env\t/'
+} >> "${STAX_IMPORT_LOG:-/dev/null}"
+printf '%s\n' '{"type":"session","session_id":"s1","project":"app","cwd":"/w"}'
+printf '%s\n' '{"type":"message","session_id":"s1","seq":0,"role":"user","content":"hello","timestamp":"2026-04-25T14:00:00+00:00"}'
+printf '%s\n' '{"type":"message","session_id":"s1","seq":1,"role":"assistant","content":"hi","model":"claude-opus-4-5","input_tokens":10,"output_tokens":5,"cache_read_tokens":2,"tools":["Bash"],"timestamp":"2026-04-25T14:00:01+00:00"}'
+printf '%s\n' '{"type":"file_touch","session_id":"s1","seq":2,"path":"/w/a.py","operation":"edit","timestamp":"2026-04-25T14:00:02+00:00"}'
+printf '%s\n' '{"type":"session","session_id":"s2","cwd":"/w2"}'
+printf '%s\n' '{"type":"message","session_id":"s2","seq":0,"role":"system","content":"boot","timestamp":"2026-04-25T15:00:00+00:00"}'
+printf '%s\n' '{"type":"cursor","cursor":"page-2"}'

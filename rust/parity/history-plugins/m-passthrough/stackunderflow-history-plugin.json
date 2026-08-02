@@ -1,0 +1,9 @@
+{
+  "schema": "stackunderflow-history-jsonl-v1",
+  "source_id": "amp",
+  "command": [
+    "sh",
+    "export.sh"
+  ],
+  "env_passthrough": "TOKEN"
+}

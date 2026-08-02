@@ -8,9 +8,9 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 ## Verdict
 
-* **105** nodes in the Python tree; **99** exist in the Rust binary today (the other **6** are unported — listed below by name, never skipped silently).
-* **0 / 99** are byte-identical after the scoped program-name substitution.
-* **92 / 99** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
+* **105** nodes in the Python tree; **100** exist in the Rust binary today (the other **5** are unported — listed below by name, never skipped silently).
+* **0 / 100** are byte-identical after the scoped program-name substitution.
+* **93 / 100** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
 * **7** ported nodes disagree on a contract fact.
 * clap's stripped trailing `.` accounted for **53** summary differences and Click's mid-word 80-column wrap for **3** more; both were normalised away and both are counted here, not hidden.
 
@@ -37,7 +37,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 | path | kind | ported | bytes py/rs | summary | options | subcommands | usage | notes |
 | --- | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
-| `(root)` | group | yes | 3031/4232 | ok | ok | **DIFF** | **DIFF** | Rust-only by ruling: `anchor`, `store`; 2 subcommand(s) not ported yet, excluded from the comparison: `analyze`, `import`; subcommands the reference does not have: `msg`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
+| `(root)` | group | yes | 3031/4334 | ok | ok | **DIFF** | **DIFF** | Rust-only by ruling: `anchor`, `store`; 1 subcommand(s) not ported yet, excluded from the comparison: `analyze`; subcommands the reference does not have: `msg`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
 | `analyze` | group | **no** | 969/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze backfill` | command | **no** | 1009/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze quality` | command | **no** | 376/— | — | — | — | — | unported — the Rust binary has no such node |
@@ -92,7 +92,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `hooks run` | command | yes | 300/326 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow hooks run [OPTIONS] HOOK_ID' rs='Usage: stackunderflow hooks run [OPTIONS] <HOOK_ID>' |
 | `hooks status` | command | yes | 347/366 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `hooks uninstall` | command | yes | 276/279 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
-| `import` | command | **no** | 1361/— | — | — | — | — | unported — the Rust binary has no such node |
+| `import` | command | yes | 1361/1312 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow import [OPTIONS]' rs='Usage: stackunderflow import [OPTIONS] --history-source <NAME\|PATH>' |
 | `ingest` | group | yes | 329/290 | ok | ok | ok | **DIFF** | 1 subcommand(s) not ported yet, excluded from the comparison: `github`; usage py='Usage: stackunderflow ingest [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow ingest <COMMAND>' |
 | `ingest github` | command | **no** | 1002/— | — | — | — | — | unported — the Rust binary has no such node |
 | `ingest webhook` | group | yes | 243/275 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow ingest webhook [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow ingest webhook <COMMAND>' |
@@ -152,7 +152,6 @@ analyze
 analyze backfill
 analyze quality
 analyze session
-import
 ingest github
 ```
 

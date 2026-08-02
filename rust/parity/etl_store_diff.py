@@ -30,9 +30,17 @@ the CLI verb that shares the orchestrator. It is a wall clock either way, so no
 differ can hold it to equality; the COUNT is the falsifiable part and it is
 printed on every run.
 
-    python rust/parity/etl_store_diff.py <dir-a> <dir-b>
+    python rust/parity/etl_store_diff.py <dir-a> <dir-b> [--mask TABLE.COLUMN ...]
 
 Exit 0 when 1–3 hold, 1 otherwise.
+
+``--mask`` (added by the import leg, RS-8-101) is the same mechanism as the
+built-in one and obeys the same rule: a masked column is NAMED in the report,
+every run, so nothing is hidden by being masked. It exists because `import`
+stamps `time.time()` into `ingest_log.file_mtime` / `.ingested_at` and
+`projects.first_seen` / `.last_seen` — four wall clocks two processes cannot
+agree on, exactly like `mart_watermark.last_refresh_ts`. Every OTHER column of
+those tables is still compared exactly.
 """
 from __future__ import annotations
 
@@ -102,7 +110,27 @@ def clock_spread(conn: sqlite3.Connection) -> int | None:
         return None
 
 
+def parse_masks(argv: list[str]) -> tuple[list[str], set[tuple[str, str]]]:
+    """Split `--mask TABLE.COLUMN` pairs out of argv, leaving the positionals."""
+    rest: list[str] = []
+    masks: set[tuple[str, str]] = set()
+    index = 0
+    while index < len(argv):
+        if argv[index] == "--mask" and index + 1 < len(argv):
+            table, _, column = argv[index + 1].partition(".")
+            if not column:
+                raise SystemExit(f"--mask wants TABLE.COLUMN, got {argv[index + 1]!r}")
+            masks.add((table, column))
+            index += 2
+            continue
+        rest.append(argv[index])
+        index += 1
+    return rest, masks
+
+
 def main(argv: list[str]) -> int:
+    argv, extra_masks = parse_masks(argv)
+    MASKED.update(extra_masks)
     if len(argv) != 3:
         print(__doc__)
         return 2
@@ -143,9 +171,10 @@ def main(argv: list[str]) -> int:
         if failed:
             return 1
 
+        masked = ", ".join(f"{table}.{column}" for table, column in sorted(MASKED))
         print(
             f"OK: sqlite_master identical, {len(tables(a))} tables, "
-            f"{total} rows identical (mart_watermark.last_refresh_ts masked)"
+            f"{total} rows identical (masked: {masked})"
         )
         print(
             "    distinct last_refresh_ts: "
