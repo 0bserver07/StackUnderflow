@@ -1640,6 +1640,70 @@ def _print_sync_init_banner(identity, device_uuid: str, bucket_url: str) -> None
     click.echo(line)
 
 
+@cli.group("msg")
+def msg_group():
+    """Agent telephone — leave word for another machine's agents (and read yours).
+
+    Store-and-forward, not chat: `msg send` writes one small JSON file into the
+    RECIPIENT's data dir over ssh (same transport as `sync`); the recipient's
+    injection hooks surface unseen messages into the next live agent turn
+    (UserPromptSubmit / PreToolUse), exactly once. No broker, no daemon.
+    """
+
+
+@msg_group.command("send")
+@click.option("--to", "dest_url", required=True,
+              help="Recipient: ssh://[user@]host[:port]/ABS_DATA_DIR "
+                   "(the machine's STACKUNDERFLOW_HOME / --data-dir path)")
+@click.argument("text")
+def msg_send(dest_url: str, text: str):
+    """Leave a message in another machine's agent inbox."""
+    from stackunderflow.services.agent_inbox import message_payload
+    from stackunderflow.sync.ssh_store import SSHStoreError, parse_ssh_url, ssh_store_from_url
+
+    try:
+        parse_ssh_url(dest_url)
+    except ValueError as exc:
+        click.echo(f"  Invalid --to destination: {exc}")
+        sys.exit(1)
+    key, body = message_payload(text)
+    try:
+        ssh_store_from_url(dest_url).put(key, body)
+    except SSHStoreError as exc:
+        click.echo(f"  send failed: {exc}")
+        sys.exit(1)
+    click.echo(f"  Left word at {dest_url.rsplit('/', 1)[0]}/…/{key}")
+
+
+@msg_group.command("inbox")
+@click.option("--all", "show_all", is_flag=True, default=False,
+              help="Include messages already seen/injected")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Machine-readable (does NOT mark seen)")
+@click.option("--ack", is_flag=True, default=False,
+              help="Mark the listed unseen messages as seen")
+def msg_inbox(show_all: bool, as_json: bool, ack: bool):
+    """Read this machine's agent inbox."""
+    from stackunderflow.services import agent_inbox
+
+    msgs = agent_inbox.list_messages(include_seen=show_all)
+    if as_json:
+        click.echo(json.dumps(
+            {"schema": "stackunderflow.msg/1",
+             "messages": [m.as_dict() for m in msgs]}, indent=2))
+        return
+    if not msgs:
+        click.echo("  Inbox empty." if show_all else "  No unseen messages.")
+        return
+    for m in msgs:
+        seen = "  (seen)" if m.path.name.endswith(".seen.json") else ""
+        click.echo(f"  [{m.ts}] from {m.sender}{seen}")
+        click.echo(f"      {m.text}")
+    if ack:
+        n = agent_inbox.mark_seen([m for m in msgs if not m.path.name.endswith(".seen.json")])
+        click.echo(f"  Acknowledged {n} message(s).")
+
+
 @cli.group("sync")
 def sync_group():
     """Encrypted, bring-your-own-bucket backup of your analytics aggregates (opt-in)."""
