@@ -30,7 +30,18 @@ Reference: Click **8.4.2**, CPython **3.12.13**, `stackunderflow/cli.py` at **64
 
 The `STATUS` map above is the file's one piece of judgment, and judgment about a moving fact goes stale silently. Every regeneration now asks `stax <path> --help` for its exit code and reports the disagreement here, so this section is a **check**, not a claim. This run: ran against `rust/target/release/stax`.
 
-**Zero disagreements.** Every node the map calls ported answers `--help` on the shipped binary, and every node the binary answers for is called ported. Hidden nodes included: `config` and its three leaves appear in no `--help` listing and are reached by exit code.
+**PRESENT IN THE BINARY, CALLED UNPORTED** — the map is behind the code:
+
+* `benchmark`
+* `benchmark recommend`
+* `benchmark show`
+* `compare`
+* `context-replay`
+* `export`
+* `optimize`
+* `worktrees`
+* `worktrees attribute`
+* `worktrees list`
 
 ### 1.2 By wave assignment
 

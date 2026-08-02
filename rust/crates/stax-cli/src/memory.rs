@@ -64,7 +64,7 @@ pub enum Format {
 /// The error text is clap's to render (D-2's precedent: parser-owned messages
 /// differ, exit code and stdout do not) — Click says
 /// `Invalid value for '--limit': '-x' is not a valid integer.`
-pub(crate) fn py_int(raw: &str) -> Result<PyInt, String> {
+pub fn py_int(raw: &str) -> Result<PyInt, String> {
     PyInt::parse(raw).ok_or_else(|| "is not a valid integer".to_string())
 }
 

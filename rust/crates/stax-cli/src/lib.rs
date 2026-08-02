@@ -12,18 +12,23 @@
 mod anchor;
 mod ask;
 mod backup;
+mod benchmark;
 mod cache;
 mod cfg;
 mod click;
 mod clickx;
+mod compare;
+mod context_replay;
 mod discovery;
 mod docs;
 mod embeddings;
+mod export;
 mod guide;
 mod hooks;
 mod init;
 mod memory;
 pub mod mode_rec;
+mod optimize;
 mod plan;
 mod pyclock;
 mod recommend;
@@ -38,6 +43,7 @@ mod start;
 mod status;
 mod store;
 mod sync;
+mod worktrees;
 
 use std::process::ExitCode;
 
@@ -50,14 +56,18 @@ pub use backup::{
     BackupArgs, BackupVerb, create_rsync_argv, cron_line, darwin_plist, launchctl_argv,
     restore_rsync_argv, run_backup, sanitise_label,
 };
+pub use benchmark::{BenchmarkArgs, BenchmarkVerb, run_benchmark};
 pub use cache::{ClearCacheArgs, run_clear_cache};
 pub use cfg::{CfgArgs, CfgVerb, ConfigArgs, ConfigVerb, ModelAliasVerb, run_cfg, run_config};
 pub use click::{Output, UsageError};
+pub use compare::{CompareArgs, render_compare_table, run_compare, sort_keys};
+pub use context_replay::{ContextReplayArgs, run_context_replay};
 pub use discovery::{
     ActionWorkedArgs, FailureModesArgs, InPathArgs, PastDecisionsArgs, TouchingFileArgs,
     run_action_worked, run_failure_modes, run_in_path, run_past_decisions, run_touching_file,
 };
 pub use docs::{DocsArgs, DocsVerb, render_markdown, run_docs, run_docs_with};
+pub use export::{ExportArgs, run_export_cmd};
 pub use guide::{GuideArgs, GuideVerb, run_guide};
 pub use hooks::{HooksArgs, HooksVerb, run_hooks};
 pub use init::{
@@ -65,6 +75,7 @@ pub use init::{
     shipped_skills_source_dir,
 };
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
+pub use optimize::{OptimizeArgs, qa_db_path, run_optimize};
 pub use plan::{PlanArgs, PlanSetArgs, PlanVerb, ThresholdsVerb, format_money, run_plan};
 pub use recommend::{ModeArgs, RecommendArgs, RecommendSkillsArgs, RecommendVerb, run_recommend};
 pub use reports::{IngestFlags, PeriodArgs, ReportArgs, run_month, run_report, run_today};
@@ -81,6 +92,10 @@ pub use start::{
 pub use status::{StatusArgs, run_status};
 pub use store::{StoreArgs, render_store, run_store};
 pub use sync::{SyncArgs, SyncInitArgs, SyncJsonArgs, SyncVerb, run_sync};
+pub use worktrees::{
+    ListArgs as WorktreesListArgs, WorktreesArgs, WorktreesVerb, render_worktrees_text,
+    run_worktrees, short_worktree_path,
+};
 
 /// `stax` — the Rust port of StackUnderflow.
 ///
@@ -108,11 +123,24 @@ pub enum Command {
     Anchor(AnchorArgs),
     /// Back up and restore session data from every registered coding agent.
     Backup(BackupArgs),
+    /// Which model wins for the kind of work you actually do.
+    ///
+    /// An observational benchmark over your own history — a natural experiment you
+    /// already ran, not live replay. Every verdict carries n, coverage, confidence
+    /// intervals and a ``confidence`` label, and says "insufficient evidence"
+    /// rather than guess. Run any subcommand with ``--json`` for the stable,
+    /// token-bounded agent-output envelope.
+    Benchmark(BenchmarkArgs),
     /// View or change persistent settings.
     Cfg(CfgArgs),
     /// Clear cached data.  Use ``start --fresh`` for a clean boot.
     #[command(name = "clear-cache")]
     ClearCache(ClearCacheArgs),
+    /// Compare per-model metrics side-by-side over a window.
+    ///
+    /// Renders one row per model with sessions, calls, one-shot %, retry
+    /// rate, cache hit %, $/call, $/session, and total $.
+    Compare(CompareArgs),
     /// The pre-`cfg` spelling, kept working and kept out of every listing.
     ///
     /// `about = ""` is deliberate and is a parity fact, not an oversight:
@@ -123,6 +151,13 @@ pub enum Command {
     Config(ConfigArgs),
     /// Read StackUnderflow's own docs, offline from the installed package.
     Docs(DocsArgs),
+    /// Export aggregated usage data to a CSV or JSON file.
+    ///
+    /// With ``--period`` set, exports a single window. Without it, exports
+    /// a multi-period rollup (today / last 7 days / last 30 days) so a JSON
+    /// consumer never has to make three CLI calls. CSV always lays out
+    /// one section per period in the same file, separated by a blank line.
+    Export(ExportArgs),
     /// List sessions where editing FILE led to a follow-up correction.
     ///
     /// Surfaces the sessions where a past edit to FILE was followed by the
@@ -180,8 +215,25 @@ pub enum Command {
     /// Estimate the per-session context tax (system prompt + MCP + skills + memory).
     #[command(name = "context-budget")]
     ContextBudget(ContextBudgetArgs),
+    /// Reconstruct what the model "saw" in SESSION_ID up to a --at seq.
+    ///
+    /// Returns the ordered message sequence (role, preview, tool calls, per-turn
+    /// token estimate) with a running token total, so you can watch the context
+    /// grow. Read-only and advisory: an unknown session yields an empty result,
+    /// never an error. MVP semantics = the session's message sequence up to --at
+    /// (harness-side context eviction is a future refinement).
+    #[command(name = "context-replay")]
+    ContextReplay(ContextReplayArgs),
     /// This month's usage.
     Month(PeriodArgs),
+    /// Find wasted spend: looped Q&A pairs plus seven structural waste patterns.
+    ///
+    /// The legacy ``waste`` block lists projects where the assistant had to
+    /// retry repeatedly. The ``patterns`` block surfaces structural waste
+    /// detected from filesystem state and tool-call history (bloated
+    /// CLAUDE.md, unused MCP servers, ghost agents, junk reads, cache
+    /// thrash, oversized bash output, exploration-only sessions).
+    Optimize(OptimizeArgs),
     /// Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom).
     Plan(PlanArgs),
     /// Proactive recommendations mined from your local session store.
@@ -223,6 +275,8 @@ pub enum Command {
     /// Yield analysis: productive vs reverted vs abandoned sessions.
     #[command(name = "yield")]
     Yield(YieldArgs),
+    /// Inspect git worktrees: owner project, cost, prune safety (read-only).
+    Worktrees(WorktreesArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -247,10 +301,13 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
     let code = match &cli.command {
         Command::Anchor(args) => run_anchor(args).map(|()| ExitCode::SUCCESS)?,
         Command::Backup(args) => run_backup(args)?.emit(),
+        Command::Benchmark(args) => run_benchmark(args)?.emit(),
         Command::Cfg(args) => run_cfg(args)?.emit(),
         Command::ClearCache(args) => run_clear_cache(args)?.emit(),
+        Command::Compare(args) => run_compare(args)?.emit(),
         Command::Config(args) => run_config(args)?.emit(),
         Command::Docs(args) => run_docs(args)?.emit(),
+        Command::Export(args) => run_export_cmd(args)?.emit(),
         Command::FindFailureModesForFile(args) => {
             run_failure_modes(args).map(|()| ExitCode::SUCCESS)?
         }
@@ -266,7 +323,9 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Init(args) => run_init(args)?.emit(),
         Command::Memory(args) => run_memory(args).map(|()| ExitCode::SUCCESS)?,
         Command::ContextBudget(args) => run_context_budget(args)?.emit(),
+        Command::ContextReplay(args) => run_context_replay(args)?.emit(),
         Command::Month(args) => run_month(args)?.emit(),
+        Command::Optimize(args) => run_optimize(args)?.emit(),
         Command::Plan(args) => run_plan(args)?.emit(),
         Command::Recommend(args) => run_recommend(args)?.emit(),
         Command::Report(args) => run_report(args)?.emit(),
@@ -281,6 +340,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Sync(args) => run_sync(args).map(|()| ExitCode::SUCCESS)?,
         Command::Today(args) => run_today(args)?.emit(),
         Command::Yield(args) => run_yield(args)?.emit(),
+        Command::Worktrees(args) => run_worktrees(args)?.emit(),
     };
     Ok(code)
 }

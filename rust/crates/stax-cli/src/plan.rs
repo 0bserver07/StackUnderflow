@@ -202,10 +202,10 @@ fn run_show(format: &str) -> Result<Output> {
 fn period_spend(period_start: &str, period_end: &str) -> Result<f64> {
     let (since, until) = plans::window_bounds(period_start, period_end)
         .ok_or_else(|| anyhow::anyhow!("period_start is not an ISO date"))?;
-    let store = open_store()?;
+    let conn = open_store()?;
     let engine = engine_for_cli(&package_dir())?;
     let scope = Scope::new(Some(since), Some(until), "plan-period");
-    let report = build_report(store.conn(), &scope, None, None, &engine)?;
+    let report = build_report(&conn, &scope, None, None, &engine)?;
     Ok(report.total_cost)
 }
 
@@ -214,9 +214,9 @@ fn period_daily_costs(period_start: &str, period_end: &str) -> Result<Vec<f64>> 
     let Some((since, until)) = plans::window_bounds(period_start, period_end) else {
         return Ok(Vec::new());
     };
-    let store = open_store()?;
+    let conn = open_store()?;
     Ok(plans::spend_daily_window(
-        store.conn(),
+        &conn,
         period_start,
         period_end,
         &since,

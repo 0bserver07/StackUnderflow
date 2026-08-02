@@ -1158,6 +1158,172 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
     probe.unwrap_or(false)
 }
 
+// ── assemble_worktrees_payload (`routes/worktrees.py:72`) ────────────────────
+//
+// The CLI verb (`worktrees list`) and `GET /api/worktrees` call the SAME
+// assembler in Python — `cli.py` imports it straight out of the route module —
+// so a port that re-derived it in the CLI would be the one place the two
+// surfaces could disagree. It lives here rather than in `stax-server` for the
+// reason tranche 3 already recorded: `stax-cli` must not depend on
+// `stax-server` (DIV-279), and `stax-reports` is the crate both consumers
+// already share.
+//
+// **DIV-375 — this is a SECOND implementation until the route is re-pointed.**
+// `crates/stax-server/src/routes/worktrees.rs` keeps its own private `scan` /
+// `summarise` / `verdict_counter`, which is exactly what this pair of functions
+// is. Collapsing them means editing that file, which this session does not own
+// (the endpoint agent has it). The two were written against the same reference
+// and the summary key order, the un-compensated `+=` fold and the untallied
+// unknown verdict are reproduced identically here — but two copies of a byte
+// contract is a drift hazard, and closing it is a two-line change in the route:
+// delete the private pair and call `stax_reports::worktrees::{summarise_infos,
+// assemble_worktrees_payload}`.
+
+/// `_VERDICT_COUNTERS` — verdict → the `summary` key it increments.
+#[must_use]
+pub fn verdict_counter(verdict: &str) -> Option<&'static str> {
+    match verdict {
+        VERDICT_ACTIVE => Some("active"),
+        VERDICT_MERGED_SAFE_TO_PRUNE => Some("safe_to_prune"),
+        VERDICT_HAS_UNIQUE_WORK => Some("has_unique_work"),
+        _ => None,
+    }
+}
+
+/// The `summary` dict, in its literal's key order.
+///
+/// `attributed_cost_usd` is seeded with the float `0.0` and stepped with `+=`.
+/// There is no `sum()` in this function, so the accumulation is deliberately
+/// **not** Neumaier-compensated and an empty scan renders `0.0`, not `0`.
+#[must_use]
+pub fn summarise_infos(infos: &[WorktreeInfo]) -> Value {
+    let mut safe_to_prune = 0_i64;
+    let mut has_unique_work = 0_i64;
+    let mut active = 0_i64;
+    let mut attributed_cost_usd = 0.0_f64;
+    for info in infos {
+        match verdict_counter(&info.verdict) {
+            Some("safe_to_prune") => safe_to_prune += 1,
+            Some("has_unique_work") => has_unique_work += 1,
+            Some("active") => active += 1,
+            // An unrecognised verdict is not tallied — but its cost still is.
+            _ => {}
+        }
+        attributed_cost_usd += info.cost_usd;
+    }
+
+    let mut summary = Map::new();
+    summary.insert(
+        "total".to_owned(),
+        Value::from(i64::try_from(infos.len()).unwrap_or(i64::MAX)),
+    );
+    summary.insert("safe_to_prune".to_owned(), Value::from(safe_to_prune));
+    summary.insert("has_unique_work".to_owned(), Value::from(has_unique_work));
+    summary.insert("active".to_owned(), Value::from(active));
+    summary.insert("attributed_cost_usd".to_owned(), jf(attributed_cost_usd));
+    Value::Object(summary)
+}
+
+/// `assemble_worktrees_payload(conn, project_root=…)`.
+///
+/// `currency` and `scanned_at` are injected rather than read here: the clock is
+/// a wall-clock read the caller has to own (the harness normalises it), and the
+/// currency block is resolved from the caller's settings.
+///
+/// The `rate != 1.0` re-scaling loop is reproduced but is unreachable while
+/// [`usd_currency_payload`] is the only producer — see DIV-052/DIV-112.
+#[must_use]
+pub fn assemble_worktrees_payload(
+    conn: &Connection,
+    project_root: Option<&str>,
+    host: &dyn Host,
+    currency: Value,
+    scanned_at: String,
+) -> Value {
+    let infos = list_worktrees(conn, project_root, host);
+    let mut worktrees: Vec<Value> = infos.iter().map(WorktreeInfo::to_dict).collect();
+    let mut summary = summarise_infos(&infos);
+
+    let rate = currency
+        .get("rate_from_usd")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    #[allow(
+        clippy::float_cmp,
+        reason = "`if rate != 1.0` is the reference's own literal comparison"
+    )]
+    if rate != 1.0 {
+        for worktree in &mut worktrees {
+            let usd = worktree
+                .get("cost_usd")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            if let Some(obj) = worktree.as_object_mut() {
+                obj.insert("cost_usd".to_owned(), jf(usd * rate));
+            }
+        }
+        let total = summary
+            .get("attributed_cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        if let Some(obj) = summary.as_object_mut() {
+            obj.insert("attributed_cost_usd".to_owned(), jf(total * rate));
+        }
+    }
+
+    let mut payload = Map::new();
+    // `project_root if project_root else "store"` — Python truthiness, so an
+    // EMPTY `--project` scopes to the whole store and says so.
+    payload.insert(
+        "scope".to_owned(),
+        Value::String(
+            project_root
+                .filter(|root| !root.is_empty())
+                .unwrap_or("store")
+                .to_owned(),
+        ),
+    );
+    payload.insert("worktrees".to_owned(), Value::Array(worktrees));
+    payload.insert("summary".to_owned(), summary);
+    payload.insert("scanned_at".to_owned(), Value::String(scanned_at));
+    payload.insert("currency".to_owned(), currency);
+    Value::Object(payload)
+}
+
+/// `active_currency_payload()` for the USD leg — the only leg with no network.
+///
+/// **The twin of `stax_server::currency::active_currency_payload`**, and it is
+/// here for the same reason [`assemble_worktrees_payload`] is: `stax-cli` may
+/// not link `stax-server`. Key order is `format_in_currency`'s dict literal
+/// minus the popped `amount`, and `rate_from_usd` is the **float** `1.0`, so it
+/// renders `1.0` and never `1`.
+///
+/// # Errors
+/// A configured currency that resolves to anything but USD: the rate chain ends
+/// at a Frankfurter HTTP fetch, which is not ported (DIV-052). Refusing beats
+/// inventing a rate — the reference's own stated rule is "never silently emit
+/// `rate_from_usd=1.0` for a non-USD code".
+pub fn usd_currency_payload(configured: &str) -> Result<Value, String> {
+    // `requested = (target or "USD").upper()`, then a non-`^[A-Z]{3}$` code
+    // silently becomes USD *before* resolution.
+    let mut requested = configured.to_ascii_uppercase();
+    if requested.len() != 3 || !requested.bytes().all(|b| b.is_ascii_uppercase()) {
+        requested = "USD".to_owned();
+    }
+    if requested != "USD" {
+        return Err(format!(
+            "currency {requested} needs the Frankfurter rate chain, which this port does not \
+             carry (DIV-052)"
+        ));
+    }
+    let mut payload = Map::new();
+    payload.insert("code".to_owned(), Value::String("USD".to_owned()));
+    payload.insert("symbol".to_owned(), Value::String("$".to_owned()));
+    payload.insert("rate_from_usd".to_owned(), Value::from(1.0_f64));
+    payload.insert("warning".to_owned(), Value::Null);
+    Ok(Value::Object(payload))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

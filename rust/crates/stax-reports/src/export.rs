@@ -87,6 +87,7 @@
 //! (`"we approximate with…"`). Ported as written.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use serde_json::{Map, Value};
@@ -1498,6 +1499,119 @@ impl Counter {
         out.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         out
     }
+}
+
+// ── safe_write_text (`export.py:702`) ────────────────────────────────────────
+
+/// What [`safe_write_text`] refuses to do.
+///
+/// Python raises `FileExistsError` for all three refusals and lets every other
+/// `OSError` propagate; `cli.py`'s `export` catches the first by type and turns
+/// it into a `ClickException`, so the split has to survive into Rust or a
+/// permission error would print as a friendly message instead of a traceback.
+#[derive(Debug)]
+pub enum WriteError {
+    /// `raise FileExistsError(...)` — the three refusals, message included.
+    Exists(String),
+    /// Anything else `open`/`replace` raised. Python would traceback here.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exists(message) => f.write_str(message),
+            Self::Io(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {}
+
+/// `safe_write_text(path, content, force=…)` — atomic, symlink-safe.
+///
+/// Three refusals, each a `FileExistsError` with its own sentence: the target
+/// is a symlink, the target exists without `--force`, or the temp path is a
+/// symlink. Then `parent.mkdir(parents=True, exist_ok=True)`, a write to
+/// `<path>.tmp`, and `Path.replace` — and on ANY exception the temp file is
+/// unlinked before the error is re-raised.
+///
+/// # `p.with_suffix(p.suffix + ".tmp")` is `path + ".tmp"`
+///
+/// It reads like suffix surgery and it is not: `with_suffix` replaces the final
+/// suffix, and the replacement here is *that same suffix* with `.tmp` glued on,
+/// so `stem + suffix + ".tmp"` — which is the whole name plus four characters.
+/// `out.csv` → `out.csv.tmp`, `out` → `out.tmp`, `a.tar.gz` → `a.tar.gz.tmp`,
+/// `.hidden` → `.hidden.tmp` (a leading dot is not a suffix to `pathlib`).
+/// Written as an append with the reasoning recorded, rather than as a
+/// transcription of the surgery that would have to be re-derived.
+///
+/// # Errors
+/// [`WriteError::Exists`] for the three refusals, [`WriteError::Io`] otherwise.
+pub fn safe_write_text(path: &Path, content: &str, force: bool) -> Result<(), WriteError> {
+    // `Path("")` is `PosixPath(".")` — `symlink_metadata` on the empty path
+    // errors where CPython would inspect the cwd, so normalise first and the
+    // `-o ''` row lands on the same "already exists" sentence.
+    let target: &Path = if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    };
+
+    // `p.is_symlink()` — TRUE for a dangling symlink too, which is the point:
+    // the refusal is about the link, not about what it points at.
+    if is_symlink(target) {
+        return Err(WriteError::Exists(format!(
+            "Refusing to write through symlink: {}",
+            target.display()
+        )));
+    }
+    // `p.exists()` FOLLOWS symlinks; we already returned for those.
+    if target.exists() && !force {
+        return Err(WriteError::Exists(format!(
+            "{} already exists. Pass --force to overwrite.",
+            target.display()
+        )));
+    }
+
+    // `p.parent.mkdir(parents=True, exist_ok=True)`. `Path(".").parent` is
+    // `PosixPath(".")`, which already exists, so this is a no-op there.
+    let parent = target.parent().unwrap_or(Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    std::fs::create_dir_all(parent).map_err(WriteError::Io)?;
+
+    let mut tmp_name = target.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    if is_symlink(&tmp) {
+        return Err(WriteError::Exists(format!(
+            "Refusing to write through symlink temp: {}",
+            tmp.display()
+        )));
+    }
+
+    // `open(tmp, "w", encoding="utf-8", newline="")` — no newline translation
+    // on any platform, so the bytes are the string's. Mode is the umask's on
+    // both sides (`open` is 0666 & ~umask, and so is `fs::write`), so DIV-264's
+    // 0600 hazard does not reach this writer.
+    let outcome = std::fs::write(&tmp, content.as_bytes())
+        .and_then(|()| std::fs::rename(&tmp, target))
+        .map_err(WriteError::Io);
+    if outcome.is_err() {
+        // `except Exception: if tmp.exists(): tmp.unlink()` — best effort, and
+        // an `OSError` from the unlink is swallowed.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    outcome
+}
+
+/// `Path.is_symlink()` — false for a path that cannot be stat-ed at all.
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 #[cfg(test)]

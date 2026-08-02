@@ -8,11 +8,11 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 ## Verdict
 
-* **105** nodes in the Python tree; **73** exist in the Rust binary today (the other **32** are unported — listed below by name, never skipped silently).
-* **0 / 73** are byte-identical after the scoped program-name substitution.
-* **67 / 73** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
+* **105** nodes in the Python tree; **83** exist in the Rust binary today (the other **22** are unported — listed below by name, never skipped silently).
+* **0 / 83** are byte-identical after the scoped program-name substitution.
+* **77 / 83** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
 * **6** ported nodes disagree on a contract fact.
-* clap's stripped trailing `.` accounted for **45** summary differences and Click's mid-word 80-column wrap for **1** more; both were normalised away and both are counted here, not hidden.
+* clap's stripped trailing `.` accounted for **48** summary differences and Click's mid-word 80-column wrap for **3** more; both were normalised away and both are counted here, not hidden.
 
 ## D-1, measured and re-filed
 
@@ -37,7 +37,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 | path | kind | ported | bytes py/rs | summary | options | subcommands | usage | notes |
 | --- | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
-| `(root)` | group | yes | 3031/2878 | ok | ok | ok | **DIFF** | Rust-only by ruling: `anchor`, `store`; 15 subcommand(s) not ported yet, excluded from the comparison: `analyze`, `benchmark`, `compare`, `context-replay`, `discovery`, `doctor`, `etl`, `export`, `import`, `ingest`, `optimize`, `pricing`, `reindex`, `risk`, `worktrees`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
+| `(root)` | group | yes | 3031/3464 | ok | ok | ok | **DIFF** | Rust-only by ruling: `anchor`, `store`; 9 subcommand(s) not ported yet, excluded from the comparison: `analyze`, `discovery`, `doctor`, `etl`, `import`, `ingest`, `pricing`, `reindex`, `risk`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
 | `analyze` | group | **no** | 969/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze backfill` | command | **no** | 1009/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze quality` | command | **no** | 376/— | — | — | — | — | unported — the Rust binary has no such node |
@@ -48,9 +48,9 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `backup list` | command | yes | 118/92 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow backup list [OPTIONS]' rs='Usage: stackunderflow backup list' |
 | `backup restore` | command | yes | 198/236 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow backup restore [OPTIONS] NAME' rs='Usage: stackunderflow backup restore [OPTIONS] <NAME>' |
 | `backup verify` | command | yes | 540/561 | ok | ok | ok | ok |  |
-| `benchmark` | group | **no** | 651/— | — | — | — | — | unported — the Rust binary has no such node |
-| `benchmark recommend` | command | **no** | 728/— | — | — | — | — | unported — the Rust binary has no such node |
-| `benchmark show` | command | **no** | 784/— | — | — | — | — | unported — the Rust binary has no such node |
+| `benchmark` | group | yes | 651/711 | ok | ok | ok | **DIFF** | summary differs only by Click's mid-word line wrap; usage py='Usage: stackunderflow benchmark [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow benchmark <COMMAND>' |
+| `benchmark recommend` | command | yes | 728/721 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow benchmark recommend [OPTIONS]' rs='Usage: stackunderflow benchmark recommend [OPTIONS] --intent <INTENT>' |
+| `benchmark show` | command | yes | 784/709 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `cfg` | group | yes | 372/407 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow cfg [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow cfg <COMMAND>' |
 | `cfg ls` | command | yes | 150/138 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `cfg model-alias` | group | yes | 336/368 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow cfg model-alias [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow cfg model-alias <COMMAND>' |
@@ -60,13 +60,13 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `cfg rm` | command | yes | 127/146 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow cfg rm [OPTIONS] KEY' rs='Usage: stackunderflow cfg rm <KEY>' |
 | `cfg set` | command | yes | 137/189 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow cfg set [OPTIONS] KEY VALUE' rs='Usage: stackunderflow cfg set <KEY> <VALUE>' |
 | `clear-cache` | command | yes | 165/234 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow clear-cache [OPTIONS] [PROJECT]' rs='Usage: stackunderflow clear-cache [PROJECT]' |
-| `compare` | command | **no** | 1214/— | — | — | — | — | unported — the Rust binary has no such node |
+| `compare` | command | yes | 1214/1158 | ok | ok | ok | ok |  |
 | `config` | group | yes | 137/183 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow config [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow config <COMMAND>' |
 | `config set` | command | yes | 101/157 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow config set [OPTIONS] KEY VALUE' rs='Usage: stackunderflow config set <KEY> <VALUE>' |
 | `config show` | command | yes | 101/106 | ok | ok | ok | ok |  |
 | `config unset` | command | yes | 97/120 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow config unset [OPTIONS] KEY' rs='Usage: stackunderflow config unset <KEY>' |
 | `context-budget` | command | yes | 645/421 | **DIFF** | ok | ok | ok | summary py='Estimate the per-session context tax (system prompt + MCP + skills + memory). Inspects the visible config files (CLAUDE.md, ~/.claude.json mcpServers, ~/.claude/skills/, agents) and produces a token / cost estimate. The ``len(text) // 4`` heuristic is approximate — useful for spotting bloat, not for billing.' rs='Estimate the per-session context tax (system prompt + MCP + skills + memory)' |
-| `context-replay` | command | **no** | 1395/— | — | — | — | — | unported — the Rust binary has no such node |
+| `context-replay` | command | yes | 1395/1729 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow context-replay [OPTIONS] SESSION_ID' rs='Usage: stackunderflow context-replay [OPTIONS] <SESSION_ID>' |
 | `discovery` | group | **no** | 331/— | — | — | — | — | unported — the Rust binary has no such node |
 | `discovery demote-uncited` | command | **no** | 688/— | — | — | — | — | unported — the Rust binary has no such node |
 | `discovery telemetry` | command | **no** | 673/— | — | — | — | — | unported — the Rust binary has no such node |
@@ -77,7 +77,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `etl` | group | **no** | 318/— | — | — | — | — | unported — the Rust binary has no such node |
 | `etl backfill` | command | **no** | 570/— | — | — | — | — | unported — the Rust binary has no such node |
 | `etl status` | command | **no** | 434/— | — | — | — | — | unported — the Rust binary has no such node |
-| `export` | command | **no** | 1654/— | — | — | — | — | unported — the Rust binary has no such node |
+| `export` | command | yes | 1654/1506 | ok | ok | ok | **DIFF** | summary differs only by Click's mid-word line wrap; usage py='Usage: stackunderflow export [OPTIONS]' rs='Usage: stackunderflow export [OPTIONS] --format <FMT> --output <OUTPUT>' |
 | `find-failure-modes-for-file` | command | yes | 1417/1337 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow find-failure-modes-for-file [OPTIONS] FILE' rs='Usage: stackunderflow find-failure-modes-for-file [OPTIONS] <FILE>' |
 | `find-sessions-in-path` | command | yes | 1258/1037 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow find-sessions-in-path [OPTIONS] PATH' rs='Usage: stackunderflow find-sessions-in-path [OPTIONS] <PATH>' |
 | `find-sessions-touching-file` | command | yes | 768/1011 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow find-sessions-touching-file [OPTIONS] FILE' rs='Usage: stackunderflow find-sessions-touching-file [OPTIONS] <FILE>' |
@@ -106,7 +106,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `memory sessions` | command | yes | 1514/2256 | ok | ok | ok | ok |  |
 | `memory worked` | command | yes | 1339/2091 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow memory worked [OPTIONS] ACTION' rs='Usage: stackunderflow memory worked [OPTIONS] <ACTION>' |
 | `month` | command | yes | 713/722 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
-| `optimize` | command | **no** | 1121/— | — | — | — | — | unported — the Rust binary has no such node |
+| `optimize` | command | yes | 1121/1414 | ok | ok | ok | ok |  |
 | `plan` | group | yes | 411/540 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow plan [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow plan <COMMAND>' |
 | `plan reset` | command | yes | 117/91 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow plan reset [OPTIONS]' rs='Usage: stackunderflow plan reset' |
 | `plan set` | command | yes | 457/415 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow plan set [OPTIONS] NAME' rs='Usage: stackunderflow plan set [OPTIONS] <NAME>' |
@@ -138,9 +138,9 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `sync push` | command | yes | 274/127 | **DIFF** | ok | ok | **DIFF** | summary py='Encrypt and upload changed aggregate shards to your bucket. Idempotent — an unchanged shard is skipped (zero uploads). Exits non-zero on any failure so it is safe to script.' rs='Encrypt and upload changed aggregate shards to your bucket'; usage py='Usage: stackunderflow sync push [OPTIONS]' rs='Usage: stackunderflow sync push' |
 | `sync status` | command | yes | 209/197 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `today` | command | yes | 708/717 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
-| `worktrees` | group | **no** | 329/— | — | — | — | — | unported — the Rust binary has no such node |
-| `worktrees attribute` | command | **no** | 424/— | — | — | — | — | unported — the Rust binary has no such node |
-| `worktrees list` | command | **no** | 624/— | — | — | — | — | unported — the Rust binary has no such node |
+| `worktrees` | group | yes | 329/403 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow worktrees [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow worktrees <COMMAND>' |
+| `worktrees attribute` | command | yes | 424/426 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow worktrees attribute [OPTIONS]' rs='Usage: stackunderflow worktrees attribute' |
+| `worktrees list` | command | yes | 624/692 | ok | ok | ok | ok |  |
 | `yield` | command | yes | 1423/869 | **DIFF** | ok | ok | ok | summary py='Yield analysis: productive vs reverted vs abandoned sessions. Cross-references each session\'s cwd with the git commit history of that repo over a 24-hour window after the session started. A session is "productive" if a non-reverted commit lands in that window, "reverted" if the commit was later reverted (or wiped from HEAD), "abandoned" if no commit followed, and "no_repo" if the cwd isn\'t a git repo. Heuristic warning: this correlates by time, not by content. A commit within 24h is credited to the session even if it\'s about something else.' rs='Yield analysis: productive vs reverted vs abandoned sessions' |
 
 ## The unported nodes
@@ -152,11 +152,6 @@ analyze
 analyze backfill
 analyze quality
 analyze session
-benchmark
-benchmark recommend
-benchmark show
-compare
-context-replay
 discovery
 discovery demote-uncited
 discovery telemetry
@@ -164,21 +159,16 @@ doctor
 etl
 etl backfill
 etl status
-export
 import
 ingest
 ingest github
 ingest webhook
 ingest webhook serve
 memory embed
-optimize
 pricing
 pricing doctor
 reindex
 risk
 risk file
-worktrees
-worktrees attribute
-worktrees list
 ```
 

@@ -29,7 +29,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use rusqlite::Connection;
-use stax_core::store::Store;
 use stax_reports::aggregate::{Report, build_report};
 use stax_reports::render;
 use stax_reports::scope::{Instant, Scope, parse_period};
@@ -236,33 +235,51 @@ pub fn build(
     include: &[String],
     exclude: &[String],
 ) -> Result<Report> {
-    let store = open_store()?;
-    let conn = store.conn();
-    guard_refresh(conn, ingest)?;
+    let conn = open_store()?;
+    guard_refresh(&conn, ingest)?;
     let engine = engine_for_cli(&package_dir())?;
     // `list(include) or None` — an EMPTY tuple becomes `None`, which is not the
     // same as an empty list: `build_report` treats `[]` as "keep nothing" and
     // `None` as "keep everything". Python's truthiness is the filter here.
     let include = (!include.is_empty()).then_some(include);
     let exclude = (!exclude.is_empty()).then_some(exclude);
-    build_report(conn, scope, include, exclude, &engine).context("build_report")
+    build_report(&conn, scope, include, exclude, &engine).context("build_report")
 }
 
-/// `_open_store()` — read-only, and it does NOT create the file.
+/// `_open_store()` — `db.connect(deps.store_path)` + `schema.apply(conn)`.
+///
+/// # DIV-374 — DIV-239 is CLOSED, and this is the whole of it
+///
+/// Tranche 1 filed DIV-239 (and tranche 4 re-filed it as DIV-291 at four more
+/// call sites): `cli.py:1830`'s helper *creates and migrates* a store, and the
+/// port refused to, because "reproducing the create would mean porting the
+/// migration chain into a read verb". **Wave 7 ported the migration chain**
+/// (`stax_core::schema`, 29 migrations to v30, the SQL `include_str!`-ed out of
+/// the reference's own `.sql` files), so the reason has dissolved and the
+/// parity-correct answer is the one Python gives: create it.
+///
+/// Two consequences worth naming:
+///
+/// * **The connection is READ-WRITE**, which is DIV-295's lesson applied here:
+///   a read-only SQLite connection to a WAL database cannot remove the `-shm` /
+///   `-wal` files it creates on open, so a case-local home diff sees two files
+///   the reference never leaves behind. `export`'s first `@home` run reported
+///   exactly that. [`stax_etl::ingest::guard::open_read_write`] is `db.connect`
+///   pragma-for-pragma (wave 4 pinned that) and additionally refuses the live
+///   dataset by path.
+/// * **The bootstrap case cannot be a matrix row.** Two implementations
+///   creating a store write different `SQLITE_VERSION_NUMBER`s at page-1
+///   offset 96 (DIV-257), and `diff -r` compares bytes — harness finding 3 for
+///   tranche 2. So the create path is proven by probe and by unit test, and the
+///   gated rows all run on homes whose store already exists.
 ///
 /// # Errors
-/// When there is no store. Python's `_open_store` calls `db.connect`, which
-/// creates it and applies the schema; this port does not write data files it was
-/// not handed (DIV-239, filed by tranche 1 for `status` and inherited here).
-pub fn open_store() -> Result<Store> {
+/// When the file cannot be created or opened, or when a migration fails.
+pub fn open_store() -> Result<Connection> {
     let path = stax_core::settings::store_path();
-    anyhow::ensure!(
-        path.exists(),
-        "no store at {} — the port does not create one (Python's `_open_store` would). \
-         Run `stackunderflow init` or point $STACKUNDERFLOW_HOME at an existing store.",
-        path.display()
-    );
-    Store::open_read_only(&path)
+    let conn = stax_etl::ingest::guard::open_read_write(&path)?;
+    stax_core::schema::apply(&conn).context("schema.apply")?;
+    Ok(conn)
 }
 
 /// `_maybe_refresh_store` — the decision, and a loud failure where the pass

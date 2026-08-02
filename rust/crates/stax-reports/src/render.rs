@@ -712,16 +712,38 @@ pub mod rich {
         out
     }
 
-    /// Centre `text` in `width` — `console.print(title, justify="center")`.
+    /// Centre `text` in `width` — the table TITLE row, padded on **both** sides.
+    ///
+    /// # DIV-373 — this used to pad only the left, and nothing crossed it
+    ///
+    /// The title is rendered by `Table.__rich_console__` as a `Text` with
+    /// `justify="center"` sized to the *table's* width (not the console's), and
+    /// `Text.__rich_console__` emits `pad_left` **and** `pad_right` segments,
+    /// which the console writes verbatim — a title row is `width` cells wide
+    /// with real trailing spaces. That is unlike a bare `console.print("…")`,
+    /// which right-strips ([`print_text`]).
+    ///
+    /// DIV-270 proved the layout engine on `report -p all` — 22,001 bytes,
+    /// byte-identical — and `report` passes **no title**, so this branch shipped
+    /// unexercised and left-padding-only. `stax compare` is the first caller
+    /// with a title and it failed on exactly this: 95 bytes vs 55, the whole
+    /// difference being the 40 trailing spaces. Wave 6's law again, on a third
+    /// crate: *a constant a port copies needs a row that crosses it* — and the
+    /// generalisation this time is that an OPTION nothing sets is the same
+    /// thing as a constant nothing crosses.
     fn centre(text: &str, width: usize) -> String {
         let used = cell_len(text);
         if used >= width {
             return text.to_owned();
         }
+        // `(width - used) // 2` on the left, the REMAINDER on the right — an
+        // odd slack puts the extra cell on the right, as `Text.pad_right` does.
         let left = (width - used) / 2;
+        let right = width - used - left;
         let mut out = String::with_capacity(width);
         out.extend(std::iter::repeat_n(' ', left));
         out.push_str(text);
+        out.extend(std::iter::repeat_n(' ', right));
         out
     }
 }

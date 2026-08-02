@@ -189,14 +189,13 @@ pub struct YieldArgs {
 /// `parse_period` rejects (unreachable through the CLI — the `click.Choice`
 /// allow-list is a strict subset of what `normalize_period` accepts).
 pub fn run_yield(args: &YieldArgs) -> Result<Output> {
-    let store = open_store()?;
-    let conn = store.conn();
-    crate::reports::guard_refresh(conn, &args.ingest)?;
+    let conn = open_store()?;
+    crate::reports::guard_refresh(&conn, &args.ingest)?;
     let engine = engine_for_cli(&package_dir())?;
     let project_filter = (!args.include.is_empty()).then_some(args.include.as_slice());
     let cap = yield_tracker::max_sessions_per_project(&|key| std::env::var(key).ok());
     let entries = compute_yield(
-        conn,
+        &conn,
         &args.period,
         project_filter,
         cap,

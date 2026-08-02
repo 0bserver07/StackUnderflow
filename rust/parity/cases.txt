@@ -610,3 +610,97 @@ S-rec-mode-build      | home@home:skills-corpus | recommend mode --prompt 'add a
 
 # ── recommend skills: the funnel that fires BEFORE the cache is written ──────
 S-rec-skl-nocwd       | home@home:skills-corpus | recommend skills
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRANCHE 5 — the last-32 pass (`T5-*`): compare · optimize · export ·
+# context-replay · benchmark {show,recommend} · worktrees {list,attribute}
+#
+# Every read row carries `--no-auto-ingest` (DIV-273: a verb with
+# `_ingest_options` is a WRITER without it, and one such probe rewrote the
+# shared state mid-run and blew a 180 s timeout).
+#
+# WHAT IS DELIBERATELY NOT HERE, each with its reason:
+#   * `compare --format json`      — `generated` is `time.time()` (DIV-370,
+#                                    inherited from DIV-085). Two processes can
+#                                    never agree on it; the text rows print it
+#                                    nowhere, so they gate and it does not.
+#   * `worktrees list --format json` — `scanned_at` is `datetime.now(UTC)`
+#                                    (DIV-376), same shape. The text renderer
+#                                    never prints it.
+#   * `export -f json` with a ROLLING window (`-p month`, `-p week`, or no
+#     `-p` at all) — the payload carries `generated` / `since` / `until`
+#     derived from the run clock (DIV-377). `-p all` (null bounds) and
+#     `-p today` (midnight-anchored) are stable and ARE rowed; every CSV row
+#     is stable because the CSV renderer emits no timestamp at all.
+#   * `compare -p nope` / `export -f nope` — `click.Choice` rejections, i.e.
+#     the parser-error class clap owns (DIV-235 / DIV-240 / DIV-260). The
+#     BODY-raised errors (`optimize -p nope`, `benchmark show --period nope`)
+#     ARE rowed, and they are the ones that carry the reference's own text.
+
+# ── compare (text; the table is a SECOND rich table at width=160) ────────────
+T5-cmp-default        | repo | compare --no-auto-ingest
+T5-cmp-month          | repo | compare -p month --no-auto-ingest
+T5-cmp-all            | repo | compare -p all --no-auto-ingest
+T5-cmp-today          | repo | compare -p today --no-auto-ingest
+T5-cmp-week           | repo | compare -p week --no-auto-ingest
+T5-cmp-fmt-text       | repo | compare -p all --format text --no-auto-ingest
+T5-cmp-prov           | repo | compare -p all --provider claude --no-auto-ingest
+T5-cmp-prov-miss      | repo | compare -p all --provider nosuch --no-auto-ingest
+T5-cmp-prov-empty     | repo | compare -p all --provider '' --no-auto-ingest
+T5-cmp-proj           | repo | compare -p all --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --no-auto-ingest
+T5-cmp-proj-miss      | repo | compare -p all --project nosuchproject --no-auto-ingest
+T5-cmp-proj-two       | repo | compare -p all --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --project nosuch --no-auto-ingest
+T5-cmp-proj-prov      | repo | compare -p all --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --provider claude --no-auto-ingest
+
+# ── optimize (plain click.echo; `-p` is FREE TEXT, so a bad one is exit 1) ───
+T5-opt-default        | repo | optimize --no-auto-ingest
+T5-opt-json           | repo | optimize --format json --no-auto-ingest
+T5-opt-all            | repo | optimize -p all --no-auto-ingest
+T5-opt-today          | repo | optimize -p today --no-auto-ingest
+T5-opt-badperiod      | repo | optimize -p nope --no-auto-ingest
+T5-opt-proj           | repo | optimize -p all --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --no-auto-ingest
+T5-opt-exclude-json   | repo | optimize -p all --exclude -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --format json --no-auto-ingest
+
+# ── export (a WRITER: every row writes INTO the case-local home, so the
+#    harness's `diff -r` compares the CSV/JSON bytes, not just the echo line) ─
+T5-exp-csv-all        | home@home:skills-corpus | export -f csv -o out.csv -p all --no-auto-ingest
+T5-exp-csv-today      | home@home:skills-corpus | export -f csv -o out.csv -p today --no-auto-ingest
+T5-exp-csv-rollup     | home@home:skills-corpus | export -f csv -o out.csv --no-auto-ingest
+T5-exp-csv-force      | home@home:skills-corpus | export -f csv -o out.csv -p all --force --no-auto-ingest
+T5-exp-csv-subdir     | home@home:skills-corpus | export -f csv -o sub/dir/out.csv -p all --no-auto-ingest
+T5-exp-json-all       | home@home:skills-corpus | export -f json -o out.json -p all --no-auto-ingest
+T5-exp-json-today     | home@home:skills-corpus | export -f json -o out.json -p today --no-auto-ingest
+T5-exp-json-prov      | home@home:skills-corpus | export -f json -o out.json -p all --provider claude --no-auto-ingest
+T5-exp-json-proj      | home@home:skills-corpus | export -f json -o out.json -p all --project -tmp-stax-skills-parity-proj --no-auto-ingest
+# The refusal legs: an existing target without --force, and `-o ''` — which is
+# `Path("")` == `PosixPath(".")`, so the cwd "already exists". Both are
+# `ClickException` at exit 1, and both must leave the tree untouched.
+T5-exp-exists         | home@home:skills-corpus | export -f csv -o store.db -p all --no-auto-ingest
+T5-exp-empty-output   | home@home:skills-corpus | export -f csv -o '' -p all --no-auto-ingest
+
+# ── context-replay (the engine was ported in wave 5; this is the verb) ───────
+T5-cr-text            | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f
+T5-cr-json            | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --json
+T5-cr-limit           | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --limit 5
+T5-cr-at              | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --at 10
+T5-cr-budget          | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --limit 5 --json --context-budget 200
+T5-cr-limit-neg       | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --limit -1 --json --context-budget 0
+T5-cr-missing         | repo | context-replay nosuchsession
+T5-cr-missing-json    | repo | context-replay nosuchsession --json
+T5-cr-fenced-json     | repo | context-replay 9ada72fa-5645-4945-ac8a-9a18a906559f --project nosuch --json
+
+# ── benchmark (a bad --period is BadParameter, exit 2 — NOT report's exit 1) ─
+T5-bm-show            | repo | benchmark show
+T5-bm-show-month      | repo | benchmark show --period month
+T5-bm-show-json       | repo | benchmark show --json
+T5-bm-show-badperiod  | repo | benchmark show --period yesterday
+T5-bm-show-intent     | repo | benchmark show --intent fix --json
+T5-bm-show-proj       | repo | benchmark show --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow
+T5-bm-rec             | repo | benchmark recommend --intent fix
+T5-bm-rec-json        | repo | benchmark recommend --intent fix --json
+T5-bm-rec-full        | repo | benchmark recommend --intent build --size large --language python --json
+
+# ── worktrees (list is read-only + git; attribute is the group's WRITER) ─────
+T5-wt-list            | repo                    | worktrees list
+T5-wt-list-home       | home@home:skills-corpus | worktrees list
+T5-wt-attribute       | home@home:skills-corpus | worktrees attribute
