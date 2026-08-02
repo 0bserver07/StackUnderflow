@@ -532,6 +532,7 @@ X-csv-all           | GET | /api/export?format=csv&period=all | -
 X-csv-multiprov     | GET | /api/export?format=csv&period=all&project=-Users-yadkonrad-dev-dev-year26-feb26-chimera | -
 # Rolling instants. The CSV body does not render `since`/`until`, so these are
 # expected GREEN — a red here means a message landed in the clock gap.
+# DIV-379: the three rows below are CLOCK-BEARING — the rolling window's row set sweeps with `now` even though no timestamp prints. A SOLITARY divergence here must be re-run before it is believed (measured drifting live 2026-08-02); a reproducing divergence is real. Pinning is impossible (the endpoint has no absolute-window params); the principled fix is a retry-once row marker, filed as a harness improvement in TASKS-RS.
 X-csv-week          | GET | /api/export?format=csv&period=week | -
 X-csv-month         | GET | /api/export?format=csv&period=month | -
 # No `period` at all: the today + 7d + 30d rollup. `generated` is in the JSON
