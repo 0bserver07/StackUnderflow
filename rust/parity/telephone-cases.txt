@@ -1,0 +1,165 @@
+# The telephone differ's corpus — `rust/telephone-differ.sh` reads this file.
+#
+# Columns, `|`-separated (surrounding whitespace stripped):
+#
+#   id      stable; used for the diff filename. `!` prefix = KNOWN-OPEN.
+#   kind    cli | hook | probe
+#   seed    the `parity/build_telephone_state.py` home this case runs in
+#           (`-` for probe rows, which touch no home)
+#   args    shell-quoted argv; `eval set --` splits it, so quoting is real
+#   stdin   hook rows only: the payload piped to `hooks run`
+#
+# Both implementations get their OWN copy of the seed at the SAME path, and the
+# two resulting trees are diffed after the run — which is the whole proof for
+# `--ack` and for the hook interject: not just that the two printed the same
+# line, but that they marked the same files seen.
+#
+# Provenance: every row here exists because a specific line of
+# `services/agent_inbox.py` or `cli.py`'s `msg` group decides something.
+
+# ── msg inbox: the empty floor ───────────────────────────────────────────────
+# The two empty lines are chosen by the FLAG, not by the count — `"  Inbox
+# empty." if show_all else "  No unseen messages."` — so both spellings need a
+# row on a home that has no inbox at all AND on one where everything is seen.
+T-inbox-empty        | cli | empty | msg inbox
+T-inbox-empty-all    | cli | empty | msg inbox --all
+T-inbox-empty-json   | cli | empty | msg inbox --json
+T-inbox-empty-json-a | cli | empty | msg inbox --all --json
+T-inbox-empty-ack    | cli | empty | msg inbox --ack
+
+# ── msg inbox: the ordinary case ─────────────────────────────────────────────
+T-inbox-plain        | cli | plain | msg inbox
+T-inbox-plain-all    | cli | plain | msg inbox --all
+T-inbox-plain-json   | cli | plain | msg inbox --json
+T-inbox-plain-alljs  | cli | plain | msg inbox --all --json
+# `--json` explicitly does NOT mark seen; the tree diff is what proves it.
+T-inbox-json-noack   | cli | plain | msg inbox --json --ack
+# `--ack` is the group's only WRITER: it renames every unseen file it listed.
+T-inbox-ack          | cli | plain | msg inbox --ack
+T-inbox-ack-all      | cli | plain | msg inbox --all --ack
+
+# ── msg inbox: the bytes ─────────────────────────────────────────────────────
+# `--json` is `json.dumps(indent=2)`, i.e. ensure_ascii=TRUE, while the message
+# files were written ensure_ascii=FALSE. So the same em-dash is one byte-shape
+# on disk and another on stdout, and the text rows show the third (raw).
+T-inbox-unicode      | cli | unicode | msg inbox
+T-inbox-unicode-json | cli | unicode | msg inbox --json
+T-inbox-unicode-ack  | cli | unicode | msg inbox --ack
+
+# ── msg inbox: hostile files ─────────────────────────────────────────────────
+# Truncated JSON, a top-level list, `{}`, non-string fields (which go through
+# CPython's `str()`), an empty file, all-falsy fields (the `or` fallbacks), a
+# dotfile, a hidden sender dir, and an in-flight `.part`.
+T-inbox-corrupt      | cli | corrupt | msg inbox
+T-inbox-corrupt-json | cli | corrupt | msg inbox --json
+T-inbox-corrupt-all  | cli | corrupt | msg inbox --all
+T-inbox-corrupt-ack  | cli | corrupt | msg inbox --ack
+
+# ── msg inbox: ordering ──────────────────────────────────────────────────────
+# `sorted(base.glob("*/*.json"))` compares whole path STRINGS, and `-` (0x2d)
+# sorts before `/` (0x2f) — so `mac-pro/aaa` precedes `mac/zzz`. A port that
+# sorted by (parent, name) would put them the other way round.
+T-inbox-sortorder    | cli | sortorder | msg inbox
+T-inbox-sortorder-js | cli | sortorder | msg inbox --json
+
+# ── msg inbox: the excerpt edge is NOT in inbox output ───────────────────────
+# `msg inbox` prints `m.text` whole; only the hook path excerpts. Rowed so the
+# two are proven different rather than assumed different.
+T-inbox-long         | cli | long | msg inbox
+T-inbox-long-json    | cli | long | msg inbox --json
+
+# ── msg send: the legs that never open a socket ──────────────────────────────
+# `parse_ssh_url` runs FIRST, for its side effect, before the payload is built —
+# so a typo costs nothing and every row below returns before `ssh` exists.
+#
+# THE RULE FOR THIS BLOCK: a row may only name a `--to` that `parse_ssh_url`
+# REJECTS. An accepted destination reaches `subprocess.run(["ssh", ...])`, which
+# is a live network call and is forbidden. Two rows were written here that did
+# reach it (`ssh://host/rel/path`, whose path urlparse reads as absolute, and a
+# bad port the port used to swallow); both are gone, and what they were probing
+# is covered by `T-argv-*` instead, where the argv is a value.
+T-send-notaurl       | cli | empty | msg send --to notaurl hello
+T-send-http          | cli | empty | msg send --to 'http://host/srv' hello
+T-send-nopath        | cli | empty | msg send --to 'ssh://host' hello
+T-send-rootpath      | cli | empty | msg send --to 'ssh://host/' hello
+T-send-nohost        | cli | empty | msg send --to 'ssh:///srv/su' hello
+T-send-empty-url     | cli | empty | msg send --to '' hello
+T-send-noscheme      | cli | empty | msg send --to '//host/srv/su' hello
+# `SSH://host/srv/su` is NOT here: `urlparse` lowercases the scheme, so the URL
+# is ACCEPTED and the row spawned ssh — the exact rule this block states, broken
+# by the row written to test it. The lowercasing is proven at `T-argv-upper`,
+# where the argv is a value and nothing is executed.
+# DIV-440 — the port used to silently DROP an unparseable port and go on to
+# spawn ssh; the reference raises `ValueError` from `urlparse().port` and never
+# gets there. Fixed in `stax-sync::ssh_store`; these rows are what crosses it.
+T-send-badport       | cli | empty | msg send --to 'ssh://host:notaport/srv' hello
+T-send-port-range    | cli | empty | msg send --to 'ssh://host:99999/srv' hello
+T-send-port-neg      | cli | empty | msg send --to 'ssh://host:-1/srv' hello
+T-send-port-double   | cli | empty | msg send --to 'ssh://host:1:2/srv' hello
+# KNOWN-OPEN: clap owns the PARSER's errors and Click owns its own. Recorded as
+# a class in `PARITY-wave1-resume.md` D-2 / DIV-240 and shared by every ported
+# node; these two rows carry the measured bytes for THIS node rather than
+# leaving the class untested here.
+!T-send-missing-text | cli | empty | msg send --to 'ssh://h/srv'
+!T-send-missing-to   | cli | empty | msg send hello
+
+# ── the hook interject ───────────────────────────────────────────────────────
+# `render_for_injection` is called for exactly two of the nine hook ids, and it
+# MARKS SEEN as a side effect — so each row's proof is stdout plus the tree.
+# Running the same seed twice (the `-again` rows) is what proves "exactly once".
+T-hook-prompt-plain    | hook | plain    | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"where did we land on caching"}
+T-hook-pretool-plain   | hook | plain    | stackunderflow-inject-pre-tool-use  | {"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/tmp","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.py"}}
+T-hook-prompt-many     | hook | many     | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+T-hook-prompt-long     | hook | long     | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+T-hook-prompt-unicode  | hook | unicode  | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+T-hook-prompt-corrupt  | hook | corrupt  | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+T-hook-prompt-sort     | hook | sortorder| stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+T-hook-prompt-empty    | hook | empty    | stackunderflow-inject-user-prompt   | {"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/tmp","prompt":"status"}
+# The OTHER seven hook ids must not touch the inbox. `session-start` is the
+# third inject hook and the one that proves the membership test is a test.
+T-hook-start-plain     | hook | plain    | stackunderflow-inject-session-start | {"hook_event_name":"SessionStart","session_id":"s1","cwd":"/tmp","source":"startup"}
+T-hook-stop-plain      | hook | plain    | stackunderflow-stop                 | {"hook_event_name":"Stop","session_id":"s1","cwd":"/tmp"}
+T-hook-nudge-plain     | hook | plain    | stackunderflow-posttool-nudge       | {"hook_event_name":"PostToolUse","session_id":"s1","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}}
+
+# ── probes: the halves a CLI run cannot show ─────────────────────────────────
+# The payload writer, byte-for-byte, with the id and the stamp injected. This
+# is the fifth `json.dumps` configuration in the tree — `(", ", ": ")` with
+# ensure_ascii=FALSE — and no other row can reach it.
+T-pay-ascii          | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'plain ascii'
+T-pay-emdash         | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'an em-dash — here'
+T-pay-cjk            | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 '日本語のメッセージ'
+T-pay-astral         | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'rocket 🚀 astral'
+T-pay-quotes         | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'he said "hi" \ and \\ that'
+T-pay-controls       | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'tab	nl-here'
+T-pay-empty          | probe | - | payload mac 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 ''
+T-pay-sender-unicode | probe | - | payload mächine 0018000000001-aaaaaa 2026-08-01T09:00:00+0200 'grüße'
+T-pay-slash-sender   | probe | - | payload 'a.b' 0018000000001-aaaaaa 2026-08-01T09:00:00-0400 'dotted sender'
+
+# The ssh argv `put` would exec — printed, never run.
+T-argv-basic         | probe | - | ssh-put 'ssh://host/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-user          | probe | - | ssh-put 'ssh://me@host/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-port          | probe | - | ssh-put 'ssh://me@host:2222/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-spacey-root   | probe | - | ssh-put 'ssh://host/srv/my data' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-quote-sender  | probe | - | ssh-put 'ssh://host/srv/su' "inbox/o'brien/0018000000001-aaaaaa.json"
+T-argv-trailing      | probe | - | ssh-put 'ssh://host/srv/su/' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-upper         | probe | - | ssh-put 'SSH://HOST/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-ipv6          | probe | - | ssh-put 'ssh://[::1]:2200/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-userpass      | probe | - | ssh-put 'ssh://me:pw@host/srv/su' 'inbox/mac/0018000000001-aaaaaa.json'
+T-argv-unicode-root  | probe | - | ssh-put 'ssh://host/srv/données' 'inbox/mächine/0018000000001-aaaaaa.json'
+# The port validation from the OTHER side: these are the argv legs `msg send`
+# can never reach because `parse_ssh_url` rejects them first (DIV-440).
+T-argv-badport       | probe | - | ssh-put 'ssh://host:notaport/srv/su' 'inbox/mac/a.json'
+T-argv-port-range    | probe | - | ssh-put 'ssh://host:99999/srv/su' 'inbox/mac/a.json'
+T-argv-port-double   | probe | - | ssh-put 'ssh://host:1:2/srv/su' 'inbox/mac/a.json'
+
+# The two clock formatters, deterministic once the epoch is an argument.
+T-stamp-epoch0       | probe | - | stamp 0
+T-stamp-2026         | probe | - | stamp 1785773418
+T-stamp-neg          | probe | - | stamp -86400
+T-id-zero            | probe | - | id 0 000000
+T-id-2026            | probe | - | id 1754150000000 deadbe
+T-id-wide            | probe | - | id 4503599627370496 010203
+
+# The hostname split. Both sides ask the SAME machine, so this row is a real
+# cross-implementation comparison and not a tautology.
+T-sender-name        | probe | - | sender-name

@@ -335,19 +335,19 @@ fn project_ids_for(conn: &Connection, path: &str) -> Result<Vec<i64>, HttpError>
 
 /// `infra/model_catalog._load` — every `candidates` entry, in file order.
 ///
-/// Read from the injected package directory rather than embedded, for the same
+/// Read from the injected package directory when it is there, for the same
 /// reason `pricing::manifest_path` is: the harness points both servers at the
 /// *same* `stackunderflow/` tree, so a catalogue edit lands on both sides at
-/// once and cannot skew.
+/// once and cannot skew. When it is *not* there — a binary on a machine with no
+/// Python package — the copy compiled into `stax_reports::prescribe` answers
+/// instead (wave-10 item 2c, DIV-400).
 fn load_candidates(package_dir: &StdPath) -> anyhow::Result<Vec<Candidate>> {
-    let path = package_dir.join("infra").join("model_candidates.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|err| anyhow::anyhow!("reading {}: {err}", path.display()))?;
+    let text = crate::services::prescribe::read_model_candidates(package_dir);
     let parsed: Value = serde_json::from_str(&text)?;
     let entries = parsed
         .get("candidates")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("{}: no `candidates` array", path.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("infra/model_candidates.json: no `candidates` array"))?;
     Ok(entries
         .iter()
         .map(|entry| Candidate {

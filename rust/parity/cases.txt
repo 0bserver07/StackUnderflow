@@ -704,3 +704,230 @@ T5-bm-rec-full        | repo | benchmark recommend --intent build --size large -
 T5-wt-list            | repo                    | worktrees list
 T5-wt-list-home       | home@home:skills-corpus | worktrees list
 T5-wt-attribute       | home@home:skills-corpus | worktrees attribute
+
+# ═══ T2v3 — the T2-leg remainder (pricing / etl / discovery / reindex / …) ═══
+#
+# These nodes were "absent from Command entirely rather than stubbed" through
+# tranches 2–5. Every row below runs a verb that now exists.
+
+# ── pricing doctor (read-only: no DB writes, no network — its own docstring) ─
+#
+# The CLI verb and `GET /api/pricing/doctor` call ONE assembler
+# (`stax_reports::pricing_doctor`), but they price through DIFFERENT engines,
+# because `cli.py` never calls `use_price_book_store` and `server.py`'s lifespan
+# always does. That asymmetry is the reference's (DIV-016 / RS-3-082) and these
+# rows pin the CLI half of it — the endpoint half is `!PR-*` in
+# `parity/endpoint-cases.txt`.
+#
+# `--strict` cannot be rowed as a FAILING gate on these two states: `ok` is a
+# hard-defect flag and both states are clean, so the row proves the exit-0 leg
+# and the unit tests carry the exit-1 one (a SystemExit(1) with no message —
+# the third exit shape, neither ClickException nor UsageError).
+T2-pd-text            | repo | pricing doctor
+T2-pd-json            | repo | pricing doctor --format json
+T2-pd-strict          | repo | pricing doctor --strict
+T2-pd-stale90         | repo | pricing doctor --stale-days 90
+T2-pd-stale0          | repo | pricing doctor --stale-days 0
+T2-pd-stale-neg       | repo | pricing doctor --stale-days -1
+T2-pd-limit2          | repo | pricing doctor --limit 2
+T2-pd-limit0          | repo | pricing doctor --limit 0
+T2-pd-limit-neg       | repo | pricing doctor --limit -1 --format json
+T2-pd-limit-space     | repo | pricing doctor --limit ' 5'
+T2-pd-limit-under     | repo | pricing doctor --limit 1_000
+T2-pd-repeat          | repo | pricing doctor --limit 3 --limit 2 --format json
+T2-pd-cwd-tmp         | tmp  | pricing doctor --format json
+# NOT rowed, and measured before it was excluded (each was a row, ran, and
+# failed on stderr alone with both sides at exit 2 and both stdouts empty):
+#   * `pricing doctor --limit notanint` / `--stale-days notanint` — Click's
+#     `Invalid value for '--limit': …` + usage block vs clap's `error: invalid
+#     value …`. The DIV-010 class the maintainer already ACCEPTED for
+#     `V-dec-limit-bad`.
+#   * `pricing doctor --format xml` — a `click.Choice` rejection, the same
+#     parser-error class `compare -p nope` / `export -f nope` are excluded for
+#     (DIV-235 / DIV-240 / DIV-260).
+#   * `pricing` with no subcommand — Click prints the GROUP HELP to stderr at
+#     exit 2, so this row is the `--help` template difference (DIV-240) wearing
+#     an exit code. `help-tree.sh` is where that contract is checked.
+
+# ── TRANCHE 6 (this leg) — `doctor` (RS-8-049) + `risk file` (RS-8-071 /
+#    RS-8-025 / RS-8-011). Appended, never interleaved: other legs are in this
+#    file concurrently.
+#
+# EVERY `doctor` row is `home@home[:SEED]`, and that is not caution — it is the
+# only shape this verb can be gated in. `_run_delivery_checks` enumerates every
+# registered adapter's ON-DISK sessions, and both implementations root that walk
+# at `Path.home()` / `std::env::home_dir()`. With `repo` as the cwd the two runs
+# would walk the MAINTAINER'S real `~/.claude`, seconds apart, on a box where a
+# live agent session is writing into it: `disk_sessions` would be a cell that can
+# drift between the reference run and the port run for reasons neither
+# implementation controls. A `home` cwd puts `$HOME` inside the case's own tree,
+# so the disk half of the scoreboard is the FIXTURE's. (Nothing writes: the tree
+# diff is the proof that `doctor` is read-only, on a home whose store it opened.)
+#
+# The six seeds come from `rust/parity/build_doctor_state.py`, whose schema is
+# `stackunderflow.store.schema.apply` and whose rows are the fixture — DIV-282.
+# Between them they cross all SIX delivery statuses (EMPTY · EXEMPT · GAP ·
+# NO_BILLABLE · DISK_GAP · OK), all FIVE health findings (store · integrity ·
+# foreign_key · schema · watermark · orphan), the `billable_scan_error` flag and
+# a non-zero `marts` column. Anti-vacuity is the point: on a healthy home the
+# only reachable output is "ok" over twenty EMPTY rows.
+#
+# NOT rowed, deliberately: a bare `stax risk` / `stax doctor --format` parser
+# error. Click prints its help/usage block on stdout, clap on stderr — the
+# pre-existing DIV-235 / DIV-240 / DIV-260 class, and closing it is the
+# Click-shaped parameter-error renderer already on the maintainer's desk.
+
+T6-doc-empty          | home@home                  | doctor
+T6-doc-empty-json     | home@home                  | doctor --json
+T6-doc-empty-fail     | home@home                  | doctor --fail-on-gap
+T6-doc-gap            | home@home:skills-corpus    | doctor
+T6-doc-gap-json       | home@home:skills-corpus    | doctor --json
+T6-doc-gap-fail       | home@home:skills-corpus    | doctor --fail-on-gap
+T6-doc-findings       | home@home:doctor-findings  | doctor
+T6-doc-findings-json  | home@home:doctor-findings  | doctor --json
+T6-doc-findings-fail  | home@home:doctor-findings  | doctor --fail-on-gap
+T6-doc-newer          | home@home:doctor-newer     | doctor
+T6-doc-newer-json     | home@home:doctor-newer     | doctor --json
+T6-doc-ok             | home@home:doctor-delivered | doctor
+T6-doc-ok-json        | home@home:doctor-delivered | doctor --json
+T6-doc-ok-fail        | home@home:doctor-delivered | doctor --fail-on-gap
+T6-doc-diskgap        | home@home:doctor-diskgap   | doctor
+T6-doc-diskgap-json   | home@home:doctor-diskgap   | doctor --json
+T6-doc-diskgap-fail   | home@home:doctor-diskgap   | doctor --fail-on-gap
+T6-doc-corrupt        | home@home:doctor-corrupt   | doctor
+T6-doc-corrupt-json   | home@home:doctor-corrupt   | doctor --json
+
+# `risk file` — the fixture rows are the ones with data. Every candidate file on
+# the maintainer's real store answers 0/0/0 (its `tools_json` is names-only, the
+# gap `build_hook_state.py` documents), so the live rows below prove the read
+# path at 3.9 GB and the `risk-corpus` rows prove the four counts and the
+# `recent failure-mode sessions:` block, which nothing else crosses.
+#
+# Both `--since` rows are stable FOREVER by construction: an ISO cutoff cannot
+# move, and `9999d` is ~27 years back from any `now`, so it never starts
+# excluding the 2026-07 fixture. `--since 30d` was measured working and rejected
+# — it is DIV-280's class, a window on the run clock that goes silently vacuous.
+T6-risk-file          | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py
+T6-risk-file-json     | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --format json
+T6-risk-file-fmt-text | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --format text
+T6-risk-clean-json    | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/README.md --format json
+T6-risk-since-iso     | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --since 2026-07-05 --format json
+T6-risk-since-rel     | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --since 9999d
+T6-risk-since-empty   | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --since '' --format json
+T6-risk-since-bad     | home@home:risk-corpus | risk file /tmp/stax/doctor/parity/proj/services/cache.py --since notadate
+T6-risk-missing       | home@home:risk-corpus | risk file /no/such/file/anywhere.py
+T6-risk-missing-json  | home@home:risk-corpus | risk file /no/such/file/anywhere.py --format json
+T6-risk-dir-json      | home@home:risk-corpus | risk file /tmp --format json
+T6-risk-tilde-json    | home@home:risk-corpus | risk file '~/store.db' --format json
+T6-risk-rel-json      | home@home:risk-corpus | risk file store.db --format json
+T6-risk-live          | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
+T6-risk-live-json     | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
+T6-risk-live-server   | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --format json
+T6-risk-live-cwd-tmp  | tmp  | risk file cli.py --format json
+
+# ── etl status (read-only; the WRITER `etl backfill` is a procedure, below) ──
+#
+# `assemble_status` is shared with `GET /api/etl/status` — the same module, not
+# a second copy. What the CLI passes differently is the two job slots: a fresh
+# interpreter has never scheduled a backfill, so `current_job` / `last_job` are
+# `None` on both sides by construction, and the port passes them explicitly
+# rather than reaching for a process global.
+#
+# The shared states exercise the interesting halves for real: 232,347 events
+# across ten providers and three cost sources (so the `(-count, key)` sort has
+# genuine ties), five marts with row counts, and full project coverage.
+T2-etl-status         | repo | etl status
+T2-etl-status-json    | repo | etl status --format json
+T2-etl-status-fmt     | repo | etl status --format text
+T2-etl-status-cwd-tmp | tmp  | etl status
+# NOT rowed:
+#   * `STACKUNDERFLOW_DISABLE_WATCHER=1` — the harness has no per-case env, and
+#     that flag is finding 1 of `rust/ETL-BACKFILL-DIFFER.md` (the environment
+#     asymmetry `parity/pyserver.py` creates). Covered by the unit test that
+#     crosses all four `Watcher:` states and by `watcher_env_disabled`'s own.
+#   * `etl status --format xml` / a bare `etl` — the parser-error and
+#     group-help classes (DIV-235 / DIV-240 / DIV-260), excluded for the same
+#     reason the `pricing` ones above are.
+#   * `etl backfill` in ANY form — it writes `usage_events` + eight marts, so
+#     one run changes the answer of every row after it (the DIV-059 lesson at
+#     ETL scale), it prints `duration: N.NNNs` (a wall clock), and both sides
+#     rewrite `store.db`'s page-1 version stamp (DIV-257), which no `diff -r`
+#     can compare. `rust/ETL-BACKFILL-CLI-DIFFER.md` is its procedure.
+
+# ── discovery telemetry / demote-uncited (the DRY legs) ─────────────────────
+#
+# Both shared states carry real telemetry — 647 rows in `fresh`, 682 in `fts`,
+# 97 and 114 of them demote candidates at the defaults — so these rows exercise
+# the ORDER BY (nulls last, newest first, then both key columns), the 12-char
+# session cut, the `{:<4d}` counters and the `{:.3f}` rate against live data.
+#
+# Two properties of this surface are worth stating at the row, because neither
+# is visible from the argv:
+#
+#   * The counter values DRIFT between matrix runs. Python's `find-*` /
+#     `search-past-decisions` rows bump `loaded_count` on their own leg (the
+#     port does not — DIV-009 B-2, the read-only store handle), so the shared
+#     state is a little different every run. Both legs of THIS case still read
+#     the same bytes, because nothing writes between them, so the diff holds;
+#     what does not hold is that two runs print the same numbers.
+#   * `demote_candidates` evaluates `julianday('now')` inside SQL, so the two
+#     legs read the clock milliseconds apart (DIV-411). A row sitting exactly
+#     on the `--min-age-days` boundary could flip between them. Not seen; named
+#     because a differ that has never seen a flake is not a differ that cannot.
+T2-disc-tel           | repo | discovery telemetry
+T2-disc-tel-json      | repo | discovery telemetry --format json
+T2-disc-tel-limit3    | repo | discovery telemetry --limit 3
+T2-disc-tel-limit0    | repo | discovery telemetry --limit 0
+T2-disc-tel-limit-neg | repo | discovery telemetry --limit -1 --format json
+T2-disc-tel-cmd       | repo | discovery telemetry --command search_past_decisions --limit 4
+T2-disc-tel-cmd-miss  | repo | discovery telemetry --command nosuch
+T2-disc-tel-cmd-empty | repo | discovery telemetry --command '' --limit 2
+T2-disc-tel-sess-miss | repo | discovery telemetry --session nosuch --format json
+T2-disc-tel-both      | repo | discovery telemetry --command find_sessions_in_path --session nosuch
+T2-disc-tel-repeat    | repo | discovery telemetry --limit 9 --limit 2
+T2-disc-tel-cwd-tmp   | tmp  | discovery telemetry --limit 2
+T2-disc-dem-dry       | repo | discovery demote-uncited --dry-run
+T2-disc-dem-dry-json  | repo | discovery demote-uncited --dry-run --format json
+T2-disc-dem-dry-none  | repo | discovery demote-uncited --dry-run --min-loads 100000
+T2-disc-dem-dry-none2 | repo | discovery demote-uncited --dry-run --min-age-days 100000 --format json
+T2-disc-dem-dry-wide  | repo | discovery demote-uncited --dry-run --min-loads 500 --min-age-days 1
+T2-disc-dem-dry-neg   | repo | discovery demote-uncited --dry-run --min-loads -1 --min-age-days -1 --format json
+# The NON-dry leg is a writer against `store.db`, so it is not rowable for the
+# same reason `etl backfill` is not: both sides rewrite page 1's version stamp
+# (DIV-257) and `diff -r` compares the copying library, not the behaviour. It
+# also flips `demoted = 1` on ~100 rows of the shared state, which would change
+# every `T2-disc-*` row after it. Its procedure is
+# `rust/discovery-demote-differ.sh`.
+
+# ── reindex (the verb whose docstring lies — it is `run_ingest`, not a rebuild) ──
+#
+# `@home:skills-corpus` with the `home` cwd token is what makes this gateable
+# and safe at once: `$HOME` points at the case-local tree, so the twenty
+# adapters enumerate a `~/.claude` that does not exist, find zero refs, and the
+# pass writes nothing. That is the honest coverage of a verb whose real input is
+# the maintainer's whole machine — the empty-pass leg, byte-for-byte, plus the
+# tree diff proving neither side touched `store.db`.
+#
+# It exercises three real things: `deps.store_path` resolution (the path is
+# PRINTED), the `db.connect` + `schema.apply` open on an existing v30 store, and
+# `f"Done: {counts}"` — a Python `dict` repr, which for an empty pass is the two
+# characters `{}` and NOT `json.dumps`'s `{}`-by-coincidence.
+T2-reindex-empty      | home@home:skills-corpus | reindex
+
+# ── memory embed (the closed-port leg — the only one a no-network gate runs) ──
+#
+# `cli.py:2656` probes `active_endpoint()` FIRST and exits 1 on `None`, so on a
+# machine with no Ollama the missing-index message is unreachable however absent
+# the index is. That ordering is the reason these three rows are all the same
+# leg: they prove the probe, the stderr text, the exit code, and — via `--batch`
+# — that Click parsed the option before the body ran.
+#
+# The reachable legs (index missing, a real embed pass, the "0 embedded" hint)
+# need a daemon answering `/api/tags`. `rust/memory-embed-differ.sh` is their
+# procedure; it stands up a LOOPBACK stub with deterministic vectors, so both
+# implementations embed the same numbers and `embeddings.db` can be compared
+# row for row. Nothing leaves the machine in either place.
+T2-embed-noollama     | repo | memory embed
+T2-embed-batch        | repo | memory embed --batch 8
+T2-embed-batch-neg    | repo | memory embed --batch -1
+T2-embed-cwd-tmp      | tmp  | memory embed --batch 1

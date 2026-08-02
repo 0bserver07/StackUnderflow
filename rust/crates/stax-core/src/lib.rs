@@ -17,6 +17,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// The agent telephone's inbox — `services/agent_inbox.py`.
+///
+/// Appended rather than filed alphabetically: three agents edit this file
+/// concurrently and the lib.rs law is add-only lines, so a new module goes at
+/// the end of the list where no other agent's insertion point can collide with
+/// it. It lives in this crate because `stax-hooks` and `stax-cli` both need it
+/// and neither may depend on the other — see the module's own docs.
+pub mod agent_inbox;
 pub mod anchor;
 pub mod api;
 pub mod ask;

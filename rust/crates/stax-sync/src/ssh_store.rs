@@ -130,6 +130,12 @@ pub fn parse_ssh_url(url: &str) -> Result<SSHTarget, String> {
         Some(user) => format!("{user}@{hostname}"),
         None => hostname,
     };
+    // LAST, and the order is the reference's: `parsed.port` is only read in the
+    // `SSHTarget(...)` construction on the final line, so a URL that is bad in
+    // two ways reports the scheme / host / path complaint, never the port one.
+    if let Some(message) = parsed.port_error {
+        return Err(message);
+    }
     Ok(SSHTarget {
         host,
         // `parsed.path.rstrip("/")` — every trailing slash, not just one.
@@ -152,6 +158,19 @@ struct ParsedUrl {
     hostname: Option<String>,
     port: Option<u16>,
     path: String,
+    /// The `ValueError` CPython's `SplitResult.port` would have raised.
+    ///
+    /// DIV-440 (telephone leg): the port used to be `port_text.parse().ok()`,
+    /// which *silently dropped* an unparseable port where the reference raises
+    /// before the caller sees a target at all. `ssh://host:notaport/srv` was
+    /// accepted here and rejected there — a live, user-reachable answer-change
+    /// on `sync init --bucket`, `backup create --to` and `msg send --to`.
+    ///
+    /// It survived wave 6 because no row in `parity/sync-cases.txt` carried a
+    /// bad port: the wave-6 lesson ("a differ passing first-try on an untested
+    /// constant is dead corpus"), re-earned. `telephone-cases.txt` now crosses
+    /// it from the `msg send` side and `parse_ssh_url` reports it.
+    port_error: Option<String>,
 }
 
 impl ParsedUrl {
@@ -186,18 +205,46 @@ impl ParsedUrl {
         });
 
         // `hostname` is lowercased by `urlparse`; the port is the tail after
-        // the LAST `:` outside brackets. IPv6 literals are `[::1]:22`.
-        let (host, port) = if let Some(close) = hostport.rfind(']') {
+        // the FIRST `:` outside brackets. `SplitResult._hostinfo` uses
+        // `partition(":")`, not `rpartition` — so `host:1:2` has the port
+        // `"1:2"`, which then fails the digit test rather than silently
+        // becoming 2 (DIV-440's second half). IPv6 literals are `[::1]:22`.
+        let (host, port_text) = if let Some(close) = hostport.rfind(']') {
             let host = hostport[..=close].to_owned();
-            let port = hostport[close + 1..]
-                .strip_prefix(':')
-                .and_then(|text| text.parse().ok());
+            let port = hostport[close + 1..].strip_prefix(':').map(str::to_owned);
             (host, port)
         } else {
-            match hostport.rsplit_once(':') {
-                Some((host, port_text)) => (host.to_owned(), port_text.parse().ok()),
+            match hostport.split_once(':') {
+                Some((host, port_text)) => (host.to_owned(), Some(port_text.to_owned())),
                 None => (hostport.to_owned(), None),
             }
+        };
+        // `SplitResult.port`, transcribed:
+        //
+        //   if not port: port = None
+        //   if port.isdigit() and port.isascii(): port = int(port)
+        //   else: raise ValueError(f"Port could not be cast to integer value as {port!r}")
+        //   if not (0 <= port <= 65535): raise ValueError("Port out of range 0-65535")
+        //
+        // `isdigit() and isascii()` is ASCII digits only, so a leading `-` or
+        // `+` is a CAST failure, not a range failure — `-1` reports the first
+        // message, which is the reference's wording and reads wrong until you
+        // know why.
+        let (port, port_error) = match port_text.as_deref().filter(|text| !text.is_empty()) {
+            None => (None, None),
+            Some(text) if !text.chars().all(|ch| ch.is_ascii_digit()) => (
+                None,
+                Some(format!(
+                    "Port could not be cast to integer value as {}",
+                    stax_core::queries::paths::py_repr(text)
+                )),
+            ),
+            Some(text) => match text.parse::<u32>() {
+                Ok(value) if value <= 65535 => (u16::try_from(value).ok(), None),
+                // An all-digit string that overflows `u32` is still a Python
+                // `int`, so it reaches the RANGE check, not the cast one.
+                _ => (None, Some("Port out of range 0-65535".to_owned())),
+            },
         };
         let hostname = if host.is_empty() {
             None
@@ -216,6 +263,7 @@ impl ParsedUrl {
             hostname,
             port,
             path,
+            port_error,
         }
     }
 }

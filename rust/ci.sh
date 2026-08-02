@@ -113,6 +113,18 @@ gate() {
 # `rust/`. Reproduced 2026-07-31 by extracting without it:
 #   error: couldn't read …/stackunderflow/data/models.toml (os error 2)
 # If another crate ever `include_str!`s outside `rust/`, its path goes here too.
+#
+# WAVE 10 ITEM 2c added three more, and they are the reason the binaries can now
+# run with `stackunderflow/` deleted (`docs/specs/decommission-report.md` §4.3):
+#   stackunderflow/adapters/capabilities.json  stax-adapters::capabilities
+#   stackunderflow/infra/                      stax-reports::prescribe
+#   stackunderflow/static/                     stax-server's build.rs
+# The last is a DIRECTORY, not a file: `build.rs` walks it and emits one
+# `include_bytes!` per file, so a checkout missing it fails the build loudly
+# rather than shipping a dashboard that 404s itself. `git archive` takes TRACKED
+# files only — which is also what a release ships, so a stray untracked asset in
+# a working tree is embedded by an in-tree build and not by this gate, and the
+# binary-size difference is the tell.
 # STANDALONE, NOT A GATE (same ruling as `hooks-parity.sh`): `sync-parity.sh`
 # copies four SQLite fixtures per case per implementation across 173 corpus rows
 # and spawns two processes for each, plus nine `age` round trips and ten CLI
@@ -127,7 +139,8 @@ gate() {
 echo "=== gate 0/7  clean-checkout build (git archive HEAD) ==="
 _cc_tmp="$(mktemp -d)"
 ( cd "$(git rev-parse --show-toplevel)" \
-    && git archive HEAD rust/ contracts/ stackunderflow/data/ stackunderflow/store/migrations/ ) | tar -x -C "$_cc_tmp"
+    && git archive HEAD rust/ contracts/ stackunderflow/data/ stackunderflow/store/migrations/ \
+         stackunderflow/adapters/capabilities.json stackunderflow/infra/ stackunderflow/static/ ) | tar -x -C "$_cc_tmp"
 ( cd "$_cc_tmp/rust" && cargo check --workspace --quiet ) \
     || { echo "GATE 0 FAILED: HEAD does not build from a clean checkout"; rm -rf "$_cc_tmp"; exit 1; }
 rm -rf "$_cc_tmp"

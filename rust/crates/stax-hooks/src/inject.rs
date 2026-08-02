@@ -98,6 +98,35 @@ pub fn build_injection(hook_id: &str, payload: &Value, env: &HookEnv) -> String 
     }
     .unwrap_or_default();
 
+    // The agent inbox rides the same two mid-session events (agent-remotes
+    // Phase 3): unseen cross-machine messages surface ahead of the memory
+    // block, once each. Works even with no store — the inbox is files.
+    // PreToolUse is what makes this a real interject: a message lands in a
+    // *running* turn at the next tool call, not just at the next prompt.
+    //
+    // Placed BEFORE `clip`, as the reference places it: the inbox block is
+    // inside the hook's token budget, not on top of it, so a chatty peer costs
+    // the memory block its tail rather than blowing the budget. And
+    // `render_for_injection` is called unconditionally for these two ids —
+    // its mark-seen side effect fires even when the text it produced is
+    // dropped by the emptiness check below, which is the reference's
+    // behaviour and the reason a message is never announced twice.
+    let text = if matches!(
+        hook_id,
+        "stackunderflow-inject-user-prompt" | "stackunderflow-inject-pre-tool-use"
+    ) {
+        let inbox = stax_core::agent_inbox::render_for_injection(Some(&env.app_dir));
+        if inbox.is_empty() {
+            text
+        } else if text.trim().is_empty() {
+            inbox
+        } else {
+            format!("{inbox}\n\n{text}").trim().to_string()
+        }
+    } else {
+        text
+    };
+
     let text = clip(&text, hook_id);
     if text.trim().is_empty() {
         return String::new();

@@ -8,11 +8,11 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 ## Verdict
 
-* **105** nodes in the Python tree; **83** exist in the Rust binary today (the other **22** are unported — listed below by name, never skipped silently).
-* **0 / 83** are byte-identical after the scoped program-name substitution.
-* **77 / 83** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
-* **6** ported nodes disagree on a contract fact.
-* clap's stripped trailing `.` accounted for **48** summary differences and Click's mid-word 80-column wrap for **3** more; both were normalised away and both are counted here, not hidden.
+* **105** nodes in the Python tree; **99** exist in the Rust binary today (the other **6** are unported — listed below by name, never skipped silently).
+* **0 / 99** are byte-identical after the scoped program-name substitution.
+* **92 / 99** agree on all three contract facts the wave-8 items name — *same summary, same options, same subcommand list*.
+* **7** ported nodes disagree on a contract fact.
+* clap's stripped trailing `.` accounted for **53** summary differences and Click's mid-word 80-column wrap for **3** more; both were normalised away and both are counted here, not hidden.
 
 ## D-1, measured and re-filed
 
@@ -37,7 +37,7 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 
 | path | kind | ported | bytes py/rs | summary | options | subcommands | usage | notes |
 | --- | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
-| `(root)` | group | yes | 3031/3464 | ok | ok | ok | **DIFF** | Rust-only by ruling: `anchor`, `store`; 9 subcommand(s) not ported yet, excluded from the comparison: `analyze`, `discovery`, `doctor`, `etl`, `import`, `ingest`, `pricing`, `reindex`, `risk`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
+| `(root)` | group | yes | 3031/4232 | ok | ok | **DIFF** | **DIFF** | Rust-only by ruling: `anchor`, `store`; 2 subcommand(s) not ported yet, excluded from the comparison: `analyze`, `import`; subcommands the reference does not have: `msg`; usage py='Usage: stackunderflow [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow <COMMAND>' |
 | `analyze` | group | **no** | 969/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze backfill` | command | **no** | 1009/— | — | — | — | — | unported — the Rust binary has no such node |
 | `analyze quality` | command | **no** | 376/— | — | — | — | — | unported — the Rust binary has no such node |
@@ -67,16 +67,16 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `config unset` | command | yes | 97/120 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow config unset [OPTIONS] KEY' rs='Usage: stackunderflow config unset <KEY>' |
 | `context-budget` | command | yes | 645/421 | **DIFF** | ok | ok | ok | summary py='Estimate the per-session context tax (system prompt + MCP + skills + memory). Inspects the visible config files (CLAUDE.md, ~/.claude.json mcpServers, ~/.claude/skills/, agents) and produces a token / cost estimate. The ``len(text) // 4`` heuristic is approximate — useful for spotting bloat, not for billing.' rs='Estimate the per-session context tax (system prompt + MCP + skills + memory)' |
 | `context-replay` | command | yes | 1395/1729 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow context-replay [OPTIONS] SESSION_ID' rs='Usage: stackunderflow context-replay [OPTIONS] <SESSION_ID>' |
-| `discovery` | group | **no** | 331/— | — | — | — | — | unported — the Rust binary has no such node |
-| `discovery demote-uncited` | command | **no** | 688/— | — | — | — | — | unported — the Rust binary has no such node |
-| `discovery telemetry` | command | **no** | 673/— | — | — | — | — | unported — the Rust binary has no such node |
+| `discovery` | group | yes | 331/401 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow discovery [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow discovery <COMMAND>' |
+| `discovery demote-uncited` | command | yes | 688/792 | ok | ok | ok | ok |  |
+| `discovery telemetry` | command | yes | 673/762 | ok | ok | ok | ok |  |
 | `docs` | group | yes | 277/307 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow docs [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow docs <COMMAND>' |
 | `docs list` | command | yes | 260/256 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `docs show` | command | yes | 201/228 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow docs show [OPTIONS] TOPIC' rs='Usage: stackunderflow docs show [OPTIONS] <TOPIC>' |
-| `doctor` | command | **no** | 828/— | — | — | — | — | unported — the Rust binary has no such node |
-| `etl` | group | **no** | 318/— | — | — | — | — | unported — the Rust binary has no such node |
-| `etl backfill` | command | **no** | 570/— | — | — | — | — | unported — the Rust binary has no such node |
-| `etl status` | command | **no** | 434/— | — | — | — | — | unported — the Rust binary has no such node |
+| `doctor` | command | yes | 828/798 | ok | ok | ok | ok |  |
+| `etl` | group | yes | 318/356 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow etl [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow etl <COMMAND>' |
+| `etl backfill` | command | yes | 570/592 | ok | ok | ok | ok |  |
+| `etl status` | command | yes | 434/518 | ok | ok | ok | ok |  |
 | `export` | command | yes | 1654/1506 | ok | ok | ok | **DIFF** | summary differs only by Click's mid-word line wrap; usage py='Usage: stackunderflow export [OPTIONS]' rs='Usage: stackunderflow export [OPTIONS] --format <FMT> --output <OUTPUT>' |
 | `find-failure-modes-for-file` | command | yes | 1417/1337 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow find-failure-modes-for-file [OPTIONS] FILE' rs='Usage: stackunderflow find-failure-modes-for-file [OPTIONS] <FILE>' |
 | `find-sessions-in-path` | command | yes | 1258/1037 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow find-sessions-in-path [OPTIONS] PATH' rs='Usage: stackunderflow find-sessions-in-path [OPTIONS] <PATH>' |
@@ -93,15 +93,15 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `hooks status` | command | yes | 347/366 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `hooks uninstall` | command | yes | 276/279 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `import` | command | **no** | 1361/— | — | — | — | — | unported — the Rust binary has no such node |
-| `ingest` | group | **no** | 329/— | — | — | — | — | unported — the Rust binary has no such node |
+| `ingest` | group | yes | 329/290 | ok | ok | ok | **DIFF** | 1 subcommand(s) not ported yet, excluded from the comparison: `github`; usage py='Usage: stackunderflow ingest [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow ingest <COMMAND>' |
 | `ingest github` | command | **no** | 1002/— | — | — | — | — | unported — the Rust binary has no such node |
-| `ingest webhook` | group | **no** | 243/— | — | — | — | — | unported — the Rust binary has no such node |
-| `ingest webhook serve` | command | **no** | 764/— | — | — | — | — | unported — the Rust binary has no such node |
+| `ingest webhook` | group | yes | 243/275 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow ingest webhook [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow ingest webhook <COMMAND>' |
+| `ingest webhook serve` | command | yes | 764/793 | ok | ok | ok | ok |  |
 | `init` | command | yes | 1343/1231 | ok | ok | ok | ok |  |
-| `memory` | group | yes | 1177/1174 | ok | ok | ok | **DIFF** | summary differs only by Click's mid-word line wrap; 1 subcommand(s) not ported yet, excluded from the comparison: `embed`; usage py='Usage: stackunderflow memory [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow memory <COMMAND>' |
+| `memory` | group | yes | 1177/1249 | ok | ok | ok | **DIFF** | summary differs only by Click's mid-word line wrap; usage py='Usage: stackunderflow memory [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow memory <COMMAND>' |
 | `memory ask` | command | yes | 1639/2467 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow memory ask [OPTIONS] QUESTION' rs='Usage: stackunderflow memory ask [OPTIONS] <QUESTION>' |
 | `memory decisions` | command | yes | 1300/2054 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow memory decisions [OPTIONS] QUERY' rs='Usage: stackunderflow memory decisions [OPTIONS] <QUERY>' |
-| `memory embed` | command | **no** | 585/— | — | — | — | — | unported — the Rust binary has no such node |
+| `memory embed` | command | yes | 585/621 | ok | ok | ok | ok |  |
 | `memory file` | command | yes | 1369/2100 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow memory file [OPTIONS] PATH' rs='Usage: stackunderflow memory file [OPTIONS] <PATH>' |
 | `memory sessions` | command | yes | 1514/2256 | ok | ok | ok | ok |  |
 | `memory worked` | command | yes | 1339/2091 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow memory worked [OPTIONS] ACTION' rs='Usage: stackunderflow memory worked [OPTIONS] <ACTION>' |
@@ -115,16 +115,16 @@ rust/help-tree.sh          # or: rust/parity/tools/help_tree.py rust/parity/HELP
 | `plan thresholds reset` | command | yes | 155/129 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow plan thresholds reset [OPTIONS]' rs='Usage: stackunderflow plan thresholds reset' |
 | `plan thresholds set` | command | yes | 173/215 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow plan thresholds set [OPTIONS] VALUES...' rs='Usage: stackunderflow plan thresholds set <VALUES>...' |
 | `plan thresholds show` | command | yes | 175/212 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
-| `pricing` | group | **no** | 236/— | — | — | — | — | unported — the Rust binary has no such node |
-| `pricing doctor` | command | **no** | 866/— | — | — | — | — | unported — the Rust binary has no such node |
+| `pricing` | group | yes | 236/277 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow pricing [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow pricing <COMMAND>' |
+| `pricing doctor` | command | yes | 866/1238 | ok | ok | ok | ok |  |
 | `recommend` | group | yes | 459/533 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow recommend [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow recommend <COMMAND>' |
 | `recommend mode` | command | yes | 625/725 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow recommend mode [OPTIONS]' rs='Usage: stackunderflow recommend mode [OPTIONS] --prompt <TEXT>' |
 | `recommend skills` | command | yes | 931/971 | ok | ok | ok | ok |  |
-| `reindex` | command | **no** | 131/— | — | — | — | — | unported — the Rust binary has no such node |
+| `reindex` | command | yes | 131/105 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow reindex [OPTIONS]' rs='Usage: stackunderflow reindex' |
 | `report` | command | yes | 1245/1146 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
 | `resume` | command | yes | 1085/1044 | ok | ok | ok | ok |  |
-| `risk` | group | **no** | 423/— | — | — | — | — | unported — the Rust binary has no such node |
-| `risk file` | command | **no** | 600/— | — | — | — | — | unported — the Rust binary has no such node |
+| `risk` | group | yes | 423/484 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow risk [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow risk <COMMAND>' |
+| `risk file` | command | yes | 600/867 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow risk file [OPTIONS] PATH' rs='Usage: stackunderflow risk file [OPTIONS] <PATH>' |
 | `search-past-decisions` | command | yes | 1509/1050 | ok | ok | ok | **DIFF** | summary differs only by clap's stripped trailing `.`; usage py='Usage: stackunderflow search-past-decisions [OPTIONS] QUERY' rs='Usage: stackunderflow search-past-decisions [OPTIONS] <QUERY>' |
 | `skills` | group | yes | 553/618 | ok | ok | ok | **DIFF** | usage py='Usage: stackunderflow skills [OPTIONS] COMMAND [ARGS]...' rs='Usage: stackunderflow skills <COMMAND>' |
 | `skills clean` | command | yes | 740/649 | ok | ok | ok | ok | summary differs only by clap's stripped trailing `.` |
@@ -152,23 +152,7 @@ analyze
 analyze backfill
 analyze quality
 analyze session
-discovery
-discovery demote-uncited
-discovery telemetry
-doctor
-etl
-etl backfill
-etl status
 import
-ingest
 ingest github
-ingest webhook
-ingest webhook serve
-memory embed
-pricing
-pricing doctor
-reindex
-risk
-risk file
 ```
 

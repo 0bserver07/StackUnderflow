@@ -46,7 +46,7 @@
 use std::path::{Path, PathBuf};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path as PathParam, Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -257,9 +257,12 @@ async fn favicon(State(state): State<AppState>) -> Response {
     let path = state.static_dir().join("favicon.ico");
     // `os.path.exists(...)` then `FileResponse(...)` — a race between the two is
     // Python's race too (it raises), so the read is the single source of truth.
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => file_response(bytes, "image/x-icon"),
-        Err(_) => {
+    // Since wave-10 item 2c that read goes through `AppState::read_static`, so
+    // it answers from the compiled-in bundle unless `STAX_STATIC_DIR` points at
+    // a directory; `static_dir()` is still the root the path is built from.
+    match state.read_static(&path).await {
+        Some(bytes) => file_response(bytes, "image/x-icon"),
+        None => {
             let mut response =
                 JsonBody::with_status(StatusCode::NO_CONTENT, Value::Object(Map::new()))
                     .into_response();
@@ -298,14 +301,18 @@ async fn serve_react_assets(
     if !file_path.to_string_lossy().starts_with(&prefix) {
         return invalid_path();
     }
-    match tokio::fs::read(&file_path).await {
+    // The containment check above is unchanged and still runs against
+    // `static_dir()` as a *nominal* root — it is pure path math (DIV-401), so
+    // it holds with no directory on disk. Only this last step moved: the bytes
+    // come from the binary unless `STAX_STATIC_DIR` is set.
+    match state.read_static(&file_path).await {
         // `file_path.exists() and file_path.is_file()` — a directory read fails
         // here for the same reason `is_file()` is false there.
-        Ok(bytes) => {
+        Some(bytes) => {
             let media = guess_media_type(&file_path);
             file_response(bytes, &media)
         }
-        Err(_) => {
+        None => {
             let mut obj = Map::new();
             obj.insert("error".to_owned(), Value::from("Asset not found"));
             JsonBody::with_status(StatusCode::NOT_FOUND, Value::Object(obj)).into_response()
@@ -392,7 +399,7 @@ fn ollama_unavailable() -> Response {
 }
 
 /// starlette's `FileResponse`, minus the two headers DIV-051 already records.
-fn file_response(bytes: Vec<u8>, media_type: &str) -> Response {
+fn file_response(bytes: Bytes, media_type: &str) -> Response {
     // `Response.init_headers` appends the charset to any `text/*` media type —
     // the same rule `spa::add_text_charset` restores for the `/static` mount.
     let content_type = if media_type.starts_with("text/") && !media_type.contains("charset=") {
@@ -437,9 +444,12 @@ fn file_response(bytes: Vec<u8>, media_type: &str) -> Response {
 /// known file in order, last write winning. Read once and memoised, because
 /// `mimetypes` also initialises exactly once per process.
 ///
-/// `mime_guess` is still not the answer even though it ships a table: it is not
-/// a direct dependency, and its table is a *third* one — it would trade a
-/// known-wrong answer for an unknown-wrong one.
+/// `mime_guess` is still not the answer even though it ships a table — and it
+/// became a direct dependency in wave 10, so the only remaining objection is the
+/// real one: its table is a *third* table, and using it here would trade a
+/// known-wrong answer for an unknown-wrong one. The `/static` mount does call
+/// it, because there the contract is "whatever `ServeDir` did"; here the
+/// contract is `mimetypes.guess_type`, and the two disagree on `.js` (DIV-404).
 fn guess_media_type(path: &Path) -> String {
     let ext = path
         .extension()

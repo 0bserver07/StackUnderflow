@@ -12,6 +12,18 @@
 //! [`default_path`] resolves a repo layout from an injected root, and
 //! [`path_from_env`] is the pure resolver the CLI wires up.
 //!
+//! # The table is also compiled in (wave-10 item 2c)
+//!
+//! That hazard is real and it is now *tested* rather than avoided:
+//! [`EMBEDDED_TABLE`] is the same file, pulled in with `include_str!`, and
+//! `the_embedded_table_is_the_checked_in_file` fails the build's tests the day
+//! the two disagree. What the disk-first order buys is that a running binary
+//! still reads the file when there is one — the harness points both
+//! implementations at one tree and nothing about that changed — while a binary
+//! on a machine with no `stackunderflow/` package answers from
+//! [`Capabilities::embedded`] instead of erroring. That is the whole of
+//! `docs/specs/decommission-report.md` §4.3's first runtime coupling, closed.
+//!
 //! Not ported here: the *introspection* half (`discover_adapters`,
 //! `support_matrix`, `render_markdown`). Rust's registry is compile-time
 //! ([`crate::registry`]), so "which adapters exist" is a different question
@@ -20,6 +32,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -39,6 +52,15 @@ pub const CAPABILITIES_PATH_ENV: &str = "STACKUNDERFLOW_CAPABILITIES";
 
 /// The data file's path relative to the repository root.
 pub const CAPABILITIES_RELATIVE_PATH: &str = "stackunderflow/adapters/capabilities.json";
+
+/// The curated table, compiled into every binary that links this crate.
+///
+/// The *same file* [`CAPABILITIES_RELATIVE_PATH`] names — read at build time,
+/// not transcribed, on the precedent `stax_etl::stats::dataset` set for
+/// `models.toml` and `stax_core::schema` set for the migrations. A checkout
+/// without it fails to compile, which is the loud failure mode.
+pub const EMBEDDED_TABLE: &str =
+    include_str!("../../../../stackunderflow/adapters/capabilities.json");
 
 /// A canonical record field, in the display order `FIELDS` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -303,6 +325,10 @@ impl Capabilities {
     /// # Errors
     /// Unreadable file, invalid JSON, a missing `adapters` object, or any of the
     /// validation failures above.
+    ///
+    /// A **missing** file is one of them: `load` stays strict, so a
+    /// `$STACKUNDERFLOW_CAPABILITIES` pointing at a typo still fails loudly.
+    /// [`Capabilities::load_or_embedded`] is the one that falls back.
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading capabilities table {}", path.display()))?;
@@ -335,6 +361,51 @@ impl Capabilities {
             entries.insert(name.clone(), parse_entry(name, entry)?);
         }
         Ok(Self { entries, schema })
+    }
+
+    /// The table compiled into the binary, parsed once on first use.
+    ///
+    /// # Errors
+    /// Only if [`EMBEDDED_TABLE`] does not validate, which
+    /// `the_embedded_table_parses` makes a test failure rather than a runtime
+    /// one. The error is a `&'static str` because it is memoised alongside the
+    /// success, and `anyhow::Error` is not `Sync`-cloneable into a `OnceLock`.
+    pub fn embedded() -> Result<&'static Self, &'static str> {
+        static PARSED: OnceLock<Result<Capabilities, String>> = OnceLock::new();
+        PARSED
+            .get_or_init(|| Self::from_str(EMBEDDED_TABLE).map_err(|err| format!("{err:#}")))
+            .as_ref()
+            .map_err(String::as_str)
+    }
+
+    /// The table at `path`, or the compiled-in copy when there is no file
+    /// there.
+    ///
+    /// The order is deliberate and it is the campaign's, not a convenience: the
+    /// parity harness points both implementations at one `stackunderflow/` tree
+    /// and must keep doing so, so a present file always wins. The fallback is
+    /// what makes a binary on a machine with no Python package still answer —
+    /// `docs/specs/decommission-report.md` §4.3.
+    ///
+    /// Only `NotFound` falls back. An unreadable file (permissions), a
+    /// directory where a file was expected, or a malformed table is still an
+    /// error: those are broken installs, and answering them from the binary
+    /// would hide a real fault behind a right-looking table.
+    ///
+    /// # Errors
+    /// As [`Capabilities::load`], minus the missing-file case.
+    pub fn load_or_embedded(path: &Path) -> Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Self::from_str(&text)
+                .with_context(|| format!("parsing capabilities table {}", path.display())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Self::embedded().cloned().map_err(|message| {
+                    anyhow::anyhow!("parsing the embedded capabilities table: {message}")
+                })
+            }
+            Err(err) => Err(anyhow::Error::from(err))
+                .with_context(|| format!("reading capabilities table {}", path.display())),
+        }
     }
 
     /// The `schema` string the file declared.
@@ -625,6 +696,59 @@ mod tests {
             note: None,
         };
         assert_eq!(latest.render("abc"), None);
+    }
+
+    #[test]
+    fn the_embedded_table_parses_and_is_the_checked_in_file() {
+        // Two claims in one, and the second is the reason `include_str!` was
+        // banned for eight waves: a build-time copy that could disagree with the
+        // file the reference reads while the harness swore they agreed. It
+        // cannot disagree while this assertion runs — and if the path in the
+        // `include_str!` ever points somewhere else, this is what says so.
+        let embedded = Capabilities::embedded().expect("the compiled-in table validates");
+        assert_eq!(embedded.schema(), FILE_SCHEMA);
+        assert!(!embedded.is_empty());
+
+        let on_disk = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../stackunderflow/adapters/capabilities.json");
+        let text = std::fs::read_to_string(&on_disk).expect("the checked-in table is readable");
+        assert_eq!(
+            text,
+            EMBEDDED_TABLE,
+            "the compiled-in capability table drifted from {}",
+            on_disk.display()
+        );
+        assert_eq!(&Capabilities::from_str(&text).expect("parses"), embedded);
+    }
+
+    #[test]
+    fn load_or_embedded_prefers_the_file_and_falls_back_when_there_is_none() {
+        let dir = std::env::temp_dir().join(format!("stax-caps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("capabilities.json");
+
+        // No file: the binary answers, which is what makes `stax` standalone.
+        let _ = std::fs::remove_file(&path);
+        let fallen_back = Capabilities::load_or_embedded(&path).expect("falls back");
+        assert_eq!(&fallen_back, Capabilities::embedded().expect("embedded"));
+
+        // A file: it wins, even when it says something else entirely. The parity
+        // harness depends on exactly this.
+        std::fs::write(
+            &path,
+            r#"{"schema": "x", "adapters": {"only": {"label": "Only", "status": "beta"}}}"#,
+        )
+        .expect("write");
+        let from_disk = Capabilities::load_or_embedded(&path).expect("reads the file");
+        assert_eq!(from_disk.providers(), vec!["only"]);
+
+        // A malformed file is still an error — never a silent fallback.
+        std::fs::write(&path, "{").expect("write");
+        assert!(Capabilities::load_or_embedded(&path).is_err());
+
+        // And a directory is not a missing file.
+        assert!(Capabilities::load_or_embedded(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

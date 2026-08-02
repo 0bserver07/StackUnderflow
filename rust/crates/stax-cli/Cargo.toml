@@ -9,6 +9,14 @@ publish.workspace = true
 name = "stax"
 path = "src/main.rs"
 
+# The telephone differ's Rust probe. Same placement rule as `stax-sync-parity`
+# and `stax-etl`'s four: the harness lives in the crate it measures, so
+# `cargo test -p stax-cli` and the differ can never be built against different
+# code. It links nothing new — `stax-core` and `stax-sync` are already deps.
+[[bin]]
+name = "stax-telephone-parity"
+path = "src/bin/telephone_parity.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

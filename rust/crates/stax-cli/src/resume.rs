@@ -201,17 +201,22 @@ impl ResumeEnv {
 /// Where `capabilities.json` lives for a *running binary*.
 ///
 /// `$STACKUNDERFLOW_CAPABILITIES` wins, as [`path_from_env`] defines. Otherwise
-/// the repo default has to be found rather than assumed: the Python side reads
-/// the copy inside its installed package, and the campaign forbids
-/// `include_str!` (a build-time copy would let the two implementations disagree
-/// about the bytes while the parity harness swore they agreed). So we walk up
-/// from the working directory, then from the executable, looking for a checkout
-/// that carries the file — which covers both `cargo run` from anywhere in the
-/// tree and `rust/target/release/stax` invoked from an unrelated cwd.
+/// the repo default is *found* rather than assumed: the Python side reads the
+/// copy inside its installed package, so we walk up from the working directory,
+/// then from the executable, looking for a checkout that carries the file —
+/// which covers both `cargo run` from anywhere in the tree and
+/// `rust/target/release/stax` invoked from an unrelated cwd. A found file wins
+/// over the compiled-in copy, which is what keeps the parity harness diffing two
+/// readers of one tree.
 ///
-/// Shipping the table with an installed binary is a wave-8 packaging question
-/// (architect decision, wave 2); until then the last resort is the repo-relative
-/// path under `cwd`, so the error names something concrete.
+/// The last resort is still the repo-relative path under `cwd`, so an error
+/// names something concrete — but it is rarely an error now. Wave-10 item 2c
+/// compiled the table into `stax-adapters`, and every caller loads through
+/// [`Capabilities::load_or_embedded`]: a binary on a machine with no
+/// `stackunderflow/` package resolves this path, finds nothing there, and reads
+/// its own copy. The `include_str!` hazard the eight-wave ban was about — a
+/// build-time copy silently disagreeing with the file the reference reads — is
+/// answered by a test that compares the two, not by refusing to embed.
 #[must_use]
 pub fn resolve_capabilities_path(raw: Option<&OsStr>, cwd: &Path, exe: Option<&Path>) -> PathBuf {
     if let Some(value) = raw.filter(|value| !value.is_empty()) {
@@ -631,7 +636,7 @@ pub fn run_resume(args: &ResumeArgs) -> Result<()> {
 pub fn run(args: &ResumeArgs, env: &ResumeEnv) -> Result<Output> {
     // Python imports `_CAPABILITIES` at the top of the command body, so a broken
     // table fails before the store is even looked at. Same order here.
-    let capabilities = Capabilities::load(&env.capabilities).with_context(|| {
+    let capabilities = Capabilities::load_or_embedded(&env.capabilities).with_context(|| {
         format!(
             "loading the resume-command table {}",
             env.capabilities.display()

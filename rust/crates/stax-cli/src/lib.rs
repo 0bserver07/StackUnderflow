@@ -21,19 +21,30 @@ mod compare;
 mod context_replay;
 mod discovery;
 mod docs;
+mod doctor;
 mod embeddings;
 mod export;
 mod guide;
 mod hooks;
+/// `stax ingest` — the PR/CI receiver group (`cli.py`'s `ingest`). Appended for
+/// the same lib.rs-law reason as `msg` above.
+mod ingest;
 mod init;
 mod memory;
 pub mod mode_rec;
+/// `stax msg` — the agent telephone (`cli.py`'s `msg` group).
+///
+/// Appended rather than filed alphabetically: three agents edit this file
+/// concurrently, and the lib.rs law is add-only lines, so a new module goes
+/// where no other agent's insertion point can collide with it.
+mod msg;
 mod optimize;
 mod plan;
 mod pyclock;
 mod recommend;
 mod reports;
 mod resume;
+mod risk;
 pub mod settings;
 pub mod skill_rec;
 pub mod skill_synth;
@@ -44,6 +55,12 @@ mod status;
 mod store;
 mod sync;
 mod worktrees;
+// ── T2v3 (this leg) — appended, never interleaved: the LIB.RS LAW ────────────
+mod discovery_telemetry;
+mod etl;
+mod memory_embed;
+mod pricing;
+mod reindex;
 
 use std::process::ExitCode;
 
@@ -67,19 +84,38 @@ pub use discovery::{
     run_action_worked, run_failure_modes, run_in_path, run_past_decisions, run_touching_file,
 };
 pub use docs::{DocsArgs, DocsVerb, render_markdown, run_docs, run_docs_with};
+// `DoctorArgs` is aliased because `pricing doctor` (T2v3, appended below)
+// exports a struct of the same name for a different command — the
+// `ListArgs as WorktreesListArgs` precedent. Renaming theirs would be an edit
+// to a line this leg does not own.
+pub use doctor::{
+    Delivery, DoctorArgs as StoreDoctorArgs, Finding, Health, ProviderRow, enumerate_disk,
+    exempt_providers, render_doctor_json, render_doctor_text, run_delivery_checks, run_doctor,
+    run_store_health_checks,
+};
 pub use export::{ExportArgs, run_export_cmd};
 pub use guide::{GuideArgs, GuideVerb, run_guide};
 pub use hooks::{HooksArgs, HooksVerb, run_hooks};
+pub use ingest::{
+    GITHUB_API_BASE, IngestArgs, IngestVerb, MAX_PAGES_RANGE, MAX_PER_PAGE, STATE_CHOICES,
+    ServeArgs, WebhookArgs, WebhookVerb, auth_headers, ci_url, is_last_page, page_params,
+    pr_extra_params, pr_url, rate_limit_message, run_ingest, serve_banner,
+};
 pub use init::{
     InitArgs, SkillsReport, default_skills_dest, install_static_skills, render_report, run_init,
     shipped_skills_source_dir,
 };
 pub use memory::{MemoryArgs, MemoryVerb, run_memory};
+pub use msg::{
+    MsgArgs, MsgInboxArgs, MsgSendArgs, MsgVerb, message_payload_now, run_inbox, run_msg, run_send,
+    strftime_local,
+};
 pub use optimize::{OptimizeArgs, qa_db_path, run_optimize};
 pub use plan::{PlanArgs, PlanSetArgs, PlanVerb, ThresholdsVerb, format_money, run_plan};
 pub use recommend::{ModeArgs, RecommendArgs, RecommendSkillsArgs, RecommendVerb, run_recommend};
 pub use reports::{IngestFlags, PeriodArgs, ReportArgs, run_month, run_report, run_today};
 pub use resume::{ResumeArgs, ResumeEnv, run_resume};
+pub use risk::{RiskArgs, RiskFileArgs, RiskVerb, render_risk_text, run_risk};
 pub use skills::{
     CleanArgs, GenerateArgs, ListArgs, SkillsArgs, SkillsEnv, SkillsVerb, run_skills,
     run_skills_with,
@@ -96,6 +132,18 @@ pub use worktrees::{
     ListArgs as WorktreesListArgs, WorktreesArgs, WorktreesVerb, render_worktrees_text,
     run_worktrees, short_worktree_path,
 };
+// ── T2v3 (this leg) ─────────────────────────────────────────────────────────
+pub use discovery_telemetry::{
+    DemoteArgs, DiscoveryArgs, DiscoveryVerb, TelemetryArgs, TelemetryRow, demote_candidates,
+    iter_telemetry, mark_demoted, render_demote_text, render_telemetry_text, run_discovery,
+};
+pub use etl::{
+    BackfillArgs as EtlBackfillArgs, EtlArgs, EtlVerb, StatusArgs as EtlStatusArgs,
+    render_etl_status_text, run_etl,
+};
+pub use memory_embed::{EmbedArgs, embed_new_messages, pack_vector, run_memory_embed};
+pub use pricing::{DoctorArgs, PricingArgs, PricingVerb, render_pricing_doctor_text, run_pricing};
+pub use reindex::{ReindexArgs, render_counts, run_reindex};
 
 /// `stax` — the Rust port of StackUnderflow.
 ///
@@ -151,6 +199,16 @@ pub enum Command {
     Config(ConfigArgs),
     /// Read StackUnderflow's own docs, offline from the installed package.
     Docs(DocsArgs),
+    /// Read-only health + delivery check of the local store.
+    ///
+    /// Health: SQLite integrity + foreign-key checks plus watermark/orphan
+    /// sanity, opening the store read-only (never migrates or writes).
+    ///
+    /// Delivery: the per-provider scoreboard (disk sessions → base messages →
+    /// usage_events → marts) that catches data loading but never reaching the
+    /// dashboard. Exit is non-zero on health findings always, and on delivery
+    /// gaps only with ``--fail-on-gap``.
+    Doctor(StoreDoctorArgs),
     /// Export aggregated usage data to a CSV or JSON file.
     ///
     /// With ``--period`` set, exports a single window. Without it, exports
@@ -253,6 +311,12 @@ pub enum Command {
     /// agents whose CLI has no known resume command still list their session
     /// ids.
     Resume(ResumeArgs),
+    /// Surface "this file has caused N reverts in M days" before editing it.
+    ///
+    /// Read-only aggregator over the v0.7.2 outcome heuristic. No new
+    /// schema; counts are computed from existing ``messages`` / ``sessions``
+    /// rows on each call.
+    Risk(RiskArgs),
     /// Substring-search QUERY across past message content; return matching
     /// sessions.
     SearchPastDecisions(PastDecisionsArgs),
@@ -277,6 +341,47 @@ pub enum Command {
     Yield(YieldArgs),
     /// Inspect git worktrees: owner project, cost, prune safety (read-only).
     Worktrees(WorktreesArgs),
+    // ── T2v3 (this leg) — appended at the tail, never interleaved ────────────
+    /// Inspect / maintain the discovery citation-feedback telemetry.
+    Discovery(DiscoveryArgs),
+    /// Run the ETL pipeline (raw messages → events → marts).
+    Etl(EtlArgs),
+    /// Inspect model pricing health (read-only).
+    Pricing(PricingArgs),
+    /// Rebuild the session store from scratch.
+    Reindex(ReindexArgs),
+    // ── TELEPHONE (this leg) — appended at the tail, never interleaved ───────
+    /// Agent telephone — leave word for another machine's agents (and read
+    /// yours).
+    ///
+    /// Store-and-forward, not chat: `msg send` writes one small JSON file into
+    /// the RECIPIENT's data dir over ssh (same transport as `sync`); the
+    /// recipient's injection hooks surface unseen messages into the next live
+    /// agent turn (UserPromptSubmit / PreToolUse), exactly once. No broker, no
+    /// daemon.
+    Msg(MsgArgs),
+    /// Pull PR / CI data into the local store (REST backfill + webhook
+    /// receiver).
+    ///
+    /// The `about` attribute below WINS over this doc comment for clap, and
+    /// that is the point: this text is for `cargo doc`, the attribute is for
+    /// `--help`. Same split the `Config` variant uses.
+    ///
+    // Only `webhook serve` is registered. `ingest github` needs a TLS client
+    // (DIV-199, an open architect manifest decision) and this campaign's brief
+    // forbids live network, so it is ABSENT rather than stubbed — see
+    // `ingest.rs`'s module docs for what of it is ported and differed.
+    //
+    // `about` is set explicitly, and the note above is a `//` comment rather
+    // than a doc one, for the reason the root `Cli` gives: Click prints the
+    // FIRST LINE of the docstring as the group summary and `help-tree.sh`
+    // compares it. A doc comment explaining the port's own gap would put text
+    // in the tree the reference does not have — measured, on the first run.
+    #[command(
+        about = "Pull PR / CI data into the local store (REST backfill + webhook receiver).",
+        long_about = None
+    )]
+    Ingest(IngestArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -307,6 +412,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Compare(args) => run_compare(args)?.emit(),
         Command::Config(args) => run_config(args)?.emit(),
         Command::Docs(args) => run_docs(args)?.emit(),
+        Command::Doctor(args) => run_doctor(args)?.emit(),
         Command::Export(args) => run_export_cmd(args)?.emit(),
         Command::FindFailureModesForFile(args) => {
             run_failure_modes(args).map(|()| ExitCode::SUCCESS)?
@@ -330,6 +436,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Recommend(args) => run_recommend(args)?.emit(),
         Command::Report(args) => run_report(args)?.emit(),
         Command::Resume(args) => run_resume(args).map(|()| ExitCode::SUCCESS)?,
+        Command::Risk(args) => run_risk(args)?.emit(),
         Command::SearchPastDecisions(args) => {
             run_past_decisions(args).map(|()| ExitCode::SUCCESS)?
         }
@@ -341,6 +448,14 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Today(args) => run_today(args)?.emit(),
         Command::Yield(args) => run_yield(args)?.emit(),
         Command::Worktrees(args) => run_worktrees(args)?.emit(),
+        // ── T2v3 (this leg) — appended at the tail, never interleaved ───────
+        Command::Discovery(args) => run_discovery(args)?.emit(),
+        Command::Etl(args) => run_etl(args)?.emit(),
+        Command::Pricing(args) => run_pricing(args)?.emit(),
+        Command::Reindex(args) => run_reindex(args)?.emit(),
+        // ── TELEPHONE (this leg) — appended at the tail, never interleaved ──
+        Command::Msg(args) => run_msg(args)?.emit(),
+        Command::Ingest(args) => run_ingest(args)?.emit(),
     };
     Ok(code)
 }

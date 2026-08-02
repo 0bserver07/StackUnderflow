@@ -616,6 +616,35 @@ packaging item nobody has taken — the adapters ruling explicitly deferred it
 (*"the installed-binary distribution question is a wave-8 packaging item"*), and
 no wave-8 tranche claimed it.
 
+> ### CORRECTION + CLOSURE (2026-08-02, wave-10 item 2c) — DIV-400
+>
+> **The table above is short by two, and both omissions are load-bearing.** It
+> is kept as written because this document is a snapshot at `a40db22`; what
+> follows is what a re-derivation found.
+>
+> | missed artifact | binding | evidence |
+> |---|---|---|
+> | `stackunderflow/data/models.toml` | **also RUNTIME**, in a *different* consumer from the one cited | `crates/stax-reports/src/pricing.rs:37` — `manifest_path(package_dir)`, read on every priced request. The `include_str!` the row above cites is `stax_etl::stats::dataset`'s `default_engine`, which no server request path uses (DIV-056 forbids it). `crates/stax-cli/src/status.rs:232` does the same |
+> | `stackunderflow/infra/model_candidates.json` | **RUNTIME** | `crates/stax-server/src/routes/whatif.rs:343` and `crates/stax-reports/src/prescribe.rs:1146` |
+>
+> A machine that shipped only the two artifacts §4.3 lists would have served the
+> dashboard and then `500`-ed on every priced endpoint.
+>
+> **All four are now compiled in** — disk-first with the binary as fallback for
+> three of them, so the parity harness still diffs two readers of one tree, and
+> embedded-by-default for `/static` so the endpoint matrix actually gates the
+> embedded path. Endpoint matrix re-run before and after: **763 rows, 692
+> identical / 0 divergent / 71 known-open, RC=0, verdict-diff EMPTY.** The
+> operational claim — all three binaries working with both checkouts
+> bind-mounted over inside a mount namespace, `strace` showing zero syscalls
+> naming either — is in `rust/STANDALONE-PROOF.md`; what was embedded, what it
+> cost, and the behaviour-for-behaviour diff against the old `ServeDir` mount
+> are in `rust/PACKAGING-STANDALONE.md`.
+>
+> **§4.1's option table is unaffected.** This closes the *packaging* blocker,
+> not the entry-point question, and not §4.3's `templates.canonical_command`
+> constraint. Nothing here is a recommendation to flip.
+
 ### 4.4 The rollback story
 
 Rollback is **structurally cheap and this is the campaign's best-defended

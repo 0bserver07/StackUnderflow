@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
+use axum::body::Bytes;
 use rusqlite::Connection;
 
 /// The settings the HTTP layer reads, resolved once at startup.
@@ -132,6 +133,7 @@ pub struct CurrentProject {
 struct Inner {
     store_path: PathBuf,
     package_dir: PathBuf,
+    static_override: Option<PathBuf>,
     config: Config,
     project: RwLock<CurrentProject>,
     is_reindexing: AtomicBool,
@@ -156,10 +158,34 @@ impl AppState {
     /// injects.
     #[must_use]
     pub fn new(store_path: PathBuf, package_dir: PathBuf, config: Config) -> Self {
+        Self::with_static_dir(store_path, package_dir, config, None)
+    }
+
+    /// As [`AppState::new`], with the static tree read from `static_override`
+    /// instead of from the binary.
+    ///
+    /// `None` — the default every caller but the binary uses — serves the
+    /// bundle [`crate::assets`] compiled in, which is what lets `stax-server`
+    /// run with `stackunderflow/` deleted. `Some(dir)` is the
+    /// `STAX_STATIC_DIR` development override: point it at a `vite build`
+    /// output and every static read goes back to the disk, unchanged from what
+    /// it was before wave 10.
+    ///
+    /// The override replaces the whole `static/` root, not just the React
+    /// subtree, because `favicon.ico` and `images/` hang off the same
+    /// directory and `deps.BASE_DIR` treats them as one tree.
+    #[must_use]
+    pub fn with_static_dir(
+        store_path: PathBuf,
+        package_dir: PathBuf,
+        config: Config,
+        static_override: Option<PathBuf>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 store_path,
                 package_dir,
+                static_override,
                 config,
                 project: RwLock::new(CurrentProject::default()),
                 is_reindexing: AtomicBool::new(false),
@@ -180,9 +206,48 @@ impl AppState {
     }
 
     /// `BASE_DIR/static` — the `StaticFiles` mount root.
+    ///
+    /// Still a path, and still the root every containment check is written
+    /// against, even when nothing is served off the disk: `misc.rs`'s
+    /// `/assets/{path}` guard is a *lexical* prefix test ported from
+    /// `os.path.resolve` + `str.startswith`, so it is a pure function of the
+    /// root's spelling and needs no directory to exist.
+    /// [`AppState::read_static`] is the step that turns a path under this root
+    /// into bytes, from disk or from [`crate::assets`].
     #[must_use]
     pub fn static_dir(&self) -> PathBuf {
-        self.inner.package_dir.join("static")
+        self.inner
+            .static_override
+            .clone()
+            .unwrap_or_else(|| self.inner.package_dir.join("static"))
+    }
+
+    /// The `STAX_STATIC_DIR` override, when one was injected.
+    ///
+    /// `None` means the compiled-in bundle. `spa::register_static` is the only
+    /// consumer that needs to branch on the *source* rather than just ask for
+    /// bytes, because `tower_http::services::ServeDir` — which is what the
+    /// override path keeps using — takes a directory, not a byte slice.
+    #[must_use]
+    pub fn static_dir_override(&self) -> Option<&Path> {
+        self.inner.static_override.as_deref()
+    }
+
+    /// The bytes of a file under [`AppState::static_dir`], or `None`.
+    ///
+    /// `path` is absolute-ish and already resolved by the caller — the same
+    /// value it used to hand `tokio::fs::read`. In override mode that is still
+    /// exactly what happens. Otherwise the path is translated back into a
+    /// table key and answered from the binary, with no copy:
+    /// [`Bytes::from_static`] over a `&'static [u8]`.
+    pub async fn read_static(&self, path: &Path) -> Option<Bytes> {
+        match self.static_dir_override() {
+            Some(_) => tokio::fs::read(path).await.ok().map(Bytes::from),
+            None => crate::assets::key_for(&self.static_dir(), path)
+                .as_deref()
+                .and_then(crate::assets::get)
+                .map(Bytes::from_static),
+        }
     }
 
     /// `BASE_DIR/static/react/index.html` — the SPA entry every page route
@@ -324,5 +389,52 @@ mod tests {
             PathBuf::from("/pkg/static/react/index.html")
         );
         assert_eq!(state.static_dir(), PathBuf::from("/pkg/static"));
+        assert!(
+            state.static_dir_override().is_none(),
+            "the default source is the compiled-in bundle"
+        );
+    }
+
+    #[test]
+    fn the_static_override_replaces_the_whole_root() {
+        let state = AppState::with_static_dir(
+            PathBuf::from("/s/store.db"),
+            PathBuf::from("/pkg"),
+            Config::default(),
+            Some(PathBuf::from("/build/static")),
+        );
+        assert_eq!(state.static_dir(), PathBuf::from("/build/static"));
+        assert_eq!(
+            state.spa_index(),
+            PathBuf::from("/build/static/react/index.html")
+        );
+        assert_eq!(
+            state.static_dir_override(),
+            Some(Path::new("/build/static"))
+        );
+    }
+
+    #[tokio::test]
+    async fn read_static_answers_from_the_binary_when_the_tree_is_absent() {
+        // The point of wave-10 item 2c: `package_dir` names a tree that does
+        // not exist, and the dashboard still serves.
+        let state = AppState::new(
+            PathBuf::from("/nonexistent/store.db"),
+            PathBuf::from("/nonexistent/stackunderflow"),
+            Config::default(),
+        );
+        let index = state
+            .read_static(&state.spa_index())
+            .await
+            .expect("the SPA entry comes out of the binary");
+        assert!(String::from_utf8_lossy(&index).contains("<div id=\"root\">"));
+        assert!(
+            state
+                .read_static(&state.static_dir().join("nope.js"))
+                .await
+                .is_none()
+        );
+        // A path outside the root is a miss, not a panic and not a disk read.
+        assert!(state.read_static(Path::new("/etc/passwd")).await.is_none());
     }
 }

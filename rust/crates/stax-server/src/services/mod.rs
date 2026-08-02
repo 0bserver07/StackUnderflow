@@ -55,8 +55,7 @@ pub mod messages;
 // | [`agent_teams`] | `services/agent_teams.py` | `routes/agent_teams.rs` |
 // | [`benchmark`] | `reports/benchmark.py` | `routes/benchmark.rs` |
 // | [`benchmark_stats`] | `services/benchmark_stats.py` | [`benchmark`] |
-// | [`etl_backfill`] | `etl/backfill.py` | `routes/etl.rs` |
-// | [`etl_status`] | `etl/status.py` | `routes/etl.rs` |
+// | [`etl_backfill`] | `etl/backfill_jobs.py`, plus re-exports of `etl/backfill.py` | `routes/etl.rs` |
 // | [`forks`] | `reports/forks.py` | `routes/forks.rs` |
 // | [`grading`] | `services/grading.py` | `routes/quality.rs` |
 // | [`live`] | `services/live.py` | `routes/live.rs` |
@@ -75,7 +74,6 @@ pub mod messages;
 // pre-wired for exactly this reason).
 pub mod agent_teams;
 pub mod etl_backfill;
-pub mod etl_status;
 pub mod live;
 pub mod ollama_proxy;
 pub mod playback;
@@ -129,3 +127,13 @@ pub use stax_reports::{
     export, forks, grading, mart_queries, mode_recommender, optimize, outcome_attribution,
     patterns, plans, prescribe, risk, scope, worktrees, yield_tracker,
 };
+
+// ── T2v3: `etl/status.py` joined them, for the same reason ───────────────────
+//
+// `cli.py`'s `etl status` verb calls `etl.status.assemble_status`, so the
+// assembler needed a home `stax-cli` can reach. It is `stax_reports::etl_status`
+// now, and this line keeps `crate::services::etl_status::assemble_status`
+// resolving in `routes/etl.rs`. One behavioural change travelled with it and is
+// visible at the call site: the two process-local job slots are PARAMETERS,
+// because a CLI process has no slots to read.
+pub use stax_reports::etl_status;

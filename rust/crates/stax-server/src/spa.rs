@@ -29,7 +29,7 @@
 //! ported, because the first is the contract and the other two are free.
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http;
 use axum::http::{HeaderValue, StatusCode, header};
@@ -58,16 +58,187 @@ const HTML_CONTENT_TYPE: &str = "text/html; charset=utf-8";
 ///   `text/html; charset=utf-8`. [`add_text_charset`] restores it.
 /// * **The 404 body.** A miss under the mount is `{"detail":"Not Found"}` in
 ///   FastAPI, not an empty 404.
+///
+/// Since wave-10 item 2c the *default* source is the binary — see
+/// [`serve_embedded`], which reproduces the four `ServeDir` behaviours the
+/// mount actually exhibits. `STAX_STATIC_DIR` puts `ServeDir` back, unchanged,
+/// over the directory it names.
 pub fn register_static(router: Router<AppState>, state: &AppState) -> Router<AppState> {
     let missing = axum::routing::any(|| async { crate::json::not_found() });
-    let files = ServeDir::new(state.static_dir()).not_found_service(missing);
     // Wrapped in a `Router` before the layer so the request body type is pinned
     // to `axum::body::Body`; `ServeDir::map_response` alone leaves it generic
     // and `nest_service` cannot then infer it.
-    let mount: Router<()> = Router::new()
-        .fallback_service(files)
-        .layer(MapResponseLayer::new(add_text_charset));
+    let mount: Router<()> = match state.static_dir_override() {
+        Some(dir) => Router::new().fallback_service(ServeDir::new(dir).not_found_service(missing)),
+        None => Router::new().fallback(serve_embedded),
+    }
+    .layer(MapResponseLayer::new(add_text_charset));
     router.nest_service("/static", mount)
+}
+
+/// The compiled-in mount — `ServeDir` over [`crate::assets`] instead of a
+/// directory.
+///
+/// Every branch below was **measured against the running `ServeDir`** before it
+/// was written (the probe transcript is in the wave-10 packaging item), and
+/// then checked against `tower-http-0.6.11`'s source, because a mount that
+/// merely "looks right" would move seven case rows:
+///
+/// | request | answer |
+/// |---|---|
+/// | a file | `200`, `mime_guess` type + `accept-ranges: bytes` + `content-length` |
+/// | `HEAD` of a file | the same headers, no body |
+/// | a directory without a trailing slash | `307` to the same URI + `/`, empty |
+/// | a directory with one | its `index.html`, or the miss below |
+/// | a miss, or a `..`/absolute component | the mount's `not_found_service` — `404 {"detail":"Not Found"}` |
+/// | anything not `GET`/`HEAD` | `405` + `allow: GET,HEAD`, empty, no `content-type` |
+///
+/// The last row is reachable **only at the bare mount root**: the app-wide
+/// `method_semantics` layer answers `/static/…` first (DIV-360). It is
+/// reproduced anyway because `!AL-static-root-put` measures exactly those bytes
+/// every run.
+///
+/// # The one header that could not survive (DIV-402)
+///
+/// `last-modified`. `ServeDir` reads it from `stat()`; an embedded slice has no
+/// mtime. The differ has never compared it (status, `content-type`, `allow` and
+/// the body are the contract — `parity/src/endpoints.rs`), and DIV-051 already
+/// records the SPA routes dropping the same header for the same reason.
+/// `accept-ranges: bytes` is kept because it is what the mount has always
+/// advertised, but `Range` is not honoured here — a ranged request gets the
+/// whole file, which is a legal answer and an unmeasured one.
+async fn serve_embedded(request: axum::extract::Request) -> Response {
+    if request.method() != http::Method::GET && request.method() != http::Method::HEAD {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            [(header::ALLOW, HeaderValue::from_static("GET,HEAD"))],
+            Body::empty(),
+        )
+            .into_response();
+    }
+
+    let uri = request.uri();
+    let Some(mut key) = validate_key(uri.path()) else {
+        return crate::json::not_found().into_response();
+    };
+
+    if crate::assets::is_dir(&key) {
+        // `maybe_redirect_or_append_path`: a directory URI that does not end in
+        // `/` redirects rather than serving, and the redirect is built from the
+        // URI this service sees — which `nest_service` has already stripped of
+        // `/static`, so the `location` comes out prefix-less. That is what the
+        // mount has always done; reproduced, not corrected.
+        if !uri.path().is_empty() && !uri.path().ends_with('/') {
+            let location = match uri.query() {
+                Some(query) => format!("{}/?{query}", uri.path()),
+                None => format!("{}/", uri.path()),
+            };
+            let Ok(location) = HeaderValue::from_str(&location) else {
+                return crate::json::not_found().into_response();
+            };
+            return (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(header::LOCATION, location)],
+                Body::empty(),
+            )
+                .into_response();
+        }
+        if key.is_empty() {
+            key = "index.html".to_owned();
+        } else {
+            key.push_str("/index.html");
+        }
+    }
+
+    let Some(bytes) = crate::assets::get(&key) else {
+        return crate::json::not_found().into_response();
+    };
+    // `mime_guess::from_path(...).first_raw()`, defaulting to
+    // `application/octet-stream` — `ServeDir`'s exact resolution. The
+    // `add_text_charset` layer above then restores starlette's charset, as it
+    // always has.
+    let media = mime_guess::from_path(&key)
+        .first_raw()
+        .unwrap_or("application/octet-stream");
+    let body = if request.method() == http::Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(Bytes::from_static(bytes))
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(media)),
+            (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
+        ],
+        // Set explicitly rather than left to the body: a `HEAD` answers with the
+        // full file's length over an empty body, which is what `ServeDir` does
+        // (`FileRequestExtent::Head(meta)` keeps `meta.len()`).
+        [(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&bytes.len().to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// `ServeVariant::Directory::build_and_validate_path`, in the key space.
+///
+/// Percent-decode, then walk components: `.` is dropped, a normal component is
+/// kept, and **anything else — `..`, a root, a Windows prefix — fails the whole
+/// path**. Failing is `InvalidFilename`, which `ServeDir` routes to the same
+/// fallback a miss uses, so the caller answers both with `404`.
+fn validate_key(path: &str) -> Option<String> {
+    let decoded = percent_decode(path.trim_start_matches('/'))?;
+    let mut key = String::with_capacity(decoded.len());
+    for component in std::path::Path::new(&decoded).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => {
+                if !key.is_empty() {
+                    key.push('/');
+                }
+                key.push_str(&part.to_string_lossy());
+            }
+            _ => return None,
+        }
+    }
+    Some(key)
+}
+
+/// `percent_encoding::percent_decode(...).decode_utf8()`, in fifteen lines.
+///
+/// The crate is in the lock (`ServeDir` uses it) but is not a dependency of
+/// this one, and the manifest law says measure before taking: this is the whole
+/// of what is needed. A stray `%` or a bad hex pair is passed through
+/// literally, which is what `percent-encoding` does; invalid UTF-8 fails the
+/// path, which is what `decode_utf8()` does.
+fn percent_decode(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "a hex digit pair is one byte by construction"
+            )]
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// starlette's `Response.init_headers`: `text/*` without a charset gains
@@ -105,8 +276,8 @@ pub fn register_pages(router: Router<AppState>) -> Router<AppState> {
 /// `FileResponse(os.path.join(BASE_DIR, "static", "react", "index.html"))`.
 async fn spa_index(State(state): State<AppState>) -> Response {
     let path = state.spa_index();
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
+    match state.read_static(&path).await {
+        Some(bytes) => {
             let len = bytes.len();
             (
                 StatusCode::OK,
@@ -129,14 +300,20 @@ async fn spa_index(State(state): State<AppState>) -> Response {
         // starlette raises `RuntimeError: File at path … does not exist.` and
         // the ASGI server turns that into a 500. A missing bundle is a broken
         // install, not a route that should 404 into the SPA.
-        Err(err) => (
+        None => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static(crate::json::JSON_CONTENT_TYPE),
             )],
             Body::from(stax_memory::pyjson::dumps_http(&serde_json::json!({
-                "detail": format!("File at path {} does not exist. ({err})", path.display()),
+                // starlette's own text, verbatim. The port used to append the
+                // `io::Error` in parentheses; `read_static` answers `Option`
+                // (an embedded miss has no errno to append), so the addendum is
+                // gone and the message is now exactly the reference's —
+                // DIV-403, a strictly closer body on a leg no case row reaches,
+                // because the bundle is compiled in and cannot be missing.
+                "detail": format!("File at path {} does not exist.", path.display()),
             }))),
         )
             .into_response(),

@@ -35,6 +35,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assets;
 pub mod currency;
 pub mod json;
 pub mod method_semantics;
@@ -95,6 +96,35 @@ pub fn app(state: AppState) -> Router {
     // Everything — routes, both fallbacks, the `/static` mount — behind the one
     // layer, reached through a stateless outer router so `app()` still returns a
     // `Router` and no caller changes.
+    Router::new().fallback_service(
+        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed),
+    )
+}
+
+/// `cli.py::ingest_webhook_serve_cmd`'s app — the PR/CI receiver, alone.
+///
+/// ```python
+/// app = FastAPI(title="StackUnderflow webhook receiver")
+/// app.include_router(webhook_router)
+/// ```
+///
+/// Three routes and nothing else: no SPA, no `/static`, no dashboard API. That
+/// is the point of the verb — a receiver you can expose to a tunnel without
+/// exposing the dashboard with it, on its own port.
+///
+/// The two fallbacks and the method layer stay, because they are not the
+/// dashboard's: they are what FastAPI does on *any* app. An unknown path here
+/// is `{"detail":"Not Found"}` on both implementations, and a `GET` on
+/// `/api/webhooks/github` is a 405 with FastAPI's `Allow` semantics, not axum's
+/// — the same DIV-323 rule, and the receiver differ's rows cross it.
+///
+/// Appended below [`app`] rather than folded into it: `app` is shared ground and
+/// this leg may not re-shape it.
+pub fn webhook_receiver_app(state: AppState) -> Router {
+    let routed = routes::webhooks::register(Router::new())
+        .fallback(|| async { json::not_found() })
+        .method_not_allowed_fallback(|| async { json::method_not_allowed() })
+        .with_state(state);
     Router::new().fallback_service(
         axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed),
     )

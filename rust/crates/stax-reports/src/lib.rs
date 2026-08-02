@@ -29,7 +29,7 @@
 //! price-book seam a report prices through).
 //!
 //! Not here: anything that speaks HTTP or owns a runtime. `agent_teams`,
-//! `etl_backfill`, `etl_status`, `json_error`, `live`, `messages`,
+//! `json_error`, `live`, `messages`,
 //! `ollama_proxy`, `playback`, `playback_fs`, `pricing_refresh` and
 //! `session_compare` stayed in `stax-server::services` — they are consumed by
 //! exactly one route module each and no CLI verb reaches them. `json::JsonBody`
@@ -60,6 +60,7 @@ pub mod burn;
 pub mod compare;
 pub mod context_budget;
 pub mod context_replay;
+pub mod etl_status;
 pub mod export;
 pub mod forks;
 pub mod grading;
@@ -71,6 +72,7 @@ pub mod patterns;
 pub mod plans;
 pub mod prescribe;
 pub mod pricing;
+pub mod pricing_doctor;
 pub mod pyops;
 pub mod risk;
 pub mod scope;

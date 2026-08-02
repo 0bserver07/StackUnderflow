@@ -21,9 +21,9 @@ Reference: Click **8.4.2**, CPython **3.12.13**, `stackunderflow/cli.py` at **64
 
 | status | nodes |
 | --- | ---: |
-| PORTED | 72 |
+| PORTED | 75 |
 | PARTIAL | 1 |
-| UNPORTED | 32 |
+| UNPORTED | 29 |
 | **total** | **105** |
 
 ### 1.1a Verified against the shipped binary — DIV-346's guard
@@ -37,8 +37,19 @@ The `STATUS` map above is the file's one piece of judgment, and judgment about a
 * `benchmark show`
 * `compare`
 * `context-replay`
+* `discovery`
+* `discovery demote-uncited`
+* `discovery telemetry`
+* `etl`
+* `etl backfill`
+* `etl status`
 * `export`
+* `ingest`
+* `ingest webhook`
+* `ingest webhook serve`
 * `optimize`
+* `pricing`
+* `pricing doctor`
 * `worktrees`
 * `worktrees attribute`
 * `worktrees list`
@@ -51,8 +62,9 @@ The `STATUS` map above is the file's one piece of judgment, and judgment about a
 | `W7` | 6 | 4 | 2 |
 | `W8-T1` | 18 | 13 | 5 |
 | `W8-T2` | 31 | 24 | 7 |
-| `W8-T3` | 28 | 23 | 5 |
+| `W8-T3` | 25 | 21 | 4 |
 | `W8-T4` | 10 | 7 | 3 |
+| `W8-T6` | 3 | 2 | 1 |
 | **total** | **105** | **82** | **23** |
 
 | wave tag | meaning |
@@ -106,7 +118,7 @@ An RS item id marked `*` did **not** exist in `rust/TASKS-RS.md` when this inven
 | 33 | `docs` | group | PORTED | `W8-T4` | RS-8-019 | 0 | Read StackUnderflow's own docs, offline from the installed package. |
 | 34 | `docs list` | command | PORTED | `W8-T4` | RS-8-047, RS-8-002 | 2 | List available documentation topics. |
 | 35 | `docs show` | command | PORTED | `W8-T4` | RS-8-048, RS-8-002 | 2 | Print an embedded documentation topic. |
-| 36 | `doctor` | command | UNPORTED | `W8-T3` | RS-8-049 | 2 | Read-only health + delivery check of the local store. |
+| 36 | `doctor` | command | PORTED | `W8-T6` | RS-8-049 | 2 | Read-only health + delivery check of the local store. |
 | 37 | `etl` | group | UNPORTED | `W8-T2` | RS-8-103* | 0 | Run the ETL pipeline (raw messages → events → marts). |
 | 38 | `etl backfill` | command | UNPORTED | `W8-T2` | RS-8-104* | 1 | Convert all existing messages into usage_events, then refresh marts. |
 | 39 | `etl status` | command | UNPORTED | `W8-T2` | RS-8-105* | 1 | Show ETL pipeline health: watcher, marts, events, lag. |
@@ -156,8 +168,8 @@ An RS item id marked `*` did **not** exist in `rust/TASKS-RS.md` when this inven
 | 83 | `reindex` | command | UNPORTED | `W8-T2` | RS-8-102* | 0 | Rebuild the session store from scratch. |
 | 84 | `report` | command | PORTED | `W8-T3` | RS-8-070, RS-5-002 | 7 | Dashboard-style summary over a date range. |
 | 85 | `resume` | command | PORTED | `W1` | RS-1-002 | 4 | Session/resume ids for every coding agent under PATH (default: cwd). |
-| 86 | `risk` | group | UNPORTED | `W8-T3` | RS-8-025 | 0 | Surface "this file has caused N reverts in M days" before editing it. |
-| 87 | `risk file` | command | UNPORTED | `W8-T3` | RS-8-071, RS-8-011 | 3 | Risk summary for PATH: how many sessions reverted / failed / worked. |
+| 86 | `risk` | group | PORTED | `W8-T6` | RS-8-025 | 0 | Surface "this file has caused N reverts in M days" before editing it. |
+| 87 | `risk file` | command | PORTED | `W8-T6` | RS-8-071, RS-8-011 | 3 | Risk summary for PATH: how many sessions reverted / failed / worked. |
 | 88 | `search-past-decisions` | command | PORTED | `W1` | RS-1-020 | 8 | Substring-search QUERY across past message content; return matching sessions. |
 | 89 | `skills` | group | PORTED | `W8-T4` | RS-8-026 | 0 | Generate / list / clean project-specific Claude Code skills. |
 | 90 | `skills clean` | command | PORTED | `W8-T4` | RS-8-072, RS-8-013 | 5 | Remove auto-generated skills (never touches hand-authored ones). |
@@ -576,7 +588,7 @@ Subcommands: `list`, `show`
 | `TOPIC` | arg | text | `Sentinel.UNSET` | required |  |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Emit {slug, title, audience, summary, body} as JSON. |
 
-### `doctor` — UNPORTED · W8-T3 · RS-8-049
+### `doctor` — PORTED · W8-T6 · RS-8-049
 
 > Read-only health + delivery check of the local store.
 > 
@@ -1232,7 +1244,7 @@ Subcommands: `mode`, `skills`
 | `--limit-per-provider` | opt | int range(1..inf) | `5` | — | Max sessions listed per coding agent. |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Emit the machine envelope. |
 
-### `risk` — UNPORTED · W8-T3 · RS-8-025
+### `risk` — PORTED · W8-T6 · RS-8-025
 
 > Surface "this file has caused N reverts in M days" before editing it.
 > 
@@ -1244,7 +1256,7 @@ Subcommands: `file`
 
 *No declared parameters.*
 
-### `risk file` — UNPORTED · W8-T3 · RS-8-071, RS-8-011
+### `risk file` — PORTED · W8-T6 · RS-8-071, RS-8-011
 
 > Risk summary for PATH: how many sessions reverted / failed / worked.
 > 

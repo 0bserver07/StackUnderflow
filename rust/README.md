@@ -59,13 +59,32 @@ the `analyze` family, `discovery` maintenance, `doctor`, `etl`, `import`,
 
 The maintainer's pyproject still owns the installed `stax` entry point;
 flipping it to this binary is the wave-10 decommission decision. Until
-then, invoke the built binary by path or shell alias. Three runtime/build
-couplings to the Python tree are deliberate (drift = build failure, not
-divergence): `stackunderflow/data/models.toml` and
-`stackunderflow/store/migrations/*.sql` are compiled in via `include_str!`;
-`adapters/capabilities.json` and the React bundle under
-`stackunderflow/static/react/` are read at runtime. Decommissioning Python
-therefore means shipping those files with the binaries — the plan is in
+then, invoke the built binary by path or shell alias.
+
+**The binaries no longer need the Python tree at run time.** Every data
+file they read is compiled in, and drift is a *test* failure rather than a
+silent divergence — each embedded copy is compared against the checked-in
+file by a unit test:
+
+| file | compiled into | override |
+|---|---|---|
+| `data/models.toml` | `stax-etl` | `--package-dir` (a file on disk still wins) |
+| `store/migrations/*.sql` | `stax-core` | — |
+| `adapters/capabilities.json` | `stax-adapters` | `$STACKUNDERFLOW_CAPABILITIES` |
+| `infra/model_candidates.json` | `stax-reports` | `--package-dir` |
+| `static/` — the React build, favicon, images | `stax-server` | `$STAX_STATIC_DIR` or `--static-dir` |
+
+Everything but `static/` reads the disk first and falls back to the
+compiled-in copy, so a checkout keeps behaving exactly as it did and the
+parity harness still diffs two readers of one tree. `/static` is served
+from memory unless the override names a directory — point
+`$STAX_STATIC_DIR` at a `vite build` output for frontend work.
+
+`stax-server --check` prints which source is in use and how many bytes of
+bundle the binary carries. What is embedded, what it cost, and the
+behaviour-for-behaviour proof against the old `ServeDir` mount are in
+`rust/PACKAGING-STANDALONE.md`; the run with the Python tree unreachable is
+in `rust/STANDALONE-PROOF.md`; the wider flip plan is in
 `docs/specs/decommission-report.md` §4.
 
 ## Verify

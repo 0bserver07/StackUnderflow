@@ -40,10 +40,11 @@ use crate::pricing::{Manifest, PricingEngine};
 /// Every other consumer in this workspace resolves `data/models.toml` from
 /// `CARGO_MANIFEST_DIR`, which works for tests and parity binaries and does not
 /// work for a shipped server binary that has no source tree beside it.
-/// `include_str!` reads the *same* file at build time — it is not a
-/// transcription, and `cargo build` re-runs when the file changes — so spec
-/// §2.4's "read, never transcribed" still holds.
-const EMBEDDED_MANIFEST: &str = include_str!("../../../../../stackunderflow/data/models.toml");
+///
+/// The `include_str!` moved to [`crate::pricing::EMBEDDED_MANIFEST`] in wave 10
+/// when `stax_reports::pricing` needed the same bytes: one owner per copy, or
+/// there are two build-time copies to keep true instead of one.
+use crate::pricing::EMBEDDED_MANIFEST;
 
 /// The pricing state a freshly imported `stackunderflow` process is in.
 ///

@@ -217,6 +217,22 @@ pub enum MemoryVerb {
         #[command(flatten)]
         options: MemoryOptions,
     },
+    /// Backfill vector embeddings for your existing indexed messages.
+    ///
+    /// ``memory ask`` embeds NEW messages as they're ingested; this one-time
+    /// backfill embeds everything already in the search index so semantic recall
+    /// works over your whole history. Needs a reachable Ollama — cloud
+    /// (``STACKUNDERFLOW_OLLAMA_URL`` + ``STACKUNDERFLOW_OLLAMA_API_KEY``) or
+    /// local; with neither it explains how to enable one and exits.
+    // Appended at the tail of this enum rather than filed next to its siblings:
+    // three agents edit `stax-cli` concurrently and the add-only rule applies
+    // here for the same reason it applies to `lib.rs`. This note is a `//`
+    // comment and not a doc comment ON PURPOSE — clap prints a variant's doc
+    // comment as its `--help` body, so a sentence explaining the PORT would
+    // become text the reference does not have. `help-tree.sh` reported exactly
+    // that on this node's first run; the `Ingest` variant learned it one leg
+    // earlier, and the lesson only transferred because the differ ran.
+    Embed(crate::memory_embed::EmbedArgs),
     /// Ask a natural-language question of the local store.
     ///
     /// ``ask`` runs a **hybrid** retrieval: a keyword search over past
@@ -239,15 +255,21 @@ pub enum MemoryVerb {
 }
 
 impl MemoryVerb {
-    /// The shared options, whichever verb this is.
+    /// The shared options, whichever verb this is — `None` for `embed`.
+    ///
+    /// `memory embed` is the one leaf `cli._memory_options` is not applied to:
+    /// its only parameter is `--batch`. So the accessor is an `Option` rather
+    /// than a lie, and the sole caller (a parser test on `memory decisions`)
+    /// unwraps it.
     #[must_use]
-    pub fn options(&self) -> &MemoryOptions {
+    pub fn options(&self) -> Option<&MemoryOptions> {
         match self {
             Self::Decisions { options, .. }
             | Self::File { options, .. }
             | Self::Worked { options, .. }
             | Self::Sessions { options, .. }
-            | Self::Ask { options, .. } => options,
+            | Self::Ask { options, .. } => Some(options),
+            Self::Embed(_) => None,
         }
     }
 }
@@ -399,6 +421,22 @@ pub fn resolve_weights(env: Option<&str>, config: Option<&pyjson::Value>) -> (f6
 /// When the store cannot be opened, or a query fails for a reason the reference
 /// would not have caught (`_memory_fail` only catches `ValueError`).
 pub fn run_memory(args: &MemoryArgs) -> Result<()> {
+    // `memory embed` is the one verb in this group that never opens `store.db`
+    // — `cli.py`'s body reads `search_index.db` and writes `embeddings.db` and
+    // imports neither `db` nor `schema`. Routing it through the shared
+    // `Store::open_read_only` below would make it fail on a machine that has an
+    // index and no store, which the reference happily serves.
+    if let MemoryVerb::Embed(embed) = &args.verb {
+        let output = crate::memory_embed::run_memory_embed(embed)?;
+        print!("{}", output.stdout);
+        if !output.stderr.is_empty() {
+            eprint!("{}", output.stderr);
+        }
+        if output.code != 0 {
+            std::process::exit(output.code);
+        }
+        return Ok(());
+    }
     let env = MemoryEnv::from_process()?;
     let store = Store::open_read_only(&settings::store_path())?;
     let output = run_verb(store.conn(), &args.verb, &env)?;
@@ -423,6 +461,18 @@ pub fn run_verb(conn: &rusqlite::Connection, verb: &MemoryVerb, env: &MemoryEnv)
         MemoryVerb::Worked { action, options } => run_worked(conn, action, options, env),
         MemoryVerb::Sessions { path, options } => run_sessions(conn, path.as_deref(), options, env),
         MemoryVerb::Ask { question, options } => crate::ask::run_ask(conn, question, options, env),
+        // Intercepted in `run_memory` before any store handle exists; reached
+        // only by a direct caller of `run_verb`, which the tests are. The two
+        // `Output` types are the same three fields under two names (this one is
+        // the `memory` group's, `click::Output` the wave-8 verbs').
+        MemoryVerb::Embed(args) => {
+            let out = crate::memory_embed::run_memory_embed(args)?;
+            Ok(Output {
+                stdout: out.stdout,
+                stderr: out.stderr,
+                code: out.code,
+            })
+        }
     }
 }
 
@@ -1448,7 +1498,11 @@ mod tests {
                 let crate::Command::Memory(args) = cli.command else {
                     panic!("expected memory");
                 };
-                Ok(args.verb.options().clone())
+                Ok(args
+                    .verb
+                    .options()
+                    .expect("decisions carries the shared options")
+                    .clone())
             }
             Err(error) => Err(error.kind()),
         }

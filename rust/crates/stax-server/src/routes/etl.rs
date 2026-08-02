@@ -61,7 +61,9 @@ use serde_json::{Map, Value};
 use stax_core::queries::pytime;
 
 use crate::json::{HandlerResult, HttpError, JsonBody, join_failure};
-use crate::services::etl_backfill::{BackfillInProgress, backfill, complete_job, start_job};
+use crate::services::etl_backfill::{
+    BackfillInProgress, backfill, complete_job, get_current_job, get_last_job, start_job,
+};
 use crate::services::etl_status::assemble_status;
 use crate::state::AppState;
 
@@ -96,11 +98,23 @@ async fn get_etl_status(State(state): State<AppState>) -> HandlerResult {
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .to_path_buf();
+        // The two job slots are the server's, and only the server has any:
+        // `assemble_status` takes them as parameters now (it moved to
+        // `stax-reports` so `stackunderflow etl status` could call it, and a
+        // CLI process passes `None, None`). `get_last_job`'s lazy, DESTRUCTIVE
+        // TTL expiry therefore fires HERE, on this read, exactly as it fired
+        // inside the assembler before — same clock, same call, same side
+        // effect. Read before the blocking work so the two slots are sampled at
+        // the same instant Python samples them.
+        let now = pytime::now_micros();
+        let current_job = get_current_job().map(|job| job.current_value());
+        let last_job = get_last_job(now).map(|job| job.last_value());
         assemble_status(
             &conn,
             &app_dir,
             disable_watcher.as_deref(),
-            pytime::now_micros(),
+            current_job,
+            last_job,
         )
         .map_err(sql_500)
     })

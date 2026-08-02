@@ -58,6 +58,30 @@ pub fn utc_backup_stamp(utc_epoch_secs: i64) -> String {
     format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}Z")
 }
 
+/// `time.strftime("%Y-%m-%dT%H:%M:%S%z")` — the agent telephone's message stamp.
+///
+/// Local time with the numeric, colon-free UTC offset `%z` produces (`-0400`).
+/// It goes on the wire in every `msg send` payload and is read back verbatim by
+/// the peer's `msg inbox`, so it is transcribed rather than converted to
+/// `isoformat()`'s `-04:00`.
+///
+/// `%z` on a *naive* `strftime` is `localtime()`'s offset — the same chain
+/// [`local_offset_seconds`] walks — so a zone-less machine prints `+0000`,
+/// matching `tzset()`'s fallback.
+#[must_use]
+pub fn local_iso_offset_stamp(utc_epoch_secs: i64) -> String {
+    let offset = local_offset_seconds(utc_epoch_secs);
+    let (year, month, day, hour, minute, second) = civil(utc_epoch_secs + i64::from(offset));
+    let sign = if offset < 0 { '-' } else { '+' };
+    let magnitude = offset.unsigned_abs();
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}\
+         {sign}{:02}{:02}",
+        magnitude / 3600,
+        (magnitude % 3600) / 60
+    )
+}
+
 /// The UTC offset `localtime()` would apply at `utc_epoch_secs`, in seconds.
 ///
 /// The lookup order is `tzset()`'s: `$TZ`, then the system zone. An unreadable,

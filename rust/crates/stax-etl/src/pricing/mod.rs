@@ -39,6 +39,32 @@ pub use manifest::{Manifest, Rates};
 pub use price_book::{PriceBook, PriceBookRow};
 pub use providers::{Pricer, get_pricer};
 
+/// The checked-in rate card, compiled in.
+///
+/// `include_str!` reads the **same** `stackunderflow/data/models.toml` the
+/// reference reads — not a transcription, and `cargo` rebuilds when it changes,
+/// so spec §2.4's "read, never transcribed" holds. It lives here, in the module
+/// that owns the manifest, because two consumers now need it: `stats::dataset`'s
+/// [`crate::stats::dataset::default_engine`] (which has embedded it since wave
+/// 3) and `stax_reports::pricing::engine`, whose disk read is the last thing
+/// keeping a *server* process dependent on the Python package directory
+/// (`docs/specs/decommission-report.md` §4.3).
+pub const EMBEDDED_MANIFEST: &str = include_str!("../../../../../stackunderflow/data/models.toml");
+
+/// The manifest half of the pricing state, from the compiled-in rate card.
+///
+/// **Not an engine.** Building one here would invite `default_engine`'s mistake
+/// at a second call site: a server prices from the store's `price_book`, and an
+/// engine handed out without it is DIV-056's silent 2 % error. Callers overlay
+/// the book themselves.
+///
+/// # Errors
+/// When [`EMBEDDED_MANIFEST`] does not parse — a build-time-detectable bug, not
+/// a runtime condition, and pinned by `the_embedded_rate_card_is_the_file`.
+pub fn embedded_manifest() -> Result<Manifest, toml_lite::TomlError> {
+    Manifest::from_str_manifest(EMBEDDED_MANIFEST)
+}
+
 /// `1_000_000.0` — rates are quoted per million tokens.
 pub const MILLION: f64 = 1_000_000.0;
 

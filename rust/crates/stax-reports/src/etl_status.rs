@@ -63,13 +63,25 @@
 //! `parity/DIV-e-etl.md` about `parity/pyserver.py` setting
 //! `STACKUNDERFLOW_DISABLE_WATCHER=1` in the Python interpreter only.
 
+// ── where this module lives, and why it moved ────────────────────────────────
+//
+// Batch E put this in `stax-server::services`, correctly for the time: `GET
+// /api/etl/status` was the only caller. `cli.py`'s `etl status` verb is the
+// second — it calls `etl.status.assemble_status` directly, and `stax-cli` may
+// not link `stax-server` (DIV-279) — so the assembler lives here, in the crate
+// both surfaces already depend on, and the server re-exports the name so no
+// route path changed. `stax-reports` is the address rather than `stax-etl`
+// (which owns `etl/`) for one concrete reason: this file reads
+// `mart_queries::table_exists`, `stax-reports` depends on `stax-etl` and not
+// the reverse, so putting it in `stax-etl` would need either a dependency cycle
+// or a second `table_exists`. A forked helper is what DIV-375 cost.
+
 use std::path::Path;
 
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 
-use crate::services::etl_backfill::{get_current_job, get_last_job};
-use crate::services::mart_queries::table_exists;
+use crate::mart_queries::table_exists;
 
 /// `STALE_LAG_THRESHOLD_EVENTS` — above this a mart is "stale", not "syncing".
 pub const STALE_LAG_THRESHOLD_EVENTS: i64 = 100;
@@ -107,11 +119,24 @@ fn mart_table(name: &str) -> &'static str {
 /// `assemble_status(conn)` — the full ETL status payload.
 ///
 /// `app_dir` is `settings.app_dir()`, the directory `etl/lock.py` derives
-/// `server.lock` from; `watcher_disable_env` is the raw
-/// `STACKUNDERFLOW_DISABLE_WATCHER` value (`None` when unset) and `now_micros`
-/// is `datetime.now(UTC)` — all three injected rather than read here, because
-/// the workspace forbids `unsafe` and therefore forbids a test that mutates the
-/// environment (ARCHITECT-STATE finding 5).
+/// `server.lock` from, and `watcher_disable_env` is the raw
+/// `STACKUNDERFLOW_DISABLE_WATCHER` value (`None` when unset) — both injected
+/// rather than read here, because the workspace forbids `unsafe` and therefore
+/// forbids a test that mutates the environment (ARCHITECT-STATE finding 5).
+///
+/// # The two job slots are parameters, and that is the CLI's whole story
+///
+/// Python's `assemble_status` calls `backfill_jobs.get_current_job()` /
+/// `get_last_job()`, which read a `threading.Lock` and two **process-local**
+/// module slots. `stackunderflow etl status` is a fresh interpreter that has
+/// never scheduled anything, so it reads `None` from both on every invocation,
+/// by construction. The port makes that explicit rather than reproducing a
+/// global: the route passes what the server's job module holds, the CLI verb
+/// passes `None, None`, and neither can read the other's.
+///
+/// `current_job` is `Job::current_value()` and `last_job` is
+/// `Job::last_value()`; the lazy TTL expiry `get_last_job` performs stays in
+/// the caller, because the clock it needs is the caller's.
 ///
 /// Key order is the literal's: `watcher`, `marts`, `events`, `coverage`,
 /// `lag_seconds`, `health`, `current_job`, `last_job` — **not** the order the
@@ -125,7 +150,8 @@ pub fn assemble_status(
     conn: &Connection,
     app_dir: &Path,
     watcher_disable_env: Option<&str>,
-    now_micros: i64,
+    current_job: Option<Value>,
+    last_job: Option<Value>,
 ) -> rusqlite::Result<Value> {
     let events = events_summary(conn)?;
     let marts = marts_summary(conn)?;
@@ -134,14 +160,17 @@ pub fn assemble_status(
     let lag = compute_lag(events.max_id, &marts.watermarks);
     let mut health = compute_health(events.max_id, &watcher, lag);
 
-    // Both slots can change between back-to-back calls with no DB activity.
-    let current = get_current_job();
-    let last = get_last_job(now_micros);
-
     // Escalate to `error` while a recently failed backfill is inside the TTL
     // window. Deliberately AFTER `compute_health`, and unconditional: a live
     // pipeline with a fresh failure still reports `error` for those 30 seconds.
-    if last.as_ref().is_some_and(|job| job.status == "failed") {
+    // The predicate reads the rendered block's `status` — the same string the
+    // payload ships — rather than a typed field the caller would have to keep.
+    if last_job
+        .as_ref()
+        .and_then(|job| job.get("status"))
+        .and_then(Value::as_str)
+        == Some("failed")
+    {
         health = "error";
     }
 
@@ -152,14 +181,8 @@ pub fn assemble_status(
     out.insert("coverage".to_owned(), coverage);
     out.insert("lag_seconds".to_owned(), Value::from(lag));
     out.insert("health".to_owned(), Value::from(health));
-    out.insert(
-        "current_job".to_owned(),
-        current.map_or(Value::Null, |job| job.current_value()),
-    );
-    out.insert(
-        "last_job".to_owned(),
-        last.map_or(Value::Null, |job| job.last_value()),
-    );
+    out.insert("current_job".to_owned(), current_job.unwrap_or(Value::Null));
+    out.insert("last_job".to_owned(), last_job.unwrap_or(Value::Null));
     Ok(Value::Object(out))
 }
 
@@ -587,12 +610,14 @@ pub fn compute_health(max_event_id: i64, watcher: &Value, lag_events: i64) -> &'
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::services::etl_backfill::{
-        complete_job, reset_for_tests, start_job, test_lock, testdb,
-    };
+    use serde_json::json;
+    use stax_etl::backfill::testdb;
 
-    const T0: i64 = 1_767_312_000_000_000;
+    use super::*;
+
+    /// The stamp `stax-server`'s slot tests produce from their `T0`, kept so
+    /// the job blocks below are the ones a real run would carry.
+    const T0_ISO: &str = "2026-01-02T00:00:00+00:00";
 
     fn scratch_dir(tag: &str) -> std::path::PathBuf {
         let dir =
@@ -602,17 +627,15 @@ mod tests {
     }
 
     fn status(conn: &Connection) -> Value {
-        assemble_status(conn, &scratch_dir("empty"), None, T0).expect("status")
+        assemble_status(conn, &scratch_dir("empty"), None, None, None).expect("status")
     }
 
     /// A store with none of the ETL tables must answer a complete payload of
     /// zeros, not 500 and not a payload with keys missing.
     #[test]
     fn a_pre_wave_one_store_degrades_to_a_complete_payload_of_zeros() {
-        let _guard = test_lock();
-        reset_for_tests();
         let conn = Connection::open_in_memory().expect("store");
-        let body = crate::json::JsonBody::ok(status(&conn)).render();
+        let body = stax_memory::pyjson::dumps_http(&status(&conn));
         assert_eq!(
             body,
             concat!(
@@ -635,7 +658,6 @@ mod tests {
     /// registry's, not the alphabet's, and not the eight `marts::all()` returns.
     #[test]
     fn the_mart_block_is_five_names_in_registration_order() {
-        let _guard = test_lock();
         let conn = testdb::conn();
         let body = status(&conn);
         let names: Vec<&String> = body["marts"]
@@ -653,7 +675,6 @@ mod tests {
     /// provider: `total` is 3, `by_provider` sums to 2.
     #[test]
     fn total_counts_the_rows_the_truthiness_filters_drop() {
-        let _guard = test_lock();
         let conn = testdb::conn();
         testdb::event(&conn, 1, "claude", "rate_card");
         testdb::event(&conn, 2, "claude", "estimated");
@@ -680,7 +701,6 @@ mod tests {
     /// missing" short circuit.
     #[test]
     fn coverage_counts_and_samples_the_projects_no_mart_row_covers() {
-        let _guard = test_lock();
         let conn = testdb::conn();
         for id in 1..=25 {
             conn.execute(
@@ -726,7 +746,6 @@ mod tests {
     /// and through `compute_health` for the branch no reachable watcher can set.
     #[test]
     fn health_is_worst_first_over_the_lag_threshold() {
-        let _guard = test_lock();
         let watcher = watcher_state(&scratch_dir("health"), None);
         // Empty store: live before anything else is even looked at.
         assert_eq!(compute_health(0, &watcher, 9_999), "live");
@@ -752,7 +771,6 @@ mod tests {
     /// so a lagging `tool_mart` is invisible to it.
     #[test]
     fn lag_folds_the_five_rendered_marts_and_ignores_the_other_three() {
-        let _guard = test_lock();
         let conn = testdb::conn();
         for id in 1..=300 {
             testdb::event(&conn, id, "claude", "rate_card");
@@ -788,24 +806,34 @@ mod tests {
         assert_eq!(body["health"], Value::from("stale"));
     }
 
-    /// The job slots reach the payload, and a failed one escalates `health` to
-    /// `error` even on a perfectly caught-up pipeline.
+    /// The job blocks reach the payload verbatim, and a `failed` one escalates
+    /// `health` to `error` even on a perfectly caught-up pipeline.
+    ///
+    /// The slot machinery that PRODUCES these blocks stayed in the server crate
+    /// and is tested there (the single claim, the 409, the destructive 30 s
+    /// TTL). What this asserts is the half that moved: the escalation reads
+    /// `last_job["status"]`, and both blocks are copied into the payload rather
+    /// than re-derived.
     #[test]
-    fn a_failed_backfill_inside_the_ttl_escalates_health_to_error() {
-        let _guard = test_lock();
-        reset_for_tests();
+    fn a_failed_backfill_block_escalates_health_to_error() {
         let conn = testdb::conn();
         let dir = scratch_dir("jobs");
 
-        let job = start_job(true, T0).expect("claim");
-        let body = assemble_status(&conn, &dir, None, T0).expect("status");
-        assert_eq!(body["current_job"]["status"], Value::from("running"));
-        assert_eq!(body["current_job"]["force"], Value::Bool(true));
+        let running = json!({
+            "job_id": "0123456789abcdef0123456789abcdef",
+            "started_at": T0_ISO, "force": true, "status": "running",
+        });
+        let body = assemble_status(&conn, &dir, None, Some(running.clone()), None).expect("status");
+        assert_eq!(body["current_job"], running);
         assert_eq!(body["last_job"], Value::Null);
         assert_eq!(body["health"], Value::from("live"));
 
-        complete_job(&job.job_id, "failed", Some("boom".to_owned()), T0 + 1_000);
-        let body = assemble_status(&conn, &dir, None, T0 + 1_000).expect("status");
+        let failed = json!({
+            "job_id": "0123456789abcdef0123456789abcdef",
+            "started_at": T0_ISO, "force": true, "status": "failed",
+            "completed_at": T0_ISO, "error": "boom",
+        });
+        let body = assemble_status(&conn, &dir, None, None, Some(failed)).expect("status");
         assert_eq!(body["current_job"], Value::Null);
         assert_eq!(body["last_job"]["error"], Value::from("boom"));
         assert_eq!(
@@ -814,16 +842,19 @@ mod tests {
             "an empty store is otherwise live"
         );
 
-        // Past the TTL the escalation stops on its own, no sweeper involved.
-        let body = assemble_status(&conn, &dir, None, T0 + 1_000 + 30_000_001).expect("status");
-        assert_eq!(body["last_job"], Value::Null);
+        // A COMPLETED job does not escalate — the predicate is on the string,
+        // not on the presence of a last job.
+        let done = json!({
+            "job_id": "0123456789abcdef0123456789abcdef",
+            "started_at": T0_ISO, "force": false, "status": "complete",
+            "completed_at": T0_ISO,
+        });
+        let body = assemble_status(&conn, &dir, None, None, Some(done)).expect("status");
         assert_eq!(body["health"], Value::from("live"));
-        reset_for_tests();
     }
 
     #[test]
     fn the_watcher_env_flag_accepts_exactly_four_spellings() {
-        let _guard = test_lock();
         for on in ["1", "true", "TRUE", " yes ", "on", "On"] {
             assert!(watcher_env_disabled(Some(on)), "{on}");
         }
@@ -836,7 +867,6 @@ mod tests {
     /// The lock probe: absent file, empty file, `<pid>\n<ts>`, PID-only, junk.
     #[test]
     fn the_lock_holder_is_the_first_line_or_nothing() {
-        let _guard = test_lock();
         let dir = scratch_dir("lock");
         let path = dir.join("server.lock");
         let _ = std::fs::remove_file(&path);
@@ -861,7 +891,7 @@ mod tests {
         // The value reaches the payload as an integer, not a string.
         std::fs::write(&path, "4242\n").expect("write");
         let conn = Connection::open_in_memory().expect("store");
-        let body = assemble_status(&conn, &dir, Some("1"), T0).expect("status");
+        let body = assemble_status(&conn, &dir, Some("1"), None, None).expect("status");
         assert_eq!(body["watcher"]["lock_held_by"], Value::from(4242));
         assert_eq!(body["watcher"]["enabled"], Value::Bool(false));
         let _ = std::fs::remove_file(&path);
@@ -869,7 +899,6 @@ mod tests {
 
     #[test]
     fn py_int_takes_the_forms_cpythons_int_takes() {
-        let _guard = test_lock();
         assert_eq!(py_int("42"), Some(42));
         assert_eq!(py_int(" 42 "), Some(42));
         assert_eq!(py_int("-7"), Some(-7));

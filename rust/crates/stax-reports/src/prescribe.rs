@@ -1134,6 +1134,28 @@ pub struct Candidate {
     pub label: String,
 }
 
+/// The model catalogue, compiled in.
+///
+/// The second runtime read of the Python package directory the decommission
+/// report missed (DIV-400) — `routes/whatif.rs` makes the same one. Same rule as
+/// the rate card: a file on disk wins, the compiled-in copy answers when there
+/// is none, and it is the *same* file read at build time rather than a
+/// transcription.
+pub const EMBEDDED_MODEL_CANDIDATES: &str =
+    include_str!("../../../../stackunderflow/infra/model_candidates.json");
+
+/// `infra/model_candidates.json`'s text — from `package_dir` when it is there,
+/// from the binary when it is not.
+///
+/// A file that exists but cannot be read (permissions) yields the compiled-in
+/// copy too, because both callers already treat an unreadable catalogue as an
+/// empty one; there is no error channel here to widen.
+#[must_use]
+pub fn read_model_candidates(package_dir: &Path) -> String {
+    let path = package_dir.join("infra").join("model_candidates.json");
+    std::fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_MODEL_CANDIDATES.to_owned())
+}
+
 /// `infra/model_catalog.routing_candidates()` — the `routing_candidate: true`
 /// entries of `infra/model_candidates.json`.
 ///
@@ -1143,10 +1165,7 @@ pub struct Candidate {
 /// `usage_events` produces.
 #[must_use]
 pub fn routing_candidates(package_dir: &Path) -> Vec<Candidate> {
-    let path = package_dir.join("infra").join("model_candidates.json");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    let text = read_model_candidates(package_dir);
     let Ok(raw) = serde_json::from_str::<Value>(&text) else {
         return Vec::new();
     };

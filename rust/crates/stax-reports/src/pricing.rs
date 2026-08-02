@@ -39,14 +39,33 @@ pub fn manifest_path(package_dir: &Path) -> PathBuf {
 
 /// Build the engine a request prices with.
 ///
+/// # The rate card falls back to the compiled-in copy (wave-10 item 2c)
+///
+/// `models.toml` was a **runtime** read of the Python package directory, which
+/// `docs/specs/decommission-report.md` §4.3 missed when it listed only two
+/// runtime couplings: this one, and `infra/model_candidates.json`, are two more
+/// (DIV-400). A present file still wins — the parity harness points both
+/// implementations at one tree and that is the whole basis of the endpoint
+/// gate — and a *missing* one is answered from
+/// [`stax_etl::pricing::EMBEDDED_MANIFEST`], the same file read at build time.
+/// A file that exists and does not parse is still a hard failure.
+///
 /// # Errors
-/// When `models.toml` is missing or unparseable — the same hard failure the
-/// Python import would raise, rather than a silently free price list.
+/// When `models.toml` is present and unparseable — the same hard failure the
+/// Python import would raise, rather than a silently free price list — or when
+/// the compiled-in copy does not parse, which is a build-time bug.
 pub fn engine(conn: &Connection, package_dir: &Path) -> Result<PricingEngine> {
     let path = manifest_path(package_dir);
-    let engine = PricingEngine::from_manifest_path(&path)
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("loading {}", path.display()))?;
+    let engine = if path.is_file() {
+        PricingEngine::from_manifest_path(&path)
+            .map_err(|err| anyhow::anyhow!("{err}"))
+            .with_context(|| format!("loading {}", path.display()))?
+    } else {
+        let manifest = stax_etl::pricing::embedded_manifest()
+            .map_err(|err| anyhow::anyhow!("{err}"))
+            .context("parsing the compiled-in data/models.toml")?;
+        PricingEngine::from_manifest(manifest)
+    };
     let book = load_price_book(conn)?;
     Ok(if book.is_empty() {
         engine

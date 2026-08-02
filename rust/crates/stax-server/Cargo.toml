@@ -24,6 +24,15 @@ axum = { version = "0.8.9", default-features = false, features = [
     "tower-log",
 ] }
 clap = { workspace = true }
+# WAVE 10 ITEM 2c — the compiled-in `/static` mount needs `ServeDir`'s content
+# type, and DIV-058's law is that a MIME table is a resolution, not a literal:
+# hand-rolling one here would be a transcription of the very crate the mount
+# used to call. ZERO new `[[package]]` stanzas — `tower-http`'s `fs` feature
+# already resolved `mime_guess 2.0.5` and `mime 0.3`; this names the version the
+# graph had already unified on, exactly as the `futures-core` line below does.
+# Measured with `git diff rust/Cargo.lock` after `cargo build -p stax-server`:
+# one line, `mime_guess` joining this crate's dependency list.
+mime_guess = { version = "2.0.5", default-features = false }
 rusqlite = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }

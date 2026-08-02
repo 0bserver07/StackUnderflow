@@ -16,6 +16,9 @@ use stax_server::state::{AppState, Config};
 /// never bound by anything in this workspace.
 const DEFAULT_PORT: u16 = 8096;
 
+/// The frontend-development override for the compiled-in bundle.
+const STATIC_DIR_ENV: &str = "STAX_STATIC_DIR";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "stax-server",
@@ -36,14 +39,41 @@ struct Cli {
     #[arg(long)]
     data_dir: Option<PathBuf>,
 
-    /// The `stackunderflow/` package directory — `deps.BASE_DIR`. `static/`
-    /// (the React oracle) and `data/models.toml` hang off it.
+    /// The `stackunderflow/` package directory — `deps.BASE_DIR`.
+    /// `data/models.toml` and `infra/model_candidates.json` are read from it
+    /// when it exists, and fall back to the copies compiled into the binary
+    /// when it does not.
     #[arg(long)]
     package_dir: Option<PathBuf>,
+
+    /// Serve `/static`, `/assets`, `/favicon.ico` and the SPA from this
+    /// directory instead of from the bundle compiled into the binary.
+    ///
+    /// The frontend-development override, and the only way to reach the disk
+    /// for a static file: point it at a `vite build` output and every static
+    /// read goes back through `tower_http`'s `ServeDir`, exactly as it did
+    /// before the bundle was embedded. `$STAX_STATIC_DIR` sets the same thing;
+    /// the flag wins.
+    ///
+    /// (The variable is read in `main`, not by `clap`'s `env` feature — taking
+    /// that feature would be a workspace-wide manifest change for one string.)
+    #[arg(long)]
+    static_dir: Option<PathBuf>,
 
     /// Print the resolved paths and exit without binding.
     #[arg(long)]
     check: bool,
+
+    /// Serve ONLY `/api/webhooks/*` — `cli.py`'s `ingest webhook serve`.
+    ///
+    /// The reference builds a second, bare `FastAPI()` and includes just the
+    /// webhook router, so the receiver can face a tunnel without the dashboard
+    /// facing it too. Same shape here, through
+    /// [`stax_server::webhook_receiver_app`]. It is a flag on this binary
+    /// rather than a binary of its own for the reason `start` spawns this one:
+    /// `stax-cli`'s dependency graph deliberately contains no axum.
+    #[arg(long)]
+    webhooks_only: bool,
 }
 
 #[tokio::main]
@@ -58,12 +88,27 @@ async fn main() -> Result<()> {
     let app_dir = cli.data_dir.unwrap_or_else(stax_core::settings::app_dir);
     let store_path = app_dir.join("store.db");
     let package_dir = cli.package_dir.unwrap_or_else(default_package_dir);
+    let static_dir = cli.static_dir.or_else(|| {
+        std::env::var_os(STATIC_DIR_ENV)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    });
     let config = Config::load(&app_dir);
 
     if cli.check {
         println!("store    {}", store_path.display());
         println!("package  {}", package_dir.display());
-        println!("static   {}", package_dir.join("static").display());
+        match &static_dir {
+            Some(dir) => println!("static   {} (override)", dir.display()),
+            None => println!(
+                "static   embedded ({} files, {} bytes)",
+                stax_server::assets::len(),
+                stax_server::assets::keys()
+                    .filter_map(stax_server::assets::get)
+                    .map(<[u8]>::len)
+                    .sum::<usize>()
+            ),
+        }
         println!("currency {}", config.currency);
         return Ok(());
     }
@@ -74,8 +119,12 @@ async fn main() -> Result<()> {
         store_path.display()
     );
 
-    let state = AppState::new(store_path, package_dir, config);
-    let app = stax_server::app(state);
+    let state = AppState::with_static_dir(store_path, package_dir, config, static_dir);
+    let app = if cli.webhooks_only {
+        stax_server::webhook_receiver_app(state)
+    } else {
+        stax_server::app(state)
+    };
 
     let addr = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -95,8 +144,12 @@ async fn main() -> Result<()> {
 
 /// `deps.BASE_DIR` when the binary runs out of this worktree.
 ///
-/// Falls back to the compile-time repo layout, which is what every campaign
-/// invocation wants; a packaged install would pass `--package-dir`.
+/// Still the compile-time repo layout, which is what every campaign invocation
+/// wants and what keeps the parity harness reading one shared tree. It is no
+/// longer load-bearing: as of wave-10 item 2c the static bundle is compiled in,
+/// and `data/models.toml` / `infra/model_candidates.json` fall back to their
+/// compiled-in copies when this path does not exist — so a binary run from a
+/// machine with no `stackunderflow/` at all still serves.
 fn default_package_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow")
 }

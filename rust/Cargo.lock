@@ -1961,6 +1961,7 @@ dependencies = [
  "axum",
  "clap",
  "futures-core",
+ "mime_guess",
  "rusqlite",
  "serde",
  "serde_json",

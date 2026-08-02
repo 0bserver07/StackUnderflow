@@ -272,7 +272,7 @@ fn body_of(doc: &Doc, capabilities: &Path) -> Result<String> {
     match doc.body {
         Body::Static(text) => Ok(format!("{}\n", strip_newlines(text))),
         Body::SupportMatrix => {
-            let table = Capabilities::load(capabilities)?;
+            let table = Capabilities::load_or_embedded(capabilities)?;
             Ok(format!("{}\n", py_rstrip(&render_markdown(&table))))
         }
     }
