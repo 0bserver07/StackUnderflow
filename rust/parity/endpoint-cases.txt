@@ -341,7 +341,7 @@ X-filter-nohit      | GET | /api/search?q=sqlite&project=-no-such-project-anywhe
 X-operators         | GET | /api/search?q=use+NOT+null           | -
 X-quote             | GET | /api/search?q=%22unbalanced          | -
 X-multi-word        | GET | /api/search?q=session+fk+index&per_page=5 | -
-!X-bad-int          | GET | /api/search?page=abc                 | -
+X-bad-int          | GET | /api/search?page=abc                 | -
 # DIV-078 / `POST /api/search/reindex` is DELIBERATELY ABSENT — see the
 # "destructive rows" note in this file's header. It rebuilt the shared
 # `.parity-state/fresh` search index (0 -> 383,580 rows, 520 MB, 192 s) on the
@@ -359,7 +359,7 @@ Q-project           | GET | /api/qa?project=-media-tmos-bumblebe-dev-dev-year26-
 Q-dates             | GET | /api/qa?date_from=2026-01-01&date_to=2026-06-30 | -
 Q-stats             | GET | /api/qa/stats                        | -
 Q-byid-missing      | GET | /api/qa/no-such-qa-pair              | -
-!Q-bad-int          | GET | /api/qa?page=abc                     | -
+Q-bad-int          | GET | /api/qa?page=abc                     | -
 # DIV-080 / `POST /api/qa/reindex` is DELIBERATELY ABSENT, same reason.
 # ── tags — this block mutates tags.json and cleans up after itself ───────────
 T-cloud             | GET | /api/tags                            | -
