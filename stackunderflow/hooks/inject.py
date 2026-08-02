@@ -103,6 +103,21 @@ def build_injection(hook_id: str, payload: dict | None) -> str:
         else:  # pragma: no cover - INJECT_HOOK_IDS membership already gated this
             return ""
 
+        # The agent inbox rides the same two mid-session events (agent-remotes
+        # Phase 3): unseen cross-machine messages surface ahead of the memory
+        # block, once each. Works even with no store — the inbox is files.
+        # PreToolUse is what makes this a real interject: a message lands in a
+        # *running* turn at the next tool call, not just at the next prompt.
+        if hook_id in (
+            "stackunderflow-inject-user-prompt",
+            "stackunderflow-inject-pre-tool-use",
+        ):
+            from stackunderflow.services import agent_inbox
+
+            inbox = agent_inbox.render_for_injection()
+            if inbox:
+                text = f"{inbox}\n\n{text}".strip() if text.strip() else inbox
+
         text = _clip(text, hook_id)
         if not text.strip():
             return ""
