@@ -1416,7 +1416,7 @@ SY-overview-blank    | GET | /api/sync/overview?scope=         | -
 # `?scope=` twice: starlette's QueryParams takes the LAST occurrence, so this
 # is the stub leg, not the merged one.
 SY-overview-last-wins | GET | /api/sync/overview?scope=all-devices&scope=this-device | -
-# DIV-133 CLOSED (wave 6). `/api/sync/status` rebuilds every shard through
+# DIV-358 CLOSED (wave 6). `/api/sync/status` rebuilds every shard through
 # `serialize.py` (227 lines) — batch D deferred it for exactly that reason, and
 # `stax-sync` now owns that port with a differ of its own. What remains is the
 # `scanned_at = datetime.now(UTC)` stamp, so this stays a `!` row whose diff can
@@ -3113,3 +3113,132 @@ G-alias-in-cfg      | GET    | /api/cfg                       | -
 !G-alias-del        | DELETE | /api/cfg/model-aliases?from=parity/d-proxy | -
 G-alias-del-again   | DELETE | /api/cfg/model-aliases?from=parity/d-proxy | -
 G-alias-clean       | GET    | /api/cfg/model-aliases         | -
+
+# ═══ CLOSING PASS (2026-08-01) — DIV-341, DIV-323, DIV-360, DIV-361 ══════════
+#
+# Appended at the END on purpose. Every row below is either a read or an error
+# leg that returns before any mutation, but the ordering law in this file's
+# header cuts both ways: a row that COULD write must have nothing after it that
+# could read what it wrote. Nothing follows these.
+#
+#   P-set-*   DIV-341 — `POST /api/project`, unported (RS-5-095)
+#   P-global* DIV-341 — `GET /api/global-stats`, unported (RS-5-101)
+#   H-*       DIV-323 — HEAD is not GET
+#   AL-*      DIV-323 / DIV-360 / DIV-361 — the `Allow` header and the mount
+
+# ── DIV-341: the two endpoints that were invisible to a 716-row matrix ───────
+#
+# The decommission audit found `POST /api/project` (RS-5-095) and
+# `GET /api/global-stats` (RS-5-101) with no axum registration, no ledger row,
+# and — the part that matters — NO CASE ROW, not even a `!` one. The matrix
+# reported `0 divergent` over 716 rows while two endpoints 404'd on the port.
+# This file's own header says unported endpoints belong here, in the file, not
+# missing from it. These two were the exception nobody filed.
+#
+# `GET /api/global-stats` is a plain read: `queries.get_global_stats(conn)`, a
+# currency conversion and a config stamp. No writer, no network, no wall-clock
+# in the payload (the two dates it carries come from the store). Measured on the
+# reference: `200`, 38,146 bytes. A safe `!`.
+!P-global-stats     | GET  | /api/global-stats                  | -
+
+# `POST /api/project` is a DIFFERENT animal and it gets three ERROR-LEG rows
+# only, never a success one. Read `routes/projects.py:44-73` in order:
+#
+#     project_path = data.get("project_path")
+#     if not project_path:              -> 400        (rows 1 and 2)
+#     if not os.path.exists(...):       -> 400        (row 3)
+#     log_path = find_claude_logs(...)
+#     if not log_path ...:              -> 404
+#     deps.current_project_path = project_path        <-- THE MUTATION
+#     deps.current_log_path = log_path
+#
+# The three legs below all return at least two statements before that
+# assignment, so they are provably side-effect-free — not "believed to be",
+# *provably*, by the guard order.
+#
+# THE SUCCESS LEG HAS NO ROW, AND HERE IS WHY IT NEEDS A PROCEDURE INSTEAD.
+# The mutation is not on disk, so a throwaway home does not contain it: it is
+# PROCESS-GLOBAL server state, and it is the very state this file's ordering law
+# exists to protect (`deps.current_log_path` is what every project-scoped GET
+# reads). A `!` row for the success leg would re-point the reference's notion of
+# the current project mid-run — and only the reference's, since the port has no
+# handler to mutate anything — silently changing what every subsequent row
+# means on one side and not the other. That is the DIV-078 hazard, and it is
+# also finding 13 of `ARCHITECT-STATE.md` verbatim: a differ that talked to a
+# server "which still had a project selected" reported a divergence that did not
+# exist. `!` downgrades a VERDICT; it does not undo a side effect (DIV-136 made
+# the same point from the other end — a `!` row can still fail the whole run).
+#
+# So the success leg is a PROCEDURE, on the model of the five wave-5 writer
+# procedures (`ETL-BACKFILL-DIFFER.md` and its four siblings): boot each server
+# on its OWN home, POST the same path to each, then diff the response AND the
+# `GET /api/project` that follows it on the same server. It is written up in
+# `rust/PROJECT-SET-DIFFER.md` and it is not run here.
+!P-set-missing      | POST | /api/project                       | {}
+!P-set-empty        | POST | /api/project                       | {"project_path": ""}
+!P-set-nonexistent  | POST | /api/project                       | {"project_path": "/no/such/path/anywhere"}
+
+# ── DIV-323: HEAD is not GET, and it never was ──────────────────────────────
+#
+# axum's `MethodRouter` aliases HEAD onto the GET handler; FastAPI's `APIRoute`
+# does not add HEAD at all (starlette's plain `Route` does, which is why reading
+# the framework docs would have got this backwards). So the reference answers
+# `405` with `allow: GET` to a HEAD on EVERY one of the 93 endpoints and all
+# four SPA pages, and the port answered `200` with a full `content-length`.
+#
+# 93 endpoints, one behaviour, and not one row in 716 sent a HEAD. These five
+# are the standing guard: one API read, one flagship, one SPA page, the mount
+# exception, and the 404 floor. They are NOT `!` rows — they pass, and they are
+# supposed to keep passing.
+H-head-health       | HEAD | /api/health                        | -
+H-head-projects     | HEAD | /api/projects?limit=1              | -
+H-head-spa-root     | HEAD | /                                  | -
+# The exception that proves the rule is a rule about FastAPI, not about HEAD:
+# `/static` is a starlette `StaticFiles` mount, which serves HEAD itself. Both
+# sides answered `200` here before the fix and must still answer `200` after —
+# this row is what stops the fix from being a blanket "HEAD is 405".
+H-head-static       | HEAD | /static/react/index.html           | -
+H-head-unknown      | HEAD | /api/definitely-not-a-route        | -
+# The one HEAD that still differs, and it is DIV-341's shadow rather than
+# DIV-323's. Starlette keeps the FIRST route whose path matches; `projects.py`
+# declares `POST /api/project` at line 44 and `GET` at line 76, so the reference
+# answers `allow: POST`. The port registers only the GET (the POST is unported),
+# so it answers `allow: GET`. A router cannot name a method it does not have.
+# Closes with RS-5-095; until then it reports itself every run.
+!H-head-project     | HEAD | /api/project                       | -
+
+# ── DIV-323: the `Allow` header, which nothing had ever compared ────────────
+#
+# The differ gained an `allow` comparison for these rows (`parity/src/
+# endpoints.rs`). Without it the whole class is invisible: status, content-type
+# and body all AGREED on every 405 in the matrix while the header underneath
+# them said `GET,HEAD,PUT,DELETE` on one side and `GET` on the other.
+#
+# `/api/budgets` is the discriminating case in the whole app — the only path
+# carrying more than one method (GET, PUT, DELETE, declared in that order in
+# `budgets.py`). Starlette answers with the first-declared route's methods and
+# nothing else, so the reference says `allow: GET` to a PATCH. Any port that
+# reports its registered SET instead passes every other 405 row and fails this
+# one. 405 fires in the router, so no budget writer is reached.
+AL-budgets-patch    | PATCH  | /api/budgets                     | {}
+AL-budgets-post     | POST   | /api/budgets                     | {}
+# Single-method paths, both directions: a GET-only route and a POST-only one.
+AL-health-post      | POST   | /api/health                      | {}
+AL-by-dir-get       | GET    | /api/project-by-dir              | -
+# DIV-360 — the `/static` mount's 405 shape, found while measuring DIV-323 and
+# never covered by a row. `StaticFiles.get_response` raises `HTTPException(405)`
+# before it looks at the filesystem, so the reference renders FastAPI's JSON
+# body with NO `Allow` header at all; tower-http's `ServeDir` answered a bare
+# `405`, `allow: GET,HEAD`, no `content-type`, empty body. Both a real file and
+# a missing one, because the reference's method check precedes its lookup.
+AL-static-post      | POST   | /static/react/index.html         | {}
+AL-static-post-miss | POST   | /static/react/nope.js            | {}
+# DIV-361 — the bare mount ROOT is not the subtree. Starlette's `Mount` answers
+# a `307` to `/static/` on EVERY method (measured on GET, HEAD and PUT); axum's
+# `nest_service` does not redirect. This is DIV-133's redirect family wearing a
+# mount instead of a route, it is the architect's for the same reason DIV-133
+# is, and the fix is the same fallback. Three rows so the class cannot be
+# closed on one method and called done.
+!AL-static-root-get | GET    | /static                          | -
+!AL-static-root-head| HEAD   | /static                          | -
+!AL-static-root-put | PUT    | /static                          | {}

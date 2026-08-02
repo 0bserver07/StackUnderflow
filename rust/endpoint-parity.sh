@@ -94,6 +94,29 @@ fi
 
 if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 
+# ── determinism — DIV-195 ────────────────────────────────────────────────────
+#
+# `parity-cli.sh` has pinned these since gate 4; this gate never did, and batch E
+# filed the gap as "the largest latent-flake finding of the wave" without being
+# able to fix it (it moves the REFERENCE's own bytes, so it needs a full
+# re-measure, which is a gate decision rather than a batch's).
+#
+# `PYTHONHASHSEED` is the load-bearing one. CPython randomises `str` hashing per
+# process, so any payload built by iterating a `set` or a pre-3.7 dict comes out
+# in a different order on every boot — and the differ boots uvicorn fresh each
+# run, so the reference could legitimately answer with different BYTES for the
+# same request twice in a row. A matrix that has only ever been run once cannot
+# tell that apart from a port defect. Starlette's own `", ".join(route.methods)`
+# on a 405 is exactly that shape (DIV-323 measured it single-token today, but
+# the join is set-ordered and one multi-method FastAPI route would light it up).
+#
+# The rest are the same list gate 4 pins, for the same reason: locale drives
+# `str.format` and sort order, `TZ` drives every naive-datetime path in the ETL
+# reader, and `PYTHONIOENCODING` drives what uvicorn's own logging does to the
+# bytes it never should have touched.
+export PYTHONHASHSEED=0
+export LC_ALL=C LANG=C TZ=UTC PYTHONIOENCODING=utf-8
+
 # ── setup checks, each with the fix in the message ───────────────────────────
 
 if [ ! -x "$PY_BIN" ]; then

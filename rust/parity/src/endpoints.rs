@@ -11,6 +11,14 @@
 //!   artefact. `content-length` is derived from the body (so the body diff
 //!   already covers it), `date` / `server` / `etag` / `last-modified` are
 //!   per-process or per-inode and would only ever produce noise.
+//! * **`allow`** — added by DIV-323, and for the same reason `content-type` is
+//!   here: it is a contract, not an artefact. RFC 9110 *requires* it on a `405`,
+//!   and the drift it hides is silent — axum listed the `HEAD` it synthesises
+//!   onto `GET` and every other registered method (`GET,HEAD,PUT,DELETE` on
+//!   `/api/budgets`) where FastAPI names exactly one (`GET`). Status, body and
+//!   `content-type` all agreed on those rows; without this line the whole class
+//!   was invisible to a green matrix. Absent on both sides compares equal, so it
+//!   costs the other ~700 rows nothing.
 //! * **body bytes** — the whole point. Not "the same JSON": the same bytes.
 //!   Key order, float presentation and `ensure_ascii` are all invisible to a
 //!   parsed comparison and all of them have already bitten this campaign.
@@ -30,6 +38,15 @@
 //! diff, so an unported endpoint is visible in the gate output rather than
 //! absent from the case file. It is the difference between "we know this is
 //! open" and "nobody looked".
+//!
+//! A `!` row that *agrees* is its own verdict — [`Verdict::FlipCandidate`],
+//! DIV-348. It used to score `Identical`, which is how 70 `!` rows and a
+//! 68-known-open tally could both be true and neither number tell a maintainer
+//! how much of the matrix is not gating. The row is passing while still marked
+//! open, so it is a **candidate to promote**: strike its `!` and the gate starts
+//! defending it. Kept separate from `Identical` deliberately — a flip candidate
+//! is a bookkeeping debt, and folding it into the win column is what let the two
+//! counts drift apart in the first place.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -61,6 +78,12 @@ pub enum Verdict {
     Divergent(String),
     /// A `!`-marked case that differs — counted separately, never fatal.
     KnownOpen(String),
+    /// A `!`-marked case that AGREES — known-open now passing, a flip candidate.
+    ///
+    /// DIV-348. Not `Identical`: the row still carries its `!`, so the gate is
+    /// still not defending it, and a maintainer reading `identical` would think
+    /// otherwise. Never fatal.
+    FlipCandidate,
     /// Neither side could be reached; the harness failed, not the port.
     Error(String),
 }
@@ -166,6 +189,17 @@ fn judge(case: &Case, py: &Response, rs: &Response) -> Verdict {
             "  content-type python {py_ct:?} vs rust {rs_ct:?}"
         );
     }
+    // DIV-323. Compared verbatim, including whether it is there at all: the
+    // reference omits `Allow` entirely on the `/static` mount's 405 and sends it
+    // on every routed one, and both halves of that are contract.
+    let py_allow = py.header("allow").unwrap_or("<absent>");
+    let rs_allow = rs.header("allow").unwrap_or("<absent>");
+    if py_allow != rs_allow {
+        let _ = writeln!(
+            problems,
+            "  allow        python {py_allow:?} vs rust {rs_allow:?}"
+        );
+    }
     if py.body != rs.body {
         let _ = writeln!(
             problems,
@@ -176,7 +210,13 @@ fn judge(case: &Case, py: &Response, rs: &Response) -> Verdict {
         );
     }
     if problems.is_empty() {
-        return Verdict::Identical;
+        // DIV-348: a `!` row that agrees is NOT a win — the `!` is still in the
+        // file, so the gate is still not defending this row. Say so.
+        return if case.known_open {
+            Verdict::FlipCandidate
+        } else {
+            Verdict::Identical
+        };
     }
     if case.known_open {
         Verdict::KnownOpen(problems)
@@ -225,6 +265,8 @@ pub struct Tally {
     pub divergent: usize,
     /// `!`-marked cases that differ — reported, never fatal.
     pub known_open: usize,
+    /// `!`-marked cases that AGREE — flip candidates (DIV-348), never fatal.
+    pub flip_candidates: usize,
     /// Harness failures (a server that would not answer).
     pub errors: usize,
 }
@@ -236,6 +278,7 @@ impl Tally {
             Verdict::Identical => self.identical += 1,
             Verdict::Divergent(_) => self.divergent += 1,
             Verdict::KnownOpen(_) => self.known_open += 1,
+            Verdict::FlipCandidate => self.flip_candidates += 1,
             Verdict::Error(_) => self.errors += 1,
         }
     }
@@ -346,6 +389,69 @@ mod tests {
         assert!(matches!(
             judge(&case(true), &py, &rs),
             Verdict::KnownOpen(_)
+        ));
+    }
+
+    #[test]
+    fn a_known_open_case_that_agrees_is_a_flip_candidate_not_a_win() {
+        // DIV-348. The `!` is still in the file, so the gate is still not
+        // defending this row — scoring it `Identical` is what let the `!` count
+        // and the known-open tally drift apart with nobody able to see it.
+        let py = response(200, "application/json", "{}");
+        let rs = response(200, "application/json", "{}");
+        assert_eq!(judge(&case(true), &py, &rs), Verdict::FlipCandidate);
+        // …and the same bytes without the `!` are still a plain win.
+        assert_eq!(judge(&case(false), &py, &rs), Verdict::Identical);
+    }
+
+    #[test]
+    fn a_flip_candidate_never_fails_the_gate() {
+        let mut tally = Tally::default();
+        tally.add(&Verdict::FlipCandidate);
+        assert_eq!(tally.flip_candidates, 1);
+        assert_eq!(tally.identical, 0, "it is not counted as a win");
+        assert_eq!(tally.exit_code(), 0);
+    }
+
+    #[test]
+    fn an_allow_header_difference_alone_is_a_divergence() {
+        // DIV-323's whole class: status, content-type and body all agreed on
+        // every 405 row while axum shipped `GET,HEAD` for FastAPI's `GET`.
+        let mut py = response(
+            405,
+            "application/json",
+            r#"{"detail":"Method Not Allowed"}"#,
+        );
+        py.headers.push(("allow".to_owned(), "GET".to_owned()));
+        let mut rs = response(
+            405,
+            "application/json",
+            r#"{"detail":"Method Not Allowed"}"#,
+        );
+        rs.headers.push(("allow".to_owned(), "GET,HEAD".to_owned()));
+        assert!(matches!(
+            judge(&case(false), &py, &rs),
+            Verdict::Divergent(_)
+        ));
+    }
+
+    #[test]
+    fn an_allow_header_present_on_one_side_only_is_a_divergence() {
+        // The `/static` mount's 405: the reference sends no `Allow` at all.
+        let py = response(
+            405,
+            "application/json",
+            r#"{"detail":"Method Not Allowed"}"#,
+        );
+        let mut rs = response(
+            405,
+            "application/json",
+            r#"{"detail":"Method Not Allowed"}"#,
+        );
+        rs.headers.push(("allow".to_owned(), "GET,HEAD".to_owned()));
+        assert!(matches!(
+            judge(&case(false), &py, &rs),
+            Verdict::Divergent(_)
         ));
     }
 

@@ -46,7 +46,7 @@ stax-memory = { path = "../stax-memory" }
 stax-reports = { path = "../stax-reports" }
 # `routes/sync.rs` delegates BOTH its endpoints here — `merge::merged_overview`
 # (the SQL batch D had to inline because it could not edit this manifest) and
-# `runner::status`, which closes DIV-133. One owner per helper, the wave-5 law.
+# `runner::status`, which closes DIV-358. One owner per helper, the wave-5 law.
 stax-sync = { path = "../stax-sync" }
 # `ServiceExt::map_response` — the one-line layer that restores starlette's
 # `; charset=utf-8` on `text/*` static responses.
@@ -56,7 +56,7 @@ tokio = { version = "1.52.3", features = [
     "macros",
     "net",
     "signal",
-    # `time`: non-test code uses tokio::time (DIV-203 found it declared only
+    # `time`: non-test code uses tokio::time (DIV-353 found it declared only
     # under dev-dependencies, surviving on feature unification — the same
     # correctness-by-accident class the workspace serde_json note forbids).
     "time",

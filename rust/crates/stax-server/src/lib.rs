@@ -37,6 +37,7 @@
 
 pub mod currency;
 pub mod json;
+pub mod method_semantics;
 pub mod qs;
 pub mod routes;
 pub mod services;
@@ -52,6 +53,9 @@ pub mod state;
 pub use stax_reports::{pricing, pyops};
 
 use axum::Router;
+// `Layer::layer` is what puts `method_semantics` OUTSIDE the router rather than
+// inside it; `Router::layer` would run after matching. See `app()`.
+use tower::Layer as _;
 
 pub use state::{AppState, Config};
 
@@ -68,17 +72,30 @@ pub use state::{AppState, Config};
 /// to a cross-origin request, the parity differ is same-origin, and porting it
 /// blind would mean inventing a header order nothing has measured. Recorded as
 /// DIV-050, not skipped quietly.
+///
+/// What *is* here, and was not before: [`method_semantics`]. axum aliases `HEAD`
+/// onto `GET` and reports every registered method in `Allow`; FastAPI does
+/// neither. The layer wrapping the finished router is **outside** it on purpose
+/// — `Router::layer` runs after routing, and rule 1 has to change the method
+/// before the matcher sees it. DIV-323.
 pub fn app(state: AppState) -> Router {
     let router = Router::new();
     let router = spa::register_static(router, &state);
     let router = routes::register_all(router);
     let router = spa::register_pages(router);
-    router
+    let routed = router
         // FastAPI replaces starlette's plain-text 404/405 with JSON ones. axum's
         // defaults are an empty body and no `content-type` at all, which is a
         // divergence on every unknown path — the differ caught it on the first
         // run, on a case that was only in the file to prove the harness worked.
         .fallback(|| async { json::not_found() })
         .method_not_allowed_fallback(|| async { json::method_not_allowed() })
-        .with_state(state)
+        .with_state(state);
+
+    // Everything — routes, both fallbacks, the `/static` mount — behind the one
+    // layer, reached through a stateless outer router so `app()` still returns a
+    // `Router` and no caller changes.
+    Router::new().fallback_service(
+        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed),
+    )
 }

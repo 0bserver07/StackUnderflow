@@ -28,7 +28,7 @@
 //! `Y-overview-all` is a `!` row whose diff can only ever be that timestamp —
 //! which is itself the evidence that every field before it agreed.
 //!
-//! # `/api/sync/status` — DIV-133, CLOSED by the wave-6 sync crate
+//! # `/api/sync/status` — DIV-358, CLOSED by the wave-6 sync crate
 //!
 //! `runner.status()` is not a status read. On a store carrying a
 //! `sync_identity` row — which the harness home does — it calls

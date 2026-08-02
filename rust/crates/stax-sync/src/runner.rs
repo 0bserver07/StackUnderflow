@@ -1051,7 +1051,7 @@ fn opt(value: Option<&str>) -> Value {
 ///
 /// Purely local: `sync_identity` + `sync_outbox`, and it rebuilds the shards to
 /// diff their content-hashes against `last_pushed_hash`. That rebuild is the
-/// whole of DIV-133 — it is why `/api/sync/status` is not a cheap read.
+/// whole of DIV-358 — it is why `/api/sync/status` is not a cheap read.
 ///
 /// # Errors
 /// Any SQLite failure, including a store whose marts are absent.

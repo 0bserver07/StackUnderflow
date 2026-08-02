@@ -21,11 +21,16 @@ Reference: Click **8.4.2**, CPython **3.12.13**, `stackunderflow/cli.py` at **64
 
 | status | nodes |
 | --- | ---: |
-| PORTED | 12 |
-| TRANCHE-1 | 17 |
+| PORTED | 72 |
 | PARTIAL | 1 |
-| UNPORTED | 75 |
+| UNPORTED | 32 |
 | **total** | **105** |
+
+### 1.1a Verified against the shipped binary — DIV-346's guard
+
+The `STATUS` map above is the file's one piece of judgment, and judgment about a moving fact goes stale silently. Every regeneration now asks `stax <path> --help` for its exit code and reports the disagreement here, so this section is a **check**, not a claim. This run: ran against `rust/target/release/stax`.
+
+**Zero disagreements.** Every node the map calls ported answers `--help` on the shipped binary, and every node the binary answers for is called ported. Hidden nodes included: `config` and its three leaves appear in no `--help` listing and are reached by exit code.
 
 ### 1.2 By wave assignment
 
@@ -42,7 +47,7 @@ Reference: Click **8.4.2**, CPython **3.12.13**, `stackunderflow/cli.py` at **64
 | wave tag | meaning |
 | --- | --- |
 | `W1` | wave 1 — landed, gated every run by `rust/parity-cli.sh` |
-| `W8-T1` | **this tranche** — read-only + config verbs, writers on case-local homes |
+| `W8-T1` | tranche 1 — read-only + config verbs, writers on case-local homes |
 | `W8-T2` | tranche 2 — writers: rsync / launchd / network / installers (argv-differ pattern) |
 | `W8-T3` | tranche 3 — the spend + reports family (`services::{aggregate,export,optimize,…}`) |
 | `W8-T4` | tranche 4 — skills / docs / recommend (`skill_synth.py` 1256 ln, `embedded_docs.py` 306 ln) |
@@ -59,37 +64,37 @@ An RS item id marked `*` did **not** exist in `rust/TASKS-RS.md` when this inven
 | 2 | `analyze backfill` | command | UNPORTED | `W8-T2` | RS-8-107* | 4 | Analyze every recent session lacking ``static_analysis_findings`` rows. |
 | 3 | `analyze quality` | command | UNPORTED | `W8-T3` | RS-8-028 | 4 | Grade session quality using a local Ollama model. |
 | 4 | `analyze session` | command | UNPORTED | `W8-T3` | RS-8-029 | 3 | Run analyzers on every file SESSION_ID touched; persist findings. |
-| 5 | `backup` | group | TRANCHE-1 | `W8-T1` | RS-8-090* | 0 | Back up and restore session data from every registered coding agent. |
-| 6 | `backup auto` | command | UNPORTED | `W8-T2` | RS-8-095*, RS-8-080 | 1 | Set up or remove daily automatic backups via launchd (macOS) or cron. |
-| 7 | `backup create` | command | UNPORTED | `W8-T2` | RS-8-093* | 3 | Create an incremental backup of every agent's session data. |
-| 8 | `backup list` | command | TRANCHE-1 | `W8-T1` | RS-8-091* | 0 | List existing backups. |
-| 9 | `backup restore` | command | UNPORTED | `W8-T2` | RS-8-094* | 2 | Restore ~/.claude/ from a backup. |
-| 10 | `backup verify` | command | TRANCHE-1 | `W8-T1` | RS-8-092* | 1 | Verify a backup contains all critical artifacts. |
+| 5 | `backup` | group | PORTED | `W8-T1` | RS-8-090* | 0 | Back up and restore session data from every registered coding agent. |
+| 6 | `backup auto` | command | PORTED | `W8-T2` | RS-8-095*, RS-8-080 | 1 | Set up or remove daily automatic backups via launchd (macOS) or cron. |
+| 7 | `backup create` | command | PORTED | `W8-T2` | RS-8-093* | 3 | Create an incremental backup of every agent's session data. |
+| 8 | `backup list` | command | PORTED | `W8-T1` | RS-8-091* | 0 | List existing backups. |
+| 9 | `backup restore` | command | PORTED | `W8-T2` | RS-8-094* | 2 | Restore ~/.claude/ from a backup. |
+| 10 | `backup verify` | command | PORTED | `W8-T1` | RS-8-092* | 1 | Verify a backup contains all critical artifacts. |
 | 11 | `benchmark` | group | UNPORTED | `W8-T3` | RS-8-014 | 0 | Which model wins for the kind of work you actually do. |
 | 12 | `benchmark recommend` | command | UNPORTED | `W8-T3` | RS-8-030, RS-5-004 | 7 | Outcome-aware model pick for a described task. |
 | 13 | `benchmark show` | command | UNPORTED | `W8-T3` | RS-8-031, RS-5-004 | 6 | Leaderboard + per-stratum honesty for the current scope. |
-| 14 | `cfg` | group | TRANCHE-1 | `W8-T1` | RS-8-015 | 0 | View or change persistent settings. |
-| 15 | `cfg ls` | command | TRANCHE-1 | `W8-T1` | RS-8-032 | 1 | Show all settings with their sources. |
-| 16 | `cfg model-alias` | group | TRANCHE-1 | `W8-T1` | RS-8-016 | 0 | Manage model aliases (proxy → canonical model id). |
-| 17 | `cfg model-alias ls` | command | TRANCHE-1 | `W8-T1` | RS-8-033 | 1 | List all configured model aliases. |
-| 18 | `cfg model-alias rm` | command | TRANCHE-1 | `W8-T1` | RS-8-034 | 1 | Remove SOURCE from the alias map. |
-| 19 | `cfg model-alias set` | command | TRANCHE-1 | `W8-T1` | RS-8-035 | 2 | Map SOURCE (proxy id) → TARGET (canonical id) for cost lookup. |
-| 20 | `cfg rm` | command | TRANCHE-1 | `W8-T1` | RS-8-036 | 1 | Remove KEY from the config file. |
-| 21 | `cfg set` | command | TRANCHE-1 | `W8-T1` | RS-8-037 | 2 | Write KEY=VALUE to the config file. |
-| 22 | `clear-cache` | command | TRANCHE-1 | `W8-T1` | RS-8-038 | 1 | Clear cached data. |
+| 14 | `cfg` | group | PORTED | `W8-T1` | RS-8-015 | 0 | View or change persistent settings. |
+| 15 | `cfg ls` | command | PORTED | `W8-T1` | RS-8-032 | 1 | Show all settings with their sources. |
+| 16 | `cfg model-alias` | group | PORTED | `W8-T1` | RS-8-016 | 0 | Manage model aliases (proxy → canonical model id). |
+| 17 | `cfg model-alias ls` | command | PORTED | `W8-T1` | RS-8-033 | 1 | List all configured model aliases. |
+| 18 | `cfg model-alias rm` | command | PORTED | `W8-T1` | RS-8-034 | 1 | Remove SOURCE from the alias map. |
+| 19 | `cfg model-alias set` | command | PORTED | `W8-T1` | RS-8-035 | 2 | Map SOURCE (proxy id) → TARGET (canonical id) for cost lookup. |
+| 20 | `cfg rm` | command | PORTED | `W8-T1` | RS-8-036 | 1 | Remove KEY from the config file. |
+| 21 | `cfg set` | command | PORTED | `W8-T1` | RS-8-037 | 2 | Write KEY=VALUE to the config file. |
+| 22 | `clear-cache` | command | PORTED | `W8-T1` | RS-8-038 | 1 | Clear cached data. |
 | 23 | `compare` | command | UNPORTED | `W8-T3` | RS-8-039 | 6 | Compare per-model metrics side-by-side over a window. |
-| 24 | `config` | group · hidden | TRANCHE-1 | `W8-T1` | RS-8-017 | 0 |  |
-| 25 | `config set` | command | TRANCHE-1 | `W8-T1` | RS-8-040 | 2 |  |
-| 26 | `config show` | command | TRANCHE-1 | `W8-T1` | RS-8-041 | 1 |  |
-| 27 | `config unset` | command | TRANCHE-1 | `W8-T1` | RS-8-042 | 1 |  |
-| 28 | `context-budget` | command | UNPORTED | `W8-T3` | RS-8-043 | 3 | Estimate the per-session context tax (system prompt + MCP + skills + memory). |
+| 24 | `config` | group · hidden | PORTED | `W8-T1` | RS-8-017 | 0 |  |
+| 25 | `config set` | command | PORTED | `W8-T1` | RS-8-040 | 2 |  |
+| 26 | `config show` | command | PORTED | `W8-T1` | RS-8-041 | 1 |  |
+| 27 | `config unset` | command | PORTED | `W8-T1` | RS-8-042 | 1 |  |
+| 28 | `context-budget` | command | PORTED | `W8-T3` | RS-8-043 | 3 | Estimate the per-session context tax (system prompt + MCP + skills + memory). |
 | 29 | `context-replay` | command | UNPORTED | `W8-T3` | RS-8-044 | 7 | Reconstruct what the model "saw" in SESSION_ID up to a --at seq. |
 | 30 | `discovery` | group | UNPORTED | `W8-T2` | RS-8-018 | 0 | Inspect / maintain the discovery citation-feedback telemetry. |
 | 31 | `discovery demote-uncited` | command | UNPORTED | `W8-T2` | RS-8-045 | 4 | Flag sessions surfaced N+ times over M+ days that were never cited. |
 | 32 | `discovery telemetry` | command | UNPORTED | `W8-T2` | RS-8-046 | 4 | Show discovery telemetry: loaded/cited counters + cite-rate per session. |
-| 33 | `docs` | group | UNPORTED | `W8-T4` | RS-8-019 | 0 | Read StackUnderflow's own docs, offline from the installed package. |
-| 34 | `docs list` | command | UNPORTED | `W8-T4` | RS-8-047, RS-8-002 | 2 | List available documentation topics. |
-| 35 | `docs show` | command | UNPORTED | `W8-T4` | RS-8-048, RS-8-002 | 2 | Print an embedded documentation topic. |
+| 33 | `docs` | group | PORTED | `W8-T4` | RS-8-019 | 0 | Read StackUnderflow's own docs, offline from the installed package. |
+| 34 | `docs list` | command | PORTED | `W8-T4` | RS-8-047, RS-8-002 | 2 | List available documentation topics. |
+| 35 | `docs show` | command | PORTED | `W8-T4` | RS-8-048, RS-8-002 | 2 | Print an embedded documentation topic. |
 | 36 | `doctor` | command | UNPORTED | `W8-T3` | RS-8-049 | 2 | Read-only health + delivery check of the local store. |
 | 37 | `etl` | group | UNPORTED | `W8-T2` | RS-8-103* | 0 | Run the ETL pipeline (raw messages → events → marts). |
 | 38 | `etl backfill` | command | UNPORTED | `W8-T2` | RS-8-104* | 1 | Convert all existing messages into usage_events, then refresh marts. |
@@ -99,22 +104,22 @@ An RS item id marked `*` did **not** exist in `rust/TASKS-RS.md` when this inven
 | 42 | `find-sessions-in-path` | command | PORTED | `W1` | RS-1-011 | 6 | List sessions whose project root is PATH or any ancestor of PATH. |
 | 43 | `find-sessions-touching-file` | command | PORTED | `W1` | RS-1-012 | 5 | List sessions where FILE shows up in tool calls or message text. |
 | 44 | `find-sessions-where-action-worked` | command | PORTED | `W1` | RS-1-013 | 8 | List sessions where ACTION was performed and the next user turn confirmed it worked. |
-| 45 | `guide` | group | UNPORTED | `W8-T2` | RS-8-020 | 0 | Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md. |
-| 46 | `guide install` | command | UNPORTED | `W8-T2` | RS-8-051, RS-8-001 | 2 | Write the agent-discovery snippet into the instruction file(s) (idempotent, backs up first). |
-| 47 | `guide status` | command | UNPORTED | `W8-T2` | RS-8-052 | 2 | Show where the StackUnderflow guide snippet is installed. |
-| 48 | `guide uninstall` | command | UNPORTED | `W8-T2` | RS-8-053 | 1 | Remove the StackUnderflow guide snippet (only our marked block; never the file). |
-| 49 | `hooks` | group | UNPORTED | `W8-T2` | RS-8-021 | 0 | Manage opt-in Claude Code lifecycle hooks (hybrid capture). |
-| 50 | `hooks install` | command | UNPORTED | `W8-T2` | RS-8-054, RS-8-004 | 4 | Register the StackUnderflow hooks in a settings.json (idempotent, backs up first). |
-| 51 | `hooks repair` | command | UNPORTED | `W8-T2` | RS-8-055, RS-8-005 | 2 | Rewrite stale StackUnderflow hook commands to the portable form (changes nothing else). |
-| 52 | `hooks run` | command | UNPORTED | `W8-T2` | RS-8-056 | 2 | Internal — invoked by Claude Code. |
-| 53 | `hooks status` | command | UNPORTED | `W8-T2` | RS-8-057 | 2 | Show which StackUnderflow hooks are installed, where, and whether any are stale. |
-| 54 | `hooks uninstall` | command | UNPORTED | `W8-T2` | RS-8-058 | 1 | Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks). |
+| 45 | `guide` | group | PORTED | `W8-T2` | RS-8-020 | 0 | Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md. |
+| 46 | `guide install` | command | PORTED | `W8-T2` | RS-8-051, RS-8-001 | 2 | Write the agent-discovery snippet into the instruction file(s) (idempotent, backs up first). |
+| 47 | `guide status` | command | PORTED | `W8-T2` | RS-8-052 | 2 | Show where the StackUnderflow guide snippet is installed. |
+| 48 | `guide uninstall` | command | PORTED | `W8-T2` | RS-8-053 | 1 | Remove the StackUnderflow guide snippet (only our marked block; never the file). |
+| 49 | `hooks` | group | PORTED | `W8-T2` | RS-8-021 | 0 | Manage opt-in Claude Code lifecycle hooks (hybrid capture). |
+| 50 | `hooks install` | command | PORTED | `W8-T2` | RS-8-054, RS-8-004 | 4 | Register the StackUnderflow hooks in a settings.json (idempotent, backs up first). |
+| 51 | `hooks repair` | command | PORTED | `W8-T2` | RS-8-055, RS-8-005 | 2 | Rewrite stale StackUnderflow hook commands to the portable form (changes nothing else). |
+| 52 | `hooks run` | command | PORTED | `W8-T2` | RS-8-056 | 2 | Internal — invoked by Claude Code. |
+| 53 | `hooks status` | command | PORTED | `W8-T2` | RS-8-057 | 2 | Show which StackUnderflow hooks are installed, where, and whether any are stale. |
+| 54 | `hooks uninstall` | command | PORTED | `W8-T2` | RS-8-058 | 1 | Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks). |
 | 55 | `import` | command | UNPORTED | `W8-T2` | RS-8-101* | 2 | Import external agent history via a user-supplied export command. |
 | 56 | `ingest` | group | UNPORTED | `W7` | RS-8-110* | 0 | Pull PR / CI data into the local store (REST backfill + webhook receiver). |
 | 57 | `ingest github` | command | UNPORTED | `W7` | RS-8-111*, RS-5-020 | 6 | Backfill GitHub PRs + workflow runs for REPO into the local store. |
 | 58 | `ingest webhook` | group | UNPORTED | `W7` | RS-8-112* | 0 | Run the opt-in webhook receiver (PR + CI events). |
 | 59 | `ingest webhook serve` | command | UNPORTED | `W7` | RS-8-113* | 2 | Serve the /api/webhooks/* endpoints on a dedicated port. |
-| 60 | `init` | command | UNPORTED | `W7` | RS-8-059 | 7 | Start the dashboard (alias for ``start``). |
+| 60 | `init` | command | PORTED | `W7` | RS-8-059 | 7 | Start the dashboard (alias for ``start``). |
 | 61 | `memory` | group | PORTED | `W1` | RS-1-001 | 0 | Ask the local store what past sessions already know. |
 | 62 | `memory ask` | command | PORTED | `W1` | RS-1-014 | 7 | Ask a natural-language question of the local store. |
 | 63 | `memory decisions` | command | PORTED | `W1` | RS-1-001 | 7 | Search past decisions — "did I decide something about this before?" |
@@ -122,43 +127,43 @@ An RS item id marked `*` did **not** exist in `rust/TASKS-RS.md` when this inven
 | 65 | `memory file` | command | PORTED | `W1` | RS-1-001 | 7 | Everything known about a file — "what do I know about this file?" |
 | 66 | `memory sessions` | command | PORTED | `W1` | RS-1-001 | 7 | List past sessions that touched here — "which sessions ran here?" |
 | 67 | `memory worked` | command | PORTED | `W1` | RS-1-001 | 7 | Find where an action worked — "what worked last time I tried this?" |
-| 68 | `month` | command | UNPORTED | `W8-T3` | RS-8-060, RS-5-002 | 5 | This month's usage. |
+| 68 | `month` | command | PORTED | `W8-T3` | RS-8-060, RS-5-002 | 5 | This month's usage. |
 | 69 | `optimize` | command | UNPORTED | `W8-T3` | RS-8-061, RS-5-007 | 6 | Find wasted spend: looped Q&A pairs plus seven structural waste patterns. |
-| 70 | `plan` | group | UNPORTED | `W8-T3` | RS-8-022 | 0 | Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom). |
-| 71 | `plan reset` | command | UNPORTED | `W8-T3` | RS-8-062 | 0 | Clear the active plan. |
-| 72 | `plan set` | command | UNPORTED | `W8-T3` | RS-8-063 | 3 | Set the active plan. |
-| 73 | `plan show` | command | UNPORTED | `W8-T3` | RS-8-064 | 1 | Show the active plan, current usage against budget, and burn projection. |
-| 74 | `plan thresholds` | group | UNPORTED | `W8-T3` | RS-8-023 | 0 | Configure burn-projector alert thresholds (default 50% / 75% / 90%). |
-| 75 | `plan thresholds reset` | command | UNPORTED | `W8-T3` | RS-8-065 | 0 | Restore the default thresholds (50% / 75% / 90%). |
-| 76 | `plan thresholds set` | command | UNPORTED | `W8-T3` | RS-8-066 | 1 | Set the alert thresholds (positional integers in [1, 200]). |
-| 77 | `plan thresholds show` | command | UNPORTED | `W8-T3` | RS-8-067 | 1 | Show the active alert thresholds. |
+| 70 | `plan` | group | PORTED | `W8-T3` | RS-8-022 | 0 | Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom). |
+| 71 | `plan reset` | command | PORTED | `W8-T3` | RS-8-062 | 0 | Clear the active plan. |
+| 72 | `plan set` | command | PORTED | `W8-T3` | RS-8-063 | 3 | Set the active plan. |
+| 73 | `plan show` | command | PORTED | `W8-T3` | RS-8-064 | 1 | Show the active plan, current usage against budget, and burn projection. |
+| 74 | `plan thresholds` | group | PORTED | `W8-T3` | RS-8-023 | 0 | Configure burn-projector alert thresholds (default 50% / 75% / 90%). |
+| 75 | `plan thresholds reset` | command | PORTED | `W8-T3` | RS-8-065 | 0 | Restore the default thresholds (50% / 75% / 90%). |
+| 76 | `plan thresholds set` | command | PORTED | `W8-T3` | RS-8-066 | 1 | Set the alert thresholds (positional integers in [1, 200]). |
+| 77 | `plan thresholds show` | command | PORTED | `W8-T3` | RS-8-067 | 1 | Show the active alert thresholds. |
 | 78 | `pricing` | group | UNPORTED | `W8-T2` | RS-8-108* | 0 | Inspect model pricing health (read-only). |
 | 79 | `pricing doctor` | command | UNPORTED | `W8-T2` | RS-8-109* | 4 | Report pricing health: unpriced models, stale rates, unknown cost rows. |
-| 80 | `recommend` | group | UNPORTED | `W8-T4` | RS-8-024 | 0 | Proactive recommendations mined from your local session store. |
-| 81 | `recommend mode` | command | UNPORTED | `W8-T4` | RS-8-068 | 4 | Recommend the cheapest model that fits this task. |
-| 82 | `recommend skills` | command | UNPORTED | `W8-T4` | RS-8-069, RS-8-012 | 5 | List patterns you've manually re-run that could become auto-skills. |
+| 80 | `recommend` | group | PORTED | `W8-T4` | RS-8-024 | 0 | Proactive recommendations mined from your local session store. |
+| 81 | `recommend mode` | command | PORTED | `W8-T4` | RS-8-068 | 4 | Recommend the cheapest model that fits this task. |
+| 82 | `recommend skills` | command | PORTED | `W8-T4` | RS-8-069, RS-8-012 | 5 | List patterns you've manually re-run that could become auto-skills. |
 | 83 | `reindex` | command | UNPORTED | `W8-T2` | RS-8-102* | 0 | Rebuild the session store from scratch. |
-| 84 | `report` | command | UNPORTED | `W8-T3` | RS-8-070, RS-5-002 | 7 | Dashboard-style summary over a date range. |
+| 84 | `report` | command | PORTED | `W8-T3` | RS-8-070, RS-5-002 | 7 | Dashboard-style summary over a date range. |
 | 85 | `resume` | command | PORTED | `W1` | RS-1-002 | 4 | Session/resume ids for every coding agent under PATH (default: cwd). |
 | 86 | `risk` | group | UNPORTED | `W8-T3` | RS-8-025 | 0 | Surface "this file has caused N reverts in M days" before editing it. |
 | 87 | `risk file` | command | UNPORTED | `W8-T3` | RS-8-071, RS-8-011 | 3 | Risk summary for PATH: how many sessions reverted / failed / worked. |
 | 88 | `search-past-decisions` | command | PORTED | `W1` | RS-1-020 | 8 | Substring-search QUERY across past message content; return matching sessions. |
-| 89 | `skills` | group | UNPORTED | `W8-T4` | RS-8-026 | 0 | Generate / list / clean project-specific Claude Code skills. |
-| 90 | `skills clean` | command | UNPORTED | `W8-T4` | RS-8-072, RS-8-013 | 5 | Remove auto-generated skills (never touches hand-authored ones). |
-| 91 | `skills generate` | command | UNPORTED | `W8-T4` | RS-8-073, RS-8-013 | 9 | Mine session patterns and emit auto-generated SKILL.md files. |
-| 92 | `skills list` | command | UNPORTED | `W8-T4` | RS-8-074, RS-8-013 | 3 | List the auto-generated skills present in the skills directory. |
-| 93 | `start` | command | UNPORTED | `W7` | RS-8-075 | 7 | Launch the StackUnderflow dashboard. |
-| 94 | `status` | command | TRANCHE-1 | `W8-T1` | RS-8-089* | 3 | Compact one-liner: today + month cost and message counts. |
-| 95 | `sync` | group | UNPORTED | `W8-T2` | RS-8-096* | 0 | Encrypted, bring-your-own-bucket backup of your analytics aggregates (opt-in). |
-| 96 | `sync init` | command | UNPORTED | `W8-T2` | RS-8-097* | 3 | Generate this device's encryption key and record the bucket destination. |
-| 97 | `sync pull` | command | UNPORTED | `W8-T2` | RS-8-099* | 1 | Fetch and merge every OTHER device's encrypted aggregates from your bucket. |
-| 98 | `sync push` | command | UNPORTED | `W8-T2` | RS-8-098* | 0 | Encrypt and upload changed aggregate shards to your bucket. |
-| 99 | `sync status` | command | UNPORTED | `W8-T2` | RS-8-100* | 1 | Show sync configuration and how many shards are pending upload (local only). |
-| 100 | `today` | command | UNPORTED | `W8-T3` | RS-8-076, RS-5-002 | 5 | Today's usage. |
+| 89 | `skills` | group | PORTED | `W8-T4` | RS-8-026 | 0 | Generate / list / clean project-specific Claude Code skills. |
+| 90 | `skills clean` | command | PORTED | `W8-T4` | RS-8-072, RS-8-013 | 5 | Remove auto-generated skills (never touches hand-authored ones). |
+| 91 | `skills generate` | command | PORTED | `W8-T4` | RS-8-073, RS-8-013 | 9 | Mine session patterns and emit auto-generated SKILL.md files. |
+| 92 | `skills list` | command | PORTED | `W8-T4` | RS-8-074, RS-8-013 | 3 | List the auto-generated skills present in the skills directory. |
+| 93 | `start` | command | PORTED | `W7` | RS-8-075 | 7 | Launch the StackUnderflow dashboard. |
+| 94 | `status` | command | PORTED | `W8-T1` | RS-8-089* | 3 | Compact one-liner: today + month cost and message counts. |
+| 95 | `sync` | group | PORTED | `W8-T2` | RS-8-096* | 0 | Encrypted, bring-your-own-bucket backup of your analytics aggregates (opt-in). |
+| 96 | `sync init` | command | PORTED | `W8-T2` | RS-8-097* | 3 | Generate this device's encryption key and record the bucket destination. |
+| 97 | `sync pull` | command | PORTED | `W8-T2` | RS-8-099* | 1 | Fetch and merge every OTHER device's encrypted aggregates from your bucket. |
+| 98 | `sync push` | command | PORTED | `W8-T2` | RS-8-098* | 0 | Encrypt and upload changed aggregate shards to your bucket. |
+| 99 | `sync status` | command | PORTED | `W8-T2` | RS-8-100* | 1 | Show sync configuration and how many shards are pending upload (local only). |
+| 100 | `today` | command | PORTED | `W8-T3` | RS-8-076, RS-5-002 | 5 | Today's usage. |
 | 101 | `worktrees` | group | UNPORTED | `W8-T3` | RS-8-027 | 0 | Inspect git worktrees: owner project, cost, prune safety (read-only). |
 | 102 | `worktrees attribute` | command | UNPORTED | `W8-T3` | RS-8-077 | 0 | Attribute worktree session fragments to their parent projects. |
 | 103 | `worktrees list` | command | UNPORTED | `W8-T3` | RS-8-078 | 2 | List known worktrees with a verdict: ACTIVE, MERGED_SAFE_TO_PRUNE, or HAS_UNIQUE_WORK. |
-| 104 | `yield` | command | UNPORTED | `W8-T3` | RS-8-079 | 5 | Yield analysis: productive vs reverted vs abandoned sessions. |
+| 104 | `yield` | command | PORTED | `W8-T3` | RS-8-079 | 5 | Yield analysis: productive vs reverted vs abandoned sessions. |
 
 ## 3. Per-node parameter detail
 
@@ -237,7 +242,7 @@ Subcommands: `backfill`, `quality`, `session`
 | `--language` | opt | choice[python, typescript, go] | `Sentinel.UNSET` | multiple, dest=languages | Restrict to these languages (repeatable). Default: all supported. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `backup` — TRANCHE-1 · W8-T1 · RS-8-090*
+### `backup` — PORTED · W8-T1 · RS-8-090*
 
 > Back up and restore session data from every registered coding agent.
 
@@ -245,7 +250,7 @@ Subcommands: `auto`, `create`, `list`, `restore`, `verify`
 
 *No declared parameters.*
 
-### `backup auto` — UNPORTED · W8-T2 · RS-8-095*, RS-8-080
+### `backup auto` — PORTED · W8-T2 · RS-8-095*, RS-8-080
 
 > Set up or remove daily automatic backups via launchd (macOS) or cron.
 
@@ -253,7 +258,7 @@ Subcommands: `auto`, `create`, `list`, `restore`, `verify`
 | --- | --- | --- | --- | --- | --- |
 | `--enable \\| --disable` | opt | boolean | `True` | flag | Enable or disable daily backups |
 
-### `backup create` — UNPORTED · W8-T2 · RS-8-093*
+### `backup create` — PORTED · W8-T2 · RS-8-093*
 
 > Create an incremental backup of every agent's session data.
 > 
@@ -277,13 +282,13 @@ Subcommands: `auto`, `create`, `list`, `restore`, `verify`
 | `--keep` | opt | int range(1..inf) | `10` | — | Max backups to retain (oldest pruned) |
 | `--to` | opt | text | `None` | dest=to_url | Also replicate the finished backup to ssh://[user@]host[:port]/abs/path. One-way whole-artifact copy — for peer sync of aggregates use `stackunderflow sync` instead. |
 
-### `backup list` — TRANCHE-1 · W8-T1 · RS-8-091*
+### `backup list` — PORTED · W8-T1 · RS-8-091*
 
 > List existing backups.
 
 *No declared parameters.*
 
-### `backup restore` — UNPORTED · W8-T2 · RS-8-094*
+### `backup restore` — PORTED · W8-T2 · RS-8-094*
 
 > Restore ~/.claude/ from a backup.
 
@@ -292,7 +297,7 @@ Subcommands: `auto`, `create`, `list`, `restore`, `verify`
 | `NAME` | arg | text | `Sentinel.UNSET` | required |  |
 | `--dry-run` | opt | boolean | `False` | flag | Show what would be restored without doing it |
 
-### `backup verify` — TRANCHE-1 · W8-T1 · RS-8-092*
+### `backup verify` — PORTED · W8-T1 · RS-8-092*
 
 > Verify a backup contains all critical artifacts.
 > 
@@ -347,7 +352,7 @@ Subcommands: `recommend`, `show`
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Shortcut for --format json. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. 'json' emits the stable agent-output envelope. |
 
-### `cfg` — TRANCHE-1 · W8-T1 · RS-8-015
+### `cfg` — PORTED · W8-T1 · RS-8-015
 
 > View or change persistent settings.
 
@@ -355,7 +360,7 @@ Subcommands: `ls`, `model-alias`, `rm`, `set`
 
 *No declared parameters.*
 
-### `cfg ls` — TRANCHE-1 · W8-T1 · RS-8-032
+### `cfg ls` — PORTED · W8-T1 · RS-8-032
 
 > Show all settings with their sources.
 
@@ -363,7 +368,7 @@ Subcommands: `ls`, `model-alias`, `rm`, `set`
 | --- | --- | --- | --- | --- | --- |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | JSON output |
 
-### `cfg model-alias` — TRANCHE-1 · W8-T1 · RS-8-016
+### `cfg model-alias` — PORTED · W8-T1 · RS-8-016
 
 > Manage model aliases (proxy → canonical model id).
 
@@ -371,7 +376,7 @@ Subcommands: `ls`, `rm`, `set`
 
 *No declared parameters.*
 
-### `cfg model-alias ls` — TRANCHE-1 · W8-T1 · RS-8-033
+### `cfg model-alias ls` — PORTED · W8-T1 · RS-8-033
 
 > List all configured model aliases.
 
@@ -379,7 +384,7 @@ Subcommands: `ls`, `rm`, `set`
 | --- | --- | --- | --- | --- | --- |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | JSON output |
 
-### `cfg model-alias rm` — TRANCHE-1 · W8-T1 · RS-8-034
+### `cfg model-alias rm` — PORTED · W8-T1 · RS-8-034
 
 > Remove SOURCE from the alias map.
 
@@ -387,7 +392,7 @@ Subcommands: `ls`, `rm`, `set`
 | --- | --- | --- | --- | --- | --- |
 | `SOURCE` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `cfg model-alias set` — TRANCHE-1 · W8-T1 · RS-8-035
+### `cfg model-alias set` — PORTED · W8-T1 · RS-8-035
 
 > Map SOURCE (proxy id) → TARGET (canonical id) for cost lookup.
 
@@ -396,7 +401,7 @@ Subcommands: `ls`, `rm`, `set`
 | `SOURCE` | arg | text | `Sentinel.UNSET` | required |  |
 | `TARGET` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `cfg rm` — TRANCHE-1 · W8-T1 · RS-8-036
+### `cfg rm` — PORTED · W8-T1 · RS-8-036
 
 > Remove KEY from the config file.
 
@@ -404,7 +409,7 @@ Subcommands: `ls`, `rm`, `set`
 | --- | --- | --- | --- | --- | --- |
 | `KEY` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `cfg set` — TRANCHE-1 · W8-T1 · RS-8-037
+### `cfg set` — PORTED · W8-T1 · RS-8-037
 
 > Write KEY=VALUE to the config file.
 
@@ -413,7 +418,7 @@ Subcommands: `ls`, `rm`, `set`
 | `KEY` | arg | text | `Sentinel.UNSET` | required |  |
 | `VALUE` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `clear-cache` — TRANCHE-1 · W8-T1 · RS-8-038
+### `clear-cache` — PORTED · W8-T1 · RS-8-038
 
 > Clear cached data.  Use ``start --fresh`` for a clean boot.
 
@@ -437,32 +442,32 @@ Subcommands: `ls`, `rm`, `set`
 | `--ingest` | opt | boolean | `False` | flag, dest=do_ingest | Force a fresh ingest+backfill pass before running the command. Useful when 'stackunderflow start' is not active. |
 | `--auto-ingest \\| --no-auto-ingest` | opt | boolean | `True` | flag | Refresh the store automatically when its newest event is older than the staleness threshold. Default on. Disable with --no-auto-ingest. |
 
-### `config` — TRANCHE-1 · W8-T1 · RS-8-017
+### `config` — PORTED · W8-T1 · RS-8-017
 
 Subcommands: `set`, `show`, `unset`
 
 *No declared parameters.*
 
-### `config set` — TRANCHE-1 · W8-T1 · RS-8-040
+### `config set` — PORTED · W8-T1 · RS-8-040
 
 | spec | kind | type | default | modifiers | help |
 | --- | --- | --- | --- | --- | --- |
 | `KEY` | arg | text | `Sentinel.UNSET` | required |  |
 | `VALUE` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `config show` — TRANCHE-1 · W8-T1 · RS-8-041
+### `config show` — PORTED · W8-T1 · RS-8-041
 
 | spec | kind | type | default | modifiers | help |
 | --- | --- | --- | --- | --- | --- |
 | `--json` | opt | boolean | `False` | flag, dest=as_json |  |
 
-### `config unset` — TRANCHE-1 · W8-T1 · RS-8-042
+### `config unset` — PORTED · W8-T1 · RS-8-042
 
 | spec | kind | type | default | modifiers | help |
 | --- | --- | --- | --- | --- | --- |
 | `KEY` | arg | text | `Sentinel.UNSET` | required |  |
 
-### `context-budget` — UNPORTED · W8-T3 · RS-8-043
+### `context-budget` — PORTED · W8-T3 · RS-8-043
 
 > Estimate the per-session context tax (system prompt + MCP + skills + memory).
 > 
@@ -534,7 +539,7 @@ Subcommands: `demote-uncited`, `telemetry`
 | `--limit` | opt | integer | `50` | — | Max rows to show. <= 0 means no limit. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `docs` — UNPORTED · W8-T4 · RS-8-019
+### `docs` — PORTED · W8-T4 · RS-8-019
 
 > Read StackUnderflow's own docs, offline from the installed package.
 
@@ -542,7 +547,7 @@ Subcommands: `list`, `show`
 
 *No declared parameters.*
 
-### `docs list` — UNPORTED · W8-T4 · RS-8-047, RS-8-002
+### `docs list` — PORTED · W8-T4 · RS-8-047, RS-8-002
 
 > List available documentation topics.
 
@@ -551,7 +556,7 @@ Subcommands: `list`, `show`
 | `--audience` | opt | text | `None` | — | Filter to pages for this audience (all, agent, user). |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Emit the topic list as JSON. |
 
-### `docs show` — UNPORTED · W8-T4 · RS-8-048, RS-8-002
+### `docs show` — PORTED · W8-T4 · RS-8-048, RS-8-002
 
 > Print an embedded documentation topic.
 
@@ -711,7 +716,7 @@ Subcommands: `backfill`, `status`
 | `--verbose / -v` | opt | boolean | `False` | flag | Append outcome_confidence to each row in text output. (JSON always carries it.) |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `guide` — UNPORTED · W8-T2 · RS-8-020
+### `guide` — PORTED · W8-T2 · RS-8-020
 
 > Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md.
 
@@ -719,7 +724,7 @@ Subcommands: `install`, `status`, `uninstall`
 
 *No declared parameters.*
 
-### `guide install` — UNPORTED · W8-T2 · RS-8-051, RS-8-001
+### `guide install` — PORTED · W8-T2 · RS-8-051, RS-8-001
 
 > Write the agent-discovery snippet into the instruction file(s) (idempotent, backs up first).
 
@@ -728,7 +733,7 @@ Subcommands: `install`, `status`, `uninstall`
 | `--scope` | opt | choice[project, user] | `'project'` | — | project = ./CLAUDE.md and ./AGENTS.md in cwd's git root; user = ~/.claude/CLAUDE.md |
 | `--dry-run` | opt | boolean | `False` | flag | Show what would change; write nothing. |
 
-### `guide status` — UNPORTED · W8-T2 · RS-8-052
+### `guide status` — PORTED · W8-T2 · RS-8-052
 
 > Show where the StackUnderflow guide snippet is installed.
 
@@ -737,7 +742,7 @@ Subcommands: `install`, `status`, `uninstall`
 | `--scope` | opt | choice[project, user] | `None` | — | Limit to one scope (default: show both project and user). |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt |  |
 
-### `guide uninstall` — UNPORTED · W8-T2 · RS-8-053
+### `guide uninstall` — PORTED · W8-T2 · RS-8-053
 
 > Remove the StackUnderflow guide snippet (only our marked block; never the file).
 
@@ -745,7 +750,7 @@ Subcommands: `install`, `status`, `uninstall`
 | --- | --- | --- | --- | --- | --- |
 | `--scope` | opt | choice[project, user] | `'project'` | — | Which instruction file(s) to clean. |
 
-### `hooks` — UNPORTED · W8-T2 · RS-8-021
+### `hooks` — PORTED · W8-T2 · RS-8-021
 
 > Manage opt-in Claude Code lifecycle hooks (hybrid capture).
 
@@ -753,7 +758,7 @@ Subcommands: `install`, `repair`, `run`, `status`, `uninstall`
 
 *No declared parameters.*
 
-### `hooks install` — UNPORTED · W8-T2 · RS-8-054, RS-8-004
+### `hooks install` — PORTED · W8-T2 · RS-8-054, RS-8-004
 
 > Register the StackUnderflow hooks in a settings.json (idempotent, backs up first).
 
@@ -764,7 +769,7 @@ Subcommands: `install`, `repair`, `run`, `status`, `uninstall`
 | `--capture-content` | opt | boolean | `False` | flag | Store full hook payloads (prompt text, tool output) instead of sanitised metadata. Off by default — the conservative choice. |
 | `--inject` | opt | boolean | `False` | flag | Also install the context-injection hooks (SessionStart / UserPromptSubmit / PreToolUse) that feed StackUnderflow's memory back into the live agent. Opt-in separately from capture; off by default. |
 
-### `hooks repair` — UNPORTED · W8-T2 · RS-8-055, RS-8-005
+### `hooks repair` — PORTED · W8-T2 · RS-8-055, RS-8-005
 
 > Rewrite stale StackUnderflow hook commands to the portable form (changes nothing else).
 
@@ -773,7 +778,7 @@ Subcommands: `install`, `repair`, `run`, `status`, `uninstall`
 | `--scope` | opt | choice[project, user, all] | `'project'` | — | project = cwd's git root; user = ~/.claude; all = walk $HOME for every .claude/settings.json |
 | `--dry-run` | opt | boolean | `False` | flag | Report stale entries; rewrite nothing. |
 
-### `hooks run` — UNPORTED · W8-T2 · RS-8-056
+### `hooks run` — PORTED · W8-T2 · RS-8-056
 
 > Internal — invoked by Claude Code. Reads the hook payload as JSON on stdin.
 
@@ -782,7 +787,7 @@ Subcommands: `install`, `repair`, `run`, `status`, `uninstall`
 | `HOOK_ID` | arg | text | `Sentinel.UNSET` | required |  |
 | `--capture-content` | opt | boolean | `False` | flag | Store the full payload (set by `hooks install --capture-content`). |
 
-### `hooks status` — UNPORTED · W8-T2 · RS-8-057
+### `hooks status` — PORTED · W8-T2 · RS-8-057
 
 > Show which StackUnderflow hooks are installed, where, and whether any are stale.
 
@@ -791,7 +796,7 @@ Subcommands: `install`, `repair`, `run`, `status`, `uninstall`
 | `--scope` | opt | choice[project, user] | `None` | — | Limit to one scope (default: show both project and user). |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt |  |
 
-### `hooks uninstall` — UNPORTED · W8-T2 · RS-8-058
+### `hooks uninstall` — PORTED · W8-T2 · RS-8-058
 
 > Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks).
 
@@ -867,7 +872,7 @@ Subcommands: `serve`
 | `--port` | opt | integer | `8096` | — | Port to bind the receiver on. |
 | `--host` | opt | text | `'127.0.0.1'` | — | Bind address. Default 127.0.0.1 (loopback only). Override to 0.0.0.0 if you're tunneling from a public webhook URL. |
 
-### `init` — UNPORTED · W7 · RS-8-059
+### `init` — PORTED · W7 · RS-8-059
 
 > Start the dashboard (alias for ``start``).
 > 
@@ -1018,7 +1023,7 @@ Subcommands: `ask`, `decisions`, `embed`, `file`, `sessions`, `worked`
 | `--limit` | opt | integer | `20` | — | Hard cap on the number of results. |
 | `--context-budget` | opt | integer | `None` | — | Token budget for the output: results are ranked and packed greedily until ~this many estimated tokens are used. Default: STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS or 2000. Pass 0 to disable. |
 
-### `month` — UNPORTED · W8-T3 · RS-8-060, RS-5-002
+### `month` — PORTED · W8-T3 · RS-8-060, RS-5-002
 
 > This month's usage.
 
@@ -1049,7 +1054,7 @@ Subcommands: `ask`, `decisions`, `embed`, `file`, `sessions`, `worked`
 | `--ingest` | opt | boolean | `False` | flag, dest=do_ingest | Force a fresh ingest+backfill pass before running the command. Useful when 'stackunderflow start' is not active. |
 | `--auto-ingest \\| --no-auto-ingest` | opt | boolean | `True` | flag | Refresh the store automatically when its newest event is older than the staleness threshold. Default on. Disable with --no-auto-ingest. |
 
-### `plan` — UNPORTED · W8-T3 · RS-8-022
+### `plan` — PORTED · W8-T3 · RS-8-022
 
 > Manage and inspect a monthly plan budget (Claude Pro, Cursor Pro, custom).
 
@@ -1057,13 +1062,13 @@ Subcommands: `reset`, `set`, `show`, `thresholds`
 
 *No declared parameters.*
 
-### `plan reset` — UNPORTED · W8-T3 · RS-8-062
+### `plan reset` — PORTED · W8-T3 · RS-8-062
 
 > Clear the active plan.
 
 *No declared parameters.*
 
-### `plan set` — UNPORTED · W8-T3 · RS-8-063
+### `plan set` — PORTED · W8-T3 · RS-8-063
 
 > Set the active plan. NAME is one of: claude-pro, claude-max, cursor-pro, cursor-max, custom.
 
@@ -1073,7 +1078,7 @@ Subcommands: `reset`, `set`, `show`, `thresholds`
 | `--monthly-usd` | opt | float | `None` | — | Monthly budget in USD (required for 'custom', overrides preset otherwise). |
 | `--reset-day` | opt | int range(1..31) | `1` | — | Day of month the budget resets (default 1). |
 
-### `plan show` — UNPORTED · W8-T3 · RS-8-064
+### `plan show` — PORTED · W8-T3 · RS-8-064
 
 > Show the active plan, current usage against budget, and burn projection.
 
@@ -1081,7 +1086,7 @@ Subcommands: `reset`, `set`, `show`, `thresholds`
 | --- | --- | --- | --- | --- | --- |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt |  |
 
-### `plan thresholds` — UNPORTED · W8-T3 · RS-8-023
+### `plan thresholds` — PORTED · W8-T3 · RS-8-023
 
 > Configure burn-projector alert thresholds (default 50% / 75% / 90%).
 
@@ -1089,13 +1094,13 @@ Subcommands: `reset`, `set`, `show`
 
 *No declared parameters.*
 
-### `plan thresholds reset` — UNPORTED · W8-T3 · RS-8-065
+### `plan thresholds reset` — PORTED · W8-T3 · RS-8-065
 
 > Restore the default thresholds (50% / 75% / 90%).
 
 *No declared parameters.*
 
-### `plan thresholds set` — UNPORTED · W8-T3 · RS-8-066
+### `plan thresholds set` — PORTED · W8-T3 · RS-8-066
 
 > Set the alert thresholds (positional integers in [1, 200]).
 
@@ -1103,7 +1108,7 @@ Subcommands: `reset`, `set`, `show`
 | --- | --- | --- | --- | --- | --- |
 | `VALUES` | arg | integer | `Sentinel.UNSET` | required, nargs=-1 |  |
 
-### `plan thresholds show` — UNPORTED · W8-T3 · RS-8-067
+### `plan thresholds show` — PORTED · W8-T3 · RS-8-067
 
 > Show the active alert thresholds.
 
@@ -1134,7 +1139,7 @@ Subcommands: `doctor`
 | `--limit` | opt | integer | `50` | — | Max model entries listed per section (full counts stay in the summary). |
 | `--strict` | opt | boolean | `False` | flag | Exit non-zero when a hard defect is found (billable unpriced model or unknown row with nonzero cost) — for CI gating. |
 
-### `recommend` — UNPORTED · W8-T4 · RS-8-024
+### `recommend` — PORTED · W8-T4 · RS-8-024
 
 > Proactive recommendations mined from your local session store.
 > 
@@ -1145,7 +1150,7 @@ Subcommands: `mode`, `skills`
 
 *No declared parameters.*
 
-### `recommend mode` — UNPORTED · W8-T4 · RS-8-068
+### `recommend mode` — PORTED · W8-T4 · RS-8-068
 
 > Recommend the cheapest model that fits this task.
 > 
@@ -1160,7 +1165,7 @@ Subcommands: `mode`, `skills`
 | `--no-cache` | opt | boolean | `False` | flag | Skip the 24h cache (recompute from history). |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `recommend skills` — UNPORTED · W8-T4 · RS-8-069, RS-8-012
+### `recommend skills` — PORTED · W8-T4 · RS-8-069, RS-8-012
 
 > List patterns you've manually re-run that could become auto-skills.
 > 
@@ -1183,7 +1188,7 @@ Subcommands: `mode`, `skills`
 
 *No declared parameters.*
 
-### `report` — UNPORTED · W8-T3 · RS-8-070, RS-5-002
+### `report` — PORTED · W8-T3 · RS-8-070, RS-5-002
 
 > Dashboard-style summary over a date range.
 
@@ -1257,7 +1262,7 @@ Subcommands: `file`
 | `--embed-model` | opt | text | `None` | — | Override the Ollama embed model. Default: STACKUNDERFLOW_EMBED_MODEL or nomic-embed-text. Ignored without --use-embeddings. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `skills` — UNPORTED · W8-T4 · RS-8-026
+### `skills` — PORTED · W8-T4 · RS-8-026
 
 > Generate / list / clean project-specific Claude Code skills.
 > 
@@ -1268,7 +1273,7 @@ Subcommands: `clean`, `generate`, `list`
 
 *No declared parameters.*
 
-### `skills clean` — UNPORTED · W8-T4 · RS-8-072, RS-8-013
+### `skills clean` — PORTED · W8-T4 · RS-8-072, RS-8-013
 
 > Remove auto-generated skills (never touches hand-authored ones).
 
@@ -1280,7 +1285,7 @@ Subcommands: `clean`, `generate`, `list`
 | `--dry-run` | opt | boolean | `False` | flag | Show what would be removed; delete nothing. |
 | `--yes / -y` | opt | boolean | `False` | flag, dest=assume_yes | Actually delete. Without this, clean only previews. |
 
-### `skills generate` — UNPORTED · W8-T4 · RS-8-073, RS-8-013
+### `skills generate` — PORTED · W8-T4 · RS-8-073, RS-8-013
 
 > Mine session patterns and emit auto-generated SKILL.md files.
 
@@ -1296,7 +1301,7 @@ Subcommands: `clean`, `generate`, `list`
 | `--dry-run` | opt | boolean | `False` | flag | Show what would be generated; write nothing. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `skills list` — UNPORTED · W8-T4 · RS-8-074, RS-8-013
+### `skills list` — PORTED · W8-T4 · RS-8-074, RS-8-013
 
 > List the auto-generated skills present in the skills directory.
 
@@ -1306,7 +1311,7 @@ Subcommands: `clean`, `generate`, `list`
 | `--out` | opt | path(file_okay=False, dir_okay=True, exists=False) | `None` | dest=out_path | Skills directory to inspect. Default depends on --scope. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format. |
 
-### `start` — UNPORTED · W7 · RS-8-075
+### `start` — PORTED · W7 · RS-8-075
 
 > Launch the StackUnderflow dashboard.
 
@@ -1320,7 +1325,7 @@ Subcommands: `clean`, `generate`, `list`
 | `--no-lock` | opt | boolean | `False` | flag | Skip the singleton watcher lock at ~/.stackunderflow/server.lock. Headless / test scenarios only — letting two instances run watchers against the same store will race on ingest+marts. |
 | `--data-dir` | opt | path(file_okay=False, dir_okay=True, exists=False) | `None` | — | Serve a dataset from somewhere other than ~/.stackunderflow — a store copied off another machine, or a backup's stackunderflow-state/ directory. Same as setting STACKUNDERFLOW_HOME. |
 
-### `status` — TRANCHE-1 · W8-T1 · RS-8-089*
+### `status` — PORTED · W8-T1 · RS-8-089*
 
 > Compact one-liner: today + month cost and message counts.
 
@@ -1330,7 +1335,7 @@ Subcommands: `clean`, `generate`, `list`
 | `--ingest` | opt | boolean | `False` | flag, dest=do_ingest | Force a fresh ingest+backfill pass before running the command. Useful when 'stackunderflow start' is not active. |
 | `--auto-ingest \\| --no-auto-ingest` | opt | boolean | `True` | flag | Refresh the store automatically when its newest event is older than the staleness threshold. Default on. Disable with --no-auto-ingest. |
 
-### `sync` — UNPORTED · W8-T2 · RS-8-096*
+### `sync` — PORTED · W8-T2 · RS-8-096*
 
 > Encrypted, bring-your-own-bucket backup of your analytics aggregates (opt-in).
 
@@ -1338,7 +1343,7 @@ Subcommands: `init`, `pull`, `push`, `status`
 
 *No declared parameters.*
 
-### `sync init` — UNPORTED · W8-T2 · RS-8-097*
+### `sync init` — PORTED · W8-T2 · RS-8-097*
 
 > Generate this device's encryption key and record the bucket destination.
 > 
@@ -1352,7 +1357,7 @@ Subcommands: `init`, `pull`, `push`, `status`
 | `--endpoint` | opt | text | `None` | dest=endpoint_url | Custom object-store endpoint URL (set it for non-default storage providers) |
 | `--force` | opt | boolean | `False` | flag | Replace an existing sync key on this device (destroys access to data encrypted under the old key — back it up first) |
 
-### `sync pull` — UNPORTED · W8-T2 · RS-8-099*
+### `sync pull` — PORTED · W8-T2 · RS-8-099*
 
 > Fetch and merge every OTHER device's encrypted aggregates from your bucket.
 > 
@@ -1367,7 +1372,7 @@ Subcommands: `init`, `pull`, `push`, `status`
 | --- | --- | --- | --- | --- | --- |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Emit machine-readable JSON |
 
-### `sync push` — UNPORTED · W8-T2 · RS-8-098*
+### `sync push` — PORTED · W8-T2 · RS-8-098*
 
 > Encrypt and upload changed aggregate shards to your bucket.
 > 
@@ -1376,7 +1381,7 @@ Subcommands: `init`, `pull`, `push`, `status`
 
 *No declared parameters.*
 
-### `sync status` — UNPORTED · W8-T2 · RS-8-100*
+### `sync status` — PORTED · W8-T2 · RS-8-100*
 
 > Show sync configuration and how many shards are pending upload (local only).
 
@@ -1384,7 +1389,7 @@ Subcommands: `init`, `pull`, `push`, `status`
 | --- | --- | --- | --- | --- | --- |
 | `--json` | opt | boolean | `False` | flag, dest=as_json | Emit machine-readable JSON |
 
-### `today` — UNPORTED · W8-T3 · RS-8-076, RS-5-002
+### `today` — PORTED · W8-T3 · RS-8-076, RS-5-002
 
 > Today's usage.
 
@@ -1429,7 +1434,7 @@ Subcommands: `attribute`, `list`
 | `--project` | opt | path(file_okay=True, dir_okay=True, exists=False) | `None` | — | Project log path or repo root to scan; omit to scan every known root. |
 | `--format` | opt | choice[text, json] | `'text'` | dest=fmt | Output format (text or json). |
 
-### `yield` — UNPORTED · W8-T3 · RS-8-079
+### `yield` — PORTED · W8-T3 · RS-8-079
 
 > Yield analysis: productive vs reverted vs abandoned sessions.
 > 

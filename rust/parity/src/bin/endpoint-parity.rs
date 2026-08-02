@@ -14,6 +14,12 @@
 //!
 //! Exit: `0` every case identical (known-open cases excepted, and reported),
 //! `1` a real divergence, `2` a harness failure.
+//!
+//! The tally line carries five numbers, not four: `flip-candidate` counts the
+//! `!` rows that came back byte-identical (DIV-348). They used to be folded into
+//! `identical`, which is how the `!`-row count and the known-open tally could
+//! disagree with nobody able to see it — and it meant "identical" included rows
+//! the gate was not defending.
 
 #![forbid(unsafe_code)]
 
@@ -98,6 +104,7 @@ fn main() {
     let mut tally = Tally::default();
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut open: Vec<(String, String)> = Vec::new();
+    let mut flips: Vec<String> = Vec::new();
 
     for case in &cases {
         let outcome = run_case(case, py_port, rs_port, timeout);
@@ -106,6 +113,7 @@ fn main() {
             Verdict::Identical => "ok  ",
             Verdict::Divergent(_) => "DIFF",
             Verdict::KnownOpen(_) => "open",
+            Verdict::FlipCandidate => "FLIP",
             Verdict::Error(_) => "ERR ",
         };
         println!(
@@ -121,8 +129,26 @@ fn main() {
                 open.push((case.id.clone(), detail.clone()));
                 persist(&diffs, case, py_port, rs_port, timeout);
             }
+            Verdict::FlipCandidate => flips.push(case.id.clone()),
             Verdict::Identical => {}
         }
+    }
+
+    // DIV-348. Printed BEFORE the known-opens so it cannot read as part of the
+    // bad news: these rows agree today and are marked open only because nobody
+    // has struck the `!`. A `!` that agrees run after run is a row the gate
+    // could be defending and is not.
+    if !flips.is_empty() {
+        println!("\n--- KNOWN-OPEN NOW PASSING — FLIP CANDIDATES ---");
+        for id in &flips {
+            println!("  {id}");
+        }
+        println!(
+            "  >>  {} `!` row(s) above are byte-identical. Strike the `!` in the case\n\
+             \x20 >>  file to promote them, or record why the `!` must stay (a wall-clock\n\
+             \x20 >>  stamp, a machine-dependent leg). They are NOT counted as identical.",
+            flips.len()
+        );
     }
 
     if !open.is_empty() {
@@ -146,10 +172,11 @@ fn main() {
     }
 
     println!(
-        "\ntally: {} identical · {} divergent · {} known-open · {} errors  (of {})",
+        "\ntally: {} identical · {} divergent · {} known-open · {} flip-candidate · {} errors  (of {})",
         tally.identical,
         tally.divergent,
         tally.known_open,
+        tally.flip_candidates,
         tally.errors,
         cases.len()
     );

@@ -193,7 +193,7 @@ V-pull-unknown-family	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaa
 V-pull-column-drift	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	column-mismatch
 V-pull-no-shards	pull	@A	@B	@BUCKET	bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb	aaaaaaaaaaaa4aaaaaaaaaaaaaaaaaaa	2026-07-31T13:00:00+00:00	no-shards
 
-# ── sync/runner.py — status (DIV-133's expensive read) ──────────────────────
+# ── sync/runner.py — status (DIV-358's expensive read) ──────────────────────
 T-status-off	status	@EMPTY
 T-status-a	status	@A
 T-status-b	status	@B

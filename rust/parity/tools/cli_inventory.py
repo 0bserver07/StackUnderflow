@@ -20,6 +20,8 @@ assignment, and it is reviewed at each tranche gate.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,7 +32,16 @@ from stackunderflow.cli import cli as ROOT
 
 # ── the only judgment in this file: port state + wave assignment ─────────────
 #
-# status ∈ {PORTED, TRANCHE-1, PARTIAL, UNPORTED}
+# status ∈ {PORTED, PARTIAL, UNPORTED}
+#
+# RECONCILED 2026-08-01 (closing pass, DIV-346). The map is judgment, but it
+# is judgment about a fact, and the fact had moved under it: 43 of 105 nodes
+# disagreed with the shipped binary — not just the five `sync` ones DIV-346
+# named. `TRANCHE-1` is retired as a status: every tranche has landed, so
+# "this tranche" no longer names a state. `verify_against_binary()` below now
+# checks the map against `target/release/stax` on every regeneration, which is
+# the mechanical guard DIV-346 asked for — an inventory that is correct at
+# generation time and silently wrong afterwards is what got audited.
 STATUS: dict[str, tuple[str, str, str]] = {
     "": ("PARTIAL", "W8-T1", "—"),
     # ── wave 1, landed and gated by rust/parity-cli.sh ───────────────────────
@@ -48,42 +59,42 @@ STATUS: dict[str, tuple[str, str, str]] = {
     "find-sessions-where-action-worked": ("PORTED", "W1", "RS-1-013"),
     "search-past-decisions": ("PORTED", "W1", "RS-1-020"),
     # ── wave 8 tranche 1 — this pass ─────────────────────────────────────────
-    "cfg": ("TRANCHE-1", "W8-T1", "RS-8-015"),
-    "cfg ls": ("TRANCHE-1", "W8-T1", "RS-8-032"),
-    "cfg set": ("TRANCHE-1", "W8-T1", "RS-8-037"),
-    "cfg rm": ("TRANCHE-1", "W8-T1", "RS-8-036"),
-    "cfg model-alias": ("TRANCHE-1", "W8-T1", "RS-8-016"),
-    "cfg model-alias ls": ("TRANCHE-1", "W8-T1", "RS-8-033"),
-    "cfg model-alias rm": ("TRANCHE-1", "W8-T1", "RS-8-034"),
-    "cfg model-alias set": ("TRANCHE-1", "W8-T1", "RS-8-035"),
-    "config": ("TRANCHE-1", "W8-T1", "RS-8-017"),
-    "config show": ("TRANCHE-1", "W8-T1", "RS-8-041"),
-    "config set": ("TRANCHE-1", "W8-T1", "RS-8-040"),
-    "config unset": ("TRANCHE-1", "W8-T1", "RS-8-042"),
-    "clear-cache": ("TRANCHE-1", "W8-T1", "RS-8-038"),
-    "status": ("TRANCHE-1", "W8-T1", "RS-8-089*"),
-    "backup": ("TRANCHE-1", "W8-T1", "RS-8-090*"),
-    "backup list": ("TRANCHE-1", "W8-T1", "RS-8-091*"),
-    "backup verify": ("TRANCHE-1", "W8-T1", "RS-8-092*"),
+    "cfg": ("PORTED", "W8-T1", "RS-8-015"),
+    "cfg ls": ("PORTED", "W8-T1", "RS-8-032"),
+    "cfg set": ("PORTED", "W8-T1", "RS-8-037"),
+    "cfg rm": ("PORTED", "W8-T1", "RS-8-036"),
+    "cfg model-alias": ("PORTED", "W8-T1", "RS-8-016"),
+    "cfg model-alias ls": ("PORTED", "W8-T1", "RS-8-033"),
+    "cfg model-alias rm": ("PORTED", "W8-T1", "RS-8-034"),
+    "cfg model-alias set": ("PORTED", "W8-T1", "RS-8-035"),
+    "config": ("PORTED", "W8-T1", "RS-8-017"),
+    "config show": ("PORTED", "W8-T1", "RS-8-041"),
+    "config set": ("PORTED", "W8-T1", "RS-8-040"),
+    "config unset": ("PORTED", "W8-T1", "RS-8-042"),
+    "clear-cache": ("PORTED", "W8-T1", "RS-8-038"),
+    "status": ("PORTED", "W8-T1", "RS-8-089*"),
+    "backup": ("PORTED", "W8-T1", "RS-8-090*"),
+    "backup list": ("PORTED", "W8-T1", "RS-8-091*"),
+    "backup verify": ("PORTED", "W8-T1", "RS-8-092*"),
     # ── wave 8 tranche 2 — writers (rsync / launchd / network / installers) ──
-    "backup create": ("UNPORTED", "W8-T2", "RS-8-093*"),
-    "backup restore": ("UNPORTED", "W8-T2", "RS-8-094*"),
-    "backup auto": ("UNPORTED", "W8-T2", "RS-8-095*, RS-8-080"),
-    "sync": ("UNPORTED", "W8-T2", "RS-8-096*"),
-    "sync init": ("UNPORTED", "W8-T2", "RS-8-097*"),
-    "sync push": ("UNPORTED", "W8-T2", "RS-8-098*"),
-    "sync pull": ("UNPORTED", "W8-T2", "RS-8-099*"),
-    "sync status": ("UNPORTED", "W8-T2", "RS-8-100*"),
-    "hooks": ("UNPORTED", "W8-T2", "RS-8-021"),
-    "hooks install": ("UNPORTED", "W8-T2", "RS-8-054, RS-8-004"),
-    "hooks repair": ("UNPORTED", "W8-T2", "RS-8-055, RS-8-005"),
-    "hooks run": ("UNPORTED", "W8-T2", "RS-8-056"),
-    "hooks status": ("UNPORTED", "W8-T2", "RS-8-057"),
-    "hooks uninstall": ("UNPORTED", "W8-T2", "RS-8-058"),
-    "guide": ("UNPORTED", "W8-T2", "RS-8-020"),
-    "guide install": ("UNPORTED", "W8-T2", "RS-8-051, RS-8-001"),
-    "guide status": ("UNPORTED", "W8-T2", "RS-8-052"),
-    "guide uninstall": ("UNPORTED", "W8-T2", "RS-8-053"),
+    "backup create": ("PORTED", "W8-T2", "RS-8-093*"),
+    "backup restore": ("PORTED", "W8-T2", "RS-8-094*"),
+    "backup auto": ("PORTED", "W8-T2", "RS-8-095*, RS-8-080"),
+    "sync": ("PORTED", "W8-T2", "RS-8-096*"),
+    "sync init": ("PORTED", "W8-T2", "RS-8-097*"),
+    "sync push": ("PORTED", "W8-T2", "RS-8-098*"),
+    "sync pull": ("PORTED", "W8-T2", "RS-8-099*"),
+    "sync status": ("PORTED", "W8-T2", "RS-8-100*"),
+    "hooks": ("PORTED", "W8-T2", "RS-8-021"),
+    "hooks install": ("PORTED", "W8-T2", "RS-8-054, RS-8-004"),
+    "hooks repair": ("PORTED", "W8-T2", "RS-8-055, RS-8-005"),
+    "hooks run": ("PORTED", "W8-T2", "RS-8-056"),
+    "hooks status": ("PORTED", "W8-T2", "RS-8-057"),
+    "hooks uninstall": ("PORTED", "W8-T2", "RS-8-058"),
+    "guide": ("PORTED", "W8-T2", "RS-8-020"),
+    "guide install": ("PORTED", "W8-T2", "RS-8-051, RS-8-001"),
+    "guide status": ("PORTED", "W8-T2", "RS-8-052"),
+    "guide uninstall": ("PORTED", "W8-T2", "RS-8-053"),
     "import": ("UNPORTED", "W8-T2", "RS-8-101*"),
     "reindex": ("UNPORTED", "W8-T2", "RS-8-102*"),
     "etl": ("UNPORTED", "W8-T2", "RS-8-103*"),
@@ -97,27 +108,27 @@ STATUS: dict[str, tuple[str, str, str]] = {
     "pricing": ("UNPORTED", "W8-T2", "RS-8-108*"),
     "pricing doctor": ("UNPORTED", "W8-T2", "RS-8-109*"),
     # ── wave 8 tranche 3 — the spend + reports family ────────────────────────
-    "report": ("UNPORTED", "W8-T3", "RS-8-070, RS-5-002"),
-    "today": ("UNPORTED", "W8-T3", "RS-8-076, RS-5-002"),
-    "month": ("UNPORTED", "W8-T3", "RS-8-060, RS-5-002"),
+    "report": ("PORTED", "W8-T3", "RS-8-070, RS-5-002"),
+    "today": ("PORTED", "W8-T3", "RS-8-076, RS-5-002"),
+    "month": ("PORTED", "W8-T3", "RS-8-060, RS-5-002"),
     "export": ("UNPORTED", "W8-T3", "RS-8-050, RS-5-005"),
     "compare": ("UNPORTED", "W8-T3", "RS-8-039"),
     "optimize": ("UNPORTED", "W8-T3", "RS-8-061, RS-5-007"),
-    "yield": ("UNPORTED", "W8-T3", "RS-8-079"),
-    "context-budget": ("UNPORTED", "W8-T3", "RS-8-043"),
+    "yield": ("PORTED", "W8-T3", "RS-8-079"),
+    "context-budget": ("PORTED", "W8-T3", "RS-8-043"),
     "context-replay": ("UNPORTED", "W8-T3", "RS-8-044"),
     "doctor": ("UNPORTED", "W8-T3", "RS-8-049"),
     "benchmark": ("UNPORTED", "W8-T3", "RS-8-014"),
     "benchmark show": ("UNPORTED", "W8-T3", "RS-8-031, RS-5-004"),
     "benchmark recommend": ("UNPORTED", "W8-T3", "RS-8-030, RS-5-004"),
-    "plan": ("UNPORTED", "W8-T3", "RS-8-022"),
-    "plan show": ("UNPORTED", "W8-T3", "RS-8-064"),
-    "plan set": ("UNPORTED", "W8-T3", "RS-8-063"),
-    "plan reset": ("UNPORTED", "W8-T3", "RS-8-062"),
-    "plan thresholds": ("UNPORTED", "W8-T3", "RS-8-023"),
-    "plan thresholds show": ("UNPORTED", "W8-T3", "RS-8-067"),
-    "plan thresholds set": ("UNPORTED", "W8-T3", "RS-8-066"),
-    "plan thresholds reset": ("UNPORTED", "W8-T3", "RS-8-065"),
+    "plan": ("PORTED", "W8-T3", "RS-8-022"),
+    "plan show": ("PORTED", "W8-T3", "RS-8-064"),
+    "plan set": ("PORTED", "W8-T3", "RS-8-063"),
+    "plan reset": ("PORTED", "W8-T3", "RS-8-062"),
+    "plan thresholds": ("PORTED", "W8-T3", "RS-8-023"),
+    "plan thresholds show": ("PORTED", "W8-T3", "RS-8-067"),
+    "plan thresholds set": ("PORTED", "W8-T3", "RS-8-066"),
+    "plan thresholds reset": ("PORTED", "W8-T3", "RS-8-065"),
     "risk": ("UNPORTED", "W8-T3", "RS-8-025"),
     "risk file": ("UNPORTED", "W8-T3", "RS-8-071, RS-8-011"),
     "analyze quality": ("UNPORTED", "W8-T3", "RS-8-028"),
@@ -126,19 +137,19 @@ STATUS: dict[str, tuple[str, str, str]] = {
     "worktrees list": ("UNPORTED", "W8-T3", "RS-8-078"),
     "worktrees attribute": ("UNPORTED", "W8-T3", "RS-8-077"),
     # ── wave 8 tranche 4 — skills / docs / recommend (large services) ────────
-    "skills": ("UNPORTED", "W8-T4", "RS-8-026"),
-    "skills list": ("UNPORTED", "W8-T4", "RS-8-074, RS-8-013"),
-    "skills generate": ("UNPORTED", "W8-T4", "RS-8-073, RS-8-013"),
-    "skills clean": ("UNPORTED", "W8-T4", "RS-8-072, RS-8-013"),
-    "recommend": ("UNPORTED", "W8-T4", "RS-8-024"),
-    "recommend mode": ("UNPORTED", "W8-T4", "RS-8-068"),
-    "recommend skills": ("UNPORTED", "W8-T4", "RS-8-069, RS-8-012"),
-    "docs": ("UNPORTED", "W8-T4", "RS-8-019"),
-    "docs list": ("UNPORTED", "W8-T4", "RS-8-047, RS-8-002"),
-    "docs show": ("UNPORTED", "W8-T4", "RS-8-048, RS-8-002"),
+    "skills": ("PORTED", "W8-T4", "RS-8-026"),
+    "skills list": ("PORTED", "W8-T4", "RS-8-074, RS-8-013"),
+    "skills generate": ("PORTED", "W8-T4", "RS-8-073, RS-8-013"),
+    "skills clean": ("PORTED", "W8-T4", "RS-8-072, RS-8-013"),
+    "recommend": ("PORTED", "W8-T4", "RS-8-024"),
+    "recommend mode": ("PORTED", "W8-T4", "RS-8-068"),
+    "recommend skills": ("PORTED", "W8-T4", "RS-8-069, RS-8-012"),
+    "docs": ("PORTED", "W8-T4", "RS-8-019"),
+    "docs list": ("PORTED", "W8-T4", "RS-8-047, RS-8-002"),
+    "docs show": ("PORTED", "W8-T4", "RS-8-048, RS-8-002"),
     # ── wave 7 — server boot and long-running processes ──────────────────────
-    "start": ("UNPORTED", "W7", "RS-8-075"),
-    "init": ("UNPORTED", "W7", "RS-8-059"),
+    "start": ("PORTED", "W7", "RS-8-075"),
+    "init": ("PORTED", "W7", "RS-8-059"),
     "ingest": ("UNPORTED", "W7", "RS-8-110*"),
     "ingest github": ("UNPORTED", "W7", "RS-8-111*, RS-5-020"),
     "ingest webhook": ("UNPORTED", "W7", "RS-8-112*"),
@@ -148,11 +159,54 @@ STATUS: dict[str, tuple[str, str, str]] = {
 WAVE_LEGEND = """| wave tag | meaning |
 | --- | --- |
 | `W1` | wave 1 — landed, gated every run by `rust/parity-cli.sh` |
-| `W8-T1` | **this tranche** — read-only + config verbs, writers on case-local homes |
+| `W8-T1` | tranche 1 — read-only + config verbs, writers on case-local homes |
 | `W8-T2` | tranche 2 — writers: rsync / launchd / network / installers (argv-differ pattern) |
 | `W8-T3` | tranche 3 — the spend + reports family (`services::{aggregate,export,optimize,…}`) |
 | `W8-T4` | tranche 4 — skills / docs / recommend (`skill_synth.py` 1256 ln, `embedded_docs.py` 306 ln) |
 | `W7` | wave 7 — server boot and long-running processes (`start`, `init`, webhook serve) |"""
+
+
+def verify_against_binary(nodes) -> tuple[list[str], list[str], str]:
+    """Check every `STATUS` claim against the shipped `stax` binary.
+
+    DIV-346's actual complaint was not that the map was wrong — it was that the
+    map is *generated*, therefore correct when written and silently wrong
+    afterwards, with nothing able to notice. This is the noticing. It asks the
+    binary the only question that settles it: does `stax <path> --help` exit 0?
+    That reaches hidden nodes too (`config` and its three leaves are hidden, so
+    walking `--help` output alone would have called four ported verbs missing).
+
+    Returns `(claimed_ported_but_absent, present_but_called_unported, note)`.
+    A missing binary is not a failure — it is a note in the document, because
+    the inventory must still be generatable on a machine with no Rust toolchain.
+    """
+    rs_bin = Path(
+        os.environ.get("STAX_PARITY_RS_BIN", str(Path("rust/target/release/stax")))
+    )
+    if not rs_bin.is_file():
+        return [], [], f"not run — no binary at `{rs_bin}`"
+
+    ghosts: list[str] = []
+    unclaimed: list[str] = []
+    for path, _cmd in nodes:
+        node = " ".join(path)
+        if not node:
+            continue
+        present = (
+            subprocess.run(
+                [str(rs_bin), *path, "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        claimed = STATUS.get(node, ("UNPORTED", "", ""))[0] in ("PORTED", "PARTIAL")
+        if claimed and not present:
+            ghosts.append(node)
+        elif present and not claimed:
+            unclaimed.append(node)
+    return ghosts, unclaimed, f"ran against `{rs_bin}`"
 
 
 def esc(text) -> str:
@@ -234,6 +288,8 @@ def main(out_path: Path) -> None:
         by_status[s] = by_status.get(s, 0) + 1
         by_wave.setdefault(w, []).append((path, cmd))
 
+    ghosts, unclaimed, ver_note = verify_against_binary(nodes)
+
     cli_py = Path("stackunderflow/cli.py")
     line_count = len(cli_py.read_text().splitlines()) if cli_py.is_file() else 0
 
@@ -280,11 +336,40 @@ def main(out_path: Path) -> None:
     A("")
     A("| status | nodes |")
     A("| --- | ---: |")
-    for s in ("PORTED", "TRANCHE-1", "PARTIAL", "UNPORTED"):
+    for s in ("PORTED", "PARTIAL", "UNPORTED"):
         if s in by_status:
             A(f"| {s} | {by_status[s]} |")
     A(f"| **total** | **{len(nodes)}** |")
     A("")
+    A("### 1.1a Verified against the shipped binary — DIV-346's guard")
+    A("")
+    A(
+        "The `STATUS` map above is the file's one piece of judgment, and judgment "
+        "about a moving fact goes stale silently. Every regeneration now asks "
+        "`stax <path> --help` for its exit code and reports the disagreement here, "
+        f"so this section is a **check**, not a claim. This run: {ver_note}."
+    )
+    A("")
+    if ghosts:
+        A("**CLAIMED PORTED, ABSENT FROM THE BINARY** — the map is ahead of the code:")
+        A("")
+        for g in ghosts:
+            A(f"* `{g}`")
+        A("")
+    if unclaimed:
+        A("**PRESENT IN THE BINARY, CALLED UNPORTED** — the map is behind the code:")
+        A("")
+        for u in unclaimed:
+            A(f"* `{u}`")
+        A("")
+    if not ghosts and not unclaimed and ver_note.startswith("ran"):
+        A(
+            "**Zero disagreements.** Every node the map calls ported answers "
+            "`--help` on the shipped binary, and every node the binary answers "
+            "for is called ported. Hidden nodes included: `config` and its three "
+            "leaves appear in no `--help` listing and are reached by exit code."
+        )
+        A("")
     A("### 1.2 By wave assignment")
     A("")
     A("| wave | nodes | leaf commands | groups |")

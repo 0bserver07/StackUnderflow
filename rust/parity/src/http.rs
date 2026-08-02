@@ -79,7 +79,17 @@ pub fn request(
     let mut reader = BufReader::new(stream);
     let status = read_status(&mut reader)?;
     let headers = read_headers(&mut reader)?;
-    let body = read_body(&mut reader, &headers)?;
+    // A `HEAD` response carries the `Content-Length` the `GET` would have had
+    // and NO body (RFC 9110 §9.3.2). Reading it like any other response means
+    // `read_exact` waiting for bytes that will never arrive, then failing on the
+    // `Connection: close` EOF — so every HEAD row would have scored
+    // `Verdict::Error`, which the tally ranks at exit 2 and which takes the rest
+    // of the run with it. DIV-323 needed HEAD rows; HEAD rows needed this.
+    let body = if method.eq_ignore_ascii_case("HEAD") {
+        Vec::new()
+    } else {
+        read_body(&mut reader, &headers)?
+    };
     Ok(Response {
         status,
         headers,
