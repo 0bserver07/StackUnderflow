@@ -1,6 +1,7 @@
 # DIV-c-optimize — divergence ledger for `routes/optimize.py` (batch C, slot 12)
 
 Range assigned: **DIV-110 .. DIV-119**. Case-row prefix: `OPT-`.
+(`DIV-119` was later found to name two findings; this file's is **DIV-482**.)
 Written to disk as each finding happened; the integrator folds these into
 `rust/TASKS-RS.md`.
 
@@ -216,7 +217,18 @@ POST (whose handler is a pure function of the request body). The one thing that
 
 ---
 
-## DIV-119 — pydantic's `json_invalid` body is NOT reproduced byte-for-byte
+## DIV-482 (was DIV-119) — pydantic's `json_invalid` body is NOT reproduced byte-for-byte
+
+> **RENUMBERED + SUPERSEDED, 2026-08-04.** The id collided: the ledger's
+> `DIV-119` is batch C's mart-helper duplication note, and it keeps the id
+> (DIV-480 filed the collision, this section is its behavioural half). More
+> importantly the finding is **closed** — DIV-367's leg replaced the hard-coded
+> shape below with `crate::json::json_invalid_detail`, which runs CPython's own
+> decoder, and the case row this section says is missing now exists:
+> `V-preview-bad-json` (`{oops`). Proof:
+> `rust/endpoint-parity.sh --only V-preview-bad-json` → 1 identical of 1. The
+> text below is left as written, because what it got wrong is the point — the
+> malformed-body leg is FastAPI's, not pydantic's, and no jiter is involved.
 
 **Python** — a `POST /api/optimize/claudemd-preview` whose body is not valid
 JSON answers
@@ -336,7 +348,9 @@ They must not be deduped into one.
 
 All three endpoints landed. The gaps are narrower than an endpoint:
 
-1. **DIV-119** — the malformed-JSON 422 shape, above. No case row claims it.
+1. ~~**DIV-119** — the malformed-JSON 422 shape, above. No case row claims it.~~
+   **CLOSED as DIV-482 (2026-08-04):** ported by DIV-367's leg and rowed as
+   `V-preview-bad-json`; see the renumbering note on that section.
 2. **DIV-113** — `statistics.pstdev`'s exact-rational accumulation, above.
    Reachable only through the MAD == 0 fallback.
 3. **The 413 branch has no case row** (a >2 MB body does not belong in a

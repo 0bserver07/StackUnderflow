@@ -85,11 +85,18 @@ if [ "$DO_BUILD" = 1 ] || [ ! -f "$SRC_HOME/store.db" ]; then
     [ "$DO_BUILD" = 1 ] && exit 0
 fi
 
-if [ ! -x "$RS_BIN" ]; then
-    echo "hooks-parity: building the release binary (the gate compares shipped bytes)"
-    if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
-    ( cd "$HERE" && cargo build --release -p stax-hooks --quiet ) || exit 2
-fi
+# DIV-484: build EVERY run, not only when the binary is missing. This used to
+# be `if [ ! -x "$RS_BIN" ]`, which meant a green run could be measured against
+# a binary older than the code it claims to gate — caught in the act on
+# 2026-08-04, when the checked-out `stax-hooks` predated the agent-inbox
+# interject and the first run of the new rows was green against bytes that did
+# not contain the feature. `endpoint-parity.sh` has always built unconditionally
+# at its top; this is the same rule, for the same reason. An up-to-date tree
+# rebuilds in under a second.
+echo "hooks-parity: building the release binary (the gate compares shipped bytes)"
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+( cd "$HERE" && cargo build --release -p stax-hooks --quiet ) || exit 2
+[ -x "$RS_BIN" ] || { echo "hooks-parity: no binary at $RS_BIN" >&2; exit 2; }
 
 # Determinism: pin everything either implementation could read differently. The
 # hook path reads far less of the environment than the CLI does, but the two
@@ -236,6 +243,23 @@ dump_state() {
     sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+/<TS>/g' "$file"
 }
 
+# The inbox tree — comparison 6, and it exists for the same reason as 4 and 5.
+# `agent_inbox.render_for_injection` has ONE side effect, a rename
+# (`*.json` → `*.seen.json`), and stdout can only show it INDIRECTLY: a later
+# fire that re-announces a message it should have consumed. That is enough to
+# catch a side that never renames, and nothing else — not a side that renames
+# to a different name, not a side that rewrites or deletes the corrupt file it
+# is supposed to skip. Names + content hashes make all of it falsifiable.
+# (DIV-460: before porting a behaviour, ask what the gate would see if the port
+# got it wrong; if the answer is "nothing", fix the gate first.)
+dump_inbox() {
+    (
+        cd "$1" 2>/dev/null || return
+        [ -d inbox ] || { echo "(no inbox)"; return; }
+        find inbox -type f -print0 | LC_ALL=C sort -z | xargs -0 -r md5sum
+    )
+}
+
 # ── the bench ────────────────────────────────────────────────────────────────
 
 bench() {
@@ -306,6 +330,14 @@ if ! diff -u <(dump_state "$PY_HOME") <(dump_state "$RS_HOME") > "$DIFFS/proacti
 else
     rm -f "$DIFFS/proactive_state.diff"
     echo "  ok    proactive_state.json identical (ISO timestamps masked)"
+fi
+if ! diff -u <(dump_inbox "$PY_HOME") <(dump_inbox "$RS_HOME") > "$DIFFS/inbox.diff"; then
+    store_ok=0
+    echo "  FAIL  inbox tree differs — see $DIFFS/inbox.diff"
+    head -40 "$DIFFS/inbox.diff"
+else
+    rm -f "$DIFFS/inbox.diff"
+    echo "  ok    inbox: $(dump_inbox "$PY_HOME" | wc -l) files identical (names + content)"
 fi
 
 echo

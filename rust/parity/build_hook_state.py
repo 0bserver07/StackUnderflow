@@ -29,6 +29,7 @@ Usage:  build_hook_state.py <out-dir> [--force]
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -46,6 +47,65 @@ PROJECT_PATH = "/tmp/stax/hook/parity/proj"
 # A file with real failure history, and one that is merely touched.
 RISKY_FILE = "/tmp/stax/hook/parity/proj/services/discovery.py"
 CLEAN_FILE = "/tmp/stax/hook/parity/proj/README.md"
+
+# ── the agent inbox (DIV-470's residue) ─────────────────────────────────────
+#
+# `inject.build_injection` prepends `agent_inbox.render_for_injection()` on the
+# two mid-session hook ids, and until now this corpus had NO row that reached
+# it: the gate was green with both sides lacking the feature, and stayed green
+# after the reference-sync gave both sides the feature, because nothing here
+# ever put a message in the inbox. A gate that cannot see the branch it covers.
+#
+# Five real messages plus one file that is not a message. The ORDER is
+# load-bearing twice over:
+#
+# * `sorted(base.glob("*/*.json"))` compares whole path STRINGS, so the sender
+#   directories are named to fix the listing order — `aardvark` < `alpha` <
+#   `beta` — and the corrupt file sorts FIRST, which is what proves a skipped
+#   file does not consume one of `MAX_INJECT`'s two slots.
+# * `render_for_injection` is a CONSUMING read (it renames what it showed), so
+#   the corpus's `X-inbox-*` block runs before every other injection row and
+#   drains the inbox for them. Anything appended to that block changes what the
+#   rows after it see.
+#
+# Everything is ASCII except one message. `Path.read_text()` takes its encoding
+# from the locale and this harness pins `LC_ALL=C`; on THIS box CPython still
+# decodes UTF-8 (measured), but a box where the C locale is not coerced would
+# make the reference skip that message and the port keep it. See DIV-483.
+INBOX_LONG_TEXT = (
+    # Leads with a 3-byte character so a byte-sliced excerpt cuts two
+    # characters early: `_TEXT_CHARS` is 220 CHARACTERS on both sides.
+    "— tower: "
+    + "the nightly backfill re-priced every opus row and the watermark moved, " * 4
+    + "see the log."
+)
+
+# sender, message id, ts, text. The ts is a fixed string from the file, never a
+# clock, so the rendered line is byte-stable across runs.
+# The LONG one is deliberately in the FIRST batch: with it there the rendered
+# inbox block plus the memory block crosses `inject._clip`'s 800 characters, so
+# `X-inbox-prompt-batch` measures the interaction the join was written for — a
+# chatty peer costs the MEMORY block its tail, because the two are joined before
+# the clip and not after it. Nothing else in the campaign can reach that: the
+# telephone differ's homes have no store, so its inbox block is always alone.
+INBOX_MESSAGES = [
+    ("alpha", "0018000000001-000001", "2026-07-30T09:01:00-0400",
+     "the mac finished the backfill; store.db is 3.9 GB"),
+    ("alpha", "0018000000002-000002", "2026-07-30T09:02:00-0400", INBOX_LONG_TEXT),
+    ("beta", "0018000000003-000003", "2026-07-30T09:03:00-0400",
+     "rate card refreshed — 日本語 tail"),
+    ("beta", "0018000000004-000004", "2026-07-30T09:04:00-0400",
+     "second tower note: nothing to do"),
+    ("beta", "0018000000005-000005", "2026-07-30T09:05:00-0400",
+     "third tower note: the inbox-only leg"),
+]
+
+# Truncated JSON. `list_messages` swallows the decode error and skips the file;
+# it is therefore never renamed, stays unseen forever, and is missing from
+# every count — the reference's "one corrupt message must not block the
+# channel", made falsifiable instead of asserted.
+INBOX_CORRUPT = ("aardvark", "0018000000000-000000",
+                 '{"id": "0018000000000-000000", "from": "aardv')
 
 SESSIONS = [
     # session_id, first_ts, last_ts, message_count, cost_usd
@@ -74,7 +134,19 @@ def _messages(conn) -> None:
       `failed` / `reverted`, because `find_failure_modes_for_file` returns only
       those two and only above `min_confidence = 0.5`.
     """
+    # DIV-483. Every message row here is stamped July 2026, so it belongs in
+    # `messages_202607` — and `schema.apply` creates a partition for the CURRENT
+    # MONTH only. This line used to assume the partition was already there,
+    # which was true for exactly as long as the wall clock said July: from
+    # 2026-08-01 the builder raised `no such table: messages_202607` and the
+    # gate kept passing on a store.db nobody could regenerate. The partition is
+    # created through the product's own `_ensure_partition` (which also rebuilds
+    # the `messages` VIEW the injection reads) rather than a transcription of
+    # its DDL, for the same reason the schema comes from the real migrations.
+    from stackunderflow.ingest.writer import _ensure_partition
+
     partition = "messages_202607"
+    _ensure_partition(conn, partition)
     rows: list[tuple] = []
     seq = 0
 
@@ -136,6 +208,27 @@ def _messages(conn) -> None:
         "VALUES (?, ?, ?, ?, ?, ?, '{}', 10, 20, 30, 40)",
         rows,
     )
+
+
+def _inbox(out: Path) -> None:
+    """Seed `app_dir()/inbox/` — the files the interject rows consume.
+
+    Written as bytes with `ensure_ascii=False`, which is what the transport
+    (`agent_inbox.message_payload`) puts on the wire; a seed written any other
+    way would be proving the harness's JSON writer rather than the product's.
+    """
+    base = out / "inbox"
+    if base.exists():
+        shutil.rmtree(base)
+    for sender, mid, ts, text in INBOX_MESSAGES:
+        body = json.dumps({"id": mid, "from": sender, "ts": ts, "text": text}, ensure_ascii=False)
+        dest = base / sender / f"{mid}.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(body.encode())
+    sender, mid, raw = INBOX_CORRUPT
+    dest = base / sender / f"{mid}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(raw.encode())
 
 
 def build(out: Path, force: bool) -> None:
@@ -235,11 +328,14 @@ def build(out: Path, force: bool) -> None:
     }
     (out / "proactive_signals.json").write_text(json.dumps(signals))
 
+    _inbox(out)
+
     print(f"build_hook_state: wrote {out}")
     print(f"  store.db          {store.stat().st_size:,} bytes")
     print(f"  project slug      {PROJECT_SLUG}")
     print(f"  decoded path      {PROJECT_PATH}")
     print(f"  risky file        {RISKY_FILE}")
+    print(f"  inbox             {len(INBOX_MESSAGES)} messages + 1 corrupt file")
 
 
 if __name__ == "__main__":

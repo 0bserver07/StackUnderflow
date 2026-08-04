@@ -26,6 +26,54 @@
 # nine hooks would be compared only in their silent branch. See that file's
 # docstring.
 
+# ── the agent inbox interject (DIV-470's residue) ───────────────────────────
+#
+# THIS BLOCK RUNS FIRST, AND IT HAS TO. `inject.build_injection` calls
+# `agent_inbox.render_for_injection()` on exactly two of the nine hook ids, and
+# that call is a CONSUMING read: it renames every message it showed
+# (`*.json` → `*.seen.json`) so nothing is announced twice. The seeded inbox is
+# therefore drained by the rows below, in order, and every later `I-prompt-*` /
+# `I-pretool-*` row sees the empty inbox it saw before this block existed.
+# Move these rows down the file and you change what the rows above them print.
+#
+# What each row is for — the state is `build_hook_state.py`'s five messages
+# plus one corrupt file, and `MAX_INJECT` is 2:
+#
+#   X-inbox-start-blind    the MEMBERSHIP test is a test: `session-start` is
+#                          the third injection hook and must NOT touch the
+#                          inbox — five messages unseen, none shown, none
+#                          marked. Its bytes are `I-start-known`'s.
+#   X-inbox-prompt-batch   5 unseen → the first 2, the `… 3 more` line, the
+#                          long message's 220-CHARACTER excerpt (it leads with
+#                          a 3-byte character, so a byte-sliced port cuts two
+#                          characters early), and the `{inbox}\n\n{text}` join
+#                          with a REAL memory block — which the telephone
+#                          differ cannot reach, because its homes have no
+#                          store. Measured 436 + 401 = 839 characters against a
+#                          200-token (800-char) budget, so `_clip` FIRES: the join
+#                          happens before the clip, so a chatty peer costs the
+#                          memory block its tail rather than riding on top of
+#                          the budget. Delete a message and this row stops
+#                          proving that.
+#   X-inbox-pretool-rest   the second interject id, and the batch has advanced:
+#                          3 unseen → the non-ASCII message and `… 1 more`.
+#   X-inbox-only           the branch where the memory half is EMPTY and the
+#                          inbox is not (`/somewhere/else` has no rows): the
+#                          block stands alone, 1 unseen, no `… more` line.
+#   X-inbox-drained-*      the same two payloads as the two rows above, now
+#                          answering with the memory block ALONE. This is what
+#                          proves the rename happened on both sides and that
+#                          the corrupt file — which is never renamed, and never
+#                          counted — does not resurrect the block.
+#   X-inbox-silent         empty inbox AND no memory: empty stdout, exit 0.
+X-inbox-start-blind	stackunderflow-inject-session-start	-	-	{"hook_event_name":"SessionStart","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","source":"startup"}
+X-inbox-prompt-batch	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"fix the cache lookup in services/discovery.py please"}
+X-inbox-pretool-rest	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py","old_string":"a","new_string":"b"}}
+X-inbox-only	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/somewhere/else","prompt":"fix the cache lookup in services/discovery.py"}
+X-inbox-drained-prompt	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/tmp/stax/hook/parity/proj","prompt":"fix the cache lookup in services/discovery.py please"}
+X-inbox-drained-pretool	stackunderflow-inject-pre-tool-use	-	-	{"hook_event_name":"PreToolUse","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Edit","tool_input":{"file_path":"/tmp/stax/hook/parity/proj/services/discovery.py","old_string":"a","new_string":"b"}}
+X-inbox-silent	stackunderflow-inject-user-prompt	-	-	{"hook_event_name":"UserPromptSubmit","cwd":"/somewhere/else","prompt":"fix the cache lookup in services/discovery.py"}
+
 # ── capture: PostToolUse ────────────────────────────────────────────────────
 C-post-fail-exit2	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"hook-parity-session-0001","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_input":{"command":"npm install"},"tool_response":{"exit_code":2,"stderr":"npm ERR! network timeout\nnpm ERR! see log","stdout":""}}
 C-post-fail-error-string	stackunderflow-post-tool-use	-	-	{"hook_event_name":"PostToolUse","session_id":"hook-parity-session-0002","cwd":"/tmp/stax/hook/parity/proj","tool_name":"Bash","tool_response":{"error":"  ModuleNotFoundError: No module named 'stax9'\ntraceback follows  "}}
