@@ -19,6 +19,7 @@ real ``~/.stackunderflow`` is never touched.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -254,6 +255,58 @@ class TestNeverDisrupt:
                 == ""
             )
         assert not (tmp_path / "absent.db").exists()  # never created the file
+
+
+# ── the store is opened read-only ───────────────────────────────────────────
+
+
+class TestReadOnlyStore:
+    """Injection never writes to the store — the module contract, enforced.
+
+    ``_connect`` used to go through ``store.db.connect``, which issues
+    ``PRAGMA journal_mode = WAL`` (and ``mkdir``s the parent). On a store not
+    already in WAL that is a write to the user's live database, from a path
+    that fires on every prompt, in a module whose own docstring says
+    "no writes of our own".
+    """
+
+    def test_connect_refuses_writes(self, seeded) -> None:
+        conn = inject._connect()
+        assert conn is not None
+        try:
+            # Reads work.
+            assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] > 0
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                conn.execute("INSERT INTO projects (provider, slug) VALUES ('x', 'y')")
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("hook_id", INJECT_IDS)
+    def test_a_fire_leaves_a_non_wal_store_untouched(self, seeded, hook_id) -> None:
+        """No journal-mode flip and not one byte changed (DIV-200)."""
+        import hashlib
+
+        project_dir, risky = seeded
+        store_path = deps.store_path
+
+        # Take the store out of WAL first — that is the state in which the old
+        # ``db.connect`` path did its damage.
+        conn = db.connect(store_path)
+        conn.execute("PRAGMA journal_mode = DELETE")
+        conn.close()
+        assert not store_path.with_name(store_path.name + "-wal").exists()
+        before = hashlib.sha256(store_path.read_bytes()).hexdigest()
+
+        payload = {"cwd": str(project_dir), "prompt": "retry backoff", "tool_input": {"file_path": risky}}
+        # The read path still works against a read-only, non-WAL store.
+        assert inject.build_injection(hook_id, payload) != ""
+
+        conn = sqlite3.connect(store_path)
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            conn.close()
+        assert hashlib.sha256(store_path.read_bytes()).hexdigest() == before
 
 
 # ── handlers.run() dispatch ─────────────────────────────────────────────────

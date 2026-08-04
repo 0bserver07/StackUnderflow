@@ -25,7 +25,9 @@ than no injection at all):
   ~200 for the others). The rendered text is hard-clipped to that budget; an
   agent's context window is not a dumping ground.
 * **Fast + read-only.** One fresh process per fire. A couple of indexed
-  ``SELECT``s via the discovery service, no schema apply, no writes of our own.
+  ``SELECT``s via the discovery service, no schema apply, no writes of our own
+  — the store is opened ``mode=ro``, so that last clause is enforced, not
+  merely intended.
 
 The output is Claude Code's context-injection envelope::
 
@@ -114,18 +116,28 @@ def build_injection(hook_id: str, payload: dict | None) -> str:
 
 
 def _connect() -> sqlite3.Connection | None:
-    """Open the store for reading, or ``None`` if it isn't there yet.
+    """Open the store **read-only** for reading, or ``None`` if it isn't there yet.
 
-    No ``schema.apply`` — injection is a reader. A short ``busy_timeout`` keeps
-    a fire under writer contention from stalling the agent: injected context is
-    nice-to-have, so we would rather skip it than wait.
+    ``mode=ro`` is the module contract ("no writes of our own") made
+    mechanical. It used to go through ``store.db.connect``, which ``mkdir``s
+    the parent and issues ``PRAGMA journal_mode = WAL`` — on a store not
+    already in WAL that is a write to the user's live database, from a code
+    path that fires on every prompt. Nothing here needs it: all three
+    injection contexts are ``SELECT``s through the discovery service.
+
+    No ``schema.apply`` either — injection is a reader. A short
+    ``busy_timeout`` keeps a fire under writer contention from stalling the
+    agent: injected context is nice-to-have, so we would rather skip it than
+    wait.
     """
+    import sqlite3
+
     import stackunderflow.deps as deps
-    from stackunderflow.store import db
 
     if not deps.store_path.exists():
         return None
-    conn = db.connect(deps.store_path)
+    conn = sqlite3.connect(f"file:{deps.store_path}?mode=ro", uri=True, isolation_level=None)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 250")
     return conn
 
