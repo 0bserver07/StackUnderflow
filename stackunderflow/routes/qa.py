@@ -1,12 +1,19 @@
 """Q&A pair routes."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.store import db, queries
 
 router = APIRouter()
+
+# Same divisor guard as ``/api/search`` — ``qa_service.list_qa`` computes
+# ``(total + per_page - 1) // per_page``, so ``?per_page=0`` used to raise
+# ZeroDivisionError into a 500 and a negative value reached SQLite as an
+# unbounded ``LIMIT``. FastAPI answers both with its own 422 now; the ceiling
+# stays a silent clamp.
+_PER_PAGE_Q = Query(20, ge=1, description="Results per page (max 100)")
 
 
 @router.get("/api/qa")
@@ -17,7 +24,7 @@ async def list_qa_pairs(
     search: str | None = None,
     resolution_status: str | None = None,
     page: int = 1,
-    per_page: int = 20,
+    per_page: int = _PER_PAGE_Q,
 ):
     """List extracted Q&A pairs with filtering and pagination.
 
@@ -28,7 +35,7 @@ async def list_qa_pairs(
         search: Optional search text within Q&A pairs
         resolution_status: Optional filter; one of 'resolved' | 'looped' | 'open'
         page: Page number (1-indexed)
-        per_page: Results per page (max 100)
+        per_page: Results per page (>= 1, clamped to 100)
     """
     if deps.qa_service is None:
         return JSONResponse(

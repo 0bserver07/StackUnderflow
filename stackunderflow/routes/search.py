@@ -1,12 +1,21 @@
 """Full-text search routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 import stackunderflow.deps as deps
 from stackunderflow.store import db, queries
 
 router = APIRouter()
+
+# ``per_page`` is a divisor: the paging envelope computes
+# ``(total + per_page - 1) // per_page``, so ``?per_page=0`` used to reach
+# CPython's ``ZeroDivisionError`` and surface as a 500, and a negative value
+# reached SQLite as an unbounded ``LIMIT``. The floor is declared here so
+# FastAPI rejects both at validation time with its own 422, before any query
+# runs. The ceiling stays a silent clamp (``min(per_page, 100)`` below) —
+# an over-large page has always been served, not refused.
+_PER_PAGE_Q = Query(20, ge=1, description="Results per page (max 100)")
 
 
 @router.get("/api/search")
@@ -18,7 +27,7 @@ async def search_messages(
     model: str | None = None,
     role: str | None = None,
     page: int = 1,
-    per_page: int = 20,
+    per_page: int = _PER_PAGE_Q,
 ):
     """Full-text search across all indexed Claude Code sessions.
 
@@ -30,7 +39,7 @@ async def search_messages(
         model: Optional model name filter
         role: Optional role filter (user, assistant, etc.)
         page: Page number (1-indexed)
-        per_page: Results per page (max 100)
+        per_page: Results per page (>= 1, clamped to 100)
     """
     if deps.search_service is None:
         return JSONResponse(
