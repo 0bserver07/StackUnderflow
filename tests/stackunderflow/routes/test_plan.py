@@ -7,7 +7,7 @@ frontend's traffic-light contract is locked in.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -466,3 +466,52 @@ class TestSpendMemo:
             # A fresh ingest bumps store.db's mtime → miss → recompute → 9.0.
             mtime["v"] = 2
             assert client.get("/api/plan").json()["usage"]["used"] == pytest.approx(9.0)
+
+    def test_crossing_midnight_busts_cache(self, app_client, tmp_path, monkeypatch):
+        """The local date is part of the memo key (DIV-091).
+
+        ``_spend_daily_window`` truncates the per-day series at
+        ``date.today()``, so the day is an *input* to the answer — but the
+        store mtime cannot see it. A server that served ``/api/plan`` and
+        then crossed midnight with no intervening ingest used to keep
+        serving yesterday's ``daily_costs`` (one element short) until
+        restart, which moves the whole burn projection.
+        """
+        from stackunderflow.routes import plan as plan_mod
+
+        client, _ = app_client
+        p1, p2 = _patch_settings_dir(tmp_path)
+        with p1, p2:
+            plans_mod.set_plan("claude-pro")
+
+            # Store is frozen: same mtime throughout, so only the day moves.
+            monkeypatch.setattr(plan_mod, "_store_mtime_ns", lambda: 111)
+
+            class _FrozenDate(date):
+                today_value = date(2026, 8, 3)
+
+                @classmethod
+                def today(cls):
+                    return cls.today_value
+
+            monkeypatch.setattr(plan_mod, "date", _FrozenDate)
+
+            spends = iter([5.0, 9.0])
+            monkeypatch.setattr(plan_mod, "_spend_in_window", lambda s, e: next(spends))
+            dailies = iter([[1.0, 2.0], [1.0, 2.0, 3.0]])
+            monkeypatch.setattr(plan_mod, "_spend_daily_window", lambda s, e: next(dailies))
+
+            # First poll → miss → 5.0, cached for (revision 111, Aug 3).
+            first = client.get("/api/plan").json()
+            assert first["usage"]["used"] == pytest.approx(5.0)
+            assert first["projection"]["projection_method"] == "linear"
+            # Same day, same revision → hit.
+            assert client.get("/api/plan").json()["usage"]["used"] == pytest.approx(5.0)
+
+            # Midnight passes; nothing was ingested, so the mtime is unmoved.
+            _FrozenDate.today_value = date(2026, 8, 4)
+            body = client.get("/api/plan").json()
+            assert body["usage"]["used"] == pytest.approx(9.0)
+            # The new day's series reached the projector: three non-zero
+            # samples now, which is exactly where the method flips.
+            assert body["projection"]["projection_method"] == "weighted-7d"

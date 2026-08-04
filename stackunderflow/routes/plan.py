@@ -143,15 +143,21 @@ def _spend_daily_window(
 # spend rollup it needs costs ~0.6s: ``build_report`` sums every project's cost
 # across the billing window and ``_spend_daily_window`` walks the per-day series
 # — plus each opens a connection and runs ``schema.apply``. Both inputs only
-# move when a new event is ingested, which bumps ``store.db``'s mtime, so we
-# memoise the USD-denominated ``(used, daily_costs)`` pair keyed on
-# ``(store_path, period_start, period_end)`` and validate it against the store
-# mtime (the same self-evicting pattern as the optimize-route cache). On a hit
-# we never open a connection — ``build_report`` and ``schema.apply`` are
-# skipped. Currency conversion and plan banding run per-request off these cached
-# USD numbers, so a currency switch is a cheap rescale and the cache never has
-# to be flushed on a settings write.
-_SPEND_CACHE: dict[tuple[str, str, str], tuple[int, tuple[float, list[float]]]] = {}
+# move when a new event is ingested, which bumps ``store.db``'s mtime — *and*
+# when the local day rolls over, because ``_spend_daily_window`` truncates the
+# series at ``date.today()``. So we memoise the USD-denominated
+# ``(used, daily_costs)`` pair keyed on
+# ``(store_path, period_start, period_end, today)`` and validate it against the
+# store mtime (the same self-evicting pattern as the optimize-route cache).
+# The local date is part of the KEY, not the validator: without it a server
+# that crossed midnight with no intervening ingest kept serving yesterday's
+# ``daily_costs`` — one element short — until restart, which moves
+# ``daily_burn_usd``, ``projected_month_end_usd`` and the alert. On a hit we
+# never open a connection — ``build_report`` and ``schema.apply`` are skipped.
+# Currency conversion and plan banding run per-request off these cached USD
+# numbers, so a currency switch is a cheap rescale and the cache never has to
+# be flushed on a settings write.
+_SPEND_CACHE: dict[tuple[str, str, str, str], tuple[int, tuple[float, list[float]]]] = {}
 _SPEND_CACHE_LOCK = threading.Lock()
 _SPEND_CACHE_MAX = 8
 
@@ -178,9 +184,11 @@ def _spend_for_window(period_start: str, period_end: str) -> tuple[float, list[f
     :func:`_spend_daily_window` — and cached against the store mtime. Repeat
     polls inside one revision skip the ~0.6s ``build_report`` pass (and the
     per-request ``schema.apply``); a fresh ingest bumps the mtime and the
-    entry drifts out naturally.
+    entry drifts out naturally. The local date is in the key because the
+    per-day series ends at ``date.today()``: crossing midnight is a new
+    answer, not a stale one.
     """
-    key = (str(deps.store_path), period_start, period_end)
+    key = (str(deps.store_path), period_start, period_end, date.today().isoformat())
     mtime = _store_mtime_ns()
     with _SPEND_CACHE_LOCK:
         hit = _SPEND_CACHE.get(key)
