@@ -80,7 +80,7 @@ stax-adapters = { path = "../stax-adapters" }
 # same way, and everything else in `ingest` (the writer, the watermarks, the
 # enumerate pass) stays available there.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-notify = { version = "8.2.0", default-features = false }
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 # `tests/fixture_parity.rs` runs the SAME fourteen fixture packs through
