@@ -57,11 +57,19 @@
 //! file is restored byte for byte" would have been the convenient claim and it
 //! is not true: one key remains, holding the default.
 //!
-//! `clear_currency_memo()` / `invalidate_dashboard_cache()` /
-//! `_invalidate_stats_cache()` have no port: the corresponding memos do not
-//! exist here (DIV-055 records the missing `/api/stats` memo). They change
-//! nothing about any response body, so the omission is a timing difference, not
-//! a divergence.
+//! `clear_currency_memo()` and `invalidate_dashboard_cache()` still have no
+//! port: neither memo exists here, and neither changes a response body, so the
+//! omission is a timing difference rather than a divergence.
+//!
+//! **`_invalidate_stats_cache()` is a different story now.** DIV-055's memo was
+//! ruled and ported, so both alias writers below drop it — and this is the one
+//! invalidation in the set that is *not* merely defensive. A model alias changes
+//! how rows are AGGREGATED without touching a single session row, so the
+//! sessions signature does not move and the memo would happily keep serving
+//! pre-alias grouping until the next ingest. Python found that bug the hard way
+//! (its invalidator had no production caller at all until this was wired), which
+//! is exactly why porting the memo meant porting its four drop sites in the same
+//! pass rather than "later".
 
 use std::path::Path;
 
@@ -402,6 +410,12 @@ async fn set_model_alias(
     let mut aliases = read_aliases(&app_dir);
     aliases.insert(src, Value::from(dst));
     persist_aliases(&app_dir, &aliases)?;
+    // `_invalidate_stats_cache()` — DIV-055's memo, FULL clear. An alias is
+    // global, not per-slug, and Python's own comment says why it cannot be left
+    // to the self-invalidation: "the stats memo aggregates per-model too, and
+    // its sessions signature does NOT move on a config edit". This is the site
+    // that had no production caller at all before Python wired it up.
+    state.stats_memo().invalidate(None);
 
     let mut payload = Map::new();
     payload.insert("aliases".to_owned(), Value::Object(aliases));
@@ -433,6 +447,8 @@ async fn delete_model_alias(
     }
     aliases.shift_remove(&src);
     persist_aliases(&app_dir, &aliases)?;
+    // "same blast radius as the set path above" — DIV-055.
+    state.stats_memo().invalidate(None);
 
     let mut payload = Map::new();
     payload.insert("aliases".to_owned(), Value::Object(aliases));

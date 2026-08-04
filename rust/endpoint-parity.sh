@@ -56,6 +56,15 @@
 # divergence, 2 on a setup failure. ci.sh's gate 6 calls it with no arguments.
 set -uo pipefail
 
+# DIV-472: two concurrent runs share HOME_DIR/target and kill each other,
+# reporting as 100-500 row "errors" while erasing each other's logs. One
+# run at a time, failing fast and loud.
+exec 9>"${TMPDIR:-/tmp}/stax-endpoint-parity.lock"
+if ! flock -n 9; then
+    echo "endpoint-parity: another run holds the lock (DIV-472) — refusing" >&2
+    exit 2
+fi
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 

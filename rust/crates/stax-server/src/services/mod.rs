@@ -81,6 +81,19 @@ pub mod playback_fs;
 pub mod pricing_refresh;
 pub mod session_compare;
 
+// ── the rulings pass: `routes/cost.py`'s cross-request memo ───────────────────
+//
+// | Module | Python source | Consumed by |
+// |---|---|---|
+// | [`stats_memo`] | `routes/cost.py::_project_stats_cached` | `routes/data.rs`, `routes/cost.rs`, `routes/commands.rs` |
+//
+// It lives here rather than in `routes/cost.rs` for the reason Python's
+// docstring gives for its own placement being awkward: three route modules share
+// it, and `routes/data.py` already has to import it back out of `cost.py`
+// (`data.py` line 29) because putting it the other way round would cycle. A
+// service module has no such problem.
+pub mod stats_memo;
+
 // ── wave 8 tranche 3: the report layer moved out, and the paths did not ───────
 //
 // Twenty-two of the modules above are now `stax-reports`'s. The reason is in

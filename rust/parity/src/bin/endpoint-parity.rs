@@ -194,8 +194,22 @@ fn persist(
     timeout: Duration,
 ) {
     let body = case.body.as_deref().map(str::as_bytes);
-    let py = http::request(py_port, &case.method, &case.target, body, timeout);
-    let rs = http::request(rs_port, &case.method, &case.target, body, timeout);
+    let py = http::request(
+        py_port,
+        &case.method,
+        &case.target,
+        body,
+        &case.headers,
+        timeout,
+    );
+    let rs = http::request(
+        rs_port,
+        &case.method,
+        &case.target,
+        body,
+        &case.headers,
+        timeout,
+    );
     if let (Ok(py), Ok(rs)) = (py, rs)
         && let Err(err) = stax_parity::endpoints::dump_bodies(dir, case, &py.body, &rs.body)
     {

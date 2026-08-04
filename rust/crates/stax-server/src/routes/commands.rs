@@ -45,17 +45,18 @@ use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_4
 use crate::pyops::path_name;
 use crate::qs::Query;
 use crate::services::mart_queries::table_exists;
+use crate::services::stats_memo;
 use crate::state::AppState;
 
 /// `_DEFAULT_LIMIT` / `_MAX_LIMIT`.
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 500;
 
-/// `routes/cost.py::_TZ_OFFSET_MIN` / `_MAX`, reached through
-/// `_project_stats_cached`'s clamp — `/api/tool-distribution` funnels through it
-/// too, so the clamp applies here.
-const TZ_OFFSET_MIN: i64 = -720;
-const TZ_OFFSET_MAX: i64 = 840;
+// `_TZ_OFFSET_MIN` / `_MAX` moved to `crate::services::stats_memo` with the
+// `_clamp_tz_offset` that is their only reader — DIV-055. Three copies of a
+// two-line constant existed because the clamp was open-coded at three call
+// sites; the memo funnels all three now, exactly as `_project_stats_cached`
+// does in Python.
 
 /// Mount this module's endpoints onto `router`.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
@@ -568,9 +569,6 @@ fn tool_distribution(
     }
     let project_ids: Vec<i64> = rows.into_iter().map(|(id, _)| id).collect();
 
-    // `_project_stats_cached` clamps the offset before both the cache key and
-    // the `get_project_stats` call.
-    let tz_offset = timezone_offset.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX);
     // The primed price-book engine, not `default_engine`'s manifest — see the
     // note in `routes/data.rs::compute_stats`. Nothing this route *returns* is
     // priced, but the sweep it runs is the same one `/api/stats` runs, and two
@@ -578,9 +576,36 @@ fn tool_distribution(
     // survives a fix to only one of them.
     let engine = crate::pricing::engine(&conn, state.package_dir())
         .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    let (_messages, stats) =
-        stax_etl::stats::dataset::get_project_stats_with(&conn, &project_ids, tz_offset, &engine)
-            .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    // The THIRD consumer of DIV-055's shared entry — `commands.py` line 311.
+    // "so the Overview tab doesn't recompute the full pipeline a third time",
+    // and it reads only `user_interactions`, so that is all it copies out of a
+    // 5.5-19 MB dict. The clamp is inside `project_stats_cached`.
+    //
+    // The id tuple is in the key, which is what stops a provider-narrowed sweep
+    // from colliding with the slug's all-provider entry — Python says so at this
+    // exact call site, and it is the reason the key is a tuple and not a slug.
+    let stats = stats_memo::project_stats_cached(
+        state.stats_memo(),
+        &conn,
+        &stats_memo::StatsRequest {
+            store_path: state.store_path(),
+            slug: &slug,
+            project_ids: &project_ids,
+            tz_offset: timezone_offset,
+            keys: Some(&["user_interactions"]),
+        },
+        |err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+        |tz_offset| {
+            stax_etl::stats::dataset::get_project_stats_with(
+                &conn,
+                &project_ids,
+                tz_offset,
+                &engine,
+            )
+            .map(|(_messages, stats)| stats)
+            .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+        },
+    )?;
     drop(conn);
 
     let ui = stats.get("user_interactions");

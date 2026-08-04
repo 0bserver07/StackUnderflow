@@ -1,15 +1,22 @@
 # The endpoint differ's case matrix — `rust/endpoint-parity.sh` reads this file.
 #
-# Format:  <id> | <METHOD> | <path-and-query> | <json body or ->
+# Format:  <id> | <METHOD> | <path-and-query> | <json body or -> | <headers or ->
 #
 #   id      stable; names the dumped bodies under .parity-state/endpoint-diffs/
 #           A LEADING `!` marks a KNOWN-OPEN case: the differ reports it in full
 #           under a loud banner and does NOT fail the gate. Unported endpoints
 #           belong here, in the file, not missing from it — "we know" beats
 #           "nobody looked".
-#   METHOD  GET / POST / PUT / DELETE
+#   METHOD  GET / POST / PUT / DELETE / HEAD / OPTIONS
 #   target  sent verbatim, query string included; it is not re-encoded
 #   body    JSON, sent as application/json; `-` or empty means no body
+#   headers OPTIONAL fifth field: `Name: value` lines separated by `;;`.
+#           `;;` and not `;`, because a header VALUE contains `;`
+#           (`text/html; charset=utf-8`) and `,` (`X-Foo, Content-Type`).
+#           Added by the rulings pass for DIV-050: `CORSMiddleware` returns
+#           immediately when there is no `Origin`, so 763 rows of evidence said
+#           nothing whatever about it and it could not be ported honestly until
+#           a row could reach it.
 #
 # ORDER IS SIGNIFICANT. `deps.current_log_path` is server state that
 # `POST /api/project-by-dir` writes and every project-scoped GET reads, so the
@@ -342,6 +349,31 @@ X-operators         | GET | /api/search?q=use+NOT+null           | -
 X-quote             | GET | /api/search?q=%22unbalanced          | -
 X-multi-word        | GET | /api/search?q=session+fk+index&per_page=5 | -
 X-bad-int          | GET | /api/search?page=abc                 | -
+# DIV-079 — `per_page` is a DIVISOR and was clamped from above only, so
+# `?per_page=0` reached `(total + per_page - 1) // per_page` and came back a
+# **500** (ZeroDivisionError through the handler's blanket `except`), while a
+# negative reached SQLite as an unbounded `LIMIT`. Fixed Python-first under
+# ruling 8: `per_page: int = Query(20, ge=1)`, so both legs are pydantic's
+# `greater_than_equal` 422 — a DIFFERENT body from `X-bad-int`'s
+# `int_parsing`, because a bound failure carries a `ctx`. Both legs are pinned
+# on both endpoints; the ceiling stays a silent clamp (`X-perpage-clamp`,
+# `Q-list-clamp`), which is the asymmetry these rows exist to hold still.
+X-perpage-zero      | GET | /api/search?q=sqlite&per_page=0      | -
+X-perpage-negative  | GET | /api/search?q=sqlite&per_page=-5     | -
+# The floor is checked on the EMPTY-query path too — the early return echoes
+# `per_page`, so a guard placed after it would have shipped a 200 here.
+X-perpage-zero-empty | GET | /api/search?q=&per_page=0           | -
+# DIV-471 — the floor made DIV-107's bignum leg REACHABLE on this param, and
+# ruling 4's saturating `opt_pyint` is what makes it come out right: pydantic's
+# ints are arbitrary-precision, so a huge positive COERCES, clears `ge=1`, and
+# `min(per_page, 100)` clamps it to 100 (a 200, not a 422) — while a huge
+# negative clears coercion and fails the bound, echoing the raw string. Two
+# rulings meet on these rows; neither alone answers both legs.
+X-perpage-bignum     | GET | /api/search?q=sqlite&per_page=99999999999999999999999 | -
+X-perpage-bignum-neg | GET | /api/search?q=sqlite&per_page=-99999999999999999999999 | -
+# `5.5` is NOT an integer to pydantic even though the float is representable —
+# `int_parsing`, no `ctx`. The third of the three shapes this param can answer.
+X-perpage-float      | GET | /api/search?q=sqlite&per_page=5.5    | -
 # DIV-078 / `POST /api/search/reindex` is DELIBERATELY ABSENT — see the
 # "destructive rows" note in this file's header. It rebuilt the shared
 # `.parity-state/fresh` search index (0 -> 383,580 rows, 520 MB, 192 s) on the
@@ -360,6 +392,13 @@ Q-dates             | GET | /api/qa?date_from=2026-01-01&date_to=2026-06-30 | -
 Q-stats             | GET | /api/qa/stats                        | -
 Q-byid-missing      | GET | /api/qa/no-such-qa-pair              | -
 Q-bad-int          | GET | /api/qa?page=abc                     | -
+# DIV-079's other half — same divisor, same declared floor, same bytes but
+# for the `loc`. See the note above `X-perpage-zero`.
+Q-perpage-zero      | GET | /api/qa?per_page=0                   | -
+Q-perpage-negative  | GET | /api/qa?per_page=-5                  | -
+# DIV-471's other half — see the note above `X-perpage-bignum`.
+Q-perpage-bignum     | GET | /api/qa?per_page=99999999999999999999999 | -
+Q-perpage-bignum-neg | GET | /api/qa?per_page=-99999999999999999999999 | -
 # DIV-080 / `POST /api/qa/reindex` is DELIBERATELY ABSENT, same reason.
 # ── tags — this block mutates tags.json and cleans up after itself ───────────
 T-cloud             | GET | /api/tags                            | -
@@ -804,13 +843,61 @@ PL-plan-delete      | DELETE | /api/plan                       | -
 # starlette's plain-text default. `/api/plans` (plural) is the typo a client
 # actually makes; the trailing slash is the one a proxy adds.
 PL-plan-plural      | GET | /api/plans                         | -
-# `/api/plan/` (trailing slash) is starlette's `redirect_slashes`: it answers
-# 307 with a `location` header, and axum 0.8 removed the equivalent. This is an
-# APP-LEVEL gap — it applies to EVERY one of the 93 endpoints, not to plan —
-# so the row is known-open and the fix (a `NormalizePathLayer` in `lib.rs`, or
-# 93 duplicate routes) is the architect's to place. DIV-133.
-!PL-plan-slash       | GET | /api/plan/                         | -
+# ── DIV-133 — CLOSED by the rulings pass. `redirect_slashes`, all of it ─────
+#
+# `/api/plan/` was the one row in the matrix that sent a trailing slash, and it
+# was `!` because the answer is a `307` on EVERY one of the 93 endpoints and
+# `NormalizePathLayer` (the obvious fix) answers `200`. `crate::path_semantics`
+# reproduces the redirect instead: a fallback that re-tests the toggled path and
+# emits starlette's own response. Measured before it was written —
+#
+#   307, `content-length: 0`, NO `content-type`, and an ABSOLUTE
+#   `location` built from the `Host` header and put through
+#   `quote(url, safe=":/%#?=@[]!$&'()*+,;")`.
+#
+# The `location` is now compared (`parity/src/endpoints.rs`), which it never was
+# — a `307` has an empty body and no content-type, so status alone had been the
+# entire test and a redirect to the wrong URL would have scored identical.
+PL-plan-slash       | GET | /api/plan/                         | -
 PL-plan-subpath     | GET | /api/plan/status                   | -
+# The query string rides along, RAW: uvicorn never decodes it and `quote`'s safe
+# set keeps `?`, `=`, `&` and `%` intact.
+SL-projects-query   | GET | /api/projects/?limit=2             | -
+SL-plan-query-pct   | GET | /api/plan/?a=b&c=d%20e             | -
+# `rstrip("/")` takes EVERY trailing slash, not one.
+SL-plan-double      | GET | /api/plan//                        | -
+# The redirect is decided before the method is: the router never gets far enough
+# to raise its 405, so a method the path does not accept still redirects.
+SL-plan-put         | PUT  | /api/plan/                        | {}
+SL-plan-head        | HEAD | /api/plan/                        | -
+SL-plan-post        | POST | /api/plan/                        | {}
+# The SPA page routes are starlette routes too.
+SL-settings         | GET | /settings/                         | -
+SL-live             | GET | /live/                             | -
+# The OTHER direction — `route_path + "/"`. `/project/{full_path:path}` matches
+# the empty rest on the reference (DIV-462), so `/project/` is a 200 and
+# `/project` redirects to it. Both were wrong here before this pass: axum's
+# `{*full_path}` needs at least one character, so `/project/` 404'd and
+# `/project` had nothing to redirect TO.
+SL-project-append   | GET | /project                           | -
+SL-project-empty    | GET | /project/                          | -
+# Where the redirect must NOT fire, which is the half a normalising layer gets
+# wrong. `//` rstrips to the empty string and matches nothing; `/nope/` trims to
+# a path no route claims; `/` is excluded by name (`route_path != "/"`).
+SL-root-double      | GET | //                                 | -
+SL-unknown-slash    | GET | /nope/                             | -
+# A POST that redirects: the reference answers before the handler runs, so this
+# row cannot select a project as a side effect — which is what makes it safe to
+# put in an ORDER-DEPENDENT file at all (law: case rows are side-effect-free).
+SL-by-dir-slash     | POST | /api/project-by-dir/              | {"dir_name": "-no-such-project-anywhere"}
+# The two rows other batches recorded as deliberately ABSENT because DIV-133 was
+# open — `endpoint-cases.txt` says so at both sites. They are here now.
+SL-compare-slash    | GET | /api/sessions/compare/             | -
+SL-ollama-bare      | GET | /ollama-api                        | -
+# Decode-then-redirect, in one row: `%61` is `a`, so uvicorn hands starlette
+# `/api/plan/`, which redirects to `/api/plan` — and the `location` carries the
+# DECODED spelling, not the escape. DIV-168 and DIV-133 in the same request.
+SL-encoded-slash    | GET | /api/pl%61n/                       | -
 
 # A query string on a parameter-less endpoint is ignored, not rejected: neither
 # FastAPI nor axum validates unknown query keys, so this must be byte-identical
@@ -1192,6 +1279,62 @@ CR-empty-at       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e
 CR-at-fractional  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=5.5 | -
 CR-at-bool        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=true | -
 
+# ── DIV-107 — the pydantic int grammar, enumerated ──────────────────────────
+#
+# `crate::qs::opt_int` was `raw.trim().parse::<i64>()`, which is three whole
+# classes stricter than pydantic's lax string→int. All of these were measured on
+# the running reference (`fastapi 0.141.1` / `pydantic 2.13.4`) before the parser
+# was rewritten; the block deliberately carries the ACCEPTED and the REFUSED
+# side of every rule, because a fix that only widens is as wrong as one that
+# only narrows and only the refusals can catch it.
+#
+# The `''`-vs-`'0'` truthiness class is here on purpose: it is thrice-proven
+# elsewhere (`--project ''`, `backup verify --name ''`, `--history-source ''`)
+# and this is its query-parameter face. `?at=` is a 422, `?at=0` is a 200 with
+# `at_seq: 0`, and an ABSENT `at` is a third thing again (`at_seq: null`) —
+# `CR-full` already covers the third.
+CR-at-zero        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=0 | -
+# Rule 1, the integer form: sign, leading zeros, and CPython's underscores.
+CR-at-plus        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%2B5 | -
+CR-at-neg         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=-5 | -
+CR-at-neg-zero    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=-0 | -
+CR-at-leading-zero| GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=03 | -
+CR-at-underscore  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3_0_3_6 | -
+CR-at-under-lead  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=_5 | -
+CR-at-under-trail | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=5_ | -
+CR-at-under-double| GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=1__0 | -
+# Rule 1's whitespace: `str::trim` is Unicode `White_Space`, so NBSP strips and
+# ZERO WIDTH SPACE does not. Sent as escapes because a raw one in the request
+# line is a uvicorn 400 before any of this is reached.
+CR-at-spaces      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%20%203036%20 | -
+CR-at-tab         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%093036%09 | -
+CR-at-nbsp        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%C2%A05 | -
+CR-at-zwsp        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=%E2%80%8B5 | -
+# Rule 2, the integral-decimal form — DIV-107's headline. `?at=3036.0` was a 200
+# there and a 422 here; the `!` on this row is struck.
+CR-at-float       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036.0 | -
+CR-at-float-zero  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=-0.0000 | -
+CR-at-float-long  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036.000000000000000000000 | -
+# The underscore is legal in the WHOLE part and not in the fraction — the single
+# fact that pins the implementation to "split, then parse the whole part with
+# rule 1" rather than to any looser sponge.
+CR-at-float-under | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3_0.0 | -
+CR-at-frac-under  | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3.0_0 | -
+# The fraction test is on DIGITS, not on a float. `1.0000000000000000001` IS
+# `1.0` in an f64 and the reference answers 422 — a `parse::<f64>()` port would
+# be green on every other row here and wrong on this one.
+CR-at-precise     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=1.0000000000000000001 | -
+# Both sides of the dot must have digits; there is no exponent and no radix.
+CR-at-dot-trail   | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=10. | -
+CR-at-dot-lead    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=.0 | -
+CR-at-two-dots    | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=1.0.0 | -
+CR-at-exp         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=1e3 | -
+CR-at-exp-float   | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3.0e3 | -
+CR-at-hex         | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=0x10 | -
+CR-at-comma       | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=1,0 | -
+# Rule 3, precision. `i64::MAX` itself is exact on both sides.
+CR-at-i64-max     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=9223372036854775807 | -
+
 # ── KNOWN OPEN — DIV-107, the two `int` coercions `qs::opt_int` does not do ──
 # Both rows are safe to execute (plain GETs, no writes); the `!` only softens
 # the verdict. Python answers 200 for each; the port answers 422.
@@ -1200,7 +1343,18 @@ CR-at-bool        | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e
 #                echoed `at_seq` could not be rendered even if it parsed.
 # Both live in the SHARED `crate::qs` helper, not in this module, so the fix is
 # the architect's to place. Measured on fastapi 0.141.1 / pydantic 2.13.4.
-!CR-at-float      | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=3036.0 | -
+# `!CR-at-float` moved into the DIV-107 block above and lost its `!`.
+#
+# `!CR-at-bignum` keeps its `!`, and the reason CHANGED: it used to be a
+# `422`-vs-`200`, i.e. the port refusing an input pydantic accepts. It is a
+# `200`-vs-`200` now, and what differs is one echoed NUMBER — the port accepts
+# the value and prints `9223372036854775807` where CPython prints
+# `10000000000000000000000`. Closing that last inch means an
+# arbitrary-precision `serde_json::Value` (the workspace `arbitrary_precision`
+# feature), which changes how every number in the port is parsed and rendered.
+# Same class as DIV-453 and the maintainer-accepted `--limit` clamp; recorded in
+# `qs::PyInt`, which carries the exact digits so the day that ruling changes
+# nothing has to be re-derived.
 !CR-at-bignum     | GET | /api/context-replay/04a86c63-4cfd-4929-91a3-3edfe80e3e2f?at=10000000000000000000000 | -
 
 # ── method coverage ─────────────────────────────────────────────────────────
@@ -1840,12 +1994,13 @@ LV-stats-empty-int   | GET | /api/live/stats?timezone_offset=        | -
 # one. `1.5` and `1.0` both 422.
 LV-stats-float-int   | GET | /api/live/stats?timezone_offset=1.5     | -
 # A bignum: Python's `int` is arbitrary-precision, so this COERCES and then
-# 500s on the timedelta; `crate::qs::opt_int` parses into `i64` and 422s.
-# `!` because that is DIV-107 — a defect in the SHARED `qs::opt_int` which the
-# batch-E charter reserves for the architect (`!CR-at-float` / `!CR-at-bignum`
-# are the same bug). Named here so `/api/live/stats` is on the list when it is
-# fixed, rather than discovered later.
-!LV-stats-bignum-int | GET | /api/live/stats?timezone_offset=9999999999999999999999 | -
+# 500s on the timedelta; `crate::qs::opt_int` parsed into `i64` and 422'd.
+#
+# CLOSED by the DIV-107 rewrite, and this row is the payoff for having named it
+# here instead of leaving it to be rediscovered: `opt_int` saturates now rather
+# than refusing, and `/api/live/stats` reaches the same overflow the reference
+# does. `!` struck — the gate defends it.
+LV-stats-bignum-int  | GET | /api/live/stats?timezone_offset=9999999999999999999999 | -
 
 # ── starlette's routers (law 5) ─────────────────────────────────────────────
 # A repeated scalar takes the LAST occurrence — starlette builds
@@ -1876,16 +2031,24 @@ LV-unknown-subpath   | GET | /api/live/nope                         | -
 # `/api/live/nope/` 404s. axum does neither redirect, so both 404 today.
 #
 # `LV-stats-slash` is therefore the pure DIV-133 control: a path mounted on
-# BOTH servers, diverging only on the redirect. `LV-stream-slash` is the same
-# 307-vs-404 shape today, so on its own it proves nothing extra — the pair is
-# what carries the information. When DIV-133 lands, `LV-stats-slash` goes green
-# and `LV-stream-slash` STAYS 404, and at that moment it becomes the standing,
-# terminating evidence that `/api/live/stream` is unmounted on the Rust side
-# (DIV-e-live.md finding 6). A row on `/api/live/stream` itself would hang the
-# differ and exit 2 (DIV-136), so this is the only safe form of the
-# observation. Both `!`; neither is batch E's to fix.
-!LV-stats-slash      | GET | /api/live/stats/                       | -
-!LV-stream-slash     | GET | /api/live/stream/                      | -
+# BOTH servers, diverging only on the redirect. `LV-stream-slash` was the same
+# 307-vs-404 shape, and batch E predicted that when DIV-133 landed this one
+# would STAY 404 and become standing evidence that `/api/live/stream` is
+# unmounted here (DIV-e-live.md finding 6).
+#
+# **The prediction is void, and it is void for a good reason: the premise
+# expired.** DIV-320 mounted `/api/live/stream` (closing DIV-165) two batches
+# after that note was written, so both rows redirect now and both are green.
+# The note is kept rather than deleted because it is the useful shape of the
+# mistake — a row whose MEANING depends on another row's state has to be re-read
+# when that state moves, and nothing re-reads it automatically. The differ is
+# what caught it: the row flipped to a candidate and the comment did not.
+#
+# A row on `/api/live/stream` ITSELF would still hang the differ and exit 2
+# (DIV-136); the trailing slash is answered before the handler, which is exactly
+# why this is the only safe form of the observation.
+LV-stats-slash       | GET | /api/live/stats/                       | -
+LV-stream-slash      | GET | /api/live/stream/                      | -
 
 # ══ member `quality` ═════════════════════════════════════════════════════════════
 # Batch E / quality — `routes/quality.py` (RS-5-102 / RS-5-103), closing DIV-135.
@@ -1986,11 +2149,15 @@ QL-quality-delete   | DELETE | /api/static-analysis/session/no-such-session-anyw
 #
 # A percent-encoded SLASH. uvicorn unquotes the raw path into `scope["path"]`
 # BEFORE starlette routes it, so `a%2Fb` is two segments and nothing matches;
-# hyper routes on the raw path and axum's `Path` decodes AFTER matching, so the
-# handler gets `a/b`. Reproduced on three already-green endpoints — see
-# DIV-e-quality.md — and invisible today because no row anywhere sends `%2F`.
+# hyper routed on the raw path and axum's `Path` decoded AFTER matching, so the
+# handler got `a/b`:
 #   py {"detail":"Not Found"}      rs {"detail":"Session a/b not found"}
-!QL-quality-encoded-slash | GET | /api/static-analysis/session/a%2Fb/quality | -
+#
+# CLOSED — DIV-168, `crate::path_semantics`. This row is the NON-terminal case
+# of the class (the escape is in the middle of the path, not at the end), which
+# the three rows DIV-168 itself named are not; keeping it green is what stops a
+# fix that only handles a trailing parameter.
+QL-quality-encoded-slash | GET | /api/static-analysis/session/a%2Fb/quality | -
 
 # ── KNOWN-OPEN: the one field that keeps a real-session 200 open ─────────────
 # `graded_at` is `datetime.now(UTC)` (grading.py:200) and it is IN THE BODY, so
@@ -2980,9 +3147,9 @@ J-compare-delete    | DELETE | /api/sessions/compare?a=04a86c63-4cfd-4929-91a3-3
 # subpath is what a router that matched a prefix would answer.
 J-compare-parent    | GET | /api/sessions | -
 J-compare-subpath   | GET | /api/sessions/compare/04a86c63-4cfd-4929-91a3-3edfe80e3e2f | -
-# NO trailing-slash row. `/api/sessions/compare/` is DIV-133 (`!PL-plan-slash`),
-# the architect's `lib.rs` redirect item, and the batch-E claim says not to
-# touch it or extend its blast radius.
+# The trailing-slash row batch E deliberately left out — DIV-133 was open and
+# its claim said not to extend the blast radius. DIV-133 is closed; the row is
+# `SL-compare-slash`, filed with the rest of the class.
 
 # ══ member `misc` ═════════════════════════════════════════════════════════════
 # Batch E / misc — `routes/misc.py` (RS-5-079/080/084).
@@ -3043,10 +3210,10 @@ J-compare-subpath   | GET | /api/sessions/compare/04a86c63-4cfd-4929-91a3-3edfe8
 # A `transfer-encoding: chunked` row is also absent: law 4 bars rows for
 # streams, and the branch is unreachable behind a closed port anyway.
 #
-# `/ollama-api` with NO trailing slash is absent too. FastAPI's
-# `redirect_slashes` answers 307 there and axum 404s — the same class as
-# DIV-133 / `!PL-plan-slash`, which is the architect's `lib.rs` change and
-# explicitly not in batch E's charter.
+# `/ollama-api` with NO trailing slash was absent for the same reason, and for
+# the same reason is not any more: `SL-ollama-bare` measures the `307` now that
+# DIV-133 is closed. The redirect is answered before the proxy is reached, so
+# the row does not need the daemon that the rest of this block does without.
 
 
 # ── the flip: replaces `!M-ollama` in endpoint-cases.txt ─────────────────────
@@ -3267,15 +3434,28 @@ AL-by-dir-get       | GET    | /api/project-by-dir              | -
 # a missing one, because the reference's method check precedes its lookup.
 AL-static-post      | POST   | /static/react/index.html         | {}
 AL-static-post-miss | POST   | /static/react/nope.js            | {}
-# DIV-361 — the bare mount ROOT is not the subtree. Starlette's `Mount` answers
-# a `307` to `/static/` on EVERY method (measured on GET, HEAD and PUT); axum's
-# `nest_service` does not redirect. This is DIV-133's redirect family wearing a
-# mount instead of a route, it is the architect's for the same reason DIV-133
-# is, and the fix is the same fallback. Three rows so the class cannot be
-# closed on one method and called done.
-!AL-static-root-get | GET    | /static                          | -
-!AL-static-root-head| HEAD   | /static                          | -
-!AL-static-root-put | PUT    | /static                          | {}
+# DIV-361 — CLOSED, and by the one rule its own entry predicted. The bare mount
+# ROOT is not the subtree: starlette compiles `Mount("/static")` to
+# `^/static/(?P<path>.*)$`, which does not match `/static`, so the router falls
+# through to `redirect_slashes` and answers a `307` to `/static/` on EVERY
+# method. axum's `nest_service` registers `/static` itself, which is why this is
+# the one path `path_semantics` names explicitly instead of asking the router.
+# Three rows so the class cannot be closed on one method and called done — a
+# fourth for the destination, which is a 404 on both sides and always was.
+AL-static-root-get  | GET    | /static                          | -
+AL-static-root-head | HEAD   | /static                          | -
+AL-static-root-put  | PUT    | /static                          | {}
+AL-static-root-post | POST   | /static                          | {}
+AL-static-slash     | GET    | /static/                         | -
+# DIV-461 (new, found while measuring DIV-361) — `StaticFiles` is constructed
+# WITHOUT `html=True`, and `ServeDir` defaults `append_index_html_on_directories`
+# ON. So a directory under the mount was a `307 location: /react/` (prefix-less,
+# because `nest_service` had already stripped `/static`, so it pointed at a path
+# that does not exist) and then a `200 index.html`, against `{"detail":"Not
+# Found"}` on both spellings for the reference. Live since wave 5 and invisible
+# because no row had ever asked the mount for a directory.
+AL-static-dir       | GET    | /static/react                    | -
+AL-static-dir-slash | GET    | /static/react/                   | -
 
 # ── DIV-367 — CLOSED. The `dict`-bodied handler class, byte-for-byte ────────
 #
@@ -3401,3 +3581,121 @@ V-alias-bad-json    | POST | /api/cfg/model-aliases             | {oops
 V-budget-bad-json   | PUT  | /api/budgets                       | {oops
 V-dismiss-bad-json  | POST | /api/patterns/dismiss              | {oops
 V-preview-bad-json  | POST | /api/optimize/claudemd-preview     | {oops
+
+# ══ DIV-168 — `%2F`, and the class it turned out to be ════════════════════════
+#
+# uvicorn percent-decodes the path BEFORE starlette routes it:
+#
+#   raw_path, _, query_string = url.partition(b"?")
+#   path = raw_path.decode("ascii")
+#   if "%" in path:
+#       path = urllib.parse.unquote(path)
+#
+# axum matches the raw path and lets `axum::extract::Path` decode afterwards.
+# DIV-168 filed the consequence — "`%2F` routes differently on EVERY `{param}`
+# endpoint … invisible only because no row anywhere sends `%2F`" — and named
+# three endpoints that were GREEN at the time. Zero rows sent one until now.
+#
+# `crate::path_semantics` decodes as uvicorn does and re-encodes everything
+# except `/`, so a decoded `%2F` becomes a structural slash the matcher sees and
+# every other escape goes back on the wire for `Path` to undo exactly once.
+#
+# The three DIV-168 named. A `[^/]+` convertor cannot span a slash, so the
+# reference never matches these at all: `{"detail":"Not Found"}`, where the port
+# used to hand the handler a session id containing a slash.
+PCT-sa-slash        | GET | /api/static-analysis/session/a%2Fb  | -
+PCT-interaction-sl  | GET | /api/interaction/a%2Fb              | -
+PCT-ctxreplay-slash | GET | /api/context-replay/a%2Fb           | -
+PCT-sa-lower        | GET | /api/static-analysis/session/a%2fb  | -
+# The class DIV-168 did NOT name, and the reason this is a decode rather than a
+# `%2F` special-case: ANY escape of an unreserved character re-routes on the
+# reference. `%61` is `a`, so this is `/api/plan` there — a 200 with the plan
+# payload — and was a 404 here.
+PCT-plan-unreserved | GET | /api/pl%61n                         | -
+# The rows that must NOT move, which are the ones a naive decode breaks. `Path`
+# decodes what the matcher captured, so a pre-decoded path would be decoded
+# TWICE: `%2520` would arrive as a space instead of as `%20`.
+PCT-space           | GET | /api/static-analysis/session/a%20b  | -
+PCT-double-escape   | GET | /api/static-analysis/session/a%2520b | -
+# `+` is a space in a QUERY string and a literal plus in a PATH — uvicorn calls
+# `unquote`, `crate::qs` calls `unquote_plus`, and the asymmetry is the
+# reference's.
+PCT-plus            | GET | /api/static-analysis/session/a+b    | -
+PCT-utf8            | GET | /api/static-analysis/session/%C3%A9 | -
+# A malformed escape is left literal by `unquote`, and an undecodable byte run
+# is `errors="replace"`.
+PCT-bad-escape      | GET | /api/static-analysis/session/a%zzb  | -
+PCT-invalid-utf8    | GET | /api/static-analysis/session/%FF    | -
+
+# ══ DIV-050 — `CORSMiddleware` ════════════════════════════════════════════════
+#
+# ```python
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[f"http://localhost:{_server_port}",
+#                    f"http://127.0.0.1:{_server_port}",
+#                    "http://localhost:5175", "http://127.0.0.1:5175"],
+#     allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# ```
+#
+# DIV-050 was filed as "the parity differ is same-origin, so nothing measures
+# it, and porting it blind would mean inventing a header order nobody has
+# observed". The ruling was port it — so the first act was making it
+# observable: rows carry request headers now, and the differ compares the five
+# `access-control-*` names plus `vary`. Nothing below was written before it was
+# measured.
+#
+# `_server_port` is `config.get("port")` — the SETTING, not the port uvicorn
+# bound. The reference runs on :8097 here and its allow-list still says :8081.
+# A port that used its own listening port would pass every row that names 5175
+# and fail these two, which is why they are here.
+CORS-simple-cfgport | GET | /api/health | - | Origin: http://localhost:8081
+CORS-simple-cfg127  | GET | /api/health | - | Origin: http://127.0.0.1:8081
+CORS-simple-vite    | GET | /api/health | - | Origin: http://localhost:5175
+CORS-simple-vite127 | GET | /api/health | - | Origin: http://127.0.0.1:5175
+# The measured surprise, and the reason `tower_http::cors::CorsLayer` is not
+# what this is: `simple_headers` is applied UNCONDITIONALLY, so a refused origin
+# still gets `access-control-allow-credentials: true` and gets neither the echo
+# nor the `Vary`. `CorsLayer` emits nothing at all for a refused origin.
+CORS-simple-refused | GET | /api/health | - | Origin: http://evil.example
+# Membership is an exact string compare — no scheme coercion, no case folding,
+# no trailing-slash tolerance.
+CORS-origin-case    | GET | /api/health | - | Origin: http://LOCALHOST:5175
+CORS-origin-slash   | GET | /api/health | - | Origin: http://localhost:5175/
+CORS-origin-https   | GET | /api/health | - | Origin: https://localhost:5175
+# `allow_all_origins` is False, so the `has_cookie` branch is dead: a cookie on
+# a refused origin changes nothing. The row exists because the branch is in the
+# reference's source and "unreachable" is a claim, not an observation.
+CORS-simple-cookie  | GET | /api/health | - | Origin: http://evil.example;;Cookie: a=b
+# The headers ride on whatever the inner stack produced — a 404, a 405, and (a
+# consequence of this layer being OUTSIDE `path_semantics`) a 307.
+CORS-on-404         | GET | /api/nope | - | Origin: http://localhost:5175
+CORS-on-405         | POST | /api/health | - | Origin: http://localhost:5175
+CORS-on-307         | GET | /api/health/ | - | Origin: http://localhost:5175
+CORS-on-static      | GET | /static/react/index.html | - | Origin: http://localhost:5175
+# ── preflight: `OPTIONS` **and** an `access-control-request-method` ──────────
+# It never reaches the router, which is the one place a middleware outranks
+# routing. `PlainTextResponse("OK")` — `text/plain; charset=utf-8`, two bytes.
+CORS-pre-ok         | OPTIONS | /api/health | - | Origin: http://localhost:5175;;Access-Control-Request-Method: GET
+# `allow_all_headers` MIRRORS the requested headers back verbatim — spacing and
+# casing preserved — rather than emitting the sorted safelisted union.
+CORS-pre-headers    | OPTIONS | /api/health | - | Origin: http://localhost:5175;;Access-Control-Request-Method: POST;;Access-Control-Request-Headers: X-Foo, Content-Type
+# The four failure legs, and the asymmetry between them: the origin echo is set
+# BEFORE the method check, so a `method` failure keeps the echo and an `origin`
+# failure does not. The joined text is ordered origin-then-method.
+CORS-pre-bad-origin | OPTIONS | /api/health | - | Origin: http://evil.example;;Access-Control-Request-Method: GET
+CORS-pre-bad-method | OPTIONS | /api/health | - | Origin: http://localhost:5175;;Access-Control-Request-Method: BREW
+CORS-pre-bad-both   | OPTIONS | /api/health | - | Origin: http://evil.example;;Access-Control-Request-Method: BREW
+CORS-pre-lower-verb | OPTIONS | /api/health | - | Origin: http://localhost:5175;;Access-Control-Request-Method: get
+# A preflight for a path that does not exist, and for one that would have
+# redirected. Both are `200 OK`: the router is never consulted.
+CORS-pre-unknown    | OPTIONS | /api/nope-nothing | - | Origin: http://localhost:5175;;Access-Control-Request-Method: GET
+CORS-pre-slash-path | OPTIONS | /api/health/ | - | Origin: http://localhost:5175;;Access-Control-Request-Method: GET
+CORS-pre-static     | OPTIONS | /static/react/index.html | - | Origin: http://localhost:5175;;Access-Control-Request-Method: GET
+# An `OPTIONS` WITHOUT `access-control-request-method` is not a preflight: it
+# falls through to the router and comes back a `405 allow: GET` wearing the
+# simple-request headers. The discriminator is the header, not the verb.
+CORS-options-plain  | OPTIONS | /api/health | - | Origin: http://localhost:5175
+# …and with no `Origin` at all the middleware returns before it does anything,
+# which is what keeps the other 760-odd rows in this file unmoved.
+CORS-options-bare   | OPTIONS | /api/health                       | -

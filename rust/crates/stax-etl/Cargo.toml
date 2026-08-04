@@ -70,6 +70,10 @@ stax-adapters = { path = "../stax-adapters" }
 # defaults are `macos_fsevent` (irrelevant off macOS) and `crossbeam-channel`
 # (an extra dependency whose only purpose is letting callers select on a
 # crossbeam channel — the watcher thread here owns a plain `std::sync::mpsc`).
+# CORRECTION (Mac relay via inbox, 2026-08-04): the kqueue fallback premise was
+# WRONG — notify 8.2.0 compiles fsevent.rs unconditionally on macOS while
+# fsevent-sys is feature-gated, so default-features=false fails E0432 there.
+# macos_fsevent is therefore ON (inert on every other target).
 # The per-platform backend — inotify on Linux, ReadDirectoryChangesW on Windows,
 # kqueue on the BSDs — is unconditional and is what we actually use. Turning
 # `macos_fsevent` back on is a one-word change if wave 8's packaging wants
@@ -80,7 +84,7 @@ stax-adapters = { path = "../stax-adapters" }
 # same way, and everything else in `ingest` (the writer, the watermarks, the
 # enumerate pass) stays available there.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-notify = { version = "8.2.0", default-features = false }
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 # `tests/fixture_parity.rs` runs the SAME fourteen fixture packs through

@@ -67,7 +67,7 @@ use serde_json::{Map, Value};
 use stax_core::ask::{build_filter_clauses, sanitize_fts_query};
 use stax_etl::stats::aggregator::round_py;
 
-use crate::json::{JsonBody, validation_422};
+use crate::json::{JsonBody, bound_422, validation_422};
 use crate::pyops::{char_prefix, floor_div, sql_value};
 use crate::qs::Query;
 use crate::state::AppState;
@@ -75,8 +75,31 @@ use crate::state::AppState;
 /// `per_page = min(per_page, 100)` — the route's clamp, before the service.
 const MAX_PER_PAGE: i64 = 100;
 
+/// `per_page: int = Query(20, ge=1)` — the floor is a DECLARED bound, so
+/// FastAPI refuses a bad value before the handler body runs (DIV-079).
+///
+/// The asymmetry is the reference's: the ceiling is a silent clamp, the floor
+/// is a 422. `per_page` is a divisor — `(total + per_page - 1) // per_page` —
+/// and `?per_page=0` used to raise `ZeroDivisionError` into the handler's
+/// blanket `except` as a **500**, while a negative reached SQLite as a
+/// negative `LIMIT`, which SQLite reads as no limit at all.
+pub(super) const MIN_PER_PAGE: i64 = 1;
+
 /// `row["content"][:500]` — a CPython `str` slice, so **code points**.
 const CONTENT_CHARS: usize = 500;
+
+/// pydantic's `ge=1` failure for `per_page`, shared with `/api/qa` — the two
+/// routes declare the same bound, so they answer the same bytes.
+pub(super) fn per_page_floor_422(raw_input: &str) -> JsonBody {
+    bound_422(
+        "per_page",
+        "greater_than_equal",
+        "Input should be greater than or equal to 1",
+        raw_input,
+        "ge",
+        MIN_PER_PAGE,
+    )
+}
 
 /// Mount this module's endpoints onto `router`.
 pub fn register(router: Router<AppState>) -> Router<AppState> {
@@ -136,8 +159,12 @@ async fn search_messages(State(state): State<AppState>, RawQuery(raw): RawQuery)
         },
         // `per_page = min(per_page, 100)` happens in the ROUTE, before the
         // service sees it — so the value echoed back in the response is the
-        // clamped one, including on the empty-query early return.
+        // clamped one, including on the empty-query early return. The floor
+        // below it is pydantic's, and fires first.
         per_page: match query.int_or("per_page", 20) {
+            Ok(value) if value < MIN_PER_PAGE => {
+                return per_page_floor_422(query.get("per_page").unwrap_or_default());
+            }
             Ok(value) => value.min(MAX_PER_PAGE),
             Err(err) => return validation_422(&err),
         },
@@ -879,6 +906,29 @@ mod tests {
         // …but a floor-clamp only, at the other end.
         let payload = run_search(&state, &params("quick", -7, 1));
         assert_eq!(payload["page"], serde_json::json!(1));
+    }
+
+    /// DIV-079 — the declared `ge=1` floor, on both routes that share it.
+    ///
+    /// The bytes are pydantic's for a constrained int, measured against
+    /// fastapi 0.141.1 / pydantic 2.13.4 (the venv `endpoint-parity.sh`
+    /// boots) with `per_page: int = Query(20, ge=1)` — not transcribed. `ctx`
+    /// is present and last; `input` echoes the RAW query string.
+    #[test]
+    fn the_per_page_floor_is_pydantics_bound_error() {
+        let zero = per_page_floor_422("0");
+        assert_eq!(
+            axum::response::IntoResponse::into_response(per_page_floor_422("0")).status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            zero.render(),
+            r#"{"detail":[{"type":"greater_than_equal","loc":["query","per_page"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}"#
+        );
+        assert_eq!(
+            per_page_floor_422("-5").render(),
+            r#"{"detail":[{"type":"greater_than_equal","loc":["query","per_page"],"msg":"Input should be greater than or equal to 1","input":"-5","ctx":{"ge":1}}]}"#
+        );
     }
 
     #[test]

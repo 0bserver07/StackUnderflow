@@ -110,11 +110,13 @@ fn under_static_mount(path: &str) -> bool {
 /// The distinction is load-bearing and measured. Inside the subtree the
 /// reference runs `StaticFiles.get_response`, whose first act is
 /// `if scope["method"] not in ("GET", "HEAD"): raise HTTPException(405)`.
-/// The bare mount root never reaches it: starlette's `Mount` answers a **307**
-/// to `/static/` on *every* method, which this port does not do — **DIV-361**,
-/// the `/static` face of DIV-133's redirect family, and the architect's the
-/// same way DIV-133 is. This layer deliberately leaves the mount root alone so
-/// that finding stays exactly as measured.
+/// The bare mount root never reaches it: it is a **307** to `/static/` on
+/// *every* method — **DIV-361**, the `/static` face of DIV-133's redirect
+/// family. Both were ruled and both are closed, by
+/// [`crate::path_semantics`] and by the one rule DIV-361 predicted would close
+/// them together. That layer sits *outside* this one and answers the mount root
+/// before a request reaches here, so the branch below still never sees it — the
+/// difference is that the answer is now the reference's rather than axum's.
 #[must_use]
 fn in_static_subtree(path: &str) -> bool {
     path.starts_with("/static/")
@@ -188,8 +190,8 @@ mod tests {
 
     #[test]
     fn the_mount_root_is_not_the_subtree() {
-        // DIV-361's boundary. The root is a `Mount` 307 on the reference and is
-        // left alone here; the subtree is `StaticFiles` and rule 3 owns it.
+        // DIV-361's boundary. The root is a `Mount` 307, answered one layer out
+        // by `path_semantics`; the subtree is `StaticFiles` and rule 3 owns it.
         assert!(!in_static_subtree("/static"));
         assert!(in_static_subtree("/static/"));
         assert!(in_static_subtree("/static/react/nope.js"));

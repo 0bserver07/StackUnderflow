@@ -137,6 +137,7 @@ struct Inner {
     config: Config,
     project: RwLock<CurrentProject>,
     is_reindexing: AtomicBool,
+    stats_memo: crate::services::stats_memo::StatsMemo,
 }
 
 /// Everything a handler needs, cloned cheaply into every request.
@@ -189,8 +190,19 @@ impl AppState {
                 config,
                 project: RwLock::new(CurrentProject::default()),
                 is_reindexing: AtomicBool::new(false),
+                stats_memo: crate::services::stats_memo::StatsMemo::new(),
             }),
         }
+    }
+
+    /// `routes/cost.py::_STATS_CACHE` — DIV-055's memo, per state.
+    ///
+    /// Python's is a module global behind a `threading.Lock`; the injection law
+    /// makes it state, which is also what lets two servers share a process
+    /// without sharing a cache.
+    #[must_use]
+    pub fn stats_memo(&self) -> &crate::services::stats_memo::StatsMemo {
+        &self.inner.stats_memo
     }
 
     /// `deps.store_path`.

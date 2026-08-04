@@ -19,9 +19,36 @@
 //!   `content-type` all agreed on those rows; without this line the whole class
 //!   was invisible to a green matrix. Absent on both sides compares equal, so it
 //!   costs the other ~700 rows nothing.
+//! * **`location`** — added by the rulings pass, and the same argument again. A
+//!   `307` has an empty body and no `content-type`, so **status alone was the
+//!   entire comparison** on every redirect row: a port that answered `307` to
+//!   the wrong URL would have scored identical. See [`normalise_location`] for
+//!   the one thing that is masked, and why it is exactly one thing.
+//! * **the five `access-control-*` names and `vary`** — DIV-050. Same reasoning
+//!   a third time: a preflight's body is `OK`, two bytes, and `Disallowed CORS
+//!   origin` and `Disallowed CORS method` are the same length. Without the
+//!   headers the CORS rows would be checking almost nothing.
 //! * **body bytes** — the whole point. Not "the same JSON": the same bytes.
 //!   Key order, float presentation and `ensure_ascii` are all invisible to a
 //!   parsed comparison and all of them have already bitten this campaign.
+//!
+//! # Request headers, and the one masked difference
+//!
+//! A case may carry request headers (the fifth `|` field). Nothing else could
+//! reach `CORSMiddleware`: it returns immediately when there is no `Origin`, so
+//! 763 rows of evidence said nothing at all about it and DIV-050 was filed as
+//! "nothing measures it" rather than as a decision.
+//!
+//! The two servers listen on **different ports**, and this client sends
+//! `Host: 127.0.0.1:<that port>`. starlette builds its `location` from the
+//! `Host` header, so a redirect row would differ on the port and on nothing
+//! else. [`normalise_location`] replaces each side's own authority — and only
+//! its own, and only in `location` — with a placeholder. Scoped to exactly the
+//! surface that justifies it, which is the harness law
+//! (`ARCHITECT-STATE`: "any output normalisation must be scoped to the surface
+//! that justified it"): the scheme, the path, the query and any other authority
+//! still compare byte for byte, so a port that redirected to the wrong host
+//! would still fail.
 //!
 //! # Why the cases run in order
 //!
@@ -65,6 +92,8 @@ pub struct Case {
     pub target: String,
     /// JSON request body, or `None`.
     pub body: Option<String>,
+    /// Extra request headers, verbatim `Name: value` lines, in file order.
+    pub headers: Vec<String>,
     /// Reported but never failed — an endpoint this wave has not ported yet.
     pub known_open: bool,
 }
@@ -106,8 +135,14 @@ pub struct Outcome {
 /// Format, `|`-separated, `#` comments and blank lines ignored:
 ///
 /// ```text
-/// <id> | <METHOD> | <path-and-query> | <json-body or ->
+/// <id> | <METHOD> | <path-and-query> | <json-body or -> | <headers or ->
 /// ```
+///
+/// The fifth field is optional and holds `Name: value` request headers
+/// separated by `;;` — a two-character separator because a single `;` appears
+/// inside real header values (`text/html; charset=utf-8`) and a `,` appears
+/// inside `Access-Control-Request-Headers`. `-` or empty means none, which is
+/// what every pre-existing row says by saying nothing.
 ///
 /// # Errors
 /// A row with fewer than three fields — a typo that would otherwise silently
@@ -135,11 +170,24 @@ pub fn parse_cases(text: &str) -> Result<Vec<Case>, String> {
             .copied()
             .filter(|b| !b.is_empty() && *b != "-")
             .map(str::to_owned);
+        let headers = fields
+            .get(4)
+            .copied()
+            .filter(|h| !h.is_empty() && *h != "-")
+            .map(|raw| {
+                raw.split(";;")
+                    .map(str::trim)
+                    .filter(|h| !h.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         cases.push(Case {
             id,
             method: fields[1].to_ascii_uppercase(),
             target: fields[2].to_owned(),
             body,
+            headers,
             known_open,
         });
     }
@@ -152,15 +200,29 @@ pub fn run_case(case: &Case, py_port: u16, rs_port: u16, timeout: Duration) -> O
     let body = case.body.as_deref().map(str::as_bytes);
 
     let py_started = std::time::Instant::now();
-    let py = http::request(py_port, &case.method, &case.target, body, timeout);
+    let py = http::request(
+        py_port,
+        &case.method,
+        &case.target,
+        body,
+        &case.headers,
+        timeout,
+    );
     let py_ms = py_started.elapsed().as_millis();
 
     let rs_started = std::time::Instant::now();
-    let rs = http::request(rs_port, &case.method, &case.target, body, timeout);
+    let rs = http::request(
+        rs_port,
+        &case.method,
+        &case.target,
+        body,
+        &case.headers,
+        timeout,
+    );
     let rs_ms = rs_started.elapsed().as_millis();
 
     let verdict = match (py, rs) {
-        (Ok(py), Ok(rs)) => judge(case, &py, &rs),
+        (Ok(py), Ok(rs)) => judge(case, &py, &rs, py_port, rs_port),
         (Err(err), _) => Verdict::Error(format!("python side: {err}")),
         (_, Err(err)) => Verdict::Error(format!("rust side: {err}")),
     };
@@ -172,7 +234,40 @@ pub fn run_case(case: &Case, py_port: u16, rs_port: u16, timeout: Duration) -> O
     }
 }
 
-fn judge(case: &Case, py: &Response, rs: &Response) -> Verdict {
+/// The response headers compared beyond `content-type`.
+///
+/// Every one is a contract rather than an artefact, and every one is invisible
+/// in the body: a `307` has no body at all, and a preflight's is two bytes.
+/// Absent on both sides compares equal, so the other ~760 rows pay nothing.
+const COMPARED_HEADERS: [&str; 8] = [
+    // DIV-323.
+    "allow",
+    // DIV-133 / DIV-361.
+    "location",
+    // DIV-050 — the four `simple_headers`/`preflight_headers` names plus `vary`,
+    // which is the one that says whether the allow-list matched.
+    "access-control-allow-origin",
+    "access-control-allow-credentials",
+    "access-control-allow-methods",
+    "access-control-allow-headers",
+    "access-control-max-age",
+    "vary",
+];
+
+/// Mask each side's OWN authority in a `location`, and nothing else.
+///
+/// The two servers are on different ports by construction, and starlette builds
+/// the redirect URL from the `Host` header this client sends. So
+/// `http://127.0.0.1:8097/api/plan` and `http://127.0.0.1:8096/api/plan` are the
+/// SAME answer. Only `127.0.0.1:<this side's port>` is replaced: a redirect to
+/// any other host, or to the *other* side's port, still shows up as a
+/// difference.
+#[must_use]
+pub fn normalise_location(value: &str, own_port: u16) -> String {
+    value.replace(&format!("127.0.0.1:{own_port}"), "127.0.0.1:$PORT")
+}
+
+fn judge(case: &Case, py: &Response, rs: &Response, py_port: u16, rs_port: u16) -> Verdict {
     let mut problems = String::new();
     if py.status != rs.status {
         let _ = writeln!(
@@ -189,16 +284,28 @@ fn judge(case: &Case, py: &Response, rs: &Response) -> Verdict {
             "  content-type python {py_ct:?} vs rust {rs_ct:?}"
         );
     }
-    // DIV-323. Compared verbatim, including whether it is there at all: the
+    // Compared verbatim, including whether the header is there at all: the
     // reference omits `Allow` entirely on the `/static` mount's 405 and sends it
-    // on every routed one, and both halves of that are contract.
-    let py_allow = py.header("allow").unwrap_or("<absent>");
-    let rs_allow = rs.header("allow").unwrap_or("<absent>");
-    if py_allow != rs_allow {
-        let _ = writeln!(
-            problems,
-            "  allow        python {py_allow:?} vs rust {rs_allow:?}"
-        );
+    // on every routed one, and it omits `access-control-allow-origin` on a
+    // refused origin while still sending the credentials flag. Both halves of
+    // each of those are contract.
+    for name in COMPARED_HEADERS {
+        let py_value = py.header(name).unwrap_or("<absent>");
+        let rs_value = rs.header(name).unwrap_or("<absent>");
+        let (py_value, rs_value) = if name == "location" {
+            (
+                normalise_location(py_value, py_port),
+                normalise_location(rs_value, rs_port),
+            )
+        } else {
+            (py_value.to_owned(), rs_value.to_owned())
+        };
+        if py_value != rs_value {
+            let _ = writeln!(
+                problems,
+                "  {name:<32} python {py_value:?} vs rust {rs_value:?}"
+            );
+        }
     }
     if py.body != rs.body {
         let _ = writeln!(
@@ -339,15 +446,20 @@ mod tests {
             method: "GET".to_owned(),
             target: "/api/projects".to_owned(),
             body: None,
+            headers: Vec::new(),
             known_open,
         }
     }
+
+    /// The differ's own ports, so `normalise_location` has something to mask.
+    const PY: u16 = 8097;
+    const RS: u16 = 8096;
 
     #[test]
     fn identical_responses_are_identical() {
         let py = response(200, "application/json", r#"{"a":1}"#);
         let rs = response(200, "application/json", r#"{"a":1}"#);
-        assert_eq!(judge(&case(false), &py, &rs), Verdict::Identical);
+        assert_eq!(judge(&case(false), &py, &rs, PY, RS), Verdict::Identical);
     }
 
     #[test]
@@ -356,7 +468,7 @@ mod tests {
         let py = response(200, "application/json", r#"{"a":1,"b":2}"#);
         let rs = response(200, "application/json", r#"{"b":2,"a":1}"#);
         assert!(matches!(
-            judge(&case(false), &py, &rs),
+            judge(&case(false), &py, &rs, PY, RS),
             Verdict::Divergent(_)
         ));
     }
@@ -367,7 +479,7 @@ mod tests {
         let py = response(200, "application/json", r#"{"n":1e+16}"#);
         let rs = response(200, "application/json", r#"{"n":1e16}"#);
         assert!(matches!(
-            judge(&case(false), &py, &rs),
+            judge(&case(false), &py, &rs, PY, RS),
             Verdict::Divergent(_)
         ));
     }
@@ -377,7 +489,7 @@ mod tests {
         let py = response(200, "application/json", "{}");
         let rs = response(200, "application/json; charset=utf-8", "{}");
         assert!(matches!(
-            judge(&case(false), &py, &rs),
+            judge(&case(false), &py, &rs, PY, RS),
             Verdict::Divergent(_)
         ));
     }
@@ -387,7 +499,7 @@ mod tests {
         let py = response(200, "application/json", "{}");
         let rs = response(404, "application/json", r#"{"detail":"Not Found"}"#);
         assert!(matches!(
-            judge(&case(true), &py, &rs),
+            judge(&case(true), &py, &rs, PY, RS),
             Verdict::KnownOpen(_)
         ));
     }
@@ -399,9 +511,9 @@ mod tests {
         // and the known-open tally drift apart with nobody able to see it.
         let py = response(200, "application/json", "{}");
         let rs = response(200, "application/json", "{}");
-        assert_eq!(judge(&case(true), &py, &rs), Verdict::FlipCandidate);
+        assert_eq!(judge(&case(true), &py, &rs, PY, RS), Verdict::FlipCandidate);
         // …and the same bytes without the `!` are still a plain win.
-        assert_eq!(judge(&case(false), &py, &rs), Verdict::Identical);
+        assert_eq!(judge(&case(false), &py, &rs, PY, RS), Verdict::Identical);
     }
 
     #[test]
@@ -430,7 +542,7 @@ mod tests {
         );
         rs.headers.push(("allow".to_owned(), "GET,HEAD".to_owned()));
         assert!(matches!(
-            judge(&case(false), &py, &rs),
+            judge(&case(false), &py, &rs, PY, RS),
             Verdict::Divergent(_)
         ));
     }
@@ -450,7 +562,7 @@ mod tests {
         );
         rs.headers.push(("allow".to_owned(), "GET,HEAD".to_owned()));
         assert!(matches!(
-            judge(&case(false), &py, &rs),
+            judge(&case(false), &py, &rs, PY, RS),
             Verdict::Divergent(_)
         ));
     }
@@ -466,6 +578,120 @@ mod tests {
         assert_eq!(tally.exit_code(), 1);
         tally.add(&Verdict::Error(String::new()));
         assert_eq!(tally.exit_code(), 2);
+    }
+
+    #[test]
+    fn a_location_differing_only_in_the_servers_own_port_is_not_a_divergence() {
+        // The whole reason the mask exists: both sides answer the SAME redirect,
+        // and each builds it from the `Host` this client sent it.
+        let mut py = Response {
+            status: 307,
+            headers: vec![],
+            body: Vec::new(),
+        };
+        py.headers.push((
+            "location".to_owned(),
+            "http://127.0.0.1:8097/api/plan".to_owned(),
+        ));
+        let mut rs = py.clone();
+        rs.headers[0].1 = "http://127.0.0.1:8096/api/plan".to_owned();
+        assert_eq!(judge(&case(false), &py, &rs, PY, RS), Verdict::Identical);
+
+        // …and a redirect to a different PATH still fails, which is the point of
+        // masking one authority rather than the whole header.
+        rs.headers[0].1 = "http://127.0.0.1:8096/api/plans".to_owned();
+        assert!(matches!(
+            judge(&case(false), &py, &rs, PY, RS),
+            Verdict::Divergent(_)
+        ));
+
+        // So does a redirect to somebody else's host.
+        rs.headers[0].1 = "http://evil.example/api/plan".to_owned();
+        assert!(matches!(
+            judge(&case(false), &py, &rs, PY, RS),
+            Verdict::Divergent(_)
+        ));
+    }
+
+    #[test]
+    fn a_missing_location_is_a_divergence_on_its_own() {
+        // A `307` has an empty body and no `content-type`; before this header
+        // was compared, status was the entire test.
+        let mut py = Response {
+            status: 307,
+            headers: vec![("location".to_owned(), "http://h/x".to_owned())],
+            body: Vec::new(),
+        };
+        let rs = Response {
+            status: 307,
+            headers: vec![],
+            body: Vec::new(),
+        };
+        assert!(matches!(
+            judge(&case(false), &py, &rs, PY, RS),
+            Verdict::Divergent(_)
+        ));
+        py.headers.clear();
+        assert_eq!(judge(&case(false), &py, &rs, PY, RS), Verdict::Identical);
+    }
+
+    #[test]
+    fn a_cors_header_difference_alone_is_a_divergence() {
+        // DIV-050's measured asymmetry: a refused origin still gets the
+        // credentials flag and does NOT get the echo. Both bodies are `OK`.
+        let mut py = response(200, "text/plain; charset=utf-8", "OK");
+        py.headers.push((
+            "access-control-allow-credentials".to_owned(),
+            "true".to_owned(),
+        ));
+        let mut rs = response(200, "text/plain; charset=utf-8", "OK");
+        rs.headers.push((
+            "access-control-allow-credentials".to_owned(),
+            "true".to_owned(),
+        ));
+        rs.headers.push((
+            "access-control-allow-origin".to_owned(),
+            "http://evil.example".to_owned(),
+        ));
+        assert!(matches!(
+            judge(&case(false), &py, &rs, PY, RS),
+            Verdict::Divergent(_)
+        ));
+    }
+
+    #[test]
+    fn request_headers_parse_on_the_fifth_field() {
+        let cases = parse_cases(
+            "X | OPTIONS | /api/health | - | Origin: http://localhost:5175;;Access-Control-Request-Method: GET\n\
+             Y | GET | /api/health | - | -\n\
+             Z | GET | /api/health\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            cases[0].headers,
+            vec![
+                "Origin: http://localhost:5175".to_owned(),
+                "Access-Control-Request-Method: GET".to_owned()
+            ],
+            "`;;` and not `;` — a header VALUE contains `;`"
+        );
+        assert!(cases[1].headers.is_empty(), "`-` is none");
+        assert!(cases[2].headers.is_empty(), "an absent field is none");
+    }
+
+    #[test]
+    fn a_header_value_may_contain_a_semicolon_and_a_comma() {
+        let cases = parse_cases(
+            "X | OPTIONS | /a | - | Access-Control-Request-Headers: X-Foo, Content-Type;;Accept: text/html; q=0.9\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            cases[0].headers,
+            vec![
+                "Access-Control-Request-Headers: X-Foo, Content-Type".to_owned(),
+                "Accept: text/html; q=0.9".to_owned()
+            ]
+        );
     }
 
     #[test]

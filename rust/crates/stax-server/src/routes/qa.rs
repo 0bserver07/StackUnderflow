@@ -64,7 +64,8 @@ use serde_json::{Map, Value};
 use stax_etl::stats::aggregator::round_py;
 
 use super::search::{
-    group_by_slug, index_error, merged_messages, msg_text, now_iso, py_error_text, py_strip,
+    MIN_PER_PAGE, group_by_slug, index_error, merged_messages, msg_text, now_iso,
+    per_page_floor_422, py_error_text, py_strip,
 };
 use crate::json::{JsonBody, validation_422};
 use crate::pyops::{floor_div, sql_value};
@@ -147,7 +148,11 @@ async fn list_qa_pairs(State(state): State<AppState>, RawQuery(raw): RawQuery) -
             Ok(value) => value,
             Err(err) => return validation_422(&err),
         },
+        // The floor is `/api/search`'s — same declared bound, same bytes.
         per_page: match query.int_or("per_page", 20) {
+            Ok(value) if value < MIN_PER_PAGE => {
+                return per_page_floor_422(query.get("per_page").unwrap_or_default());
+            }
             Ok(value) => value.min(MAX_PER_PAGE),
             Err(err) => return validation_422(&err),
         },
@@ -1409,6 +1414,19 @@ mod tests {
             r#"{"total_pairs":0,"by_project":[],"by_date":[],"indexed_projects":[],"with_code_snippets":0}"#
         );
         assert!(qa_by_id(&state, "q1").is_none());
+    }
+
+    /// DIV-079 — `/api/qa` declares the same `ge=1` floor as `/api/search`
+    /// and must answer the SAME bytes, only with its own `loc`. Pinned here
+    /// so a future file-local copy of the builder is caught by a test rather
+    /// than by a case row.
+    #[test]
+    fn the_per_page_floor_is_the_shared_one() {
+        assert_eq!(MIN_PER_PAGE, 1);
+        assert_eq!(
+            per_page_floor_422("0").render(),
+            r#"{"detail":[{"type":"greater_than_equal","loc":["query","per_page"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}"#
+        );
     }
 
     #[test]

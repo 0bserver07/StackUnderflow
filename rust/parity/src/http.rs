@@ -54,6 +54,7 @@ pub fn request(
     method: &str,
     target: &str,
     body: Option<&[u8]>,
+    extra_headers: &[String],
     timeout: Duration,
 ) -> std::io::Result<Response> {
     let stream = TcpStream::connect(("127.0.0.1", port))?;
@@ -66,6 +67,13 @@ pub fn request(
     if let Some(body) = body {
         head.push_str("Content-Type: application/json\r\n");
         head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    // Case-supplied request headers, verbatim and in file order — the CORS
+    // layer (DIV-050) is invisible without an `Origin`, so the matrix had no way
+    // to reach it at all before this existed.
+    for header in extra_headers {
+        head.push_str(header);
+        head.push_str("\r\n");
     }
     head.push_str("\r\n");
 
@@ -190,7 +198,7 @@ fn read_chunked(reader: &mut impl BufRead) -> std::io::Result<Vec<u8>> {
 pub fn wait_until_up(port: u16, deadline: Duration) -> std::io::Result<Duration> {
     let started = std::time::Instant::now();
     while started.elapsed() < deadline {
-        if request(port, "GET", "/", None, Duration::from_secs(5)).is_ok() {
+        if request(port, "GET", "/", None, &[], Duration::from_secs(5)).is_ok() {
             return Ok(started.elapsed());
         }
         std::thread::sleep(Duration::from_millis(100));

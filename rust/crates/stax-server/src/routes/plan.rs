@@ -57,18 +57,22 @@
 //!
 //! # The spend memo is not ported
 //!
-//! `_SPEND_CACHE` memoises `(used, daily_costs)` on
-//! `(store_path, period_start, period_end)` and validates against `store.db`'s
-//! `st_mtime_ns`. It is a latency device — the precedent for skipping one is
-//! DIV-055, `/api/stats`'s equivalent. But this one is *not* purely a latency
-//! device, and that is a finding rather than an assumption: `_spend_daily_window`
-//! reads `date.today()`, which is not part of the cache key, so a hit served
-//! across a local midnight with no intervening ingest returns yesterday's
-//! series — one element short, which moves `linear_projection`'s denominator
-//! and the weighted tail. Recorded as DIV-091; the port recomputes and is
-//! therefore *more* correct on exactly that boundary. Everything else about the
-//! memo (and `invalidate_plan_cache`, which has no caller anywhere in the tree)
-//! can only ever return the same bytes.
+//! `_SPEND_CACHE` memoises `(used, daily_costs)` and validates against
+//! `store.db`'s `st_mtime_ns`. It is a latency device — the precedent for
+//! skipping one is DIV-055, `/api/stats`'s equivalent.
+//!
+//! It was not purely a latency device, and that was a finding rather than an
+//! assumption: the key was `(store_path, period_start, period_end)`, while
+//! `_spend_daily_window` reads `date.today()`, so a hit served across a local
+//! midnight with no intervening ingest returned yesterday's series — one
+//! element short, which moves `linear_projection`'s denominator and the
+//! weighted tail. **Recorded as DIV-091 and now FIXED in the reference**
+//! (ruling 6, Python-first): the local date joined the key, so the memo can no
+//! longer answer for a day that has ended. Nothing here changed — the port
+//! recomputes both halves per request, which was already the fixed behaviour,
+//! and DIV-091 collapses into DIV-055's plain latency trade. Everything else
+//! about the memo (and `invalidate_plan_cache`, which has no caller anywhere
+//! in the tree) can only ever return the same bytes.
 
 use axum::Router;
 use axum::extract::State;

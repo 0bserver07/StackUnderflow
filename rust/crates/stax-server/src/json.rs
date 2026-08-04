@@ -194,6 +194,46 @@ pub fn validation_422(err: &crate::qs::QueryError) -> JsonBody {
     JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, validation_detail(err))
 }
 
+/// pydantic's 422 for a parameter that COERCED and then failed a bound.
+///
+/// A third shape: `type`, `loc`, `msg`, `input`, and then a `ctx` object
+/// carrying the bound itself — `{"ge": 1}` / `{"le": 500}` — appended after
+/// `input`. `input` is the RAW string, not the parsed integer. Measured
+/// against fastapi 0.141.1 / pydantic 2.13.4, not transcribed.
+///
+/// This is not reachable through [`validation_detail`], whose `QueryError`
+/// has no bound to report: a `QueryError` is a *coercion* failure. Lived
+/// privately in `routes/agent_teams.rs` (the only `Query(…, ge=…, le=…)` in
+/// the reference) until `/api/search` and `/api/qa` declared a floor too —
+/// promoted rather than copied, on the wave-5 dedup precedent.
+#[must_use]
+pub fn bound_422(
+    field: &str,
+    kind: &str,
+    msg: &str,
+    raw_input: &str,
+    ctx_key: &str,
+    ctx_value: i64,
+) -> JsonBody {
+    let mut ctx = serde_json::Map::new();
+    ctx.insert(ctx_key.to_owned(), Value::from(ctx_value));
+    let mut entry = serde_json::Map::new();
+    entry.insert("type".to_owned(), Value::from(kind));
+    entry.insert(
+        "loc".to_owned(),
+        Value::Array(vec![Value::from("query"), Value::from(field)]),
+    );
+    entry.insert("msg".to_owned(), Value::from(msg));
+    entry.insert("input".to_owned(), Value::from(raw_input));
+    entry.insert("ctx".to_owned(), Value::Object(ctx));
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "detail".to_owned(),
+        Value::Array(vec![Value::Object(entry)]),
+    );
+    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
+}
+
 /// FastAPI's 422 for an absent *required* query parameter.
 ///
 /// A different pydantic error type from [`validation_detail`]'s — `missing`,

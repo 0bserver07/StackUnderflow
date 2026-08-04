@@ -36,9 +36,11 @@
 #![forbid(unsafe_code)]
 
 pub mod assets;
+pub mod cors;
 pub mod currency;
 pub mod json;
 pub mod method_semantics;
+pub mod path_semantics;
 pub mod qs;
 pub mod routes;
 pub mod services;
@@ -69,36 +71,82 @@ pub use state::{AppState, Config};
 /// which handler Starlette would have picked, so it is reproduced rather than
 /// sorted.
 ///
-/// What is deliberately *not* here: `CORSMiddleware`. It only ever adds headers
-/// to a cross-origin request, the parity differ is same-origin, and porting it
-/// blind would mean inventing a header order nothing has measured. Recorded as
-/// DIV-050, not skipped quietly.
+/// # The three layers, and why they are in this order
 ///
-/// What *is* here, and was not before: [`method_semantics`]. axum aliases `HEAD`
-/// onto `GET` and reports every registered method in `Allow`; FastAPI does
-/// neither. The layer wrapping the finished router is **outside** it on purpose
-/// — `Router::layer` runs after routing, and rule 1 has to change the method
-/// before the matcher sees it. DIV-323.
+/// starlette wraps its router in `ServerErrorMiddleware → user middleware →
+/// ExceptionMiddleware → Router`, so the stack below is that stack:
+///
+/// 1. [`cors`] — `CORSMiddleware`, the one `add_middleware` call in
+///    `server.py`. Outermost, which is not cosmetic: a preflight short-circuits
+///    *before* routing, so `OPTIONS /api/health/` answers `200 OK` and never
+///    redirects, and the simple-request headers land on the `307` when it does.
+///    DIV-050, ruled and ported.
+/// 2. [`path_semantics`] — uvicorn's percent-decode (DIV-168) and starlette's
+///    `redirect_slashes` `307` (DIV-133, and DIV-361 with it). Both have to
+///    happen around the matcher: the decode before it, the redirect after it
+///    has failed.
+/// 3. [`method_semantics`] — axum aliases `HEAD` onto `GET` and reports every
+///    registered method in `Allow`; FastAPI does neither. DIV-323.
+///
+/// Each is `Layer::layer`ed onto the finished router rather than
+/// `Router::layer`ed into it, because `Router::layer` runs *after* routing and
+/// two of the three rules have to be earlier than that.
+///
+/// The `fallback` stamps [`path_semantics::Unmatched`] onto its response. That
+/// marker is the whole of how layer 2 tells "no route claimed this path" (which
+/// is what starlette redirects on) apart from "a handler answered `404`" (which
+/// it does not) — without either duplicating the route table or guessing from a
+/// status code.
 pub fn app(state: AppState) -> Router {
     let router = Router::new();
     let router = spa::register_static(router, &state);
     let router = routes::register_all(router);
     let router = spa::register_pages(router);
+    let cors = cors::CorsPolicy::from_config(state.config());
     let routed = router
         // FastAPI replaces starlette's plain-text 404/405 with JSON ones. axum's
         // defaults are an empty body and no `content-type` at all, which is a
         // divergence on every unknown path — the differ caught it on the first
         // run, on a case that was only in the file to prove the harness worked.
-        .fallback(|| async { json::not_found() })
+        .fallback(unmatched_path)
         .method_not_allowed_fallback(|| async { json::method_not_allowed() })
         .with_state(state);
 
-    // Everything — routes, both fallbacks, the `/static` mount — behind the one
-    // layer, reached through a stateless outer router so `app()` still returns a
-    // `Router` and no caller changes.
-    Router::new().fallback_service(
-        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed),
-    )
+    // The probe handle layer 2 asks "does this path exist?" — the very same
+    // router, so it cannot drift from the one that answers the request.
+    let probe = routed.clone();
+
+    // Everything — routes, both fallbacks, the `/static` mount — behind the
+    // layers, reached through a stateless outer router so `app()` still returns
+    // a `Router` and no caller changes.
+    let methods =
+        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed);
+    let paths = axum::middleware::from_fn(move |req, next| {
+        path_semantics::python_path_semantics(
+            probe.clone(),
+            Some(path_semantics::STATIC_MOUNT),
+            req,
+            next,
+        )
+    })
+    .layer(methods);
+    let cors =
+        axum::middleware::from_fn(move |req, next| cors::python_cors(cors.clone(), req, next))
+            .layer(paths);
+
+    Router::new().fallback_service(cors)
+}
+
+/// The app fallback: FastAPI's `404` body, plus the marker layer 2 reads.
+///
+/// Split out of the closure it used to be so the marker has somewhere to live.
+/// It is a response *extension*, which never reaches the wire — the bytes are
+/// byte-for-byte what they were.
+async fn unmatched_path() -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let mut res = json::not_found().into_response();
+    res.extensions_mut().insert(path_semantics::Unmatched);
+    res
 }
 
 /// `cli.py::ingest_webhook_serve_cmd`'s app — the PR/CI receiver, alone.
@@ -118,14 +166,27 @@ pub fn app(state: AppState) -> Router {
 /// `/api/webhooks/github` is a 405 with FastAPI's `Allow` semantics, not axum's
 /// — the same DIV-323 rule, and the receiver differ's rows cross it.
 ///
+/// [`path_semantics`] joins them for the same reason: `redirect_slashes` is a
+/// property of every starlette `Router`, so `/api/webhooks/github/` is a `307`
+/// here too. What it is **not** given is a mount root — this app has no
+/// `/static`, and a receiver that answered `307` to `/static` would be
+/// inventing one. Nor does it get [`cors`]: `cli.py::ingest_webhook_serve_cmd`
+/// builds a bare `FastAPI()` with no `add_middleware` call at all.
+///
 /// Appended below [`app`] rather than folded into it: `app` is shared ground and
 /// this leg may not re-shape it.
 pub fn webhook_receiver_app(state: AppState) -> Router {
     let routed = routes::webhooks::register(Router::new())
-        .fallback(|| async { json::not_found() })
+        .fallback(unmatched_path)
         .method_not_allowed_fallback(|| async { json::method_not_allowed() })
         .with_state(state);
+    let probe = routed.clone();
+    let methods =
+        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed);
     Router::new().fallback_service(
-        axum::middleware::from_fn(method_semantics::python_method_semantics).layer(routed),
+        axum::middleware::from_fn(move |req, next| {
+            path_semantics::python_path_semantics(probe.clone(), None, req, next)
+        })
+        .layer(methods),
     )
 }

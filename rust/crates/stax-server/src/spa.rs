@@ -69,7 +69,18 @@ pub fn register_static(router: Router<AppState>, state: &AppState) -> Router<App
     // to `axum::body::Body`; `ServeDir::map_response` alone leaves it generic
     // and `nest_service` cannot then infer it.
     let mount: Router<()> = match state.static_dir_override() {
-        Some(dir) => Router::new().fallback_service(ServeDir::new(dir).not_found_service(missing)),
+        // `append_index_html_on_directories(false)` is `StaticFiles(html=False)`
+        // — DIV-461. `ServeDir` defaults it ON, so `/static/react/` served the
+        // bundle's `index.html` where the reference `404`s: `get_response` only
+        // looks for an index `if self.html`, and `server.py` does not pass it.
+        // The same flag is what stops the directory `307` the reference never
+        // sends (`/static/react` → `location: /react/`, prefix-less, because
+        // `nest_service` had already stripped the mount).
+        Some(dir) => Router::new().fallback_service(
+            ServeDir::new(dir)
+                .append_index_html_on_directories(false)
+                .not_found_service(missing),
+        ),
         None => Router::new().fallback(serve_embedded),
     }
     .layer(MapResponseLayer::new(add_text_charset));
@@ -88,15 +99,33 @@ pub fn register_static(router: Router<AppState>, state: &AppState) -> Router<App
 /// |---|---|
 /// | a file | `200`, `mime_guess` type + `accept-ranges: bytes` + `content-length` |
 /// | `HEAD` of a file | the same headers, no body |
-/// | a directory without a trailing slash | `307` to the same URI + `/`, empty |
-/// | a directory with one | its `index.html`, or the miss below |
+/// | a directory, with or without a trailing slash | `404` — see DIV-461 |
 /// | a miss, or a `..`/absolute component | the mount's `not_found_service` — `404 {"detail":"Not Found"}` |
 /// | anything not `GET`/`HEAD` | `405` + `allow: GET,HEAD`, empty, no `content-type` |
 ///
 /// The last row is reachable **only at the bare mount root**: the app-wide
 /// `method_semantics` layer answers `/static/…` first (DIV-360). It is
-/// reproduced anyway because `!AL-static-root-put` measures exactly those bytes
+/// reproduced anyway because `AL-static-root-put` measures exactly those bytes
 /// every run.
+///
+/// # DIV-461 — the directory rows used to be `ServeDir`'s and not the mount's
+///
+/// This table read "a directory without a trailing slash → `307`; with one →
+/// its `index.html`" until the rulings pass measured the reference and found
+/// neither. `StaticFiles(directory=…)` is constructed **without `html=True`**,
+/// and `get_response` only looks for an index — and `check_config` only ever
+/// redirects — under that flag; without it a directory falls straight through
+/// to `raise HTTPException(404)`. Measured: `/static/react` and `/static/react/`
+/// are both `{"detail":"Not Found"}` on the reference, against a `307
+/// location: /react/` (the mount prefix already stripped by `nest_service`,
+/// so the redirect pointed at a path that does not exist) and a `200
+/// index.html` here. Both rows are pinned now.
+///
+/// The lesson is the one this crate keeps relearning: `ServeDir`'s defaults are
+/// not `StaticFiles`'s defaults, and the two only agree where a row crosses
+/// them. `charset=utf-8` and the `404` body were found the same way; these two
+/// survived four waves because no case row had ever asked the mount for a
+/// directory.
 ///
 /// # The one header that could not survive (DIV-402)
 ///
@@ -118,36 +147,14 @@ async fn serve_embedded(request: axum::extract::Request) -> Response {
     }
 
     let uri = request.uri();
-    let Some(mut key) = validate_key(uri.path()) else {
+    let Some(key) = validate_key(uri.path()) else {
         return crate::json::not_found().into_response();
     };
 
+    // DIV-461. `StaticFiles` is built without `html=True`, so a directory is
+    // neither redirected nor indexed — it is a `404`, on both spellings.
     if crate::assets::is_dir(&key) {
-        // `maybe_redirect_or_append_path`: a directory URI that does not end in
-        // `/` redirects rather than serving, and the redirect is built from the
-        // URI this service sees — which `nest_service` has already stripped of
-        // `/static`, so the `location` comes out prefix-less. That is what the
-        // mount has always done; reproduced, not corrected.
-        if !uri.path().is_empty() && !uri.path().ends_with('/') {
-            let location = match uri.query() {
-                Some(query) => format!("{}/?{query}", uri.path()),
-                None => format!("{}/", uri.path()),
-            };
-            let Ok(location) = HeaderValue::from_str(&location) else {
-                return crate::json::not_found().into_response();
-            };
-            return (
-                StatusCode::TEMPORARY_REDIRECT,
-                [(header::LOCATION, location)],
-                Body::empty(),
-            )
-                .into_response();
-        }
-        if key.is_empty() {
-            key = "index.html".to_owned();
-        } else {
-            key.push_str("/index.html");
-        }
+        return crate::json::not_found().into_response();
     }
 
     let Some(bytes) = crate::assets::get(&key) else {
@@ -265,9 +272,23 @@ fn add_text_charset(mut response: http::Response<Body>) -> http::Response<Body> 
 /// path, slashes included". The capture is unused — Python's handler ignores it
 /// too — but the route must still exist, because `/project/foo/bar` is a real
 /// URL the dashboard puts in the address bar.
+///
+/// # DIV-462 — the two spellings are not the same wildcard
+///
+/// starlette compiles `{full_path:path}` to `(?P<full_path>.*)`, which matches
+/// the **empty** rest; `matchit`'s `{*full_path}` requires at least one
+/// character. Measured: `GET /project/` is `200` and the SPA index on the
+/// reference and was `404` here. `/project/` is therefore declared explicitly —
+/// the same handler, the capture unused on both sides.
+///
+/// Adding it also closes the *other* direction. With `/project/` registered,
+/// `GET /project` becomes an unmatched path whose toggled form matches, so
+/// [`crate::path_semantics`] answers the reference's `307 location:
+/// http://…/project/` instead of a `404`. One route, two rows.
 pub fn register_pages(router: Router<AppState>) -> Router<AppState> {
     router
         .route("/", get(spa_index))
+        .route("/project/", get(spa_index))
         .route("/project/{*full_path}", get(spa_index))
         .route("/settings", get(spa_index))
         .route("/live", get(spa_index))

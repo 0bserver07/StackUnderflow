@@ -51,6 +51,7 @@ use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_4
 use crate::pyops::{COST_KEYS, path_name};
 use crate::qs::Query;
 use crate::services::mart_queries::{mart_has_tool_rows, table_exists};
+use crate::services::stats_memo;
 use crate::state::AppState;
 
 /// The `COST_KEYS` members whose missing-value default is `{}` rather than `[]`.
@@ -62,9 +63,11 @@ const DICT_SHAPED_KEYS: [&str; 5] = [
     "trends",
 ];
 
-/// `_TZ_OFFSET_MIN` / `_MAX` — minutes EAST of UTC.
-const TZ_OFFSET_MIN: i64 = -720;
-const TZ_OFFSET_MAX: i64 = 840;
+// `_TZ_OFFSET_MIN` / `_MAX` moved to `crate::services::stats_memo` with the
+// `_clamp_tz_offset` that is their only reader — DIV-055. Three copies of a
+// two-line constant existed because the clamp was open-coded at three call
+// sites; the memo funnels all three now, exactly as `_project_stats_cached`
+// does in Python.
 
 /// `_BY_MODEL_MART_PERIODS` — the periods whose bounds sit on day boundaries.
 const BY_MODEL_MART_PERIODS: [&str; 3] = ["today", "month", "all"];
@@ -225,23 +228,38 @@ fn cost_data_stats(
     let conn = state.connect().map_err(|err| any_500(&err))?;
     let project_ids = project_ids_for(&conn, path)?;
     let engine = crate::pricing::engine(&conn, state.package_dir()).map_err(|err| any_500(&err))?;
-    // `_project_stats_cached` clamps before both the cache key and the call.
-    let tz_offset = timezone_offset.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX);
-    let (_messages, stats) =
-        stax_etl::stats::dataset::get_project_stats_with(&conn, &project_ids, tz_offset, &engine)
-            .map_err(|err| any_500(&err))?;
-
-    // `keys=COST_KEYS` — the memo's narrowed copy. Not a perf device here (there
-    // is no memo to copy out of), but the *set* is load-bearing: an unrequested
-    // key must be OMITTED from the working dict, not carried and dropped later.
+    // `keys=COST_KEYS` — the memo's narrowed copy, and the SECOND consumer of
+    // DIV-055's shared entry. The set is load-bearing twice over: an unrequested
+    // key must be OMITTED from the working dict rather than carried and dropped
+    // later, and narrowing the copy is what turns an ~81 ms warm hit into ~8 ms
+    // (Python's own measurement, quoted in `cost.py`).
+    //
+    // The clamp is inside `project_stats_cached`, exactly as `_clamp_tz_offset`
+    // is inside `_project_stats_cached`, so it lands in the key and the call.
+    let stats = stats_memo::project_stats_cached(
+        state.stats_memo(),
+        &conn,
+        &stats_memo::StatsRequest {
+            store_path: state.store_path(),
+            slug: &path_name(path),
+            project_ids: &project_ids,
+            tz_offset: timezone_offset,
+            keys: Some(&COST_KEYS),
+        },
+        sql_500,
+        |tz_offset| {
+            stax_etl::stats::dataset::get_project_stats_with(
+                &conn,
+                &project_ids,
+                tz_offset,
+                &engine,
+            )
+            .map(|(_messages, stats)| stats)
+            .map_err(|err| any_500(&err))
+        },
+    )?;
     let mut stats: Map<String, Value> = match stats {
-        Value::Object(map) => COST_KEYS
-            .iter()
-            .filter_map(|key| {
-                map.get(*key)
-                    .map(|value| ((*key).to_owned(), value.clone()))
-            })
-            .collect(),
+        Value::Object(map) => map,
         _ => Map::new(),
     };
 

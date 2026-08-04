@@ -66,12 +66,14 @@ use crate::pyops::COST_KEYS;
 use crate::qs::Query;
 use crate::services::mart_queries::table_exists;
 use crate::services::messages as messages_api;
+use crate::services::stats_memo;
 use crate::state::AppState;
 
-/// `routes/cost.py::_TZ_OFFSET_MIN` / `_MAX` — minutes EAST of UTC.
-const TZ_OFFSET_MIN: i64 = -720;
-/// See [`TZ_OFFSET_MIN`].
-const TZ_OFFSET_MAX: i64 = 840;
+// `_TZ_OFFSET_MIN` / `_MAX` moved with the memo they belong to —
+// `crate::services::stats_memo`, DIV-055. They were duplicated here, in
+// `routes/cost.rs` and in `routes/commands.rs` for the same reason Python
+// duplicates the clamp *call* at three sites: the constant lives with
+// `_clamp_tz_offset`, which lives with `_project_stats_cached`.
 
 /// `_HEAVY_NESTED_LISTS` — `(parent, child)` pairs emptied unless `details=1`.
 const HEAVY_NESTED_LISTS: [(&str, &str); 4] = [
@@ -206,9 +208,6 @@ fn compute_stats(state: &AppState, log_path: &str, tz_offset: i64) -> Result<Val
             "Project '{slug}' not found in store — try /api/refresh first"
         )));
     }
-    // `_clamp_tz_offset` lives in the memo on the Python side, so the clamp
-    // reaches `get_project_stats` there too. Applied here for the same reason.
-    let tz_offset = tz_offset.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX);
     // RS-3-082's seam, and it is not theoretical: `get_project_stats` builds the
     // *manifest* engine (`default_engine`), while `server.py`'s lifespan flips
     // `infra.costs` onto the primed `price_book` table before it serves a byte.
@@ -220,10 +219,34 @@ fn compute_stats(state: &AppState, log_path: &str, tz_offset: i64) -> Result<Val
     // `routes/commands.rs` price with; injecting it is the whole fix.
     let engine = crate::pricing::engine(&conn, state.package_dir())
         .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    let (_messages, stats) =
-        stax_etl::stats::dataset::get_project_stats_with(&conn, &project_ids, tz_offset, &engine)
-            .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    Ok(stats)
+    // `stats = _project_stats_cached(conn, project_ids=…, slug=slug,
+    //  tz_offset=timezone_offset)` — `data.py` line 245, with `keys=None`
+    // because `/api/stats` needs every top-level key. DIV-055: this is the one
+    // endpoint where the reference was faster, and the memo is why. The clamp
+    // lives inside `project_stats_cached`, exactly as `_clamp_tz_offset` lives
+    // inside `_project_stats_cached`, so it reaches the key AND the call.
+    stats_memo::project_stats_cached(
+        state.stats_memo(),
+        &conn,
+        &stats_memo::StatsRequest {
+            store_path: state.store_path(),
+            slug: &slug,
+            project_ids: &project_ids,
+            tz_offset,
+            keys: None,
+        },
+        |err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+        |tz_offset| {
+            stax_etl::stats::dataset::get_project_stats_with(
+                &conn,
+                &project_ids,
+                tz_offset,
+                &engine,
+            )
+            .map(|(_messages, stats)| stats)
+            .map_err(|err| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+        },
+    )
 }
 
 /// `queries.get_projects_by_slug` → the id list, in row order.
@@ -2092,6 +2115,26 @@ fn run_refresh(state: &AppState, per_project: bool) -> Result<Value, HttpError> 
 
     // `sum(counts.values())`.
     let total_new: i64 = report.counts.iter().map(|(_, added)| *added).sum();
+
+    // `_invalidate_stats_cache(...)` — DIV-055's memo, dropped at two of the
+    // four sites Python drops it (the other two are `routes/cfg.rs`'s alias
+    // writers). The memo self-invalidates on the sessions signature anyway, so
+    // this is the same DEFENSIVE posture Python's own comment describes — but
+    // the scope is not: the per-project branch clears only this slug
+    // (`data.py` line 1077) and the all-projects branch clears everything
+    // (`data.py` line 1128, "every slug may have moved — full clear").
+    if total_new != 0 {
+        let slug = if per_project {
+            state
+                .current_project()
+                .log_path
+                .as_deref()
+                .map(crate::pyops::path_name)
+        } else {
+            None
+        };
+        state.stats_memo().invalidate(slug.as_deref());
+    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let ms = (started.elapsed().as_secs_f64() * 1000.0) as i64;
 
@@ -2217,14 +2260,14 @@ mod tests {
 
     #[test]
     fn the_tz_clamp_is_a_real_world_utc_offset() {
-        assert_eq!((-999_i64).clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX), -720);
-        assert_eq!(9999_i64.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX), 840);
+        assert_eq!(stats_memo::clamp_tz_offset(-999), -720);
+        assert_eq!(stats_memo::clamp_tz_offset(9999), 840);
         // §6b divergence 5: the React callers send raw `getTimezoneOffset()`,
         // which is minutes WEST, where the backend wants minutes east. Both
         // signs are inside the clamp, so the port inherits the wrong bucketing
         // faithfully — as it must until the frontend fix lands.
-        assert_eq!(480_i64.clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX), 480);
-        assert_eq!((-480_i64).clamp(TZ_OFFSET_MIN, TZ_OFFSET_MAX), -480);
+        assert_eq!(stats_memo::clamp_tz_offset(480), 480);
+        assert_eq!(stats_memo::clamp_tz_offset(-480), -480);
     }
 }
 

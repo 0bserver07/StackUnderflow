@@ -52,7 +52,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use serde_json::{Map, Value};
 
-use crate::json::{HandlerResult, HttpError, JsonBody, join_failure, validation_422};
+use crate::json::{HandlerResult, HttpError, JsonBody, bound_422, join_failure, validation_422};
 use crate::qs::{Query, QueryError};
 use crate::services::agent_teams as service;
 use crate::state::AppState;
@@ -84,34 +84,6 @@ fn any_500(err: &anyhow::Error) -> HttpError {
 
 fn sql_500(err: &rusqlite::Error) -> HttpError {
     HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-}
-
-/// One pydantic bound error — `type`, `loc`, `msg`, `input`, `ctx`, in that
-/// order, wrapped in FastAPI's `{"detail": [ … ]}`.
-///
-/// `crate::json` has no `ctx`-carrying builder (nothing before batch E declared
-/// a *constrained* query parameter), and `json.rs` belongs to no batch member.
-/// This is the file-local one; flagged for the integrator's dedup list rather
-/// than smuggled into a shared file.
-fn bound_422(kind: &str, msg: &str, raw_input: &str, ctx_key: &str, ctx_value: i64) -> JsonBody {
-    let mut ctx = Map::new();
-    ctx.insert(ctx_key.to_owned(), Value::from(ctx_value));
-    let mut entry = Map::new();
-    entry.insert("type".to_owned(), Value::from(kind));
-    entry.insert(
-        "loc".to_owned(),
-        Value::Array(vec![Value::from("query"), Value::from("limit")]),
-    );
-    entry.insert("msg".to_owned(), Value::from(msg));
-    // The RAW string, not the parsed integer — measured.
-    entry.insert("input".to_owned(), Value::from(raw_input));
-    entry.insert("ctx".to_owned(), Value::Object(ctx));
-    let mut obj = Map::new();
-    obj.insert(
-        "detail".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    JsonBody::with_status(StatusCode::UNPROCESSABLE_ENTITY, Value::Object(obj))
 }
 
 /// `limit: int = Query(50, ge=1, le=500)` — coercion then bounds.
@@ -157,6 +129,7 @@ fn parse_limit(query: &Query) -> Result<i64, JsonBody> {
     };
     if value < LIMIT_MIN {
         return Err(bound_422(
+            "limit",
             "greater_than_equal",
             "Input should be greater than or equal to 1",
             raw,
@@ -166,6 +139,7 @@ fn parse_limit(query: &Query) -> Result<i64, JsonBody> {
     }
     if value > LIMIT_MAX {
         return Err(bound_422(
+            "limit",
             "less_than_equal",
             "Input should be less than or equal to 500",
             raw,
