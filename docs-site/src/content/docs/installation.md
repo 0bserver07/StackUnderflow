@@ -9,7 +9,7 @@ staxtrace's engine is the Rust workspace under `rust/` — build it from source
 `target/release/stax` onto your PATH. Prebuilt binaries are coming to
 GitHub Releases. The Python instructions below cover the previous
 implementation, which remains in maintenance mode, reads the same store,
-and its PyPI package is being retired.
+and the old PyPI packages have been removed — install from this repo.
 :::
 
 ## Requirements

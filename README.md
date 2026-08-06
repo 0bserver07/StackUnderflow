@@ -56,7 +56,7 @@ stax init
 
 **Python (maintenance mode)** lives on the
 [`python-legacy`](../../tree/python-legacy) branch — same store, same schema;
-its PyPI package is being retired.
+the old PyPI packages have been removed — install from this repo.
 
 `stax` is the native binary; `stackunderflow` survives as its long-form alias on the [`python-legacy`](../../tree/python-legacy) branch. Where this README uses the long form, substitute `stax` — same commands, same flags, same output.
 
