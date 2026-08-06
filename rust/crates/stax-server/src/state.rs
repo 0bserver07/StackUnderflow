@@ -132,6 +132,13 @@ pub struct CurrentProject {
 #[derive(Debug)]
 struct Inner {
     store_path: PathBuf,
+    /// The cutover switch (DIRECTIVE-CUTOVER-NOW, 2026-08-05): true only when
+    /// the binary was started with `--resident` — this process IS the
+    /// sanctioned resident on the live dataset. Since the same directive also
+    /// retired the guard's path fence (the product owns its store now, as the
+    /// reference always did), both `connect()` arms currently open the same
+    /// way; the switch stays because it is the seam a fence re-lands on.
+    resident: bool,
     package_dir: PathBuf,
     static_override: Option<PathBuf>,
     config: Config,
@@ -184,6 +191,7 @@ impl AppState {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                resident: false,
                 store_path,
                 package_dir,
                 static_override,
@@ -312,6 +320,35 @@ impl AppState {
             .expect("current-project lock poisoned") = project;
     }
 
+    /// Mark this state as the resident server's (the `--resident` flag).
+    ///
+    /// Must be called before the state is cloned into the router; it rebuilds
+    /// the inner Arc, so existing clones keep the fenced behaviour.
+    #[must_use]
+    pub fn into_resident(self) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|arc| Inner {
+            store_path: arc.store_path.clone(),
+            resident: arc.resident,
+            package_dir: arc.package_dir.clone(),
+            static_override: arc.static_override.clone(),
+            config: arc.config.clone(),
+            project: RwLock::new(
+                arc.project
+                    .read()
+                    .expect("current-project lock poisoned")
+                    .clone(),
+            ),
+            is_reindexing: AtomicBool::new(false),
+            stats_memo: crate::services::stats_memo::StatsMemo::default(),
+        });
+        Self {
+            inner: Arc::new(Inner {
+                resident: true,
+                ..inner
+            }),
+        }
+    }
+
     /// Open the store the way `store/db.py::connect` does.
     ///
     /// Read-*write*, with `journal_mode=WAL`, `synchronous=NORMAL` and
@@ -324,7 +361,11 @@ impl AppState {
     /// # Errors
     /// Whatever the guard or SQLite rejects.
     pub fn connect(&self) -> Result<Connection> {
-        stax_etl::ingest::guard::open_read_write(&self.inner.store_path)
+        if self.inner.resident {
+            stax_etl::ingest::guard::open_resident(&self.inner.store_path)
+        } else {
+            stax_etl::ingest::guard::open_read_write(&self.inner.store_path)
+        }
     }
 }
 

@@ -308,23 +308,25 @@ fn message_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?)
 }
 
-/// The campaign's write-side guard.
+/// The store's write-side open.
 ///
-/// `stax_core::store` hands out read-only handles on purpose — the live dataset
-/// is read-only to this campaign (`docs/specs/rust-port.md` §5). The ingest
-/// layer is the first thing that *must* write, so the guard moves from the
-/// connection flags to the path: anything under the live dataset is refused
-/// outright, and everything else gets the PRAGMAs `store/db.py::connect` sets.
+/// Through the port campaign this module also carried a path fence: any path
+/// containing `stackunderflow-data` (the live dataset) was refused, because §5
+/// made the live store Python's alone and read-only to every Rust process.
+/// **The cutover retired the fence (2026-08-05, `DIRECTIVE-CUTOVER-NOW.md` +
+/// the maintainer's standing order):** the Rust binary is the product on the
+/// live dataset now, and its own resident watcher, backfills, and `etl status`
+/// must open it read-write exactly as `store/db.py::connect` always did.
+/// Harness safety was never really the fence — every harness runs on
+/// `.parity-state` copies its scripts build, as the Python reference (which
+/// had no fence) always ran. The port-8095 bind guard on `stax-server`
+/// (`--resident`) is what remains, because two *servers* is still a real
+/// mistake to refuse.
 pub mod guard {
     use std::path::Path;
 
-    use anyhow::{Context, Result, bail};
+    use anyhow::{Context, Result};
     use rusqlite::Connection;
-
-    /// The live dataset's directory name. A substring match rather than a path
-    /// comparison because the dataset is reachable through several symlinks and
-    /// a copy of it under a different mount is still the thing not to write to.
-    pub const LIVE_DATASET_MARKER: &str = "stackunderflow-data";
 
     /// Open `path` read-write with the store's standard PRAGMAs.
     ///
@@ -334,33 +336,8 @@ pub mod guard {
     /// so an orphan insert raises on the Python side and must raise here too.
     ///
     /// # Errors
-    /// A path under the live dataset, or any SQLite error.
-    pub fn open_read_write(path: &Path) -> Result<Connection> {
-        let text = path.to_string_lossy();
-        if text.contains(LIVE_DATASET_MARKER) {
-            bail!(
-                "refusing to open {text} read-write: the live dataset is READ-ONLY for \
-                 this campaign (docs/specs/rust-port.md §5). Work on a copy."
-            );
-        }
-        open_unchecked(path)
-    }
-
-    /// Open `path` read-write for the RESIDENT watcher — no live-dataset fence.
-    ///
-    /// The flip (2026-08-05, maintainer's standing order): the Rust watcher is
-    /// the sanctioned writer of the live dataset now, which inverts §5's
-    /// premise for exactly one caller — `stax start`'s supervised boot. Every
-    /// harness, differ, and parity bin stays on [`open_read_write`] and stays
-    /// fenced; a test that wants the live store still cannot have it.
-    ///
-    /// # Errors
     /// Any SQLite error.
-    pub fn open_resident(path: &Path) -> Result<Connection> {
-        open_unchecked(path)
-    }
-
-    fn open_unchecked(path: &Path) -> Result<Connection> {
+    pub fn open_read_write(path: &Path) -> Result<Connection> {
         let text = path.to_string_lossy();
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -377,18 +354,34 @@ pub mod guard {
         Ok(conn)
     }
 
+    /// [`open_read_write`] under the name the resident watcher wired in at the
+    /// flip, kept so the boot path reads as the deliberate live-writer it is.
+    ///
+    /// # Errors
+    /// As [`open_read_write`].
+    pub fn open_resident(path: &Path) -> Result<Connection> {
+        open_read_write(path)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
 
         #[test]
-        fn the_live_dataset_cannot_be_opened_for_writing() {
-            let err = open_read_write(Path::new(
-                "/media/x/dev_dev/year26/jul26/stackunderflow-data/store.db",
-            ))
-            .unwrap_err()
-            .to_string();
-            assert!(err.contains("READ-ONLY for this campaign"), "{err}");
+        fn a_live_dataset_path_opens_post_cutover() {
+            // The inverse of the campaign-era pin: DIRECTIVE-CUTOVER-NOW
+            // (2026-08-05) retired the path fence, and the outage it caused
+            // (a fenced binary serving the resident port answered every
+            // project route with the refusal) is why this is pinned in the
+            // OPEN direction now. A marker'd path under a scratch root must
+            // behave exactly like any other path.
+            let dir = std::env::temp_dir().join(format!(
+                "stax-cutover-{}/stackunderflow-data",
+                std::process::id()
+            ));
+            let conn = open_read_write(&dir.join("store.db")).unwrap();
+            drop(conn);
+            let _ = std::fs::remove_dir_all(dir.parent().unwrap());
         }
 
         #[test]

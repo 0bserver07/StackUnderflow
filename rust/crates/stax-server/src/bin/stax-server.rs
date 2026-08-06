@@ -131,7 +131,10 @@ async fn main() -> Result<()> {
         store_path.display()
     );
 
-    let state = AppState::with_static_dir(store_path, package_dir, config, static_dir);
+    let mut state = AppState::with_static_dir(store_path, package_dir, config, static_dir);
+    if cli.resident {
+        state = state.into_resident();
+    }
     let app = if cli.webhooks_only {
         stax_server::webhook_receiver_app(state)
     } else {
