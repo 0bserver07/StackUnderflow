@@ -138,8 +138,17 @@ impl Divergence {
 #[test]
 fn pricing_parity_sweep_over_the_real_store_and_the_whole_manifest() {
     let paths = discover();
-    let manifest_path = paths.repo.join("stackunderflow/data/models.toml");
-    if !paths.python.exists() || !paths.store.exists() || !manifest_path.exists() {
+    let manifest_path = paths.repo.join("rust/assets/data/models.toml");
+    // The Python reference left this tree at the split (2026-08-06,
+    // python-legacy branch); the oracle only runs where a reference
+    // implementation sits IN this repo, so an interpreter resolving the
+    // package from a sibling checkout can never masquerade as it.
+    let reference_tree = paths.repo.join("stackunderflow/infra/costs.py");
+    if !paths.python.exists()
+        || !paths.store.exists()
+        || !manifest_path.exists()
+        || !reference_tree.is_file()
+    {
         eprintln!(
             "SKIP pricing parity sweep — missing input(s):\n  python: {} ({})\n  store : {} ({})\n  manifest: {} ({})",
             paths.python.display(),
@@ -423,7 +432,7 @@ fn exists(path: &Path) -> &'static str {
 #[test]
 fn the_manifest_loader_agrees_with_cpython_tomllib() {
     let paths = discover();
-    let manifest_path = paths.repo.join("stackunderflow/data/models.toml");
+    let manifest_path = paths.repo.join("rust/assets/data/models.toml");
     if !paths.python.exists() || !manifest_path.exists() {
         eprintln!("SKIP tomllib cross-check — no reference interpreter");
         return;

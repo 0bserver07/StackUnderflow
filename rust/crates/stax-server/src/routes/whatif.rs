@@ -379,7 +379,7 @@ mod tests {
     use super::*;
 
     fn package_dir() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow")
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
     }
 
     fn engine() -> PricingEngine {

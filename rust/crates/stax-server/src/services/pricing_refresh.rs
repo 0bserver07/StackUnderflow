@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn the_rate_card_payload_is_the_manifest_order_with_four_keys_per_entry() {
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory");
         // `crate::pricing::engine`, NEVER `default_engine` — batch-E law 2.
         let engine = crate::pricing::engine(&conn, &package).expect("engine");

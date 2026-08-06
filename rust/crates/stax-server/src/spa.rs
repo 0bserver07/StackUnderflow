@@ -350,7 +350,7 @@ mod tests {
     fn repo_package() -> PathBuf {
         // …/StackUnderflow-rust/rust/crates/stax-server → …/stackunderflow
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow")
+            .join("../../assets")
             .canonicalize()
             .expect("the checked-in package tree is the wave-5 oracle")
     }

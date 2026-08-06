@@ -984,7 +984,7 @@ mod tests {
     /// arithmetic is not an assertion about today's manifest. `$1M/M tokens`
     /// makes one token cost one dollar, which keeps the expected bytes readable.
     fn engine() -> PricingEngine {
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let mut overlay = StdHashMap::new();
         overlay.insert("m-one".to_owned(), (1_000_000.0, 1_000_000.0, 0.0, 0.0));
         overlay.insert("m-two".to_owned(), (1_000_000.0, 1_000_000.0, 0.0, 0.0));

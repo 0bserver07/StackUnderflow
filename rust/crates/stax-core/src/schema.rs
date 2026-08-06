@@ -119,29 +119,27 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         name: "v001_initial",
-        body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v001_initial.sql"
-        )),
+        body: Body::Sql(include_str!("../../../assets/migrations/v001_initial.sql")),
     },
     Migration {
         version: 2,
         name: "v002_ingest_log_multistore",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v002_ingest_log_multistore.sql"
+            "../../../assets/migrations/v002_ingest_log_multistore.sql"
         )),
     },
     Migration {
         version: 3,
         name: "v003_messages_speed",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v003_messages_speed.sql"
+            "../../../assets/migrations/v003_messages_speed.sql"
         )),
     },
     Migration {
         version: 4,
         name: "v004_clean_synthetic_models",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v004_clean_synthetic_models.sql"
+            "../../../assets/migrations/v004_clean_synthetic_models.sql"
         )),
     },
     Migration {
@@ -153,14 +151,14 @@ const MIGRATIONS: &[Migration] = &[
         version: 6,
         name: "v006_etl_layer",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v006_etl_layer.sql"
+            "../../../assets/migrations/v006_etl_layer.sql"
         )),
     },
     Migration {
         version: 7,
         name: "v007_lower_grain_marts",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v007_lower_grain_marts.sql"
+            "../../../assets/migrations/v007_lower_grain_marts.sql"
         )),
     },
     Migration {
@@ -172,147 +170,147 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "v009_discovery_telemetry",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v009_discovery_telemetry.sql"
+            "../../../assets/migrations/v009_discovery_telemetry.sql"
         )),
     },
     Migration {
         version: 10,
         name: "v010_captured_events",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v010_captured_events.sql"
+            "../../../assets/migrations/v010_captured_events.sql"
         )),
     },
     Migration {
         version: 11,
         name: "v011_message_tool_mart",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v011_message_tool_mart.sql"
+            "../../../assets/migrations/v011_message_tool_mart.sql"
         )),
     },
     Migration {
         version: 12,
         name: "v012_tool_mart_calls_total",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v012_tool_mart_calls_total.sql"
+            "../../../assets/migrations/v012_tool_mart_calls_total.sql"
         )),
     },
     Migration {
         version: 13,
         name: "v013_multi_agent_session_metadata",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v013_multi_agent_session_metadata.sql"
+            "../../../assets/migrations/v013_multi_agent_session_metadata.sql"
         )),
     },
     Migration {
         version: 14,
         name: "v014_discovery_embeddings",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v014_discovery_embeddings.sql"
+            "../../../assets/migrations/v014_discovery_embeddings.sql"
         )),
     },
     Migration {
         version: 16,
         name: "v016_mode_recommendations",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v016_mode_recommendations.sql"
+            "../../../assets/migrations/v016_mode_recommendations.sql"
         )),
     },
     Migration {
         version: 17,
         name: "v017_pr_ci_outcomes",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v017_pr_ci_outcomes.sql"
+            "../../../assets/migrations/v017_pr_ci_outcomes.sql"
         )),
     },
     Migration {
         version: 18,
         name: "v018_static_analysis_findings",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v018_static_analysis_findings.sql"
+            "../../../assets/migrations/v018_static_analysis_findings.sql"
         )),
     },
     Migration {
         version: 19,
         name: "v019_commit_session_link",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v019_commit_session_link.sql"
+            "../../../assets/migrations/v019_commit_session_link.sql"
         )),
     },
     Migration {
         version: 20,
         name: "v020_session_quality_metrics",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v020_session_quality_metrics.sql"
+            "../../../assets/migrations/v020_session_quality_metrics.sql"
         )),
     },
     Migration {
         version: 21,
         name: "v021_grade_no_fabricated_fallback",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v021_grade_no_fabricated_fallback.sql"
+            "../../../assets/migrations/v021_grade_no_fabricated_fallback.sql"
         )),
     },
     Migration {
         version: 22,
         name: "v022_project_mart_message_dims",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v022_project_mart_message_dims.sql"
+            "../../../assets/migrations/v022_project_mart_message_dims.sql"
         )),
     },
     Migration {
         version: 23,
         name: "v023_mart_overview_rate_dims",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v023_mart_overview_rate_dims.sql"
+            "../../../assets/migrations/v023_mart_overview_rate_dims.sql"
         )),
     },
     Migration {
         version: 24,
         name: "v024_price_book",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v024_price_book.sql"
+            "../../../assets/migrations/v024_price_book.sql"
         )),
     },
     Migration {
         version: 25,
         name: "v025_command_day_mart",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v025_command_day_mart.sql"
+            "../../../assets/migrations/v025_command_day_mart.sql"
         )),
     },
     Migration {
         version: 26,
         name: "v026_reasoning_tokens",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v026_reasoning_tokens.sql"
+            "../../../assets/migrations/v026_reasoning_tokens.sql"
         )),
     },
     Migration {
         version: 27,
         name: "v027_worktree_of",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v027_worktree_of.sql"
+            "../../../assets/migrations/v027_worktree_of.sql"
         )),
     },
     Migration {
         version: 28,
         name: "v028_sync_identity_outbox",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v028_sync_identity_outbox.sql"
+            "../../../assets/migrations/v028_sync_identity_outbox.sql"
         )),
     },
     Migration {
         version: 29,
         name: "v029_sync_pull_landing",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v029_sync_pull_landing.sql"
+            "../../../assets/migrations/v029_sync_pull_landing.sql"
         )),
     },
     Migration {
         version: 30,
         name: "v030_live_indexes",
         body: Body::Sql(include_str!(
-            "../../../../stackunderflow/store/migrations/v030_live_indexes.sql"
+            "../../../assets/migrations/v030_live_indexes.sql"
         )),
     },
 ];

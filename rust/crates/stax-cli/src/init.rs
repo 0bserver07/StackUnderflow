@@ -163,7 +163,7 @@ pub fn default_skills_dest() -> PathBuf {
 #[must_use]
 pub fn shipped_skills_source_dir() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../stackunderflow")
+        .join("../../assets")
         .join("skills");
     std::fs::canonicalize(&path).unwrap_or(path)
 }

@@ -16,7 +16,7 @@ use support::{
 };
 
 fn table() -> Capabilities {
-    let path = fixture("stackunderflow/adapters/capabilities.json");
+    let path = fixture("rust/assets/adapters/capabilities.json");
     assert!(
         path.is_file(),
         "missing capability table at {}",

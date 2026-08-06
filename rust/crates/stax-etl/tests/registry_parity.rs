@@ -167,7 +167,8 @@ fn the_pricing_seams_the_diff_runs_under_are_the_etl_paths_seams() {
     // …and the rate-card membership set the `cost_source` decision turns on is
     // the same size on both sides.
     let manifest = repo_root()
-        .join("stackunderflow")
+        .join("rust")
+        .join("assets")
         .join("data")
         .join("models.toml");
     let ctx = stax_etl::normalize::NormalizeContext::unprimed(&manifest).expect("manifest parses");

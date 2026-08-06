@@ -388,11 +388,13 @@ pub enum Command {
     // FIRST LINE of the docstring as the group summary and `help-tree.sh`
     // compares it. A doc comment explaining the port's own gap would put text
     // in the tree the reference does not have — measured, on the first run.
+    /// Per-session static-analysis pass.
     #[command(
         about = "Per-session static-analysis pass — complexity / lint / type-completeness deltas.",
         long_about = None
     )]
     Analyze(crate::analyze::AnalyzeArgs),
+    /// PR / CI ingest group.
     #[command(
         about = "Pull PR / CI data into the local store (REST backfill + webhook receiver).",
         long_about = None

@@ -998,7 +998,7 @@ mod tests {
     use super::*;
 
     fn engine() -> PricingEngine {
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         PricingEngine::from_manifest_path(&crate::pricing::manifest_path(&package))
             .expect("the shipped manifest")
     }

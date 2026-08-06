@@ -180,7 +180,7 @@ mod tests {
     fn ctx() -> NormalizeContext {
         NormalizeContext::new(
             crate::pricing::PricingEngine::from_manifest_path(Path::new(
-                "../../../stackunderflow/data/models.toml",
+                "../../assets/data/models.toml",
             ))
             .expect("manifest"),
         )

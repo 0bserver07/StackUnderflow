@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::click::{Output, UsageError};
 use crate::compare::sort_keys;
@@ -383,7 +383,7 @@ fn run_quality(args: &QualityArgs) -> Result<Output> {
     let sub = |key: &str| -> String {
         grades
             .get(key)
-            .map_or("None".to_owned(), |v| stax_etl::stats::pytext::py_str(v))
+            .map_or("None".to_owned(), stax_etl::stats::pytext::py_str)
     };
     let mut out = String::new();
     out.push_str(&format!("Session: {}\n", get_str(&grade, "session_id")));

@@ -51,7 +51,7 @@ pub const FILE_SCHEMA: &str = "stackunderflow.adapter-capabilities/1";
 pub const CAPABILITIES_PATH_ENV: &str = "STACKUNDERFLOW_CAPABILITIES";
 
 /// The data file's path relative to the repository root.
-pub const CAPABILITIES_RELATIVE_PATH: &str = "stackunderflow/adapters/capabilities.json";
+pub const CAPABILITIES_RELATIVE_PATH: &str = "rust/assets/adapters/capabilities.json";
 
 /// The curated table, compiled into every binary that links this crate.
 ///
@@ -59,8 +59,7 @@ pub const CAPABILITIES_RELATIVE_PATH: &str = "stackunderflow/adapters/capabiliti
 /// not transcribed, on the precedent `stax_etl::stats::dataset` set for
 /// `models.toml` and `stax_core::schema` set for the migrations. A checkout
 /// without it fails to compile, which is the loud failure mode.
-pub const EMBEDDED_TABLE: &str =
-    include_str!("../../../../stackunderflow/adapters/capabilities.json");
+pub const EMBEDDED_TABLE: &str = include_str!("../../../assets/adapters/capabilities.json");
 
 /// A canonical record field, in the display order `FIELDS` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -602,11 +601,11 @@ mod tests {
         let root = Path::new("/repo");
         assert_eq!(
             path_from_env(None, root),
-            Path::new("/repo/stackunderflow/adapters/capabilities.json")
+            Path::new("/repo/rust/assets/adapters/capabilities.json")
         );
         assert_eq!(
             path_from_env(Some(OsStr::new("")), root),
-            Path::new("/repo/stackunderflow/adapters/capabilities.json")
+            Path::new("/repo/rust/assets/adapters/capabilities.json")
         );
         assert_eq!(
             path_from_env(Some(OsStr::new("/elsewhere/caps.json")), root),
@@ -710,7 +709,7 @@ mod tests {
         assert!(!embedded.is_empty());
 
         let on_disk = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow/adapters/capabilities.json");
+            .join("../../assets/adapters/capabilities.json");
         let text = std::fs::read_to_string(&on_disk).expect("the checked-in table is readable");
         assert_eq!(
             text,

@@ -681,7 +681,7 @@ mod tests {
         // The pricing engine needs the SHIPPED manifest — LAW 2's engine is
         // built from it plus the store's `price_book`, so `package_dir` cannot
         // be the scratch dir here the way it can for a route that never prices.
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         AppState::new(store, package, Config::default())
     }
 

@@ -505,7 +505,7 @@ mod tests {
 
     fn engine() -> PricingEngine {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow/data/models.toml");
+            .join("../../assets/data/models.toml");
         PricingEngine::from_manifest_path(&manifest).expect("the shipped rate card")
     }
 

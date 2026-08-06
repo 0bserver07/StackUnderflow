@@ -453,7 +453,7 @@ mod tests {
 
     /// The real `stackunderflow/` package dir — `data/models.toml` hangs off it.
     fn package_dir() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow")
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
     }
 
     fn state_at(home: &std::path::Path) -> AppState {

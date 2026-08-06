@@ -56,7 +56,7 @@ fn main() {
         std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo always sets CARGO_MANIFEST_DIR"),
     );
     // …/rust/crates/stax-server → …/stackunderflow/static
-    let root = manifest.join("../../../stackunderflow/static");
+    let root = manifest.join("../../assets/static");
     let root = root.canonicalize().unwrap_or_else(|err| {
         panic!(
             "the checked-in React build is not at {} ({err}). It is the parity \

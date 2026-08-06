@@ -1,0 +1,24 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['rust/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: fmt
+        run: cd rust && cargo fmt --check
+      - name: clippy
+        run: cd rust && cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cd rust && cargo test --workspace

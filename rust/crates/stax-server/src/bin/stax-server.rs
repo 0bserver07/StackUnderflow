@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
 /// compiled-in copies when this path does not exist — so a binary run from a
 /// machine with no `stackunderflow/` at all still serves.
 fn default_package_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
 async fn shutdown() {

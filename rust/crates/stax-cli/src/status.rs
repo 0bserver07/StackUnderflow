@@ -267,6 +267,12 @@ pub fn resolve_package_dir(
     let from_exe = exe.and_then(Path::parent);
     for start in [Some(cwd), from_exe].into_iter().flatten() {
         for ancestor in start.ancestors() {
+            for name in ["rust/assets", "stackunderflow"] {
+                let candidate = ancestor.join(name);
+                if candidate.join("data").join("models.toml").is_file() {
+                    return candidate;
+                }
+            }
             let candidate = ancestor.join("stackunderflow");
             if candidate.join("data").join("models.toml").is_file() {
                 return candidate;

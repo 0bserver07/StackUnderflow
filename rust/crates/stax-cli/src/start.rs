@@ -680,7 +680,7 @@ fn open_browser(url: &str) {
 /// The same compile-time repo layout `stax-server`'s binary resolves; a packaged
 /// install is a wave-10 concern and is not invented here.
 fn package_dir() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 

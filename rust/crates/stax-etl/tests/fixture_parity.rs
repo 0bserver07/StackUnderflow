@@ -108,7 +108,8 @@ fn run_reference(args: &[&str], home: &Path) -> String {
 
 fn manifest_path() -> PathBuf {
     repo_root()
-        .join("stackunderflow")
+        .join("rust")
+        .join("assets")
         .join("data")
         .join("models.toml")
 }

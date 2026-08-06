@@ -26,7 +26,7 @@ fn seed(name: &str) -> PathBuf {
 
 /// The repository's `stackunderflow/adapters/capabilities.json`.
 fn capabilities() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow/adapters/capabilities.json")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/adapters/capabilities.json")
 }
 
 fn scratch(tag: &str) -> PathBuf {

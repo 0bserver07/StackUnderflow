@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn the_manifest_lives_under_the_package_dir() {
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let path = manifest_path(&package);
         assert!(path.is_file(), "missing {}", path.display());
     }

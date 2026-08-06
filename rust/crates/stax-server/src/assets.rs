@@ -135,7 +135,7 @@ mod tests {
         // Not a tautology: it catches a `build.rs` root that silently points at
         // some other tree, which is the whole hazard `include_str!` carries and
         // the reason the capability table was kept on disk for eight waves.
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow/static");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/static");
         for key in keys() {
             let on_disk = std::fs::read(root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR)))
                 .unwrap_or_else(|err| panic!("reading {key}: {err}"));

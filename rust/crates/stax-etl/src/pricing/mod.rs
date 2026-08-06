@@ -49,7 +49,7 @@ pub use providers::{Pricer, get_pricer};
 /// 3) and `stax_reports::pricing::engine`, whose disk read is the last thing
 /// keeping a *server* process dependent on the Python package directory
 /// (`docs/specs/decommission-report.md` §4.3).
-pub const EMBEDDED_MANIFEST: &str = include_str!("../../../../../stackunderflow/data/models.toml");
+pub const EMBEDDED_MANIFEST: &str = include_str!("../../../../assets/data/models.toml");
 
 /// The manifest half of the pricing state, from the compiled-in rate card.
 ///
@@ -212,7 +212,8 @@ pub(crate) mod test_support {
             .ancestors()
             .nth(3)
             .expect("crates/stax-etl sits three levels below the worktree root")
-            .join("stackunderflow")
+            .join("rust")
+            .join("assets")
             .join("data")
             .join("models.toml")
     }

@@ -578,7 +578,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("scratch dir");
         let store = dir.join("store.db");
         drop(rusqlite::Connection::open(&store).expect("store"));
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let state = AppState::new(store, package, crate::state::Config::default());
         (register(Router::new()).with_state(state), dir)
     }

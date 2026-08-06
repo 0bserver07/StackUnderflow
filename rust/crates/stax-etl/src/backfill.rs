@@ -368,7 +368,7 @@ mod tests {
     /// `stackunderflow/` in the Python checkout this worktree carries.
     fn package_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow")
+            .join("../../assets")
             .canonicalize()
             .unwrap_or_else(|_| std::path::PathBuf::from("/nonexistent"))
     }

@@ -38,7 +38,8 @@ staxtrace ingests session logs from 20 coding-agent providers into one local SQL
 
 > **Formerly published as StackUnderflow.** The engine is now the Rust
 > workspace under [`rust/`](rust/) — same store, same schema, no migration.
-> The Python implementation remains in the tree in maintenance mode.
+> The Python implementation lives on the [`python-legacy`](../../tree/python-legacy)
+> branch in maintenance mode.
 
 ## Quickstart
 
@@ -53,14 +54,11 @@ ln -s "$PWD/target/release/stax" ~/.local/bin/stax
 stax init
 ```
 
-**Python (maintenance mode)** — requires Python 3.11+:
+**Python (maintenance mode)** lives on the
+[`python-legacy`](../../tree/python-legacy) branch — same store, same schema;
+its PyPI package is being retired.
 
-```bash
-pip install stackunderflow
-stackunderflow init
-```
-
-`stax` is the native Rust binary; `stackunderflow` is the Python entry point (maintenance mode). Both read the same store, so `stax init`, `stax status`, and `stax memory decisions "cache"` behave identically under either. Where this README uses the long form, substitute `stax` — it is the faster path for every command it carries.
+`stax` is the native binary; `stackunderflow` survives as its long-form alias on the [`python-legacy`](../../tree/python-legacy) branch. Where this README uses the long form, substitute `stax` — same commands, same flags, same output.
 
 Browser opens to `http://localhost:8081` with every project the local store knows about, indexed and ready. Background ingest + watcher start immediately; the dashboard is interactive while ingest runs.
 
@@ -75,23 +73,18 @@ stackunderflow init --no-browser            # don't auto-open the browser
 stackunderflow --help                       # full CLI  (or: stax --help)
 ```
 
-### Nix
-
-```bash
-nix run github:0bserver07/staxtrace      # launch the dashboard
-nix build github:0bserver07/staxtrace    # build, output at ./result
-nix develop                                   # dev shell
-```
-
 ### From source
 
 ```bash
 git clone https://github.com/0bserver07/staxtrace.git
-cd staxtrace
-cd stackunderflow-ui && npm install && npm run build && cd ..
-pip install -e ".[dev]"
-stackunderflow init
+cd staxtrace/rust
+cargo build --release
+ln -s "$PWD/target/release/stax" ~/.local/bin/stax
+stax init
 ```
+
+(The Nix flake retired with the in-tree Python implementation; it lives on
+[`python-legacy`](../../tree/python-legacy).)
 
 ---
 
@@ -489,15 +482,14 @@ No telemetry. No tracking. No crash reports. No analytics. The app is a single b
 
 ```bash
 git clone https://github.com/0bserver07/staxtrace.git
-cd staxtrace
-pip install -e ".[dev]"
-cd stackunderflow-ui && npm install && npm run build && cd ..
+cd staxtrace/rust
 
-# Backend tests — fast suite (pytest tests/ -q runs 3307 of 3321 collected; 14 slow tests deselected by default)
-pytest tests/ -q
+cargo test --workspace                               # the suite
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
 
-# Slow integration + perf-regression suite (opt-in via the `slow` marker)
-pytest -m slow tests/stackunderflow/integration -q
+# The React frontend (build output embeds into stax-server)
+cd ../ui && npm install && npm run build
 
 # Lint
 ruff check stackunderflow/

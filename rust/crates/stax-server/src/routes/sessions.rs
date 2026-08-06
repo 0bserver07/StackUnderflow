@@ -1262,8 +1262,7 @@ mod compare_tests {
         }
         drop(conn);
 
-        let package =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let state = AppState::new(store, package, crate::state::Config::default());
         (state, Scratch(dir))
     }

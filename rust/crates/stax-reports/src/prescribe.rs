@@ -1142,7 +1142,7 @@ pub struct Candidate {
 /// is none, and it is the *same* file read at build time rather than a
 /// transcription.
 pub const EMBEDDED_MODEL_CANDIDATES: &str =
-    include_str!("../../../../stackunderflow/infra/model_candidates.json");
+    include_str!("../../../assets/infra/model_candidates.json");
 
 /// `infra/model_candidates.json`'s text — from `package_dir` when it is there,
 /// from the binary when it is not.
@@ -1806,8 +1806,7 @@ mod tests {
     use super::*;
 
     fn engine() -> PricingEngine {
-        let package =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow");
+        let package = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         PricingEngine::from_manifest_path(&crate::pricing::manifest_path(&package))
             .expect("the shipped manifest")
     }
@@ -2126,7 +2125,7 @@ mod tests {
     fn a_downshift_fires_on_short_output_with_the_attribution_caveat() {
         let conn = seeded();
         let candidates = routing_candidates(
-            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../stackunderflow"),
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"),
         );
         assert!(!candidates.is_empty(), "the shipped catalog loads");
         let payload = build_routing_recommendations(&conn, &engine(), &candidates, None, None);
