@@ -35,18 +35,19 @@
 //!   maintainer-only) and the timestamp is a wall clock, so this file can never
 //!   be byte-compared, not even between two runs of the *same* implementation.
 //!   The differ compares its key set and shape instead.
-//! * **DIV-304** — `--no-watcher` / `--no-lock` are accepted and inert. They
-//!   exist to set two environment variables the FastAPI lifespan reads, and the
-//!   Rust server has no lifespan watcher to disable (the ETL watcher lives in
-//!   `stax-etl`, unwired into `stax-server`). Setting the variables anyway would
-//!   need `std::env::set_var`, which is `unsafe` in Rust 2024 and forbidden
-//!   workspace-wide; the injection law says the flag travels in the plan, not in
-//!   the environment. Both flags parse, both are recorded here, neither lies.
-//! * **DIV-305** — the reference's lifespan also starts a background ingest and
-//!   activates the price book. Not ported: those are wave-4/wave-3 surfaces and
-//!   wiring them into the boot is not this wave's charter. The **synchronous**
-//!   half of the lifespan — `db.connect` + `schema.apply` — *is* ported, because
-//!   wave 7 is the wave that built the runner.
+//! * **DIV-304 — CLOSED at the flip (2026-08-05).** `--no-watcher` /
+//!   `--no-lock` were accepted-and-inert while the watcher was unwired; the
+//!   resident flip wired it at THIS layer (`stax-cli` links `stax-etl`;
+//!   `stax-server` may not — DIV-279/308), so both flags now gate a real
+//!   watcher and a real `server.lock`, no environment variable involved —
+//!   which is what the injection law wanted all along.
+//! * **DIV-305 — NARROWED at the flip.** The lifespan's watcher now runs (see
+//!   [`resident_watcher`]); its one-shot boot-time catch-up ingest and
+//!   price-book activation remain unported — a store that changed while the
+//!   server was down is picked up on the file's next change or a manual
+//!   `stax etl backfill`, and the flip's runbook does that catch-up
+//!   explicitly. The **synchronous** half — `db.connect` + `schema.apply` —
+//!   was already ported (wave 7).
 //! * **DIV-306** — a bind failure. The reference launches uvicorn on a daemon
 //!   thread, sleeps 1.0 s, and prints `StackUnderflow is live at …` *whether or
 //!   not the bind succeeded*; with the port already in use it then falls
@@ -156,7 +157,7 @@ pub fn run_start_with(args: &StartArgs, command_path: &str, prefix: String) -> R
         err.push_str(&exposure_warning(&host));
     }
 
-    boot(&host, port, args.headless, &config, &env, out, err)
+    boot(args, &host, port, &config, &env, out, err)
 }
 
 // ── `--data-dir` ─────────────────────────────────────────────────────────────
@@ -471,9 +472,9 @@ fn bind_addr(host: &str, port: i64) -> Result<SocketAddr> {
 /// * Ctrl-C reaches the child through the terminal's process group, exactly as
 ///   it reaches uvicorn's thread, so `\nStopped.` still prints on the way out.
 fn boot(
+    args: &StartArgs,
     host: &str,
     port: i64,
-    headless: bool,
     config: &settings::ConfigFile,
     env: &dyn settings::Env,
     pre_stdout: String,
@@ -489,7 +490,8 @@ fn boot(
     // store somebody else had migrated.
     apply_schema_at_boot(&store_path)?;
 
-    let mut child = std::process::Command::new(server_binary())
+    let mut command = std::process::Command::new(server_binary());
+    command
         .arg("--host")
         .arg(addr.ip().to_string())
         .arg("--port")
@@ -498,8 +500,14 @@ fn boot(
         .arg(&home)
         .arg("--package-dir")
         .arg(package_dir())
-        .stdout(std::process::Stdio::piped())
-        .spawn()?;
+        .stdout(std::process::Stdio::piped());
+    if addr.port() == 8095 {
+        // The flip (2026-08-05): a supervised boot on the resident port is the
+        // deliberate ask the child's guard exists to distinguish from a stray
+        // harness invocation.
+        command.arg("--resident");
+    }
+    let mut child = command.spawn()?;
 
     // Readiness: the child prints one line on stdout when it is bound.
     let ready = {
@@ -531,14 +539,90 @@ fn boot(
         std::io::stderr().flush()?;
     }
 
-    if !headless && auto_browser(config, env) {
+    if !args.headless && auto_browser(config, env) {
         open_browser(&url);
     }
+
+    // The asynchronous half of the reference's lifespan — the filesystem
+    // watcher (DIV-304/305) — wired at the supervisor layer because
+    // `stax-server` may not link `stax-etl` (DIV-279/308). Started only after
+    // the child is bound, so a failed bind never leaves a held lock; dropped
+    // after the child exits, which stops the thread and releases the lock.
+    // Cycle reports go to stderr, where the reference's logging goes — stdout
+    // stays byte-identical to the pre-watcher shape.
+    let watcher = if args.no_watcher {
+        None
+    } else {
+        resident_watcher(&home, &store_path, args.no_lock)
+    };
 
     // `handle.wait_forever()` — the reference swallows the KeyboardInterrupt and
     // falls through to the closing line, so a Ctrl-C is a clean exit here too.
     let _ = child.wait();
+    drop(watcher);
     Ok(Output::ok("\nStopped.\n"))
+}
+
+/// The resident watcher: singleton lock, pricing-primed normalize context,
+/// then [`stax_etl::ingest::watcher::start_watcher`] over the default adapter
+/// registry. `None` — with the reason on stderr — means "serve HTTP without a
+/// watcher", which is the reference's disposition for every failure here: the
+/// dashboard reads the store and is happy without one.
+fn resident_watcher(
+    home: &Path,
+    store_path: &Path,
+    no_lock: bool,
+) -> Option<(
+    Option<stax_etl::ingest::lock::LockHandle>,
+    stax_etl::ingest::watcher::WatcherHandle,
+)> {
+    use stax_etl::ingest::{SystemClock, guard, lock, watcher};
+
+    let lock_handle = if no_lock {
+        None
+    } else {
+        match lock::acquire_watcher_lock(&home.join("server.lock")) {
+            Some(handle) => Some(handle),
+            None => {
+                eprintln!("  watcher: lock held by another instance; serving without one");
+                return None;
+            }
+        }
+    };
+
+    let engine = match crate::status::engine_for_cli(&package_dir()) {
+        Ok(engine) => engine,
+        Err(err) => {
+            eprintln!("  watcher: pricing engine unavailable ({err}); serving without one");
+            return None;
+        }
+    };
+    let ctx = stax_etl::normalize::NormalizeContext::new(engine);
+
+    let store = store_path.to_path_buf();
+    match watcher::start_watcher(
+        move || guard::open_resident(&store),
+        stax_adapters::registry::registered,
+        ctx,
+        Box::new(SystemClock),
+        watcher::WatcherConfig::default(),
+        |report| {
+            // Python's single `_log.info` line per cycle.
+            eprintln!(
+                "  watcher: +{} messages, {} events, {} marts, {:.1} ms",
+                report.messages_added(),
+                report.events_normalised,
+                report.marts.len(),
+                report.elapsed.as_secs_f64() * 1000.0
+            );
+        },
+    ) {
+        Ok(handle) => Some((lock_handle, handle)),
+        Err(err) => {
+            eprintln!("  watcher: could not start ({err}); serving without one");
+            None
+        }
+    }
 }
 
 /// Where the `stax-server` binary is.

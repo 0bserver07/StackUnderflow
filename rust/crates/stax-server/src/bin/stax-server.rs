@@ -64,6 +64,17 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
+    /// Permit binding 8095 — the resident port.
+    ///
+    /// The flip (2026-08-05): the maintainer's resident server IS this binary,
+    /// which retires the reservation's premise — but only for a supervised,
+    /// deliberate boot. `stax start` passes this when the resolved port is
+    /// 8095; every unsupervised invocation (harnesses spawn this binary raw)
+    /// still refuses, so a parity run can never take the resident port by
+    /// accident.
+    #[arg(long)]
+    resident: bool,
+
     /// Serve ONLY `/api/webhooks/*` — `cli.py`'s `ingest webhook serve`.
     ///
     /// The reference builds a second, bare `FastAPI()` and includes just the
@@ -81,8 +92,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     anyhow::ensure!(
-        cli.port != 8095,
-        "port 8095 is reserved for the Python server (docs/specs/rust-port.md §5)"
+        cli.port != 8095 || cli.resident,
+        "port 8095 is the resident port — pass --resident to take it deliberately \
+         (harness and parity invocations never do; see the flag's doc)"
     );
 
     let app_dir = cli.data_dir.unwrap_or_else(stax_core::settings::app_dir);

@@ -48,6 +48,7 @@
 
 pub mod enumerate;
 pub mod hooks;
+pub mod lock;
 pub mod outcomes;
 pub mod pyraw;
 pub mod reindex;
@@ -342,6 +343,25 @@ pub mod guard {
                  this campaign (docs/specs/rust-port.md §5). Work on a copy."
             );
         }
+        open_unchecked(path)
+    }
+
+    /// Open `path` read-write for the RESIDENT watcher — no live-dataset fence.
+    ///
+    /// The flip (2026-08-05, maintainer's standing order): the Rust watcher is
+    /// the sanctioned writer of the live dataset now, which inverts §5's
+    /// premise for exactly one caller — `stax start`'s supervised boot. Every
+    /// harness, differ, and parity bin stays on [`open_read_write`] and stays
+    /// fenced; a test that wants the live store still cannot have it.
+    ///
+    /// # Errors
+    /// Any SQLite error.
+    pub fn open_resident(path: &Path) -> Result<Connection> {
+        open_unchecked(path)
+    }
+
+    fn open_unchecked(path: &Path) -> Result<Connection> {
+        let text = path.to_string_lossy();
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
