@@ -28,7 +28,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 
-PY_ROOT="${STAX_PARITY_PY_ROOT:-$(cd "$REPO_ROOT/../StackUnderflow" 2>/dev/null && pwd || true)}"
+PY_ROOT="${STAX_PARITY_PY_ROOT:-$(cd "$REPO_ROOT/../staxtrace" 2>/dev/null && pwd || true)}"
 PY_BIN="${STAX_ENDPOINT_PY_BIN:-$PY_ROOT/.venv/bin/python}"
 PKG_DIR="${STAX_ENDPOINT_PKG_DIR:-$PY_ROOT/stackunderflow}"
 SEED="${STAX_PROJECT_SET_SEED:-$HERE/.parity-state/fresh}"
