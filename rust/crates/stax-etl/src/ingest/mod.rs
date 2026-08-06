@@ -50,6 +50,7 @@ pub mod enumerate;
 pub mod hooks;
 pub mod lock;
 pub mod outcomes;
+pub mod pr_ci;
 pub mod pyraw;
 pub mod reindex;
 pub mod teams;

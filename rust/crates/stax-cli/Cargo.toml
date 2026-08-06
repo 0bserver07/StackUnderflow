@@ -91,3 +91,4 @@ regex = "1.12"
 # `mode_rec::md5` against the RFC vectors plus a digest captured from the
 # reference CLI.
 sha2 = "0.10.9"
+ureq = { version = "2", default-features = false, features = ["tls"] }

@@ -61,8 +61,36 @@ pub struct IngestArgs {
 /// The `ingest` subcommands that are registered.
 #[derive(Debug, Subcommand)]
 pub enum IngestVerb {
+    /// Backfill GitHub PRs + workflow runs for REPO into the local store.
+    Github(GithubArgs),
     /// Run the opt-in webhook receiver (PR + CI events).
     Webhook(WebhookArgs),
+}
+
+/// `ingest github`'s flags — `cli.py:5549`, option for option.
+#[derive(Debug, Args)]
+pub struct GithubArgs {
+    /// The GitHub repository slug (e.g. 'octocat/hello-world').
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: String,
+    /// GitHub PAT. Falls back to $STACKUNDERFLOW_GITHUB_TOKEN, then
+    /// $GITHUB_TOKEN. Public repos work without one but rate-limit much
+    /// faster.
+    #[arg(long)]
+    pub token: Option<String>,
+    /// PR state filter passed to the GitHub API.
+    #[arg(long, default_value = "all", value_parser = ["all", "open", "closed"])]
+    pub state: String,
+    /// Maximum pages of 100 to fetch per endpoint (PRs + CI).
+    #[arg(long = "max-pages", default_value_t = 10,
+          value_parser = clap::value_parser!(u32).range(1..=50))]
+    pub max_pages: u32,
+    /// Skip the workflow-runs fetch — useful for quick PR-only refreshes.
+    #[arg(long = "no-ci")]
+    pub no_ci: bool,
+    /// Output format.
+    #[arg(long = "format", default_value = "text", value_parser = ["text", "json"])]
+    pub format: String,
 }
 
 /// `stax ingest webhook` — the nested group.
@@ -105,6 +133,7 @@ pub struct ServeArgs {
 /// Whatever the receiver's boot returns.
 pub fn run_ingest(args: &IngestArgs) -> Result<Output> {
     match &args.verb {
+        IngestVerb::Github(github) => run_ingest_github(github),
         IngestVerb::Webhook(webhook) => match &webhook.verb {
             WebhookVerb::Serve(serve) => run_webhook_serve(serve),
         },
@@ -416,4 +445,378 @@ mod tests {
         assert!(is_last_page(99));
         assert!(!is_last_page(100));
     }
+}
+
+// ── the REST backfill — DIV-199 landed (2026-08-06) ─────────────────────────
+//
+// The TLS decision: `ureq` with rustls, blocking, 30-second timeout — the
+// smallest client that can speak HTTPS, in the one crate that needs it. The
+// fetch loops below are `github_ingest._paged_fetch` /
+// `_paged_fetch_workflow_runs` / `backfill_repo`, ported over the pure
+// functions above (which `rust/ingest-rest-differ.sh` already pins).
+//
+// Recorded divergence: an unhandled HTTP error is the reference's traceback
+// and this port's `Error: …` line — same exit code, different stderr shape.
+// `RateLimitedError` is caught in both and renders identically.
+
+/// `github_ingest.BackfillReport`, field for field.
+#[derive(Debug, Default)]
+pub struct BackfillReport {
+    pub repo_slug: String,
+    pub pr_inserted: i64,
+    pub pr_updated: i64,
+    pub pr_pages_fetched: u32,
+    pub ci_inserted: i64,
+    pub ci_updated: i64,
+    pub ci_pages_fetched: u32,
+    pub duration_seconds: f64,
+    pub warnings: Vec<String>,
+}
+
+impl BackfillReport {
+    /// `to_dict()` — insertion order preserved, duration rounded to 3.
+    #[must_use]
+    pub fn to_dict(&self) -> serde_json::Map<String, serde_json::Value> {
+        use serde_json::{Map, Value, json};
+        let mut map = Map::new();
+        map.insert("repo_slug".into(), json!(self.repo_slug));
+        map.insert("pr_inserted".into(), json!(self.pr_inserted));
+        map.insert("pr_updated".into(), json!(self.pr_updated));
+        map.insert("pr_pages_fetched".into(), json!(self.pr_pages_fetched));
+        map.insert("ci_inserted".into(), json!(self.ci_inserted));
+        map.insert("ci_updated".into(), json!(self.ci_updated));
+        map.insert("ci_pages_fetched".into(), json!(self.ci_pages_fetched));
+        let rounded = (self.duration_seconds * 1000.0).round() / 1000.0;
+        map.insert("duration_seconds".into(), json!(rounded));
+        map.insert(
+            "warnings".into(),
+            Value::Array(self.warnings.iter().map(|w| json!(w)).collect()),
+        );
+        map
+    }
+}
+
+/// The fetch layer's failures, kept apart so the caller can reproduce the
+/// reference's `except RateLimitedError` without catching anything else.
+enum FetchError {
+    /// `RateLimitedError` — becomes `click.ClickException`.
+    RateLimited(String),
+    /// `raise_for_status` — the reference's traceback class.
+    Status(u16, String),
+    /// Transport failure after the one retry.
+    Transport(String),
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited(msg) | Self::Transport(msg) => write!(f, "{msg}"),
+            Self::Status(code, url) => write!(f, "HTTP {code} for url '{url}'"),
+        }
+    }
+}
+
+/// One GET with headers + params: rate-limit check, then status check, then
+/// JSON. Retries ONCE on a transport error after 0.5 s — the reference's
+/// `except httpx.HTTPError` loop, which never catches status errors.
+fn fetch_json(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(String, String)],
+    params: &[(String, String)],
+) -> Result<serde_json::Value, FetchError> {
+    let mut attempt = 0u8;
+    loop {
+        let mut request = agent.get(url);
+        for (name, value) in headers {
+            request = request.set(name, value);
+        }
+        for (name, value) in params {
+            request = request.query(name, value);
+        }
+        match request.call() {
+            Ok(response) => {
+                let text = response
+                    .into_string()
+                    .map_err(|err| FetchError::Transport(err.to_string()))?;
+                // `response.json()` failing is a traceback in the reference;
+                // the status/url wrapper is the closest honest shape.
+                return serde_json::from_str(&text).map_err(|err| {
+                    FetchError::Transport(format!("invalid JSON from {url}: {err}"))
+                });
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                if let Some(message) = rate_limit_message(
+                    code,
+                    response.header("x-ratelimit-remaining"),
+                    response.header("x-ratelimit-reset"),
+                ) {
+                    return Err(FetchError::RateLimited(message));
+                }
+                return Err(FetchError::Status(code, url.to_string()));
+            }
+            Err(ureq::Error::Transport(transport)) => {
+                if attempt >= 1 {
+                    return Err(FetchError::Transport(transport.to_string()));
+                }
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+}
+
+/// `_paged_fetch` — bare-list endpoints. Stops on a short page, a non-list
+/// body, or the cap.
+fn paged_fetch(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(String, String)],
+    max_pages: u32,
+    extra: &[(&str, &str)],
+) -> Result<(Vec<serde_json::Value>, u32), FetchError> {
+    let mut rows = Vec::new();
+    let mut pages_fetched = 0;
+    for page in 1..=max_pages {
+        let params = page_params(page, extra);
+        let body = fetch_json(agent, url, headers, &params)?;
+        let serde_json::Value::Array(page_rows) = body else {
+            break;
+        };
+        pages_fetched += 1;
+        let short = page_rows.len() < MAX_PER_PAGE as usize;
+        rows.extend(page_rows);
+        if short {
+            break;
+        }
+    }
+    Ok((rows, pages_fetched))
+}
+
+/// `_paged_fetch_workflow_runs` — `/actions/runs` wraps its rows in
+/// `{"workflow_runs": [...]}`.
+fn paged_fetch_workflow_runs(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(String, String)],
+    max_pages: u32,
+) -> Result<(Vec<serde_json::Value>, u32), FetchError> {
+    let mut rows = Vec::new();
+    let mut pages_fetched = 0;
+    for page in 1..=max_pages {
+        let params = page_params(page, &[]);
+        let body = fetch_json(agent, url, headers, &params)?;
+        let serde_json::Value::Object(map) = body else {
+            break;
+        };
+        let page_rows = match map.get("workflow_runs") {
+            // `body.get("workflow_runs") or []` — Null and absent are [].
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(serde_json::Value::Array(list)) => list.clone(),
+            Some(_) => break,
+        };
+        pages_fetched += 1;
+        let short = page_rows.len() < MAX_PER_PAGE as usize;
+        rows.extend(page_rows);
+        if short {
+            break;
+        }
+    }
+    Ok((rows, pages_fetched))
+}
+
+/// `backfill_repo` — both endpoints, both CI passes (the first CI pass sees
+/// the `{"workflow_runs": …}` envelope, takes the non-list branch, and burns
+/// one request before the wrapper pass does the real fetch; reproduced, not
+/// repaired).
+fn backfill_repo(
+    conn: &rusqlite::Connection,
+    repo_slug: &str,
+    token: Option<&str>,
+    state: &str,
+    max_pages: u32,
+    include_ci: bool,
+) -> Result<BackfillReport, FetchError> {
+    use stax_etl::ingest::pr_ci;
+
+    let started = std::time::Instant::now();
+    let headers = auth_headers(token);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+
+    let mut report = BackfillReport {
+        repo_slug: repo_slug.to_string(),
+        ..BackfillReport::default()
+    };
+
+    // PRs.
+    let extra = pr_extra_params(state);
+    let extra_refs: Vec<(&str, &str)> = extra
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let (pr_rows, pr_pages) =
+        paged_fetch(&agent, &pr_url(repo_slug), &headers, max_pages, &extra_refs)?;
+    report.pr_pages_fetched = pr_pages;
+    for raw in pr_rows {
+        let serde_json::Value::Object(payload) = raw else {
+            continue;
+        };
+        let row = pr_ci::normalise_pr_payload(&payload, "github", Some(repo_slug));
+        match pr_ci::upsert_pr_outcome(conn, &row) {
+            Ok("inserted") => report.pr_inserted += 1,
+            Ok(_) => report.pr_updated += 1,
+            Err(err) => return Err(FetchError::Transport(err.to_string())),
+        }
+    }
+
+    // CI, pass one — the reference's `_paged_fetch` against a dict envelope.
+    if include_ci {
+        match paged_fetch(&agent, &ci_url(repo_slug), &headers, max_pages, &[]) {
+            Ok((rows, pages)) => {
+                report.ci_pages_fetched = pages;
+                for raw in rows {
+                    let serde_json::Value::Object(payload) = raw else {
+                        continue;
+                    };
+                    let row = pr_ci::normalise_ci_run_payload(
+                        &payload,
+                        "github-actions",
+                        Some(repo_slug),
+                    );
+                    match pr_ci::upsert_ci_run(conn, &row) {
+                        Ok("inserted") => report.ci_inserted += 1,
+                        Ok(_) => report.ci_updated += 1,
+                        Err(err) => return Err(FetchError::Transport(err.to_string())),
+                    }
+                }
+            }
+            Err(FetchError::Status(404, _)) => {
+                report
+                    .warnings
+                    .push("no GitHub Actions workflow runs found".to_string());
+            }
+            Err(other) => return Err(other),
+        }
+    }
+
+    // CI, pass two — the wrapper that unwraps the envelope, exactly when the
+    // reference re-runs it.
+    if include_ci
+        && report.ci_pages_fetched == 0
+        && report.ci_inserted == 0
+        && report.ci_updated == 0
+    {
+        match paged_fetch_workflow_runs(&agent, &ci_url(repo_slug), &headers, max_pages) {
+            Ok((rows, pages)) => {
+                report.ci_pages_fetched = pages;
+                for raw in rows {
+                    let serde_json::Value::Object(payload) = raw else {
+                        continue;
+                    };
+                    let row = pr_ci::normalise_ci_run_payload(
+                        &payload,
+                        "github-actions",
+                        Some(repo_slug),
+                    );
+                    match pr_ci::upsert_ci_run(conn, &row) {
+                        Ok("inserted") => report.ci_inserted += 1,
+                        Ok(_) => report.ci_updated += 1,
+                        Err(err) => return Err(FetchError::Transport(err.to_string())),
+                    }
+                }
+            }
+            Err(FetchError::Status(404, _)) => {
+                let warning = "no GitHub Actions workflow runs found".to_string();
+                if !report.warnings.contains(&warning) {
+                    report.warnings.push(warning);
+                }
+            }
+            Err(other) => return Err(other),
+        }
+    }
+
+    report.duration_seconds = started.elapsed().as_secs_f64();
+    Ok(report)
+}
+
+/// The text rendering — `cli.py:5599-5610`, f-string for f-string.
+#[must_use]
+pub fn render_backfill_text(report: &BackfillReport) -> String {
+    use stax_reports::render::py_thousands;
+    let mut out = String::new();
+    out.push_str(&format!("Backfill complete for {}\n", report.repo_slug));
+    out.push_str(&format!(
+        "  PRs:  inserted={}  updated={}  pages={}\n",
+        py_thousands(report.pr_inserted),
+        py_thousands(report.pr_updated),
+        report.pr_pages_fetched
+    ));
+    out.push_str(&format!(
+        "  CI:   inserted={}  updated={}  pages={}\n",
+        py_thousands(report.ci_inserted),
+        py_thousands(report.ci_updated),
+        report.ci_pages_fetched
+    ));
+    out.push_str(&format!("  duration: {:.2}s\n", report.duration_seconds));
+    if !report.warnings.is_empty() {
+        out.push_str("  warnings:\n");
+        for warning in &report.warnings {
+            out.push_str(&format!("    - {warning}\n"));
+        }
+    }
+    out
+}
+
+/// `ingest github` — token resolution, the note, the store, the backfill.
+fn run_ingest_github(args: &GithubArgs) -> Result<Output> {
+    let resolved_token = args
+        .token
+        .clone()
+        .or_else(|| std::env::var("STACKUNDERFLOW_GITHUB_TOKEN").ok())
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok());
+    let mut pre = String::new();
+    if resolved_token.as_deref().is_none_or(str::is_empty) {
+        // `click.secho(fg="yellow")` — plain on a non-tty.
+        pre.push_str("  note: no GitHub token provided — public-repo rate limits apply (60/hr).\n");
+    }
+    // The reference prints the note before the fetch blocks on the network.
+    {
+        use std::io::Write as _;
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(pre.as_bytes());
+        let _ = stdout.flush();
+    }
+
+    let conn = crate::reports::open_store()?;
+    let result = backfill_repo(
+        &conn,
+        &args.repo,
+        resolved_token.as_deref(),
+        &args.state,
+        args.max_pages,
+        !args.no_ci,
+    );
+    drop(conn);
+
+    let report = match result {
+        Ok(report) => report,
+        // `except RateLimitedError` → `click.ClickException`: `Error: <msg>`,
+        // exit 1. Every other failure is the recorded traceback divergence.
+        Err(err) => {
+            return Ok(Output {
+                stdout: String::new(),
+                stderr: format!("Error: {err}\n"),
+                code: 1,
+            });
+        }
+    };
+
+    if args.format == "json" {
+        let rendered = serde_json::to_string_pretty(&serde_json::Value::Object(report.to_dict()))
+            .unwrap_or_default();
+        return Ok(Output::ok(format!("{rendered}\n")));
+    }
+    Ok(Output::ok(render_backfill_text(&report)))
 }

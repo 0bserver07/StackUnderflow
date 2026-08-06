@@ -27,6 +27,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 # member set would silently lose it otherwise).
 serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
 stax-core = { path = "crates/stax-core" }
+stax-memory = { path = "crates/stax-memory" }
 
 [profile.release]
 lto = true

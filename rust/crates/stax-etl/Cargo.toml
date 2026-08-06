@@ -16,6 +16,7 @@ publish.workspace = true
 # Re-implementing any of that here is how two ports drift. etl → core is the
 # charter's dependency direction (§3); nothing flows the other way.
 stax-core.workspace = true
+stax-memory.workspace = true
 # The normalize *pass* streams `messages` and writes `usage_events` on a store
 # copy — the wave-3 parity proof. A plain dependency, not a feature: the
 # architect's binding ruling on db-kind consumers (feature unification would let
