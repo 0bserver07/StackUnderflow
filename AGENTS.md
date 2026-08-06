@@ -43,3 +43,17 @@ maintainer updates the pin in the same deliberate release commit.
 A version number is not progress. Roadmap issues #86–#104 sat open across four
 releases while the number climbed. Never let the version imply verified, closed
 work.
+
+## Push & history rules — HARD RULE (2026-08-06)
+
+**Origin pushes are maintainer-word-only. Force-pushing a public or shared
+branch is banned for agents, always, no exceptions** — including "cleanup",
+"squash", or any publication plan. History rewrites happen on a scratch
+clone, get verified, and wait for the maintainer's explicit word.
+
+**No infrastructure details in tracked files, ever**: hostnames, tailnet
+names, IPs, SSH ports, home paths, spend figures. Operational/fleet state
+files are gitignored (see .gitignore) and stay local. Why: on 2026-08-05 a
+publication pass found a live tailnet SSH URL and spend totals committed in
+campaign records, and the recovery from the resulting history surgery cost a
+night. The store is local-first; the repo must be too.

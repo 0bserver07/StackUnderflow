@@ -234,3 +234,17 @@ cython_debug/
 # Nix build output
 result
 result-*
+
+# Fleet/operational state — never committed (2026-08-06, after infra details
+# nearly reached the public repo). Machine names, addresses, spend, and
+# campaign coordination live OUTSIDE version control.
+rust/ARCHITECT-STATE.md
+rust/TASKS-RS.md
+rust/HANDOFF-*.md
+rust/DIRECTIVE-*.md
+rust/BATCH-*.md
+rust/*-CLAIM.md
+rust/PERF.md
+rust/MAINTAINER-*.md
+rust/TICK-*.md
+rust/.stax-anchors.db
