@@ -285,12 +285,15 @@ fn ingest_cmd(home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The live dataset's directory name. Was `guard::LIVE_DATASET_MARKER` until
+/// the cutover retired the PRODUCT's fence (2026-08-05, DIRECTIVE-CUTOVER-NOW
+/// — the resident binary owns its store now); the HARNESS keeps its own copy
+/// because a parity run still has no business near the live dataset.
+const LIVE_DATASET_MARKER: &str = "stackunderflow-data";
+
 /// One TSV per table, plus a manifest of what was excluded and why.
 fn dump_cmd(store: &Path, outdir: &Path) -> Result<()> {
-    if store
-        .to_string_lossy()
-        .contains(ingest::guard::LIVE_DATASET_MARKER)
-    {
+    if store.to_string_lossy().contains(LIVE_DATASET_MARKER) {
         bail!("refusing to read the live dataset — work on a copy (§5)");
     }
     std::fs::create_dir_all(outdir)?;
