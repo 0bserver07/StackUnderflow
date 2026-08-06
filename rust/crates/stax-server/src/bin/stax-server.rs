@@ -75,6 +75,18 @@ struct Cli {
     #[arg(long)]
     resident: bool,
 
+    /// Run one static-analysis verb and exit without binding — the DIV-308
+    /// spawn surface for `stax analyze {session,backfill,quality}`.
+    ///
+    /// The value is a JSON request: `{"verb": "session"|"backfill"|"quality",
+    /// …verb args…}`. The response is one JSON object on stdout (the CLI
+    /// renders text from it); a failure is `{"error": {"kind", "message"}}`
+    /// on stdout with exit 1, so the CLI can map `bad_parameter` onto
+    /// click's rendering. This lives on THIS binary because the analyzers
+    /// need Playback v2 and grading, which `stax-cli` may not link.
+    #[arg(long, value_name = "REQUEST_JSON")]
+    analyze: Option<String>,
+
     /// Serve ONLY `/api/webhooks/*` — `cli.py`'s `ingest webhook serve`.
     ///
     /// The reference builds a second, bare `FastAPI()` and includes just the
@@ -106,6 +118,13 @@ async fn main() -> Result<()> {
             .map(PathBuf::from)
     });
     let config = Config::load(&app_dir);
+
+    if let Some(request) = &cli.analyze {
+        let (payload, code) =
+            stax_server::services::static_analysis::run_bin_request(request, &store_path);
+        println!("{payload}");
+        std::process::exit(code);
+    }
 
     if cli.check {
         println!("store    {}", store_path.display());

@@ -80,6 +80,7 @@ pub mod playback;
 pub mod playback_fs;
 pub mod pricing_refresh;
 pub mod session_compare;
+pub mod static_analysis;
 
 // ── the rulings pass: `routes/cost.py`'s cross-request memo ───────────────────
 //

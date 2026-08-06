@@ -9,6 +9,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// `stax ingest` — the PR/CI receiver group (`cli.py`'s `ingest`). Appended for
+/// the same lib.rs-law reason as `msg` above.
+mod analyze;
 mod anchor;
 mod ask;
 mod backup;
@@ -26,8 +29,6 @@ mod embeddings;
 mod export;
 mod guide;
 mod hooks;
-/// `stax ingest` — the PR/CI receiver group (`cli.py`'s `ingest`). Appended for
-/// the same lib.rs-law reason as `msg` above.
 mod ingest;
 mod init;
 mod memory;
@@ -388,6 +389,11 @@ pub enum Command {
     // compares it. A doc comment explaining the port's own gap would put text
     // in the tree the reference does not have — measured, on the first run.
     #[command(
+        about = "Per-session static-analysis pass — complexity / lint / type-completeness deltas.",
+        long_about = None
+    )]
+    Analyze(crate::analyze::AnalyzeArgs),
+    #[command(
         about = "Pull PR / CI data into the local store (REST backfill + webhook receiver).",
         long_about = None
     )]
@@ -482,6 +488,7 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Reindex(args) => run_reindex(args)?.emit(),
         // ── TELEPHONE (this leg) — appended at the tail, never interleaved ──
         Command::Msg(args) => run_msg(args)?.emit(),
+        Command::Analyze(args) => crate::analyze::run_analyze(args)?.emit(),
         Command::Ingest(args) => run_ingest(args)?.emit(),
         // ── RS-8-101 (the import leg) — appended at the tail ────────────────
         Command::Import(args) => run_import(args)?.emit(),
