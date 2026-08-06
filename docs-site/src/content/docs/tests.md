@@ -3,10 +3,10 @@ title: Tests
 description: Test suite layout and how to run tests.
 ---
 
-# StackUnderflow Test Documentation
+# staxtrace Test Documentation
 
 ## Overview
-This document describes the test suite for StackUnderflow. The suite currently runs **340 passing + 2 skipped** tests covering the adapter layer, ingest pipeline, SQLite store, statistics pipeline, report rendering, and the CLI/HTTP surfaces.
+This document describes the test suite for staxtrace. The suite currently runs **340 passing + 2 skipped** tests covering the adapter layer, ingest pipeline, SQLite store, statistics pipeline, report rendering, and the CLI/HTTP surfaces.
 
 ## Test Structure
 

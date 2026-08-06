@@ -3,11 +3,11 @@ title: Performance
 description: Store-backed architecture and latency characteristics.
 ---
 
-# Memory and Latency: StackUnderflow Performance Notes
+# Memory and Latency: staxtrace Performance Notes
 
 ## Overview
 
-This document describes how StackUnderflow handles performance now that all session
+This document describes how staxtrace handles performance now that all session
 data lives in a single SQLite store. Storage is `~/.stackunderflow/store.db` and
 all performance characteristics derive from that. There is no in-process memory
 cache for session data.
@@ -26,7 +26,7 @@ resulting in a ~1.6 GB store (60% of raw, due to structured column extraction).
 | Dashboard query, large project (10k messages) | ~962 ms | Same path, more rows |
 
 There is no warm-up phase. Every request goes to SQLite directly. The OS page
-cache keeps hot pages in RAM automatically; StackUnderflow does not manage that
+cache keeps hot pages in RAM automatically; staxtrace does not manage that
 memory.
 
 ## Storage Architecture
@@ -93,7 +93,7 @@ not total file size.
 
 ## What Is Explicitly Cached
 
-StackUnderflow does not maintain a programmatic in-process cache for session data.
+staxtrace does not maintain a programmatic in-process cache for session data.
 Two narrow exceptions:
 
 - **Pricing data** (`infra/costs.py`): model pricing table loaded once at startup,

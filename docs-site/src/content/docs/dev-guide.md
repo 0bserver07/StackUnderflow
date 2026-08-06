@@ -1,15 +1,15 @@
 ---
 title: Development guide
-description: Hack on StackUnderflow locally.
+description: Hack on staxtrace locally.
 ---
 
-# StackUnderflow Development Guide
+# staxtrace Development Guide
 
 Guide for contributors. Covers architecture, dev setup, testing, and release.
 
 ## What this is
 
-StackUnderflow is a single-process local-first app:
+staxtrace is a single-process local-first app:
 
 - **Python backend**: FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer (Claude Code today) into a local SQLite store, and exposes a JSON API on top of it.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. Built output is written to `stackunderflow/static/react/` and served by the backend.
@@ -25,8 +25,8 @@ Everything runs on the user's machine. There is no cloud component, no sharing f
 ## Setup
 
 ```bash
-git clone https://github.com/0bserver07/StackUnderflow
-cd StackUnderflow
+git clone https://github.com/0bserver07/staxtrace
+cd staxtrace
 
 # Python (use any venv manager — conda, venv, pyenv-virtualenv)
 python -m venv .venv
@@ -71,7 +71,7 @@ cd stackunderflow-ui && npm run build   # writes to stackunderflow/static/react/
 ## Repository layout
 
 ```
-StackUnderflow/
+staxtrace/
 ├── stackunderflow/              # Python package
 │   ├── __init__.py              # Public API: list_projects()
 │   ├── __version__.py

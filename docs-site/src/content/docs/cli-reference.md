@@ -3,9 +3,9 @@ title: CLI reference
 description: Every stackunderflow command, flag, and subcommand.
 ---
 
-# StackUnderflow CLI Reference
+# staxtrace CLI Reference
 
-StackUnderflow ships a single `stackunderflow` binary that covers dashboard launch, usage reports,
+staxtrace ships a single `stackunderflow` binary that covers dashboard launch, usage reports,
 data export, config management, and session backups. All persistent state lives under
 `~/.stackunderflow/` (config at `~/.stackunderflow/config.json`, session data at
 `~/.stackunderflow/store.db`). Every command accepts `--help` for a quick reminder.
@@ -47,7 +47,7 @@ stackunderflow backup auto [--enable|--disable]
 
 ### `stackunderflow start`
 
-Launch the StackUnderflow dashboard.
+Launch the staxtrace dashboard.
 
 ```
 Usage: stackunderflow start [OPTIONS]
@@ -64,16 +64,16 @@ Usage: stackunderflow start [OPTIONS]
 
 ```
 $ stackunderflow start
-  StackUnderflow is live at http://127.0.0.1:8081
+  staxtrace is live at http://127.0.0.1:8081
   Ctrl+C to stop
 
 $ stackunderflow start -p 9000 --headless
-  StackUnderflow is live at http://127.0.0.1:9000
+  staxtrace is live at http://127.0.0.1:9000
   Ctrl+C to stop
 
 $ stackunderflow start --fresh
   cache cleared: /Users/you/.stackunderflow/cache
-  StackUnderflow is live at http://127.0.0.1:8081
+  staxtrace is live at http://127.0.0.1:8081
   Ctrl+C to stop
 ```
 
@@ -202,7 +202,7 @@ Usage: stackunderflow today [OPTIONS]
 
 ```
 $ stackunderflow today
-StackUnderflow — today
+staxtrace — today
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                       ┃   Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
@@ -234,16 +234,16 @@ Usage: stackunderflow month [OPTIONS]
 
 ```
 $ stackunderflow month
-StackUnderflow — this month
+staxtrace — this month
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                      ┃    Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ -Users-you-dev-StackUnderflow                │ $138.56 │    5,665 │       10 │
+│ -Users-you-dev-staxtrace                │ $138.56 │    5,665 │       10 │
 │ -Users-you-dev-my-api                        │  $91.91 │    2,939 │        3 │
 └──────────────────────────────────────────────┴─────────┴──────────┴──────────┘
 Total: $230.47  8,604 messages  13 sessions
 
-$ stackunderflow month --exclude StackUnderflow
+$ stackunderflow month --exclude staxtrace
 ```
 
 ---
@@ -271,16 +271,16 @@ code 1 and prints `Unknown period`.
 
 ```
 $ stackunderflow report
-StackUnderflow — last 7 days
+staxtrace — last 7 days
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                      ┃    Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ -Users-you-dev-StackUnderflow                │ $138.56 │    5,665 │       10 │
+│ -Users-you-dev-staxtrace                │ $138.56 │    5,665 │       10 │
 │ -Users-you-dev-chimera                       │  $91.91 │    2,939 │        3 │
 └──────────────────────────────────────────────┴─────────┴──────────┴──────────┘
 Total: $453.88  14,782 messages  48 sessions
 
-$ stackunderflow report -p 30days --project StackUnderflow
+$ stackunderflow report -p 30days --project staxtrace
 $ stackunderflow report -p all --format json
 $ stackunderflow report -p today --exclude sandbox
 ```
@@ -309,7 +309,7 @@ Usage: stackunderflow export [OPTIONS]
 $ stackunderflow export --period today --format csv
 project,cost,messages,sessions
 -Users-you-dev-my-api,15.21,116,1
--Users-you-dev-StackUnderflow,2.95,125,1
+-Users-you-dev-staxtrace,2.95,125,1
 
 $ stackunderflow export --period today --format json
 {

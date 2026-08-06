@@ -1,7 +1,16 @@
 ---
 title: Installation
-description: How to install StackUnderflow and open the dashboard.
+description: How to install staxtrace and open the dashboard.
 ---
+
+:::note[The engine is Rust now]
+staxtrace's engine is the Rust workspace under `rust/` — build it from source
+(`cargo build --release` in `rust/`, Rust 1.89+) and symlink
+`target/release/stax` onto your PATH. Prebuilt binaries are coming to
+GitHub Releases. The Python instructions below cover the previous
+implementation, which remains in maintenance mode, reads the same store,
+and its PyPI package is being retired.
+:::
 
 ## Requirements
 
@@ -58,7 +67,7 @@ stackunderflow init
 | `~/.stackunderflow/store.db` | SQLite session store (can be several GB once populated) |
 | `~/.stackunderflow/config.json` | Your persistent settings (port, filters, etc.) |
 | `~/.stackunderflow/cache/pricing.json` | Cached model pricing from LiteLLM |
-| `~/.claude/` | Read-only source data — StackUnderflow never writes here |
+| `~/.claude/` | Read-only source data — staxtrace never writes here |
 
 To start over from scratch, delete `~/.stackunderflow/store.db` and run `stackunderflow reindex`.
 
@@ -72,4 +81,4 @@ The ingest pipeline is incremental, so re-running `stackunderflow init` after an
 
 ## Install from source
 
-See the [Development guide](/StackUnderflow/dev-guide/) for source setup, which additionally requires Node 18+ to build the React dashboard.
+See the [Development guide](/staxtrace/dev-guide/) for source setup, which additionally requires Node 18+ to build the React dashboard.

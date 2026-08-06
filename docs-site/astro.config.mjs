@@ -8,10 +8,10 @@ export default defineConfig({
   base: '/staxtrace',
   integrations: [
     starlight({
-      title: 'StackUnderflow',
+      title: 'staxtrace',
       description: 'The local observability for your coding agents. Search, replay, and analyse every session, all offline. Starts with Claude Code.',
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/0bserver07/StackUnderflow' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/0bserver07/staxtrace' },
       ],
       editLink: {
         baseUrl: 'https://github.com/0bserver07/staxtrace/edit/main/docs-site/',

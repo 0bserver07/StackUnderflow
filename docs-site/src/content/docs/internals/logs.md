@@ -1,11 +1,11 @@
 ---
 title: Claude log format
-description: How StackUnderflow reads ~/.claude/projects/ and ~/.claude/history.jsonl.
+description: How staxtrace reads ~/.claude/projects/ and ~/.claude/history.jsonl.
 ---
 
 # Claude Logs Structure and Processing Documentation
 
-This document describes Claude log files (JSONL format), their structure, and how StackUnderflow processes them to generate analytics while handling complex edge cases.
+This document describes Claude log files (JSONL format), their structure, and how staxtrace processes them to generate analytics while handling complex edge cases.
 
 ## Table of Contents
 1. [Log File Structure](#log-file-structure)
