@@ -5,7 +5,7 @@ import starlight from '@astrojs/starlight';
 // https://astro.build/config
 export default defineConfig({
   site: 'https://0bserver07.github.io',
-  base: '/StackUnderflow',
+  base: '/staxtrace',
   integrations: [
     starlight({
       title: 'StackUnderflow',
@@ -14,7 +14,7 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/0bserver07/StackUnderflow' },
       ],
       editLink: {
-        baseUrl: 'https://github.com/0bserver07/StackUnderflow/edit/main/docs-site/',
+        baseUrl: 'https://github.com/0bserver07/staxtrace/edit/main/docs-site/',
       },
       sidebar: [
         {
