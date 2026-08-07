@@ -70,9 +70,25 @@ empties.
 
 `stax hooks install` is separate from installing the binaries and is what makes
 the tool proactive: without it, nothing surfaces prior context into a session
-and cross-machine messages sit unread in the inbox. It is idempotent, backs the
-file up first, and touches only its own entries. Check any time with
-`stax hooks status`.
+and cross-machine messages sit unread in the inbox. Note that **context
+injection is a second opt-in** — plain `hooks install` registers capture only,
+and you want `--inject` for the memory and inbox delivery described above:
+
+```bash
+stax hooks install --scope user --inject --dry-run   # inspect first
+stax hooks install --scope user --inject
+```
+
+It is idempotent, backs the file up first, and touches only its own entries.
+Check any time with `stax hooks status`.
+
+> **Known issue.** `hooks install` currently writes hook commands that invoke
+> the **Python** entry point (`stackunderflow hooks run …`) rather than the
+> `stax-hooks` binary, which is what the cutover intends and what `hooks.rs`
+> documents as the fast path. If you installed the Python package with
+> `pip install -e`, your hooks will run from that source tree — a different
+> checkout, on whatever branch it happens to be on. Run the `--dry-run` above
+> and read the commands before installing.
 
 **Python (maintenance mode)** lives on the
 [`python-legacy`](../../tree/python-legacy) branch — same store, same schema;
