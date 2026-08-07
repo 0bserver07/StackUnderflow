@@ -96,6 +96,15 @@ the old PyPI packages have been removed — install from this repo.
 
 `stax` is the native binary; `stackunderflow` survives as its long-form alias on the [`python-legacy`](../../tree/python-legacy) branch. Where this README uses the long form, substitute `stax` — same commands, same flags, same output.
 
+> **Known issue — installing the python-legacy package overwrites the Rust
+> `stax`.** The legacy branch's `pyproject.toml` declares two console scripts,
+> `stackunderflow` **and** `stax`, both pointing at the Python CLI. `stax` is
+> also the native binary's name, so a `pip`/`pipx` install from that branch
+> drops a Python `stax` onto your `PATH` and the native one is silently
+> shadowed — `stax --version` starts answering `stackunderflow, version 0.9.x`
+> instead of `stax 0.0.0`. Re-run the `cargo install` above afterwards, and
+> check `stax --version` whenever you touch the Python package.
+
 Browser opens to `http://localhost:8081` with every project the local store knows about, indexed and ready. Background ingest + watcher start immediately; the dashboard is interactive while ingest runs.
 
 If port 8081 is taken: `stackunderflow cfg set port 8090` then re-run.
