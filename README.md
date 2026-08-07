@@ -50,9 +50,29 @@ The first run picks up whatever local sessions you already have under `~/.claude
 ```bash
 git clone https://github.com/0bserver07/staxtrace
 cd staxtrace/rust && cargo build --release
-ln -s "$PWD/target/release/stax" ~/.local/bin/stax
+cargo install --path crates/stax-cli --path crates/stax-server --path crates/stax-hooks
+stax hooks install     # opt-in: surfaces past context (and agent messages) into live sessions
 stax init
 ```
+
+**The build produces three binaries, and you need all three.** `stax` is the
+command you type; `stax-server` is the dashboard; `stax-hooks` is the injection
+fast path. `stax` locates the other two *next to its own executable*, so
+installing only `stax` leaves `stax start` failing with
+`No such file or directory` — it is looking for `stax-server`. Install them
+together, or copy all three into one directory on your `PATH`; they carry every
+data file they read, so they run from anywhere.
+
+Do **not** symlink a single binary out of `target/release/` — earlier revisions
+of this README suggested it. It installs one third of the product, and it pins
+your `PATH` to a build directory that the next `cargo clean` or branch switch
+empties.
+
+`stax hooks install` is separate from installing the binaries and is what makes
+the tool proactive: without it, nothing surfaces prior context into a session
+and cross-machine messages sit unread in the inbox. It is idempotent, backs the
+file up first, and touches only its own entries. Check any time with
+`stax hooks status`.
 
 **Python (maintenance mode)** lives on the
 [`python-legacy`](../../tree/python-legacy) branch — same store, same schema;
@@ -79,7 +99,7 @@ stackunderflow --help                       # full CLI  (or: stax --help)
 git clone https://github.com/0bserver07/staxtrace.git
 cd staxtrace/rust
 cargo build --release
-ln -s "$PWD/target/release/stax" ~/.local/bin/stax
+cargo install --path crates/stax-cli --path crates/stax-server --path crates/stax-hooks
 stax init
 ```
 
