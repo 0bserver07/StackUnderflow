@@ -96,17 +96,17 @@ class _FakeRemote(SSHObjectStore):
 
 
 def _store() -> _FakeRemote:
-    return _FakeRemote(parse_ssh_url("ssh://tmos@host:22144/srv/sync"))
+    return _FakeRemote(parse_ssh_url("ssh://user@host:22/srv/sync"))
 
 
 # ── URL parsing ──────────────────────────────────────────────────────────────
 
 def test_parses_user_host_port_and_path():
-    t = parse_ssh_url("ssh://tmos@example.internal:22144/srv/stackunderflow")
-    assert t.host == "tmos@example.internal"
-    assert t.port == 22144
+    t = parse_ssh_url("ssh://user@example.internal:22/srv/stackunderflow")
+    assert t.host == "user@example.internal"
+    assert t.port == 22
     assert t.root == "/srv/stackunderflow"
-    assert t.ssh_argv()[-3:] == ["-p", "22144", "tmos@example.internal"]
+    assert t.ssh_argv()[-3:] == ["-p", "22", "user@example.internal"]
 
 
 def test_user_and_port_are_optional():
