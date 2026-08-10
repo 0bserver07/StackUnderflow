@@ -441,7 +441,7 @@ mod tests {
         };
         assert_eq!(
             emit_report(&report, "text").stdout,
-            "StackUnderflow — today\nNo activity in this period.\nTotal: $0.00  0 messages  0 sessions\n"
+            "staxtrace — today\nNo activity in this period.\nTotal: $0.00  0 messages  0 sessions\n"
         );
     }
 

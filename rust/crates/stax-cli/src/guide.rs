@@ -106,7 +106,7 @@ pub enum GuideVerb {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Show where the StackUnderflow guide snippet is installed.
+    /// Show where the staxtrace guide snippet is installed.
     Status {
         /// Limit to one scope (default: show both project and user).
         #[arg(long, value_parser = ["project", "user"])]
@@ -115,7 +115,7 @@ pub enum GuideVerb {
         #[arg(long = "format", default_value = "text", value_parser = ["text", "json"])]
         fmt: String,
     },
-    /// Remove the StackUnderflow guide snippet (only our marked block; never the file).
+    /// Remove the staxtrace guide snippet (only our marked block; never the file).
     Uninstall {
         /// Which instruction file(s) to clean.
         #[arg(long, default_value = "project", value_parser = ["project", "user"])]
@@ -420,7 +420,7 @@ pub fn install(scope: &str, dry_run: bool, env: &Env) -> Output {
     } else {
         "Installed"
     };
-    let mut out = format!("{verb} the StackUnderflow guide snippet ({scope} scope)\n");
+    let mut out = format!("{verb} the staxtrace guide snippet ({scope} scope)\n");
     echo_guide_files(&files, &mut out);
     if !files.iter().any(|file| file.changed) {
         out.push_str("  no change — already up to date.\n");
@@ -438,7 +438,7 @@ pub fn uninstall(scope: &str, env: &Env) -> Output {
             Err(message) => return click_exception(&message),
         }
     }
-    let mut out = format!("Removed the StackUnderflow guide snippet ({scope} scope)\n");
+    let mut out = format!("Removed the staxtrace guide snippet ({scope} scope)\n");
     echo_guide_files(&files, &mut out);
     if !files.iter().any(|file| file.changed) {
         out.push_str("  no change — nothing to remove.\n");
@@ -663,7 +663,7 @@ mod tests {
         );
         assert!(
             out.stdout
-                .starts_with("Installed the StackUnderflow guide snippet (project scope)\n")
+                .starts_with("Installed the staxtrace guide snippet (project scope)\n")
         );
         assert!(out.stdout.contains("installed  "), "{}", out.stdout);
     }

@@ -2,7 +2,7 @@
 //! the public `memory` CLI.
 //!
 //! Where [`crate::inject`] reads the store *in-process*, this one shells the
-//! agent-facing surface — `stackunderflow memory file <path> --json` — as a
+//! agent-facing surface — `stax memory file <path> --json` — as a
 //! subprocess under a **hard deadline**, parses the token-bounded
 //! `stackunderflow.memory/1` envelope, and injects a warning only when the file
 //! about to be touched has real failure history.
@@ -513,7 +513,7 @@ pub fn render(recalls: &[Recall]) -> String {
 
     let opening = if recalls.len() == 1 {
         format!(
-            "[StackUnderflow memory] {} has failure history ({}).",
+            "[staxtrace memory] {} has failure history ({}).",
             pystr::basename(&recalls[0].path),
             risk_phrase(&recalls[0])
         )
@@ -523,7 +523,7 @@ pub fn render(recalls: &[Recall]) -> String {
             .map(|recall| pystr::basename(&recall.path))
             .collect();
         format!(
-            "[StackUnderflow memory] Files this command touches have failure history ({}).",
+            "[staxtrace memory] Files this command touches have failure history ({}).",
             names.join(", ")
         )
     };
@@ -533,7 +533,7 @@ pub fn render(recalls: &[Recall]) -> String {
         format!("{opening} Recent trouble:")
     };
     let footer = format!(
-        "Full history: `stackunderflow memory file {} --json`.",
+        "Full history: `stax memory file {} --json`.",
         recalls[0].path
     );
     assemble(&header, bullets, &footer)
@@ -738,8 +738,8 @@ mod tests {
         // The header alone carries the warning when there are no bullet rows.
         assert_eq!(
             render(std::slice::from_ref(&recall)),
-            "[StackUnderflow memory] b.py has failure history (2 failed of 9 past sessions touching it).\n\
-             Full history: `stackunderflow memory file /resolved/b.py --json`."
+            "[staxtrace memory] b.py has failure history (2 failed of 9 past sessions touching it).\n\
+             Full history: `stax memory file /resolved/b.py --json`."
         );
     }
 

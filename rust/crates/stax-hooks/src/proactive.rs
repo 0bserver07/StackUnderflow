@@ -527,7 +527,7 @@ fn render_command_cluster(cluster: &Value, key: &str) -> String {
         "sessions"
     };
     let mut text = format!(
-        "[StackUnderflow memory] Heads-up before this Bash call: `{command}` has failed in \
+        "[staxtrace memory] Heads-up before this Bash call: `{command}` has failed in \
          {session_count} recent {sess_word} in this project"
     );
     if let Some(top) = top_category(cluster.get("categories")) {
@@ -676,7 +676,7 @@ fn render_error_signature(sig: &Value, signature: &str) -> String {
     };
     let shown = pystr::trim(shown, 160);
     let mut text = format!(
-        "[StackUnderflow memory] This error recurred in {session_count} {sess_word}: \"{shown}\"."
+        "[staxtrace memory] This error recurred in {session_count} {sess_word}: \"{shown}\"."
     );
     if let Some(action) = top_hint_action(sig.get("resolution_hints")) {
         text.push_str(&format!(
@@ -1366,7 +1366,7 @@ mod tests {
         ]);
         assert_eq!(
             render_command_cluster(&cluster, "npm install"),
-            "[StackUnderflow memory] Heads-up before this Bash call: `npm install` has failed in \
+            "[staxtrace memory] Heads-up before this Bash call: `npm install` has failed in \
              4 recent sessions in this project — mostly network. Last failure 2026-07-01."
         );
         // The singular.
@@ -1376,7 +1376,7 @@ mod tests {
         ]);
         assert_eq!(
             render_command_cluster(&cluster, "pytest"),
-            "[StackUnderflow memory] Heads-up before this Bash call: `pytest` has failed in \
+            "[staxtrace memory] Heads-up before this Bash call: `pytest` has failed in \
              1 recent session in this project."
         );
     }
@@ -1396,7 +1396,7 @@ mod tests {
         ]);
         assert_eq!(
             render_error_signature(&sig, "sig"),
-            "[StackUnderflow memory] This error recurred in 3 sessions: \
+            "[staxtrace memory] This error recurred in 3 sessions: \
              \"ModuleNotFoundError: no module named x\". \
              The sessions that moved past it ran `pip install` next."
         );

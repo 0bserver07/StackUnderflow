@@ -113,7 +113,7 @@ pub fn run_status(args: &StatusArgs) -> Result<Output> {
         // report; fabricating it would hide the state divergence.
         bail!(
             "no store at {} — the port does not create one (Python's `_open_store` would). \
-             Run `stackunderflow init` or point $STACKUNDERFLOW_HOME at an existing store.",
+             Run `stax init` or point $STAXTRACE_HOME at an existing store.",
             path.display()
         );
     }

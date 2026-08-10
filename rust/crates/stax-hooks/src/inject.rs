@@ -186,11 +186,11 @@ fn session_start_context(payload: &Value, env: &HookEnv) -> anyhow::Result<Strin
         return Ok(String::new());
     }
     let mut lines = vec![
-        "[StackUnderflow memory] This project has prior recorded coding sessions:".to_string(),
+        "[staxtrace memory] This project has prior recorded coding sessions:".to_string(),
     ];
     lines.extend(result.sessions.iter().map(session_line));
     lines.push(
-        "Query this history with `stackunderflow memory sessions --json`, or \
+        "Query this history with `stax memory sessions --json`, or \
          `memory file <path> --json` / `memory decisions \"<topic>\" --json`."
             .to_string(),
     );
@@ -363,11 +363,11 @@ fn user_prompt_context(payload: &Value, env: &HookEnv) -> anyhow::Result<String>
         return Ok(String::new());
     }
     let mut lines = vec![format!(
-        "[StackUnderflow memory] Past decisions here mention \"{query}\":"
+        "[staxtrace memory] Past decisions here mention \"{query}\":"
     )];
     lines.extend(result.sessions.iter().map(decision_line));
     lines.push(format!(
-        "Full context: `stackunderflow memory decisions \"{query}\" --json`."
+        "Full context: `stax memory decisions \"{query}\" --json`."
     ));
     Ok(lines.join("\n"))
 }
@@ -404,12 +404,12 @@ fn pre_tool_use_context(payload: &Value, env: &HookEnv) -> anyhow::Result<String
         return Ok(String::new());
     }
     let mut lines = vec![format!(
-        "[StackUnderflow memory] Editing {} has gone wrong before:",
+        "[staxtrace memory] Editing {} has gone wrong before:",
         pystr::basename(&file_path)
     )];
     lines.extend(matches.iter().map(failure_line));
     lines.push(format!(
-        "Review the full history: `stackunderflow memory file {file_path} --json`."
+        "Review the full history: `stax memory file {file_path} --json`."
     ));
     Ok(lines.join("\n"))
 }

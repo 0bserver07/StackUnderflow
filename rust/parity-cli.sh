@@ -236,6 +236,13 @@ normalise_cutover_names() {
         -e 's/`stax memory /`stackunderflow memory /g' \
         -e 's/^## staxtrace — query your past coding sessions$/## StackUnderflow — query your past coding sessions/' \
         -e 's/locally with staxtrace\./locally with StackUnderflow./' \
+        -e 's/^staxtrace — /StackUnderflow — /' \
+        -e 's/\[staxtrace memory\]/[StackUnderflow memory]/g' \
+        -e 's/\[staxtrace inbox\]/[StackUnderflow inbox]/g' \
+        -e 's/\bstaxtrace hook\(s\{0,1\}\)\b/StackUnderflow hook\1/g' \
+        -e 's/the staxtrace guide snippet/the StackUnderflow guide snippet/g' \
+        -e 's/Welcome to staxtrace!/Welcome to StackUnderflow!/' \
+        -e 's/staxtrace is live at/StackUnderflow is live at/' \
         "$file" >"$file.cutover"
     if cmp -s "$file" "$file.cutover"; then
         rm -f "$file.cutover"

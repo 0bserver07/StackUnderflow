@@ -31,7 +31,6 @@
 //! parsed flags. Reconstructing argv from clap output would silently drop any
 //! flag this binary is older than; the verbatim tail cannot.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -362,13 +361,6 @@ pub fn envelope_schema_is_ours(stdout: &str) -> bool {
     // The envelopes put `schema` first, but no parser is needed to be
     // conservative: any `"schema": "stackunderflow.…"` in the body counts.
     stdout.contains("\"schema\": \"stackunderflow.")
-}
-
-/// The data-dir path a registered remote serves, for callers (observe) that
-/// need it alongside the ssh argv.
-#[must_use]
-pub fn data_dir_of(target: &SSHTarget) -> PathBuf {
-    PathBuf::from(&target.root)
 }
 
 #[cfg(test)]

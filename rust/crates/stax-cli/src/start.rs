@@ -49,7 +49,7 @@
 //!   explicitly. The **synchronous** half — `db.connect` + `schema.apply` —
 //!   was already ported (wave 7).
 //! * **DIV-306** — a bind failure. The reference launches uvicorn on a daemon
-//!   thread, sleeps 1.0 s, and prints `StackUnderflow is live at …` *whether or
+//!   thread, sleeps 1.0 s, and prints `staxtrace is live at …` *whether or
 //!   not the bind succeeded*; with the port already in use it then falls
 //!   straight through `wait_forever` and exits **0** having claimed success.
 //!   This port binds first and reports the failure. Deliberately not reproduced
@@ -321,7 +321,7 @@ fn ensure_state_dir(state_dir: &Path) -> Result<String> {
         return Ok(String::new());
     }
     let mut out = String::new();
-    out.push_str("\n  Welcome to StackUnderflow!\n");
+    out.push_str("\n  Welcome to staxtrace!\n");
     out.push_str("  Your Claude Code knowledge base\n\n");
     match std::fs::create_dir(state_dir) {
         Ok(()) => {}
@@ -536,7 +536,7 @@ fn boot(
     // only at shutdown, and the harness reads it to know the port is up.
     let url = dashboard_url(host, port);
     print!("{pre_stdout}");
-    print!("\n  StackUnderflow is live at {url}\n");
+    print!("\n  staxtrace is live at {url}\n");
     print!("  Ctrl+C to stop\n\n");
     std::io::stdout().flush()?;
     if !pre_stderr.is_empty() {
@@ -846,7 +846,7 @@ mod tests {
         let first = ensure_state_dir(&dir).expect("scaffold");
         assert_eq!(
             first,
-            "\n  Welcome to StackUnderflow!\n  Your Claude Code knowledge base\n\n"
+            "\n  Welcome to staxtrace!\n  Your Claude Code knowledge base\n\n"
         );
         let written = std::fs::read_to_string(dir.join("config.json")).expect("marker");
         assert!(written.starts_with("{\"version\": \""), "{written}");

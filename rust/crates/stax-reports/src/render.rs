@@ -6,7 +6,7 @@
 //!
 //! ```python
 //! console = Console(file=stream, force_terminal=False, highlight=False)
-//! console.print(f"[bold]StackUnderflow — {report['scope_label']}[/bold]")
+//! console.print(f"[bold]staxtrace — {report['scope_label']}[/bold]")
 //! table = Table(show_header=True, header_style="bold")
 //! …
 //! console.print(table)
@@ -72,7 +72,7 @@ pub const DEFAULT_CONSOLE_WIDTH: usize = 80;
 pub fn render_text(report: &Report, width: usize) -> String {
     let mut out = String::new();
     out.push_str(&rich::print_text(
-        &format!("StackUnderflow — {}", report.scope_label),
+        &format!("staxtrace — {}", report.scope_label),
         width,
     ));
 
@@ -784,7 +784,7 @@ mod tests {
         // Recorded from `stackunderflow today` on the parity `fresh` state.
         assert_eq!(
             render_text(&report("today", Vec::new()), 80),
-            "StackUnderflow — today\nNo activity in this period.\nTotal: $0.00  0 messages  0 sessions\n"
+            "staxtrace — today\nNo activity in this period.\nTotal: $0.00  0 messages  0 sessions\n"
         );
     }
 
@@ -795,7 +795,7 @@ mod tests {
         assert_eq!(
             out,
             concat!(
-                "StackUnderflow — all time\n",
+                "staxtrace — all time\n",
                 "┏━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓\n",
                 "┃ Project ┃  Cost ┃ Messages ┃ Sessions ┃\n",
                 "┡━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩\n",

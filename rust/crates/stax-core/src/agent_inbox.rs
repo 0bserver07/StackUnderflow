@@ -4,7 +4,7 @@
 //! small JSON file under `app_dir()/inbox/<sender>/`; the sending side
 //! (`stax msg send`) writes that file over ssh through the sync transport.
 //! Delivery into a *live* agent session rides the injection hooks: unseen
-//! messages surface as an `[StackUnderflow inbox]` block on the next
+//! messages surface as an `[staxtrace inbox]` block on the next
 //! `UserPromptSubmit` / `PreToolUse` fire, then are marked seen so they surface
 //! exactly once.
 //!
@@ -446,7 +446,7 @@ pub fn render_for_injection(root: Option<&Path>) -> String {
     }
     let batch = &unseen[..unseen.len().min(MAX_INJECT)];
     let mut lines = vec![format!(
-        "[StackUnderflow inbox] {} message(s):",
+        "[staxtrace inbox] {} message(s):",
         unseen.len()
     )];
     for message in batch {
@@ -704,7 +704,7 @@ mod tests {
         let rendered = render_for_injection(Some(&root));
         assert_eq!(
             rendered,
-            "[StackUnderflow inbox] 3 message(s):\n  \
+            "[staxtrace inbox] 3 message(s):\n  \
              • from mac (T): m0\n  • from mac (T): m1\n  \
              … 1 more: run `stackunderflow msg inbox`"
         );
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(list_messages(false, Some(&root)).len(), 1);
         assert_eq!(
             render_for_injection(Some(&root)),
-            "[StackUnderflow inbox] 1 message(s):\n  • from mac (T): m2"
+            "[staxtrace inbox] 1 message(s):\n  • from mac (T): m2"
         );
         assert_eq!(render_for_injection(Some(&root)), "");
     }

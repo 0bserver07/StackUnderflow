@@ -169,7 +169,7 @@ pub use import_history::{
 #[command(
     name = "stax",
     version,
-    about = "StackUnderflow — a local-first knowledge base for your AI coding sessions.",
+    about = "staxtrace — a local-first knowledge base for your AI coding sessions.",
     long_about = None
 )]
 pub struct Cli {
@@ -211,7 +211,7 @@ pub enum Command {
     /// would be the only text in the tree the reference does not have.
     #[command(hide = true, about = "", long_about = None)]
     Config(ConfigArgs),
-    /// Read StackUnderflow's own docs, offline from the installed package.
+    /// Read staxtrace's own docs, offline from the installed package.
     Docs(DocsArgs),
     /// Read-only health + delivery check of the local store.
     ///
@@ -262,7 +262,7 @@ pub enum Command {
     /// filtered out. Pair with ``find-failure-modes-for-file`` to see where
     /// an edit went wrong.
     FindSessionsWhereActionWorked(ActionWorkedArgs),
-    /// Manage the StackUnderflow agent-discovery snippet in CLAUDE.md / AGENTS.md.
+    /// Manage the staxtrace agent-discovery snippet in CLAUDE.md / AGENTS.md.
     Guide(GuideArgs),
     /// Manage opt-in Claude Code lifecycle hooks (hybrid capture).
     Hooks(HooksArgs),
@@ -281,7 +281,7 @@ pub enum Command {
     ///
     /// Every subcommand shares ``--format`` / ``--json``, ``--project``,
     /// ``--since``, ``--limit`` and ``--context-budget``. ``--project``
-    /// defaults to the current directory's project when StackUnderflow
+    /// defaults to the current directory's project when staxtrace
     /// recognises it, so these commands Just Work when run inside a repo.
     Memory(MemoryArgs),
     /// Estimate the per-session context tax (system prompt + MCP + skills + memory).
@@ -339,7 +339,7 @@ pub enum Command {
     /// These are mined from your local session store — never from CLAUDE.md
     /// or memory — and are always project-scoped unless you ask otherwise.
     Skills(SkillsArgs),
-    /// Launch the StackUnderflow dashboard.
+    /// Launch the staxtrace dashboard.
     Start(StartArgs),
     /// Compact one-liner: today + month cost and message counts.
     Status(StatusArgs),

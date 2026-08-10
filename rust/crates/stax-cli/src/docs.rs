@@ -93,9 +93,9 @@ struct Doc {
 const DOCS: [Doc; 6] = [
     Doc {
         slug: "overview",
-        title: "StackUnderflow overview",
+        title: "staxtrace overview",
         audience: "all",
-        summary: "What StackUnderflow is and how the pieces fit together.",
+        summary: "What staxtrace is and how the pieces fit together.",
         body: Body::Static(OVERVIEW),
     },
     Doc {

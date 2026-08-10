@@ -49,7 +49,7 @@ pub struct HooksArgs {
 /// The `hooks` verbs.
 #[derive(Debug, Subcommand)]
 pub enum HooksVerb {
-    /// Register the StackUnderflow hooks in a settings.json (idempotent, backs up first).
+    /// Register the staxtrace hooks in a settings.json (idempotent, backs up first).
     Install {
         /// project = .claude/settings.json in cwd's git root; user = ~/.claude/settings.json
         #[arg(long, default_value = "project", value_parser = ["project", "user"])]
@@ -84,7 +84,7 @@ pub enum HooksVerb {
         #[arg(long = "capture-content")]
         capture_content: bool,
     },
-    /// Show which StackUnderflow hooks are installed, where, and whether any are stale.
+    /// Show which staxtrace hooks are installed, where, and whether any are stale.
     Status {
         /// Limit to one scope (default: show both project and user).
         #[arg(long, value_parser = ["project", "user"])]
@@ -93,7 +93,7 @@ pub enum HooksVerb {
         #[arg(long = "format", default_value = "text", value_parser = ["text", "json"])]
         fmt: String,
     },
-    /// Remove the StackUnderflow hooks (only ours; never the file or other tools' hooks).
+    /// Remove the staxtrace hooks (only ours; never the file or other tools' hooks).
     Uninstall {
         /// Which settings.json to clean.
         #[arg(long, default_value = "project", value_parser = ["project", "user"])]
@@ -167,7 +167,7 @@ pub fn install(
     } else {
         "Already installed"
     };
-    let mut out = format!("{verb} StackUnderflow hooks ({scope} scope)\n");
+    let mut out = format!("{verb} staxtrace hooks ({scope} scope)\n");
     out.push_str(&format!("  settings file:   {}\n", report.settings_path));
 
     if dry_run {
@@ -185,7 +185,7 @@ pub fn install(
                 ));
             }
             out.push_str(&format!(
-                "  would preserve {} non-StackUnderflow hook entry(ies)\n",
+                "  would preserve {} non-staxtrace hook entry(ies)\n",
                 report.other_hooks_preserved
             ));
         } else {
@@ -216,7 +216,7 @@ pub fn install(
         ));
     }
     out.push_str(&format!(
-        "  preserved:       {} non-StackUnderflow hook entry(ies)\n",
+        "  preserved:       {} non-staxtrace hook entry(ies)\n",
         report.other_hooks_preserved
     ));
     if report.capture_content {
@@ -262,11 +262,11 @@ pub fn uninstall(scope: &str, env: &installer::Env) -> Output {
     }
     if !report.changed {
         return Output::ok(format!(
-            "No StackUnderflow hooks in {} — nothing to remove.\n",
+            "No staxtrace hooks in {} — nothing to remove.\n",
             report.settings_path
         ));
     }
-    let mut out = format!("Removed StackUnderflow hooks ({scope} scope)\n");
+    let mut out = format!("Removed staxtrace hooks ({scope} scope)\n");
     out.push_str(&format!("  settings file:  {}\n", report.settings_path));
     out.push_str(&format!(
         "  backup written: {}\n",
@@ -277,7 +277,7 @@ pub fn uninstall(scope: &str, env: &installer::Env) -> Output {
         sorted_unique(&report.hooks_removed).join(", ")
     ));
     out.push_str(&format!(
-        "  preserved:      {} non-StackUnderflow hook entry(ies)\n",
+        "  preserved:      {} non-staxtrace hook entry(ies)\n",
         report.other_hooks_preserved
     ));
     Output::ok(out)
@@ -359,7 +359,7 @@ pub fn status(scope: Option<&str>, fmt: &str, env: &installer::Env) -> Output {
             continue;
         }
         if entry.hooks.is_empty() {
-            out.push_str("  no StackUnderflow hooks installed.\n");
+            out.push_str("  no staxtrace hooks installed.\n");
         } else {
             let mut hooks = entry.hooks.clone();
             hooks.sort_by(|a, b| a.0.cmp(&b.0));
@@ -380,7 +380,7 @@ pub fn status(scope: Option<&str>, fmt: &str, env: &installer::Env) -> Output {
             }
         }
         out.push_str(&format!(
-            "  ({} non-StackUnderflow hook entry(ies) in this file)\n",
+            "  ({} non-staxtrace hook entry(ies) in this file)\n",
             entry.other_hook_count
         ));
     }
@@ -414,7 +414,7 @@ pub fn repair(scope: &str, dry_run: bool, env: &installer::Env) -> Output {
         ));
     }
     if n == 0 {
-        out.push_str("No stale StackUnderflow hook commands found.\n");
+        out.push_str("No stale staxtrace hook commands found.\n");
         return Output::ok(out);
     }
     let verb = if dry_run { "Would rewrite" } else { "Rewrote" };
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(out.code, 0);
         assert!(
             out.stdout
-                .starts_with("Would install StackUnderflow hooks (project scope)\n")
+                .starts_with("Would install staxtrace hooks (project scope)\n")
         );
         assert!(out.stdout.contains("  would write the 'hooks' block:\n"));
         assert!(out.stdout.contains("    {\n"), "{}", out.stdout);
@@ -527,7 +527,7 @@ mod tests {
         );
         assert!(
             out.stdout
-                .ends_with("  would preserve 0 non-StackUnderflow hook entry(ies)\n"),
+                .ends_with("  would preserve 0 non-staxtrace hook entry(ies)\n"),
             "{}",
             out.stdout
         );
@@ -540,7 +540,7 @@ mod tests {
         let out = install("project", false, false, false, &scratch.env());
         assert!(
             out.stdout
-                .starts_with("Already installed StackUnderflow hooks")
+                .starts_with("Already installed staxtrace hooks")
         );
         assert!(!out.stdout.contains("backup written"));
     }
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(out.stdout.matches("  ✓ ").count(), 4, "{}", out.stdout);
         assert!(
             out.stdout
-                .ends_with("  (0 non-StackUnderflow hook entry(ies) in this file)\n")
+                .ends_with("  (0 non-staxtrace hook entry(ies) in this file)\n")
         );
     }
 
@@ -628,7 +628,7 @@ mod tests {
         assert!(out.stdout.starts_with("Scanned: "));
         assert!(
             out.stdout
-                .ends_with("No stale StackUnderflow hook commands found.\n")
+                .ends_with("No stale staxtrace hook commands found.\n")
         );
     }
 

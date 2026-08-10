@@ -1,10 +1,20 @@
 //! Where the data directory lives — the Rust half of Python's `settings.app_dir()`.
 //!
-//! Resolution is deliberately identical to `stackunderflow/settings.py:22`:
-//! `$STACKUNDERFLOW_HOME` when set (with a leading `~` expanded), otherwise
-//! `~/.stackunderflow`. Every path the campaign touches derives from here, so
-//! pointing both implementations at the same dataset stays one environment
-//! variable — which is exactly how the parity harness runs them side by side.
+//! Resolution order, post-rename (the staxtrace identity campaign):
+//!
+//! 1. `$STAXTRACE_HOME` — the product's name.
+//! 2. `$STACKUNDERFLOW_HOME` — the reference's name, honored forever: every
+//!    existing script, hook and remote invocation keeps working unchanged.
+//! 3. `~/.staxtrace` **when it exists** — a machine that migrated.
+//! 4. `~/.stackunderflow` **when it exists** — a machine that has not; this is
+//!    the no-data-movement guarantee. The campaign renames identifiers, never
+//!    moves bytes; migrating is one `mv` the *user* runs, after which resolution
+//!    finds the new name by itself.
+//! 5. `~/.staxtrace` — a fresh machine starts under the product's name.
+//!
+//! [`resolve_app_dir`] keeps the reference's exact two-step semantics
+//! (env-else-default) as the pure, parity-pinned core; the existence dance
+//! lives only in [`app_dir`], the impure edge.
 
 use std::env;
 use std::ffi::OsStr;
@@ -12,17 +22,42 @@ use std::path::{Path, PathBuf};
 
 /// The environment variable that re-points the whole application at a dataset.
 ///
-/// Mirrors `stackunderflow.settings.APP_DIR_ENV`.
+/// Mirrors `stackunderflow.settings.APP_DIR_ENV`. Still honored — see the
+/// module doc's resolution order.
 pub const APP_DIR_ENV: &str = "STACKUNDERFLOW_HOME";
+
+/// The post-rename spelling; wins over [`APP_DIR_ENV`] when both are set.
+pub const APP_DIR_ENV_STAXTRACE: &str = "STAXTRACE_HOME";
 
 /// The data directory holding the store, the indexes, and `config.json`.
 ///
-/// `$STACKUNDERFLOW_HOME` when set, else `~/.stackunderflow`. Unlike Python this
-/// is resolved on every call rather than bound at import, which is strictly more
+/// See the module doc for the five-step order. Unlike Python this is resolved
+/// on every call rather than bound at import, which is strictly more
 /// permissive: no caller can observe a stale value.
 #[must_use]
 pub fn app_dir() -> PathBuf {
-    resolve_app_dir(env::var_os(APP_DIR_ENV).as_deref(), home_dir().as_deref())
+    let new_env = env::var_os(APP_DIR_ENV_STAXTRACE);
+    let old_env = env::var_os(APP_DIR_ENV);
+    let raw = new_env
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or(old_env.as_deref());
+    let home = home_dir();
+    if raw.is_some() {
+        return resolve_app_dir(raw, home.as_deref());
+    }
+    let Some(home) = home else {
+        return resolve_app_dir(None, None);
+    };
+    let staxtrace = home.join(".staxtrace");
+    if staxtrace.is_dir() {
+        return staxtrace;
+    }
+    let stackunderflow = home.join(".stackunderflow");
+    if stackunderflow.is_dir() {
+        return stackunderflow;
+    }
+    staxtrace
 }
 
 /// The SQLite store — `app_dir()/store.db`, matching `deps.store_path`.
