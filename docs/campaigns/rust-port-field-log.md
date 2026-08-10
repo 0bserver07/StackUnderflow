@@ -69,8 +69,8 @@ total, roughly two minutes of work.
    provider priced as anthropic in one endpoint, a cache whose answers change
    at midnight (missing date in the key), hooks opening the store read-write
    against their own docstring, nondeterministic resume ordering (ANALYZE
-   reshuffled 35.6% of results), and $617.41 of phantom mart cost in the live
-   store that both implementations faithfully reproduce.
+   reshuffled 35.6% of results), and a 1.45% sliver of phantom mart cost in the
+   live store that both implementations faithfully reproduce (DIV-040).
 4. **stderr is not a signal; sshd banners write to it on every connection.**
    A missing-object check keyed on "empty stderr" made every miss look like a
    transport failure on a real host. Exit-code sentinels or nothing.
