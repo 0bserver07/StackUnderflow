@@ -54,17 +54,23 @@ touches its own entries. Verify with `stax hooks status`.
 - **Python 3.10 or newer**
 - An existing `~/.claude/` directory from having used [Claude Code](https://claude.ai/code). Adapters for more coding agents are on the way.
 
-## Install from PyPI
+## Install the Python implementation (python-legacy)
+
+The old PyPI packages have been removed — install from this repo's
+`python-legacy` branch:
 
 ```bash
-pip install stackunderflow
+git clone --branch python-legacy https://github.com/0bserver07/staxtrace
+cd staxtrace && pip install .
 ```
 
-Or with `pipx` if you prefer isolated CLI installs:
-
-```bash
-pipx install stackunderflow
-```
+:::caution[This shadows the Rust binary]
+The legacy package installs **two** console scripts — `stackunderflow` and a
+`stax` alias — and the alias lands on your `PATH` over the native Rust `stax`.
+If you use both, re-run the `cargo install` above after any Python
+(re)install, and confirm with `stax --version` (the native binary answers
+`stax 0.0.0`, the alias answers `stackunderflow, version 0.9.x`).
+:::
 
 ## Launch the dashboard
 
@@ -111,10 +117,14 @@ To start over from scratch, delete `~/.stackunderflow/store.db` and run `stackun
 ## Upgrade
 
 ```bash
-pip install --upgrade stackunderflow
+git pull && cd rust && cargo build --release
+cargo install --path crates/stax-cli --path crates/stax-server --path crates/stax-hooks
 ```
 
-The ingest pipeline is incremental, so re-running `stackunderflow init` after an upgrade only processes new or changed session files.
+(For the Python implementation: `git pull` on the `python-legacy` checkout —
+the install is from the repo, there is no package to upgrade.) The ingest
+pipeline is incremental, so re-running `stax init` after an upgrade only
+processes new or changed session files.
 
 ## Install from source
 
