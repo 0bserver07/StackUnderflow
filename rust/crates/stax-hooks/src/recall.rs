@@ -20,12 +20,14 @@
 //!
 //! ### The subprocess this port spawns
 //!
-//! Deliberately still `stackunderflow memory file … --json`, the *Python* CLI,
-//! not `stax memory file`. The command is what a user's `settings.json` and
-//! `$PATH` resolve, and swapping it would (a) change the measured latency into
-//! something the differ cannot compare and (b) silently re-point a user's hook
-//! at a different implementation. `HookEnv::memory_bin` is the seam for wave 8
-//! to decide otherwise; the default is the reference's bare name.
+//! `stax memory file … --json` — the native CLI, same argv, same
+//! `stackunderflow.memory/1` envelope. During the port this deliberately
+//! stayed on the *Python* bare name for comparable latency and an unchanged
+//! resolution story, with `HookEnv::memory_bin` named as the seam for
+//! deciding otherwise. The split (f6ac5f6) decided: main carries no Python,
+//! so the reference's name resolved to nothing and every recall spawn
+//! degraded to the silent-failure branch. The default is now the native
+//! binary; the seam remains for tests.
 
 use std::io::Read as _;
 use std::process::{Command, Stdio};

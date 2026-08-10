@@ -109,7 +109,12 @@ impl HookEnv {
             config,
             proactive_disabled: std::env::var("STACKUNDERFLOW_PROACTIVE_DISABLED").ok(),
             recall_timeout: std::env::var("STACKUNDERFLOW_RECALL_TIMEOUT").ok(),
-            memory_bin: "stackunderflow".to_string(),
+            // Post-split: the memory CLI is the native binary. The reference
+            // spawned `stackunderflow` (recall.rs's header records why, and
+            // named this field the seam for deciding otherwise) — since
+            // f6ac5f6 that bare name resolves to nothing a Rust-only machine
+            // has, so every recall spawn failed silently.
+            memory_bin: "stax".to_string(),
             proactive,
         }
     }
