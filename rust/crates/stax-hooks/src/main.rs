@@ -1,9 +1,13 @@
-//! `stackunderflow hooks run <id>` — the process Claude Code spawns.
+//! `stax-hooks run <id>` — the process Claude Code spawns.
+//!
+//! (The reference spelled it `stackunderflow hooks run <id>`; since the split
+//! that names a program a Rust-only install does not have, so the settings
+//! file points here — see `templates::canonical_command`.)
 //!
 //! Argv and stdin contract, copied from `cli.py:hooks_run_cmd`:
 //!
 //! ```text
-//! stax-hooks hooks run <hook_id> [--capture-content]
+//! stax-hooks [hooks] run <hook_id> [--capture-content]
 //! ```
 //!
 //! * the payload arrives as JSON on **stdin**, and is read only when stdin is

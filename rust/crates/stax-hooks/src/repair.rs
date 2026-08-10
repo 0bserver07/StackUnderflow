@@ -371,10 +371,7 @@ mod tests {
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(report.repaired.len(), 1);
         assert_eq!(report.files_changed(), 1);
-        assert_eq!(
-            report.repaired[0].new,
-            "stackunderflow hooks run stackunderflow-stop"
-        );
+        assert_eq!(report.repaired[0].new, "stax-hooks run stackunderflow-stop");
         assert_eq!(report.backups.len(), 1);
         let text = std::fs::read_to_string(scratch.0.join(".claude/settings.json")).unwrap();
         assert!(text.contains("someone-elses-tool"), "{text}");
@@ -397,11 +394,26 @@ mod tests {
         let scratch = Scratch::new("clean");
         scratch.write(
             ".claude/settings.json",
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stackunderflow hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax-hooks run stackunderflow-stop"}]}]}}"#,
         );
         let report = repair("project", false, &scratch.env()).unwrap();
         assert!(report.repaired.is_empty());
         assert!(report.backups.is_empty());
+    }
+
+    #[test]
+    fn the_pre_cutover_python_form_is_stale_and_repaired() {
+        // Bare-name `stackunderflow hooks run …` was the reference's canonical;
+        // after the split it names a program a Rust-only install does not have,
+        // so `repair` rewrites it like any other stale spelling.
+        let scratch = Scratch::new("python-form");
+        scratch.write(
+            ".claude/settings.json",
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stackunderflow hooks run stackunderflow-stop"}]}]}}"#,
+        );
+        let report = repair("project", false, &scratch.env()).unwrap();
+        assert_eq!(report.repaired.len(), 1);
+        assert_eq!(report.repaired[0].new, "stax-hooks run stackunderflow-stop");
     }
 
     #[test]
@@ -414,7 +426,7 @@ mod tests {
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(
             report.repaired[0].new,
-            "stackunderflow hooks run stackunderflow-stop --capture-content"
+            "stax-hooks run stackunderflow-stop --capture-content"
         );
     }
 

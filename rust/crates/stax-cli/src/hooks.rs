@@ -228,9 +228,9 @@ pub fn install(
             "  note: couldn't pre-create the captured_events table; it'll be created on first hook fire.\n",
         );
     }
-    if crate::backup::which("stackunderflow").is_none() {
+    if crate::backup::which("stax-hooks").is_none() {
         out.push_str(
-            "  note: 'stackunderflow' isn't on your PATH — Claude Code may not be able to run the hook command. Make sure it resolves in your shell.\n",
+            "  note: 'stax-hooks' isn't on your PATH — Claude Code may not be able to run the hook command. Install all three binaries (stax, stax-server, stax-hooks) into one PATH directory.\n",
         );
     }
     Output::ok(out)
@@ -644,7 +644,7 @@ mod tests {
         );
         assert!(
             out.stdout
-                .contains("      → stackunderflow hooks run stackunderflow-stop\n")
+                .contains("      → stax-hooks run stackunderflow-stop\n")
         );
         assert!(!out.stdout.contains("backups written"));
     }

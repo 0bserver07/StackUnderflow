@@ -152,7 +152,7 @@ export PYTHONPATH="${STAX_PARITY_PY_PATH:-$REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}
 
 CASE_TIMEOUT="${STAX_PARITY_TIMEOUT:-180}"
 
-pass=0; fail=0; skipped=0; normalized=0; accepted_count=0
+pass=0; fail=0; skipped=0; normalized=0; accepted_count=0; hook_command_normalized=0
 failed_ids=(); accepted_ids=()
 
 resolve_cwd() {
@@ -386,6 +386,22 @@ run_case() {
         normalized=$((normalized + 1))
     fi
 
+    # Canonical hook-command normalisation, Rust side only, counted when it
+    # fires. Since the split the installer writes `stax-hooks run <id>` where
+    # the reference wrote `stackunderflow hooks run <id>` — main carries no
+    # Python entry point for a settings file to invoke, so the PROGRAM changed
+    # while the hook ids did not (templates.rs::canonical_command). Scoped to
+    # the exact canonical spelling followed by one of our ids, on stdout and
+    # on the settings trees the installer cases diff below.
+    local hookcmd=0 stream
+    for stream in "$work/rs.out" "$work/rs.err"; do
+        sed "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
+            "$stream" >"$stream.hookcmd"
+        cmp -s "$stream" "$stream.hookcmd" || hookcmd=1
+        mv "$stream.hookcmd" "$stream"
+    done
+    [ "$hookcmd" = 1 ] && hook_command_normalized=$((hook_command_normalized + 1))
+
     # Installer backup-stamp normalisation on the printed paths — both sides,
     # counted (see the note by `normalise_backup_stamps`).
     local stamped=0 stream
@@ -409,6 +425,19 @@ run_case() {
     if [ -n "$home_spec" ]; then
         normalise_backup_stamps "$py_home"
         normalise_backup_stamps "$rs_home"
+        # The hook-command normalisation again, on the Rust-side tree: an
+        # installer case's settings.json now carries the post-split canonical
+        # (`stax-hooks run <id>`) where the reference writes the Python form.
+        # Same scope as the stdout pass, counted through the same flag.
+        local settings
+        while IFS= read -r settings; do
+            sed "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
+                "$settings" >"$settings.hookcmd"
+            if ! cmp -s "$settings" "$settings.hookcmd"; then
+                hook_command_normalized=$((hook_command_normalized + 1))
+            fi
+            mv "$settings.hookcmd" "$settings"
+        done < <(find "$rs_home" -name 'settings.json*' -type f 2>/dev/null)
         home_diff="$(diff -r "$py_home" "$rs_home" 2>&1)" || ok=0
     fi
 
@@ -506,6 +535,8 @@ printf '\n=== parity tally ===\n'
 printf 'cases: %s   pass: %s   FAIL: %s   accepted: %s   skipped: %s\n' \
     "$total" "$pass" "$fail" "$accepted_count" "$skipped"
 printf 'program-name normalisation fired on %s case(s)\n' "$normalized"
+printf 'hook-command normalisation (post-split canonical) fired on %s case/file(s)\n' \
+    "$hook_command_normalized"
 printf 'installer backup-stamp normalisation fired on %s file(s), %s case output(s)\n' \
     "$backup_stamps_normalized" "$stdout_stamps_normalized"
 if [ "$accepted_count" -gt 0 ]; then

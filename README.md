@@ -82,13 +82,12 @@ stax hooks install --scope user --inject
 It is idempotent, backs the file up first, and touches only its own entries.
 Check any time with `stax hooks status`.
 
-> **Known issue.** `hooks install` currently writes hook commands that invoke
-> the **Python** entry point (`stackunderflow hooks run …`) rather than the
-> `stax-hooks` binary, which is what the cutover intends and what `hooks.rs`
-> documents as the fast path. If you installed the Python package with
-> `pip install -e`, your hooks will run from that source tree — a different
-> checkout, on whatever branch it happens to be on. Run the `--dry-run` above
-> and read the commands before installing.
+> **Upgrading from a pre-split install:** older installs wrote hook commands
+> that invoked the Python entry point (`stackunderflow hooks run …`) — a
+> program a Rust-only install no longer has. Re-running `stax hooks install`
+> (or `stax hooks repair`) rewrites those entries in place to the native form,
+> `stax-hooks run …`; the hook ids and every other tool's entries are
+> untouched.
 
 **Python (maintenance mode)** lives on the
 [`python-legacy`](../../tree/python-legacy) branch — same store, same schema;

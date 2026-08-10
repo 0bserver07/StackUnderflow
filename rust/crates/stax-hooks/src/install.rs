@@ -797,7 +797,10 @@ mod tests {
         assert_eq!(report.hooks_installed.len(), 4);
         let text = std::fs::read_to_string(scratch.settings()).unwrap();
         assert!(text.ends_with("}\n"), "{text}");
-        assert!(text.contains("stackunderflow hooks run stackunderflow-stop"));
+        assert!(text.contains("stax-hooks run stackunderflow-stop"));
+        // Never the Python entry point — the program a post-split install
+        // does not have.
+        assert!(!text.contains("stackunderflow hooks run"), "{text}");
     }
 
     #[test]
@@ -837,7 +840,7 @@ mod tests {
         assert_eq!(report.other_hooks_preserved, 1);
         let text = std::fs::read_to_string(scratch.settings()).unwrap();
         assert!(text.contains("some-other-tool --go"), "{text}");
-        assert!(!text.contains("stackunderflow hooks run"), "{text}");
+        assert!(!text.contains("stax-hooks run"), "{text}");
     }
 
     #[test]

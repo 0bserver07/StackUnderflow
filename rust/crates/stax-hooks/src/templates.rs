@@ -1,10 +1,11 @@
 //! `hooks/templates.py` — the canonical hook blocks, verbatim.
 //!
 //! Pure data plus string helpers: the nine hook ids, the Claude Code lifecycle
-//! event each binds to, the *portable* command form (`stackunderflow hooks run
-//! <id>` — never an absolute path), the matchers, and the one regular
-//! expression that decides whether a `command` string inside somebody's
-//! `settings.json` is ours.
+//! event each binds to, the *portable* command form (`stax-hooks run <id>` —
+//! never an absolute path; the reference's `stackunderflow hooks run <id>`
+//! named the Python entry point, which a post-split Rust install does not
+//! have), the matchers, and the one regular expression that decides whether a
+//! `command` string inside somebody's `settings.json` is ours.
 //!
 //! That last decision is the sharp one. `parse_hook_command` is what `install`
 //! uses to replace a stale entry, what `uninstall` uses to remove only ours, and
@@ -126,9 +127,19 @@ fn matcher_for(table: &[(&'static str, &'static str)], event: &str) -> Option<&'
 }
 
 /// `templates.canonical_command` — the portable command we install.
+///
+/// The program is the standalone **`stax-hooks` binary**, not a CLI entry
+/// point: since the split, `main` carries no Python, so the reference's
+/// `stackunderflow hooks run <id>` names a program a Rust-only install does
+/// not have. The bare name (never an absolute path) resolves through `$PATH`,
+/// exactly as the Python form did; `stax-hooks` accepts `run <id>` directly
+/// (see `main.rs::parse_argv` — the `hooks` prefix is optional there for
+/// drop-in compatibility). [`parse_hook_command`] still recognises every
+/// legacy spelling, which is what lets `install` upgrade an old settings file
+/// in place.
 #[must_use]
 pub fn canonical_command(hook_id: &str, capture_content: bool) -> String {
-    let cmd = format!("stackunderflow hooks run {hook_id}");
+    let cmd = format!("stax-hooks run {hook_id}");
     if capture_content {
         format!("{cmd} {CAPTURE_CONTENT_FLAG}")
     } else {
@@ -136,14 +147,22 @@ pub fn canonical_command(hook_id: &str, capture_content: bool) -> String {
     }
 }
 
-/// `templates._HOOK_COMMAND_RE`, character for character.
+/// `templates._HOOK_COMMAND_RE`, widened for the cutover.
 ///
-/// `[^|&;]` keeps the match inside a single command when the entry is part of a
-/// shell pipeline; the lazy `*?` is why leftmost-**first** semantics matter (see
-/// the manifest's note on `regex`).
+/// The reference matched only `stackunderflow … hook(s) run`. The canonical
+/// program is now `stax-hooks`, and `stax hooks run` is a supported spelling of
+/// the same verb, so the program alternation names all three — otherwise
+/// `uninstall` could not remove what `install` writes, and `install` could not
+/// replace a pre-cutover entry. The `hooks?` word becomes optional because
+/// `stax-hooks run <id>` carries no separate `hooks` token; ownership is still
+/// gated on the hook id being one of ours (`parse_hook_command`'s
+/// `hook_id_event` check), so the looser verb cannot claim another tool's
+/// command. `[^|&;]` keeps the match inside a single command when the entry is
+/// part of a shell pipeline; the lazy `*?` is why leftmost-**first** semantics
+/// matter (see the manifest's note on `regex`).
 static HOOK_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"stackunderflow\b[^|&;]*?\bhooks?\b\s+run\s+(?P<hook_id>stackunderflow-[a-z][a-z0-9-]*)\b(?P<rest>[^|&;]*)",
+        r"(?:stackunderflow|stax-hooks|stax)\b[^|&;]*?\b(?:hooks?\s+)?run\s+(?P<hook_id>stackunderflow-[a-z][a-z0-9-]*)\b(?P<rest>[^|&;]*)",
     )
     .expect("the hook-command pattern is a literal and compiles")
 });
@@ -151,10 +170,12 @@ static HOOK_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// `templates.parse_hook_command` — `(hook_id, capture_content)` when *command*
 /// is one of ours, else `None`.
 ///
-/// Recognises the canonical form, a stale absolute-path prefix
-/// (`/old/venv/bin/stackunderflow hooks run …`) and the legacy singular `hook
-/// run` spelling. A `stackunderflow-…` token we do not know is **not** ours —
-/// conservative on purpose, because the callers delete what this returns.
+/// Recognises the canonical form (`stax-hooks run …`), the pre-cutover Python
+/// forms (`stackunderflow hooks run …`, `stax hooks run …`), a stale
+/// absolute-path prefix (`/old/venv/bin/stackunderflow hooks run …`) and the
+/// legacy singular `hook run` spelling. A `stackunderflow-…` token we do not
+/// know is **not** ours — conservative on purpose, because the callers delete
+/// what this returns.
 #[must_use]
 pub fn parse_hook_command(command: &str) -> Option<(String, bool)> {
     let caps = HOOK_COMMAND_RE.captures(command)?;
@@ -327,11 +348,11 @@ mod tests {
     fn the_canonical_command_is_portable() {
         assert_eq!(
             canonical_command("stackunderflow-stop", false),
-            "stackunderflow hooks run stackunderflow-stop"
+            "stax-hooks run stackunderflow-stop"
         );
         assert_eq!(
             canonical_command("stackunderflow-stop", true),
-            "stackunderflow hooks run stackunderflow-stop --capture-content"
+            "stax-hooks run stackunderflow-stop --capture-content"
         );
     }
 
@@ -361,6 +382,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_recognises_every_post_cutover_spelling() {
+        // The canonical form `install` writes now.
+        assert_eq!(
+            parse_hook_command("stax-hooks run stackunderflow-stop"),
+            Some(("stackunderflow-stop".into(), false))
+        );
+        assert_eq!(
+            parse_hook_command("stax-hooks run stackunderflow-stop --capture-content"),
+            Some(("stackunderflow-stop".into(), true))
+        );
+        // A stale absolute path to the binary — what `repair` canonicalises.
+        assert_eq!(
+            parse_hook_command("/old/prefix/bin/stax-hooks run stackunderflow-stop"),
+            Some(("stackunderflow-stop".into(), false))
+        );
+        // The drop-in spelling the binary also accepts.
+        assert_eq!(
+            parse_hook_command("stax-hooks hooks run stackunderflow-stop"),
+            Some(("stackunderflow-stop".into(), false))
+        );
+        // The CLI parity surface.
+        assert_eq!(
+            parse_hook_command("stax hooks run stackunderflow-stop"),
+            Some(("stackunderflow-stop".into(), false))
+        );
+        // Ownership still gates on the id, whatever the program spelling.
+        assert_eq!(
+            parse_hook_command("stax-hooks run stackunderflow-not-a-hook"),
+            None
+        );
+    }
+
+    #[test]
     fn the_pipeline_guard_stops_at_the_separator() {
         // `[^|&;]*` must not run past the `|` into the next command.
         let (id, flag) = parse_hook_command(
@@ -373,17 +427,17 @@ mod tests {
 
     #[test]
     fn is_canonical_is_exact() {
-        assert!(is_canonical(
-            "stackunderflow hooks run stackunderflow-stop",
+        assert!(is_canonical("stax-hooks run stackunderflow-stop", false));
+        assert!(!is_canonical(
+            "/old/prefix/bin/stax-hooks run stackunderflow-stop",
             false
         ));
-        assert!(!is_canonical(
-            "/old/venv/bin/stackunderflow hooks run stackunderflow-stop",
-            false
-        ));
+        assert!(!is_canonical("stax-hooks run stackunderflow-stop", true));
+        // The pre-cutover Python form is ours (parseable) but stale, which is
+        // exactly what makes a re-`install` rewrite it in place.
         assert!(!is_canonical(
             "stackunderflow hooks run stackunderflow-stop",
-            true
+            false
         ));
     }
 
@@ -393,7 +447,7 @@ mod tests {
         let rendered = pyjson::dumps_default(&block);
         assert!(
             rendered.starts_with(
-                r#"{"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "stackunderflow hooks run stackunderflow-post-tool-use"}]}]"#
+                r#"{"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "stax-hooks run stackunderflow-post-tool-use"}]}]"#
             ),
             "{rendered}"
         );
