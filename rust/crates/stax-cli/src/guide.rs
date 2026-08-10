@@ -15,10 +15,13 @@
 //!
 //! # The snippet is a byte contract, and it is this repo's own CLAUDE.md
 //!
-//! `_GUIDE_BODY` is transcribed here verbatim, em-dashes and all. It is the
-//! text the installer writes into a user's instruction file, so a single
-//! changed character is a real divergence — the parity rows diff the produced
-//! file, not just the printed lines.
+//! `_GUIDE_BODY` is the reference's text, em-dashes and all, with one
+//! post-split departure: the commands (and the heading) name the native
+//! binary — see the const's own doc. It is the text the installer writes into
+//! a user's instruction file, so a single changed character is a real
+//! divergence — the parity rows diff the produced file, not just the printed
+//! lines, and the harness's hook-command normalisation carries the renamed
+//! lines back to the reference spelling, counted like every other departure.
 //!
 //! # Why the timestamped backup is proven off the shared matrix
 //!
@@ -49,20 +52,29 @@ pub const GUIDE_START: &str = "<!-- stackunderflow:guide:start -->";
 /// `GUIDE_END`.
 pub const GUIDE_END: &str = "<!-- stackunderflow:guide:end -->";
 
-/// `_GUIDE_BODY` — transcribed byte for byte from `agentsmd.py`.
+/// `_GUIDE_BODY` — the reference's snippet with the program renamed.
+///
+/// Transcribed from `agentsmd.py`, with one post-split departure: the
+/// commands name `stax`, because a snippet telling every agent on the machine
+/// to run the retired Python entry point is an instruction to fail. The
+/// envelope schema string stays `stackunderflow.memory/1` — that is the wire
+/// contract's version identifier, not a program name. The markers likewise
+/// keep their spelling: they are the anchors `install` uses to find and
+/// replace an existing block, and renaming them would orphan every
+/// previously-written snippet.
 pub const GUIDE_BODY: &str = "\
-## StackUnderflow — query your past coding sessions
+## staxtrace — query your past coding sessions
 
-This machine indexes every past AI coding session locally with StackUnderflow.
+This machine indexes every past AI coding session locally with staxtrace.
 Before re-deriving something, check whether the answer is already recorded:
 
-- `stackunderflow memory file <path>` — a file's history: past edits, failure
+- `stax memory file <path>` — a file's history: past edits, failure
   modes, and sessions that touched it. Worth a look before a non-trivial edit.
-- `stackunderflow memory decisions \"<topic>\"` — past decisions on a topic.
-- `stackunderflow memory worked \"<action>\"` — past sessions where an action
+- `stax memory decisions \"<topic>\"` — past decisions on a topic.
+- `stax memory worked \"<action>\"` — past sessions where an action
   succeeded, with evidence.
-- `stackunderflow memory sessions` — recent sessions in this project.
-- `stackunderflow memory ask \"<question>\"` — natural-language query over history.
+- `stax memory sessions` — recent sessions in this project.
+- `stax memory ask \"<question>\"` — natural-language query over history.
 
 Pass `--json` for a stable, token-bounded envelope (`schema:
 stackunderflow.memory/1`) meant for programmatic use. Every query is local and
@@ -629,7 +641,13 @@ mod tests {
         let block = render_block();
         assert!(block.starts_with(GUIDE_START));
         assert!(block.ends_with(GUIDE_END));
-        assert!(block.contains("stackunderflow memory ask"));
+        assert!(block.contains("stax memory ask"));
+        // Never the retired Python entry point — the snippet is an
+        // instruction to every agent on the machine.
+        assert!(!block.contains("stackunderflow memory"));
+        // The envelope's version identifier is a wire contract, not a program
+        // name; it keeps its spelling.
+        assert!(block.contains("stackunderflow.memory/1"));
     }
 
     #[test]

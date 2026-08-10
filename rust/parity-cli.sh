@@ -223,6 +223,28 @@ normalise_backup_stamps() {
     done < <(find "$dir" -name '*.bak.*Z' -o -name '*.bak.*Z.[0-9]*' 2>/dev/null)
 }
 
+# Rewrite one file's post-split native-program spellings back to the
+# reference's, in place. Returns 1 when it changed the file, 0 when it was
+# already reference-form — callers count the change. Five exact mappings, one
+# per departed surface: the canonical hook command, the stale hint, and the
+# guide snippet's three renamed lines. The envelope schema string
+# (`stackunderflow.memory/1`) never needed a mapping — it did not change.
+normalise_cutover_names() {
+    local file="$1"
+    sed -e 's/\bstax-hooks run \(stackunderflow-\)/stackunderflow hooks run \1/g' \
+        -e 's/run `stax hooks repair`/run `stackunderflow hooks repair`/g' \
+        -e 's/`stax memory /`stackunderflow memory /g' \
+        -e 's/^## staxtrace — query your past coding sessions$/## StackUnderflow — query your past coding sessions/' \
+        -e 's/locally with staxtrace\./locally with StackUnderflow./' \
+        "$file" >"$file.cutover"
+    if cmp -s "$file" "$file.cutover"; then
+        rm -f "$file.cutover"
+        return 0
+    fi
+    mv "$file.cutover" "$file"
+    return 1
+}
+
 seed_home() {
     local dest="$1" seed="$2"
     mkdir -p "$dest" || return 1
@@ -386,20 +408,16 @@ run_case() {
         normalized=$((normalized + 1))
     fi
 
-    # Canonical hook-command normalisation, Rust side only, counted when it
-    # fires. Since the split the installer writes `stax-hooks run <id>` where
-    # the reference wrote `stackunderflow hooks run <id>` — main carries no
-    # Python entry point for a settings file to invoke, so the PROGRAM changed
-    # while the hook ids did not (templates.rs::canonical_command). Scoped to
-    # the exact canonical spelling followed by one of our ids, on stdout and
-    # on the settings trees the installer cases diff below.
+    # Cutover-name normalisation, Rust side only, counted when it fires.
+    # Since the split the port names the native programs where the reference
+    # named the Python entry point — main carries no Python for a settings
+    # file or an instruction snippet to invoke. Four exact spellings, each
+    # scoped to its surface (templates.rs::canonical_command, the stale hint,
+    # guide.rs::GUIDE_BODY); applied to case stdout here and to the written
+    # trees the installer cases diff below, through one shared function.
     local hookcmd=0 stream
     for stream in "$work/rs.out" "$work/rs.err"; do
-        sed -e "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
-            -e "s/run \`stax hooks repair\`/run \`$PROGRAM_NAME_PY hooks repair\`/g" \
-            "$stream" >"$stream.hookcmd"
-        cmp -s "$stream" "$stream.hookcmd" || hookcmd=1
-        mv "$stream.hookcmd" "$stream"
+        normalise_cutover_names "$stream" || hookcmd=1
     done
     [ "$hookcmd" = 1 ] && hook_command_normalized=$((hook_command_normalized + 1))
 
@@ -426,19 +444,16 @@ run_case() {
     if [ -n "$home_spec" ]; then
         normalise_backup_stamps "$py_home"
         normalise_backup_stamps "$rs_home"
-        # The hook-command normalisation again, on the Rust-side tree: an
-        # installer case's settings.json now carries the post-split canonical
-        # (`stax-hooks run <id>`) where the reference writes the Python form.
-        # Same scope as the stdout pass, counted through the same flag.
-        local settings
-        while IFS= read -r settings; do
-            sed "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
-                "$settings" >"$settings.hookcmd"
-            if ! cmp -s "$settings" "$settings.hookcmd"; then
+        # The cutover-name normalisation again, on the Rust-side tree: an
+        # installer case's settings.json carries the post-split canonical
+        # (`stax-hooks run <id>`) and a guide case's CLAUDE.md / AGENTS.md the
+        # renamed snippet, where the reference writes the Python spellings.
+        # Same mappings as the stdout pass, counted through the same flag.
+        local written
+        while IFS= read -r written; do
+            normalise_cutover_names "$written" || \
                 hook_command_normalized=$((hook_command_normalized + 1))
-            fi
-            mv "$settings.hookcmd" "$settings"
-        done < <(find "$rs_home" -name 'settings.json*' -type f 2>/dev/null)
+        done < <(find "$rs_home" -type f \( -name 'settings.json*' -o -name 'CLAUDE.md*' -o -name 'AGENTS.md*' \) 2>/dev/null)
         home_diff="$(diff -r "$py_home" "$rs_home" 2>&1)" || ok=0
     fi
 
