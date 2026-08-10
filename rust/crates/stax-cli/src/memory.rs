@@ -151,6 +151,12 @@ impl MemoryOptions {
 /// `stax memory` — ask the local store what past sessions already know.
 #[derive(Debug, Args)]
 pub struct MemoryArgs {
+    /// Run this query on a registered remote's dataset instead of the local
+    /// store (agent-remotes Phase 1; see `stax remote ls`). Global so it can
+    /// sit after the subverb, as in `stax memory sessions --at tmos-hq`.
+    #[arg(long = "at", value_name = "REMOTE", global = true)]
+    pub at: Option<String>,
+
     /// Which question to ask.
     #[command(subcommand)]
     pub verb: MemoryVerb,

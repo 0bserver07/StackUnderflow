@@ -66,6 +66,11 @@ use stax_memory::{ProviderBlock, ResumeEnvelope, ResumeSession, ResumeTemplate};
 /// precedence over an `Args` struct's), which carries the Python docstring.
 #[derive(Debug, Args)]
 pub struct ResumeArgs {
+    /// Run against a registered remote's dataset instead of the local store
+    /// (agent-remotes Phase 1; see `stax remote ls`).
+    #[arg(long = "at", value_name = "REMOTE")]
+    pub at: Option<String>,
+
     /// Directory to look under. Default: the current directory.
     #[arg(help = "Directory to look under. Default: the current directory.")]
     pub path: Option<String>,
@@ -843,6 +848,7 @@ mod tests {
 
     fn args(path: &str) -> ResumeArgs {
         ResumeArgs {
+            at: None,
             path: Some(path.to_owned()),
             provider: Vec::new(),
             limit_per_provider: PyInt::from(5),
@@ -858,6 +864,7 @@ mod tests {
 
     fn payload(args: &ResumeArgs) -> ResumeEnvelope {
         let mut args = ResumeArgs {
+            at: None,
             as_json: true,
             path: args.path.clone(),
             provider: args.provider.clone(),

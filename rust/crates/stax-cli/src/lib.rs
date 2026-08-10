@@ -67,6 +67,9 @@ mod reindex;
 /// `import` so the module name matches `cli.py`'s function
 /// (`import_history_cmd`) and reads unambiguously beside `use`.
 mod import_history;
+// ── agent-remotes Phases 1+2 — appended at the tail, per the lib.rs law ──────
+mod observe;
+mod remote;
 
 use std::process::ExitCode;
 
@@ -417,6 +420,22 @@ pub enum Command {
     ///
     /// Also available as ``stax import``.
     Import(ImportArgs),
+    // ── agent-remotes Phases 1+2 — appended at the tail ─────────────────────
+    /// Manage the remote address book: other machines' datasets, by name.
+    ///
+    /// A remote is `NAME -> ssh://[user@]host[:port]/ABS_DATA_DIR` in
+    /// config.json. `stax memory … --at NAME` and `stax resume --at NAME` run
+    /// the same read-only verb where that data lives; `stax observe NAME`
+    /// tails its most recent session. Auth is ssh's (keys, agent, tailnet);
+    /// nothing here stores a credential.
+    Remote(remote::RemoteArgs),
+    /// Watch another machine's most recent agent session, live.
+    ///
+    /// Polls the remote's store over ssh (`store tail` on their side, the
+    /// versioned `stackunderflow.observe/1` envelope on the wire) and renders
+    /// a log tail. `--once` fetches a single batch; `--json` passes envelopes
+    /// through verbatim.
+    Observe(observe::ObserveArgs),
 }
 
 /// Parse this process's arguments and run the requested command.
@@ -462,6 +481,12 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Guide(args) => run_guide(args)?.emit(),
         Command::Hooks(args) => run_hooks(args)?.emit(),
         Command::Init(args) => run_init(args)?.emit(),
+        // `--at NAME` re-runs the user's own argv on a registered remote —
+        // read-only by construction (only memory/resume parse the flag).
+        Command::Memory(args) if args.at.is_some() => {
+            let tail: Vec<String> = std::env::args().skip(1).collect();
+            remote::run_at(args.at.as_deref().unwrap_or_default(), &tail)?
+        }
         Command::Memory(args) => run_memory(args).map(|()| ExitCode::SUCCESS)?,
         Command::ContextBudget(args) => run_context_budget(args)?.emit(),
         Command::ContextReplay(args) => run_context_replay(args)?.emit(),
@@ -470,6 +495,10 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Plan(args) => run_plan(args)?.emit(),
         Command::Recommend(args) => run_recommend(args)?.emit(),
         Command::Report(args) => run_report(args)?.emit(),
+        Command::Resume(args) if args.at.is_some() => {
+            let tail: Vec<String> = std::env::args().skip(1).collect();
+            remote::run_at(args.at.as_deref().unwrap_or_default(), &tail)?
+        }
         Command::Resume(args) => run_resume(args).map(|()| ExitCode::SUCCESS)?,
         Command::Risk(args) => run_risk(args)?.emit(),
         Command::SearchPastDecisions(args) => {
@@ -494,6 +523,9 @@ pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
         Command::Ingest(args) => run_ingest(args)?.emit(),
         // ── RS-8-101 (the import leg) — appended at the tail ────────────────
         Command::Import(args) => run_import(args)?.emit(),
+        // ── agent-remotes Phases 1+2 — appended at the tail ─────────────────
+        Command::Remote(args) => remote::run_remote(args)?.emit(),
+        Command::Observe(args) => observe::run_observe(args)?,
     };
     Ok(code)
 }
