@@ -4,11 +4,12 @@
 //! [`stax_hooks::install`] / [`stax_hooks::repair`] and the handlers in
 //! [`stax_hooks::run`]; what is here is the printing, and the printing is the
 //! byte contract — the two-space indents, the column alignment of
-//! `settings file:` against `hooks active:`, and the literal `stackunderflow`
-//! inside `run \`stackunderflow hooks repair\``, which is a *string in cli.py*
-//! and not `sys.argv[0]`. It stays spelled that way; the harness's program-name
-//! normalisation is scoped to Click's `Usage:` lines and deliberately does not
-//! reach message bodies (DIV-237).
+//! `settings file:` against `hooks active:`. One deliberate departure: the
+//! stale hint reads `run \`stax hooks repair\``. The reference spelled the
+//! program `stackunderflow` (a string in cli.py, not `sys.argv[0]`; DIV-237
+//! kept it), but since the split that is advice to run a program a Rust-only
+//! install does not have — the hint follows the program, and the harness's
+//! hook-command normalisation covers the divergence.
 //!
 //! # `hooks run` exists here and is not the fast path
 //!
@@ -368,7 +369,7 @@ pub fn status(scope: Option<&str>, fmt: &str, env: &installer::Env) -> Output {
                     tags.push("capture-content");
                 }
                 if entry.stale.contains(&hook_id) {
-                    tags.push("STALE — run `stackunderflow hooks repair`");
+                    tags.push("STALE — run `stax hooks repair`");
                 }
                 let suffix = if tags.is_empty() {
                     String::new()

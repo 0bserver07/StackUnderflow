@@ -395,7 +395,8 @@ run_case() {
     # on the settings trees the installer cases diff below.
     local hookcmd=0 stream
     for stream in "$work/rs.out" "$work/rs.err"; do
-        sed "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
+        sed -e "s/\\bstax-hooks run \\(stackunderflow-\\)/$PROGRAM_NAME_PY hooks run \\1/g" \
+            -e "s/run \`stax hooks repair\`/run \`$PROGRAM_NAME_PY hooks repair\`/g" \
             "$stream" >"$stream.hookcmd"
         cmp -s "$stream" "$stream.hookcmd" || hookcmd=1
         mv "$stream.hookcmd" "$stream"
