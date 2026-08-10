@@ -110,7 +110,7 @@ pub fn run_pricing(args: &PricingArgs) -> Result<Output> {
 
 fn run_doctor(args: &DoctorArgs) -> Result<Output> {
     let conn = open_store()?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     // `PricingService.read_cache_status()` reads `app_dir()/cache/pricing.json`
     // — `settings.app_dir()`, not the store file's parent. They are the same
     // directory today; naming the right one keeps them the same directory the

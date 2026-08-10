@@ -104,7 +104,7 @@ pub fn run_import(args: &ImportArgs) -> Result<Output> {
     };
 
     let conn = crate::reports::open_store()?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let ctx = stax_etl::normalize::NormalizeContext::new(engine);
     // `now: Callable[[], float] = time.time` — the ref's `file_mtime` and the
     // cursor sidecar's `updated_at`. A wall clock, so it is injected and never

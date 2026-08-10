@@ -237,7 +237,7 @@ pub fn build(
 ) -> Result<Report> {
     let conn = open_store()?;
     guard_refresh(&conn, ingest)?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     // `list(include) or None` — an EMPTY tuple becomes `None`, which is not the
     // same as an empty list: `build_report` treats `[]` as "keep nothing" and
     // `None` as "keep everything". Python's truthiness is the filter here.

@@ -498,9 +498,14 @@ fn boot(
         .arg(addr.port().to_string())
         .arg("--data-dir")
         .arg(&home)
-        .arg("--package-dir")
-        .arg(package_dir())
         .stdout(std::process::Stdio::piped());
+    // Only name a package dir the resolver actually found — with none, the
+    // server's own default applies, which since the wave-10 packaging pass
+    // falls back to its embedded copies (an installed binary far from any
+    // checkout is exactly that case).
+    if let Some(dir) = crate::status::package_dir() {
+        command.arg("--package-dir").arg(dir);
+    }
     if addr.port() == 8095 {
         // The flip (2026-08-05): a supervised boot on the resident port is the
         // deliberate ask the child's guard exists to distinguish from a stray
@@ -590,7 +595,7 @@ fn resident_watcher(
         }
     };
 
-    let engine = match crate::status::engine_for_cli(&package_dir()) {
+    let engine = match crate::status::engine_for_cli(crate::status::package_dir().as_deref()) {
         Ok(engine) => engine,
         Err(err) => {
             eprintln!("  watcher: pricing engine unavailable ({err}); serving without one");
@@ -675,14 +680,12 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-/// `deps.BASE_DIR` — the `stackunderflow/` package directory.
-///
-/// The same compile-time repo layout `stax-server`'s binary resolves; a packaged
-/// install is a wave-10 concern and is not invented here.
-fn package_dir() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
-    std::fs::canonicalize(&path).unwrap_or(path)
-}
+// `start`'s local compile-time `package_dir()` (CARGO_MANIFEST_DIR-based) is
+// gone: it baked the BUILD machine's checkout into the binary, which is the
+// exact hazard the wave-10 packaging pass existed to remove. Both former
+// callers now use `crate::status::package_dir()` — env, then walk-up, then
+// `None`, which for the spawned server means "no --package-dir flag at all"
+// and its own embedded fallbacks apply.
 
 #[cfg(test)]
 mod tests {

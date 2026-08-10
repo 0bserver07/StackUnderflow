@@ -96,7 +96,7 @@ pub fn run_optimize(args: &OptimizeArgs) -> Result<Output> {
 
     let conn = open_store()?;
     guard_refresh(&conn, &args.ingest)?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
 
     // `list(include) or None` twice over — an empty repeatable option is `None`
     // ("keep everything"), never `[]` ("keep nothing"). `find_waste` tests

@@ -88,7 +88,7 @@ pub struct ExportArgs {
 pub fn run_export_cmd(args: &ExportArgs) -> Result<Output> {
     let conn = open_store()?;
     guard_refresh(&conn, &args.ingest)?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
 
     // `list(include) or None` / `list(exclude) or None`.
     let include = (!args.include.is_empty()).then_some(args.include.as_slice());

@@ -191,7 +191,7 @@ pub struct YieldArgs {
 pub fn run_yield(args: &YieldArgs) -> Result<Output> {
     let conn = open_store()?;
     crate::reports::guard_refresh(&conn, &args.ingest)?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let project_filter = (!args.include.is_empty()).then_some(args.include.as_slice());
     let cap = yield_tracker::max_sessions_per_project(&|key| std::env::var(key).ok());
     let entries = compute_yield(

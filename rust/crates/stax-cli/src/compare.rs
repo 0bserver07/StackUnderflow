@@ -79,7 +79,7 @@ pub struct CompareArgs {
 pub fn run_compare(args: &CompareArgs) -> Result<Output> {
     let conn = open_store()?;
     guard_refresh(&conn, &args.ingest)?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
 
     // `list(project) or None` — an empty tuple is `None`, which `compare_models`
     // reads as "no filter" and which additionally selects the mart fast path.

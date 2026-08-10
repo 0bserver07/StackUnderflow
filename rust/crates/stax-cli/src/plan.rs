@@ -203,7 +203,7 @@ fn period_spend(period_start: &str, period_end: &str) -> Result<f64> {
     let (since, until) = plans::window_bounds(period_start, period_end)
         .ok_or_else(|| anyhow::anyhow!("period_start is not an ISO date"))?;
     let conn = open_store()?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let scope = Scope::new(Some(since), Some(until), "plan-period");
     let report = build_report(&conn, &scope, None, None, &engine)?;
     Ok(report.total_cost)

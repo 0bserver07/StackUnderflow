@@ -126,7 +126,7 @@ pub fn run_status(args: &StatusArgs) -> Result<Output> {
              --no-auto-ingest to read the store as it stands."
         );
     }
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let now = Instant::now_utc();
     let today = report_for(conn, "today", now, &engine)?;
     let month = report_for(conn, "month", now, &engine)?;
@@ -223,28 +223,46 @@ pub fn is_stale(conn: &Connection, now_micros: i64) -> rusqlite::Result<bool> {
 
 // ── pricing + the package directory ──────────────────────────────────────────
 
-/// The CLI's pricing engine: `data/models.toml`, and nothing else.
+/// The CLI's pricing engine: `data/models.toml` from disk when a package
+/// directory is known, the embedded copy when none is.
+///
+/// `None` is the installed-binary case — no `$STACKUNDERFLOW_PACKAGE_DIR`, no
+/// checkout above the cwd or the executable. Before this fell back to
+/// [`stax_etl::pricing::EMBEDDED_MANIFEST`], it guessed `<cwd>/stackunderflow`
+/// and hard-errored on the guess, which made `status` / `today` / `month` fail
+/// on every machine without the Python tree — the exact case wave 10's
+/// packaging pass embedded the manifest for (PACKAGING-STANDALONE.md: "disk
+/// first, binary when there is no file"). The embedded copy is drift-tested
+/// against the checked-in file, so this is not the two-truths hazard the old
+/// walk-up comment warned about.
 ///
 /// # Errors
-/// When the manifest is missing or unparseable — the same hard failure the
-/// Python import would raise, rather than a silently free price list.
-pub fn engine_for_cli(package_dir: &Path) -> Result<PricingEngine> {
+/// When a NAMED package dir's manifest is missing or unparseable — an explicit
+/// override or a found checkout stays a hard failure, exactly as before; only
+/// the absence of any package dir stops being one.
+pub fn engine_for_cli(package_dir: Option<&Path>) -> Result<PricingEngine> {
+    let Some(package_dir) = package_dir else {
+        let manifest = stax_etl::pricing::embedded_manifest()
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .context("parsing the embedded models.toml (a build-time bug)")?;
+        return Ok(PricingEngine::from_manifest(manifest));
+    };
     let path = package_dir.join("data").join("models.toml");
     PricingEngine::from_manifest_path(&path)
         .map_err(|error| anyhow::anyhow!("{error}"))
         .with_context(|| format!("loading {}", path.display()))
 }
 
-/// `deps.BASE_DIR` — the installed package directory.
+/// `deps.BASE_DIR` — the installed package directory, when one exists.
 ///
 /// Found the way `resume` finds `capabilities.json` (D-3): walk up from the
 /// working directory, then from the executable, looking for a checkout that
-/// carries `stackunderflow/data/models.toml`. `include_str!` stays banned —
-/// a build-time copy would let the two implementations disagree about the
-/// rates while the harness swore they agreed. `$STACKUNDERFLOW_PACKAGE_DIR`
-/// wins when set, which is how a packaged install will point at its own copy.
+/// carries the manifest. `$STACKUNDERFLOW_PACKAGE_DIR` wins when set, which is
+/// how a packaged install points at its own copy. `None` means "no disk copy
+/// anywhere" — the caller prices from the embedded manifest rather than from a
+/// guessed path that cannot exist.
 #[must_use]
-pub fn package_dir() -> PathBuf {
+pub fn package_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exe = std::env::current_exe().ok();
     resolve_package_dir(
@@ -260,9 +278,9 @@ pub fn resolve_package_dir(
     raw: Option<&std::ffi::OsStr>,
     cwd: &Path,
     exe: Option<&Path>,
-) -> PathBuf {
+) -> Option<PathBuf> {
     if let Some(value) = raw.filter(|value| !value.is_empty()) {
-        return PathBuf::from(value);
+        return Some(PathBuf::from(value));
     }
     let from_exe = exe.and_then(Path::parent);
     for start in [Some(cwd), from_exe].into_iter().flatten() {
@@ -270,16 +288,12 @@ pub fn resolve_package_dir(
             for name in ["rust/assets", "stackunderflow"] {
                 let candidate = ancestor.join(name);
                 if candidate.join("data").join("models.toml").is_file() {
-                    return candidate;
+                    return Some(candidate);
                 }
-            }
-            let candidate = ancestor.join("stackunderflow");
-            if candidate.join("data").join("models.toml").is_file() {
-                return candidate;
             }
         }
     }
-    cwd.join("stackunderflow")
+    None
 }
 
 #[cfg(test)]
@@ -404,12 +418,13 @@ mod tests {
     fn the_package_dir_env_wins_and_the_walk_up_finds_the_checkout() {
         assert_eq!(
             resolve_package_dir(Some(OsStr::new("/pkg")), Path::new("/tmp"), None),
-            PathBuf::from("/pkg")
+            Some(PathBuf::from("/pkg"))
         );
         assert_eq!(
             resolve_package_dir(Some(OsStr::new("")), Path::new("/tmp"), None),
-            PathBuf::from("/tmp/stackunderflow"),
-            "an empty value counts as unset and the last resort names something concrete"
+            None,
+            "an empty value counts as unset, and no checkout above /tmp means \
+             no disk copy — the caller prices from the embedded manifest"
         );
     }
 
@@ -418,12 +433,20 @@ mod tests {
         // Not a tautology: it proves the walk-up actually resolves from the
         // test binary's own location, which is where a `cargo test` run of the
         // real command would look.
-        let dir = package_dir();
+        let dir = package_dir().expect("the test binary sits inside the checkout");
         assert!(
             dir.join("data").join("models.toml").is_file(),
             "package dir resolved to {dir:?}"
         );
-        engine_for_cli(&dir).expect("the manifest parses");
+        engine_for_cli(Some(&dir)).expect("the manifest parses");
+    }
+
+    #[test]
+    fn no_package_dir_prices_from_the_embedded_manifest() {
+        // The installed-binary case: no env, no checkout. This used to be the
+        // hard error `loading <cwd>/stackunderflow/data/models.toml`, which
+        // broke status/today/month on every machine without the Python tree.
+        engine_for_cli(None).expect("the embedded manifest builds an engine");
     }
 
     #[test]

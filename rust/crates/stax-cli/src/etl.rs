@@ -135,7 +135,7 @@ fn run_status(args: &StatusArgs) -> Result<Output> {
 
 fn run_backfill(args: &BackfillArgs) -> Result<Output> {
     let conn = open_store()?;
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let ctx = stax_etl::normalize::NormalizeContext::new(engine);
     // `refresh_all_marts` takes ONE stamp here where Python's `set_watermark`
     // re-reads `datetime.now(UTC)` per mart — the second finding in

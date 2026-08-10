@@ -66,7 +66,7 @@ pub fn run_reindex(_args: &ReindexArgs) -> Result<Output> {
     // The CLI is UNPRIMED (`cli.py` never calls `use_price_book_store`), so the
     // per-file normalize hooks price from the manifest — the same seam
     // `etl backfill` carries, at the other end of the pipeline.
-    let engine = engine_for_cli(&package_dir())?;
+    let engine = engine_for_cli(package_dir().as_deref())?;
     let ctx = stax_etl::normalize::NormalizeContext::new(engine);
     let adapters = stax_adapters::registry::registered();
     let report = stax_etl::ingest::run_ingest(
