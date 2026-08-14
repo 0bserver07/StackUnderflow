@@ -1,4 +1,4 @@
-# StackUnderflow — Handoff doc
+# staxtrace — Handoff doc
 
 **Date:** 2026-07-01 (carried over from the 2026-05-19 handoff)
 **Maintainer:** 0bserver07
@@ -16,7 +16,7 @@ Six distinct eras, all merged to `main` and pushed:
 
 | Era | What landed |
 |---|---|
-| **May 20 — memory-CLI pivot** | The standalone **MCP server was retired** (`aaf5c8d`) and replaced by the `stackunderflow memory` CLI namespace (`548d33f`): `memory file / decisions / worked / sessions / ask`, a token-bounded `--json` agent envelope (`stackunderflow.memory/1`), context-injection hooks (`hooks/inject.py`), and `AGENTS.md` at the repo root pointing agents at the commands. **Do not re-introduce an MCP server** — the CLI + hooks are the interface. |
+| **May 20 — memory-CLI pivot** | The standalone **MCP server was retired** (`aaf5c8d`) and replaced by the `stax memory` CLI namespace (`548d33f`): `memory file / decisions / worked / sessions / ask`, a token-bounded `--json` agent envelope (`stackunderflow.memory/1`), context-injection hooks (`hooks/inject.py`), and `AGENTS.md` at the repo root pointing agents at the commands. **Do not re-introduce an MCP server** — the CLI + hooks are the interface. |
 | **May 26–28 — adapters + grading, v0.9.2** | Pi and OpenClaw promoted to default-on; Hermes and Antigravity adapters added (`788955e`, `37a2245`). Session grading / quality metrics / outcome attribution shipped (v019 `commit_session_link`, v020 `session_quality_metrics`). **v0.9.2** released (`59eb59a` — an agent-executed release commit; see the versioning rule above). |
 | **June 18–19 — pricing truth** | Pricing became **data-driven**: `stackunderflow/data/models.toml` + `infra/model_manifest.py` replace hard-coded `_RATES` (`0f384f5`); Anthropic rates corrected; per-project provider pricing fixed (`755785e`); manifest entries validated at load (`f5e0307`); fabricated 5.0 grades purged (v021). A forced backfill corrected the real store total **$67,825 → $34,959** (snapshot kept at `store.db.pre-pricing-backfill`). |
 | **June 25–27 — UI/perf audit campaign** | A 147-agent audit produced **63 confirmed findings** (`docs/campaigns/ui-perf-audit.md`); the big ones are fixed: `/api/global-stats` ~9090ms → ~9ms (`25be795`), dashboard 3.1s → 445ms (`65787ca`), `/api/jsonl-files` 3679 → 3 queries (`3e6d096`), `/api/messages` SQL-paginated (`2146af1`), entry bundle 1.3MB → 145KB (`7d158a7`), error/interruption rates were displayed ×100 too high (`4b3d9d1`). v022/v023 materialize the Overview dims that used to render 0 on the mart path. Also: **Windows support** (cross-platform adapter paths, `CLAUDE_CONFIG_DIR`, CI smoke leg — `b31fb2d`) and the **Grok** beta adapter (`e2b6798`). |
@@ -27,11 +27,11 @@ Six distinct eras, all merged to `main` and pushed:
 
 Foundation is **DONE and CI-green**. Three tasks remain, spec'd in that doc:
 
-- **#5 Active-recall hooks** (highest leverage) — PreToolUse hook that shells `stackunderflow memory file <path> --json` before Edit/Write/Bash and injects failure-mode context. Fast, never-blocking, no-op on error. Build on `hooks/inject.py` + `_install.py`; install at **project scope** (user-scope fails here — pyenv-3.12.9-only machine).
+- **#5 Active-recall hooks** (highest leverage) — PreToolUse hook that shells `stax memory file <path> --json` before Edit/Write/Bash and injects failure-mode context. Fast, never-blocking, no-op on error. Build on `hooks/inject.py` + `_install.py`; install at **project scope** (user-scope fails here — pyenv-3.12.9-only machine).
 - **#6 Cross-session pattern / failure mining** — recurrence-keyed aggregation of enricher output (model on `reports/anomaly.py`); new `reports/patterns.py` + route + "coding health" panel; feeds #5.
 - **#7 Prescriptive cost** — turn findings into actions: generated slimmer-CLAUDE.md diff (preview-first, confirmation-gated), model-routing recommendations, one-click apply in the Optimize tab.
 
-**Ollama config (all consumers):** `active_endpoint()` in `services/embeddings.py` probes cloud→local. `STACKUNDERFLOW_OLLAMA_URL` (+ `STACKUNDERFLOW_OLLAMA_API_KEY` bearer) → hosted; else `localhost:11434`. Embed model: `STACKUNDERFLOW_EMBED_MODEL` (default `nomic-embed-text`). Activate semantic recall on existing data: set env, pull model, run `stackunderflow memory embed`. Vectors live in `~/.stackunderflow/embeddings.db` (table `embeddings(message_id, model, dim, vector)`, keyed by `search_index.db` message id — deliberately no join back to `store.db`).
+**Ollama config (all consumers):** `active_endpoint()` in `services/embeddings.py` probes cloud→local. `STACKUNDERFLOW_OLLAMA_URL` (+ `STACKUNDERFLOW_OLLAMA_API_KEY` bearer) → hosted; else `localhost:11434`. Embed model: `STACKUNDERFLOW_EMBED_MODEL` (default `nomic-embed-text`). Activate semantic recall on existing data: set env, pull model, run `stax memory embed`. Vectors live in `~/.stackunderflow/embeddings.db` (table `embeddings(message_id, model, dim, vector)`, keyed by `search_index.db` message id — deliberately no join back to `store.db`).
 
 ## Release history
 
@@ -89,14 +89,14 @@ Side stores OUTSIDE store.db (backup must capture all of them): `search_index.db
 
 ---
 
-## What StackUnderflow is
+## What staxtrace is
 
 An offline, local-first observability + memory toolkit for AI coding agents. It ingests session logs from **20 providers**, all registered and on by default (Claude Code, Codex, Cursor, Cline, Pi, OpenClaw, Hermes, KiloCode, RooCode, OpenCode, Cursor-Agent, Qwen, Gemini, Copilot, Codeium, Continue, Droid, Kiro, Antigravity, Grok) — the registry self-discovers adapter modules, so there is no opt-in flag. It surfaces cost analytics, session playback with filesystem reconstruction, and a queryable memory both developers and agents use to learn from past sessions. MIT, no external service dependencies, no telemetry.
 
 Surfaces:
 
-- **REST API** under `/api/*` for the React dashboard (`stackunderflow start` → `127.0.0.1:8081`)
-- **`stackunderflow memory` CLI** — the agent-facing interface (`file` / `decisions` / `worked` / `sessions` / `ask` / `embed`), with a token-bounded `--json` envelope (`stackunderflow.memory/1`). Replaces the retired MCP server.
+- **REST API** under `/api/*` for the React dashboard (`stax start` → `127.0.0.1:8081`)
+- **`stax memory` CLI** — the agent-facing interface (`file` / `decisions` / `worked` / `sessions` / `ask` / `embed`), with a token-bounded `--json` envelope (`stackunderflow.memory/1`). Replaces the retired MCP server.
 - **Opt-in Claude Code hooks** — context injection (`hooks/inject.py`) + lifecycle capture (`captured_events`)
 - **CLI** for ops, reports, ETL, backups, and health checks (`doctor` — store integrity + per-provider delivery scoreboard; `pricing doctor`)
 - **Python public API** (`import stackunderflow; list_projects(); process(...)`)
@@ -236,28 +236,28 @@ Additive marts can't SUM `COUNT(DISTINCT session_id)`; a follow-up UPDATE recomp
 ## How to run / what to know
 
 ```bash
-stackunderflow start                      # 127.0.0.1:8081; ingest + watcher in background
-stackunderflow start --no-watcher --no-lock
+stax start                      # 127.0.0.1:8081; ingest + watcher in background
+stax start --no-watcher --no-lock
 
 # ETL
-stackunderflow etl status [--format json]
-stackunderflow etl backfill [--force]     # --force re-derives costs from the manifest
+stax etl status [--format json]
+stax etl backfill [--force]     # --force re-derives costs from the manifest
 
 # Memory (the agent interface — docs/cli-reference.md, AGENTS.md)
-stackunderflow memory file stackunderflow/routes/cost.py --json
-stackunderflow memory decisions "pricing" --json
-stackunderflow memory worked "add caching"
-stackunderflow memory sessions
-stackunderflow memory ask "why did we retire sentence-transformers"
-stackunderflow memory embed               # backfill Ollama vectors (needs endpoint + model)
+stax memory file stackunderflow/routes/cost.py --json
+stax memory decisions "pricing" --json
+stax memory worked "add caching"
+stax memory sessions
+stax memory ask "why did we retire sentence-transformers"
+stax memory embed               # backfill Ollama vectors (needs endpoint + model)
 
 # Pricing
-stackunderflow pricing doctor             # unpriced/stale models + $ delta of a rate change
+stax pricing doctor             # unpriced/stale models + $ delta of a rate change
 
 # Hooks / skills / discovery-telemetry — unchanged surface
-stackunderflow hooks install              # project scope by default
-stackunderflow skills generate --dry-run
-stackunderflow discovery telemetry
+stax hooks install              # project scope by default
+stax skills generate --dry-run
+stax discovery telemetry
 
 # Tests
 pytest tests/ -q                          # 3302 selected; 4 perf-budget tests are load-
@@ -319,11 +319,11 @@ node --test tests/services/*.test.ts      # 168 tests
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
-| `/api/etl/status` lag > 1000 events for minutes | Watcher not running, or a normalizer raising | server log; `stackunderflow etl status` |
+| `/api/etl/status` lag > 1000 events for minutes | Watcher not running, or a normalizer raising | server log; `stax etl status` |
 | Marts empty after backfill | Builder/normalizer not registered | `etl.normalize.all()` → 20 keys; `etl.marts.all()` → 8 |
 | A stat shows 0 on the dashboard but raw data has it | Missing mart dim (the v022/v023 class of bug) — fallback path is perf-forbidden | `store/mart_queries.py`; the relevant mart builder |
 | Cost total looks wrong after a rate change | Backfill not re-run, or manifest entry invalid (dropped at load with a warning) | `pricing doctor`; `etl backfill --force`; `models.toml` |
-| `memory ask` gives shallow/substring results | Ollama unreachable or vectors not backfilled | `STACKUNDERFLOW_OLLAMA_URL`; `stackunderflow memory embed` |
+| `memory ask` gives shallow/substring results | Ollama unreachable or vectors not backfilled | `STACKUNDERFLOW_OLLAMA_URL`; `stax memory embed` |
 | Meta-agent sidebar dead | Ollama endpoint down (cloud probe falls back to localhost) | `routes/misc.py` pass-through; `services/embeddings.active_endpoint()` |
 | Discovery/memory commands empty on fresh store | Nothing ingested | `etl backfill`, then retry |
 | Second `start` doesn't refresh data | First instance holds the watcher lock (by design) | `etl status` → `lock_held_by`; `--no-lock` |
@@ -342,4 +342,4 @@ node --test tests/services/*.test.ts      # 168 tests
 
 ---
 
-That's the picture. Paths are relative to `/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/`. Welcome — read the campaign doc before writing code.
+That's the picture. Paths are relative to `/Users/yadkonrad/dev_dev/year26/jan26/staxtrace/`. Welcome — read the campaign doc before writing code.

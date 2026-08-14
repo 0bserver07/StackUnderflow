@@ -2,18 +2,18 @@
 
 Some session sources have no local transcript on disk — they are cloud-gated,
 or niche enough that a bespoke adapter is not worth maintaining. For those,
-StackUnderflow owns only a **format** and a **runner**: you supply an export
-command that streams your history to stdout as this JSONL, and StackUnderflow
+staxtrace owns only a **format** and a **runner**: you supply an export
+command that streams your history to stdout as this JSONL, and staxtrace
 validates it and imports it under one `custom` provider.
 
 ```
-stackunderflow import --history-source <name-or-path>
+stax import --history-source <name-or-path>
 ```
 
 `stax import …` is the same command.
 
 > **Guardrails, not a sandbox.** The export command is *your own code, running
-> as you*. StackUnderflow runs it with no shell, a cleared + allowlisted
+> as you*. staxtrace runs it with no shell, a cleared + allowlisted
 > environment, and byte/time caps so ordinary footguns (a stray `$(…)` in an
 > argv, an env var leaking into a child, a runaway process) can't bite. That is
 > **not** a security boundary. If you point the manifest at a hostile command,
@@ -124,7 +124,7 @@ A file the agent read or wrote during the session.
   delete | …`. Mapped to a tool name (`Read`/`Write`/`Edit`).
 
 A `file_touch` becomes a lightweight row whose content carries the path, so the
-session surfaces in `stackunderflow memory file <path>` /
+session surfaces in `stax memory file <path>` /
 `find_sessions_touching_file`.
 
 ### `cursor`
@@ -157,7 +157,7 @@ Everything else in your shell is dropped before the command starts.
 ## 4. The cursor — opaque, stored, replayed
 
 The cursor lets an export resume instead of re-exporting everything. It is an
-**opaque string** — StackUnderflow stores it and hands it back, and **never
+**opaque string** — staxtrace stores it and hands it back, and **never
 interprets it**.
 
 1. Before each run, the last stored cursor for this `source_id` (or the
@@ -227,7 +227,7 @@ EOF
 ```
 
 ```
-stackunderflow import --history-source /abs/path/to/stackunderflow-history-plugin.json
+stax import --history-source /abs/path/to/stackunderflow-history-plugin.json
 ```
 
 A runnable fake export used by the test suite lives at

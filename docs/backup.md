@@ -8,7 +8,7 @@ disk. Nothing is uploaded anywhere.
 ## Why this exists
 
 `~/.claude/` is the source of truth for every Claude Code session
-StackUnderflow ingests. It is also a moving target — Claude Code
+staxtrace ingests. It is also a moving target — Claude Code
 rewrites the session JSONL files as sessions evolve, replaces plan and
 task files in place, and occasionally rotates history. A misconfigured
 hook, a bad merge, or a `rm` mishap can wipe weeks of work.
@@ -21,11 +21,11 @@ re-running every coding session.
 ## Command surface
 
 ```
-stackunderflow backup create [--label TEXT] [--keep N]
-stackunderflow backup verify [--name NAME]
-stackunderflow backup list
-stackunderflow backup restore NAME [--dry-run]
-stackunderflow backup auto [--enable | --disable]
+stax backup create [--label TEXT] [--keep N]
+stax backup verify [--name NAME]
+stax backup list
+stax backup restore NAME [--dry-run]
+stax backup auto [--enable | --disable]
 ```
 
 ### `backup create`
@@ -161,7 +161,7 @@ snapshots.
 
 On macOS: writes a launchd plist at
 `~/Library/LaunchAgents/com.stackunderflow.backup.plist` and loads it
-via `launchctl load`. The plist invokes `stackunderflow backup create
+via `launchctl load`. The plist invokes `stax backup create
 --label auto --keep 10`. Standard output and error are written to
 `~/.stackunderflow/backup.log`.
 
@@ -176,9 +176,9 @@ clobbered.
 ## When to run a backup
 
 - **Before any `~/.claude/` migration.** Claude Code upgrades that touch
-  the on-disk format. Run `stackunderflow backup create --label
+  the on-disk format. Run `stax backup create --label
   before-upgrade` first.
-- **Before a `--fresh` start.** `stackunderflow start --fresh` clears
+- **Before a `--fresh` start.** `stax start --fresh` clears
   `~/.stackunderflow/cache/`. That's safe, but if you also intend to
   re-ingest from scratch, a backup is a cheap insurance policy.
 - **Before a destructive shell experiment.** If you're about to mass-

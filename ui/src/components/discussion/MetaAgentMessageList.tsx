@@ -39,7 +39,7 @@ export default function MetaAgentMessageList({ messages }: MetaAgentMessageListP
         <div className="text-center text-gray-500">
           <p className="text-sm">Ask about your sessions, costs, or projects.</p>
           <p className="text-xs mt-1 leading-relaxed">
-            The meta agent reads from your local StackUnderflow store —
+            The meta agent reads from your local staxtrace store —
             nothing leaves the machine.
           </p>
         </div>

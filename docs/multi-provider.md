@@ -1,6 +1,6 @@
 # Multi-provider support
 
-StackUnderflow ingests session data from more than one coding agent. Twenty adapters are registered and every one is on by default. The registry in `stackunderflow/adapters/__init__.py` is **self-discovering**: it walks the package at import time and registers every adapter module, so there is no opt-in flag and no import list to maintain — an adapter whose source directory is absent on a machine simply yields nothing. Curated per-adapter fidelity (the Status column below) lives in `stackunderflow/adapters/capabilities.json`; a `beta` status means *pending broad validation*, not opt-in.
+staxtrace ingests session data from more than one coding agent. Twenty adapters are registered and every one is on by default. The registry in `stackunderflow/adapters/__init__.py` is **self-discovering**: it walks the package at import time and registers every adapter module, so there is no opt-in flag and no import list to maintain — an adapter whose source directory is absent on a machine simply yields nothing. Curated per-adapter fidelity (the Status column below) lives in `stackunderflow/adapters/capabilities.json`; a `beta` status means *pending broad validation*, not opt-in.
 
 ## Supported providers
 
@@ -37,7 +37,7 @@ Every adapter is registered automatically — there is nothing to enable. `stack
 
 Curated per-adapter fidelity lives in `stackunderflow/adapters/capabilities.json` (loaded and validated by `stackunderflow/services/support_matrix.py`). Each entry records a `status` (`supported` / `beta` / `partial`), whether the source can emit billable usage events, and per-field fidelity (`content_text`, `tokens`, `cost`, `tool_calls`, `tool_output`, `reasoning`, `file_touches`). A `beta` status means *pending broad validation* — the adapter is on like every other; the label only flags that its output hasn't been checked against as much real-world data yet.
 
-To see what a given machine actually ingests per provider, run `stackunderflow doctor` (alias `stax doctor`). Its delivery scoreboard walks disk sessions → base messages → usage_events → marts and flags any provider that has sessions on disk but nothing loaded; `stackunderflow doctor --fail-on-gap` turns such a gap into a non-zero exit for CI.
+To see what a given machine actually ingests per provider, run `stax doctor` (alias `stax doctor`). Its delivery scoreboard walks disk sessions → base messages → usage_events → marts and flags any provider that has sessions on disk but nothing loaded; `stax doctor --fail-on-gap` turns such a gap into a non-zero exit for CI.
 
 ## What Cursor and Cline read
 
@@ -92,7 +92,7 @@ The flag is set on the adapter `Record` and persists in `messages.raw_json`. The
 
 ```mermaid
 flowchart LR
-    user[User: stackunderflow start] --> ingest[run_ingest]
+    user[User: stax start] --> ingest[run_ingest]
     ingest --> claude[ClaudeAdapter]
     ingest --> codex[CodexAdapter]
     ingest --> cursor[CursorAdapter]
@@ -114,9 +114,9 @@ flowchart LR
 
 ## Troubleshooting
 
-**Cursor / Cline show no data.** Check that the source file exists. Cursor: `ls ~/Library/Application\ Support/Cursor/User/globalStorage/state.vscdb`. Cline: `ls ~/Library/Application\ Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`. If either path is missing the adapter exits cleanly without logging an error — the tool is not installed or has not been used on this machine. After confirming the path, re-run `stackunderflow reindex`.
+**Cursor / Cline show no data.** Check that the source file exists. Cursor: `ls ~/Library/Application\ Support/Cursor/User/globalStorage/state.vscdb`. Cline: `ls ~/Library/Application\ Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/`. If either path is missing the adapter exits cleanly without logging an error — the tool is not installed or has not been used on this machine. After confirming the path, re-run `stax reindex`.
 
-**A provider I use shows no data.** Same pattern: confirm the on-disk source exists for that provider (paths are listed in the table above), then re-run `stackunderflow reindex`. `stackunderflow doctor` reports, per provider, whether sessions found on disk actually made it into the store.
+**A provider I use shows no data.** Same pattern: confirm the on-disk source exists for that provider (paths are listed in the table above), then re-run `stax reindex`. `stax doctor` reports, per provider, whether sessions found on disk actually made it into the store.
 
 **My Cursor sessions show $0 (or a `≈` marker).** As of the cursor-pricing fix, cursor records with non-zero token counts always price at a real dollar figure: vendor-prefixed ids (`claude-*`, `gpt-*`, `gemini-*`) delegate to the upstream pricer; `composer-1` prices at Cursor's published rate; `composer-2` and the `cursor-auto` / `cursor-fast` autoselectors use **ESTIMATED** Anthropic Sonnet 4.x rates (see "Cursor pricing" above). A record still showing $0 means its token counts are zero — Cursor v3 stores zero `tokenCount.{inputTokens, outputTokens}` on every bubble, and the adapter's `len(text) // 4` fallback estimate also returns 0 when the bubble's text payload is empty (the v3 bubble shape stores rich JSON with diffs and code chunks instead of a top-level `text` field, so some assistant bubbles legitimately have no estimable text). The `≈` marker on Sessions table rows reflects the estimated-tokens flag; cost _is_ estimated even when the dollar figure is non-zero.
 

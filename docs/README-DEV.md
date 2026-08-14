@@ -1,10 +1,10 @@
-# StackUnderflow Development Guide
+# staxtrace Development Guide
 
 Contributor guide: architecture, local setup, testing, and release.
 
 ## What this is
 
-StackUnderflow is a single-process, local-first app:
+staxtrace is a single-process, local-first app:
 
 - **Python backend**: a FastAPI server in `stackunderflow/` that ingests coding-agent session logs through a pluggable adapter layer into a local SQLite store and exposes a JSON API over it. All twenty adapters are enabled by default — the registry self-discovers adapter modules, so there's no opt-in flag.
 - **React frontend**: Vite + TypeScript + Tailwind in `stackunderflow-ui/`. The build output is written to `stackunderflow/static/react/` and served by the backend.
@@ -15,13 +15,13 @@ Everything runs on the user's machine; data never leaves the host.
 
 - Python 3.11 or 3.12 (`pyproject.toml` sets `requires-python = ">=3.11"`; CI runs 3.11 and 3.12).
 - Node.js 20+ for the frontend build. The frontend test suite needs Node 22+.
-- `rsync` on `PATH` for `stackunderflow backup create` — it falls back to `shutil.copytree` if missing.
+- `rsync` on `PATH` for `stax backup create` — it falls back to `shutil.copytree` if missing.
 
 ## Setup
 
 ```bash
-git clone https://github.com/0bserver07/StackUnderflow
-cd StackUnderflow
+git clone https://github.com/0bserver07/staxtrace
+cd staxtrace
 
 # Python — use any virtualenv manager (venv, conda, pyenv-virtualenv)
 python -m venv .venv
@@ -54,7 +54,7 @@ There are two processes: the Python backend and the Vite dev server.
 **Backend** (port 8081):
 
 ```bash
-stackunderflow start          # init also starts the dashboard
+stax start          # init also starts the dashboard
 # or
 python -m stackunderflow.server
 ```
@@ -79,7 +79,7 @@ cd stackunderflow-ui && npm run build   # writes to stackunderflow/static/react/
 ## Repository layout
 
 ```
-StackUnderflow/
+staxtrace/
 ├── stackunderflow/              # Python package
 │   ├── __init__.py              # Public API re-export (list_projects, list_sessions, process)
 │   ├── __version__.py
@@ -156,7 +156,7 @@ Key properties:
 - **Routes and CLI reports** both read through `store.queries` (and `store.mart_queries`); neither touches `sqlite3` directly.
 
 `server.py` runs an ingest pass in a background thread at boot, then
-starts the filesystem watcher. `stackunderflow reindex` re-applies
+starts the filesystem watcher. `stax reindex` re-applies
 migrations and runs a full ingest pass on demand.
 
 ## Shared state (`deps.py`)
@@ -205,15 +205,15 @@ Settings with no env var are file-only — a JSON dict or list is awkward
 to express in a shell variable, so they are managed through the CLI.
 
 ```bash
-stackunderflow cfg ls                    # show all settings with source
-stackunderflow cfg set port 9000         # persist to ~/.stackunderflow/config.json
-stackunderflow cfg rm port               # remove from config file
+stax cfg ls                    # show all settings with source
+stax cfg set port 9000         # persist to ~/.stackunderflow/config.json
+stax cfg rm port               # remove from config file
 ```
 
-The `model_aliases` map has its own `stackunderflow cfg model-alias`
-subcommands, and the `plan_*` keys are managed by `stackunderflow plan`.
+The `model_aliases` map has its own `stax cfg model-alias`
+subcommands, and the `plan_*` keys are managed by `stax plan`.
 The hidden `config` group stays wired as an alias
-(`stackunderflow config show|set|unset`) for backward compatibility.
+(`stax config show|set|unset`) for backward compatibility.
 
 ## CLI reference
 
@@ -222,22 +222,22 @@ point.
 
 | Command | Purpose |
 | --- | --- |
-| `stackunderflow start` | Launch the dashboard. `--fresh` wipes the disk cache first; `--headless` skips opening the browser. |
-| `stackunderflow init` | Start the dashboard (alias for `start`); `--install-skills` also installs the shipped Claude Code skills. |
-| `stackunderflow reindex` | Apply pending migrations and run a full ingest pass. |
-| `stackunderflow cfg ls\|set\|rm` | View or change persistent settings. |
-| `stackunderflow plan show\|set\|reset` | Manage the monthly plan budget. |
-| `stackunderflow report` / `today` / `month` | Cost and activity summaries over a date range. |
-| `stackunderflow status` | One-line today + month cost and message counts. |
-| `stackunderflow export` | Export aggregated data as CSV or JSON. |
-| `stackunderflow optimize` | Surface sessions with repeated retry loops. |
-| `stackunderflow backup create\|verify\|list\|restore\|auto` | Snapshot and restore `~/.claude/` — see [backup.md](backup.md). |
-| `stackunderflow clear-cache` | Clear the Cursor parse cache; the in-memory cache clears on restart. |
+| `stax start` | Launch the dashboard. `--fresh` wipes the disk cache first; `--headless` skips opening the browser. |
+| `stax init` | Start the dashboard (alias for `start`); `--install-skills` also installs the shipped Claude Code skills. |
+| `stax reindex` | Apply pending migrations and run a full ingest pass. |
+| `stax cfg ls\|set\|rm` | View or change persistent settings. |
+| `stax plan show\|set\|reset` | Manage the monthly plan budget. |
+| `stax report` / `today` / `month` | Cost and activity summaries over a date range. |
+| `stax status` | One-line today + month cost and message counts. |
+| `stax export` | Export aggregated data as CSV or JSON. |
+| `stax optimize` | Surface sessions with repeated retry loops. |
+| `stax backup create\|verify\|list\|restore\|auto` | Snapshot and restore `~/.claude/` — see [backup.md](backup.md). |
+| `stax clear-cache` | Clear the Cursor parse cache; the in-memory cache clears on restart. |
 
 The CLI has more command groups — `memory` (the agent-facing query
 namespace), `etl`, `hooks`, `guide`, `skills`, `discovery`,
 `recommend`, `risk`, `ingest`, `pricing`, `analyze`, plus
-`context-budget`, `compare`, and `yield`. Run `stackunderflow --help`
+`context-budget`, `compare`, and `yield`. Run `stax --help`
 or see [cli-reference.md](cli-reference.md) for the full surface.
 
 ## Public Python API
@@ -398,7 +398,7 @@ and `docs.yml` (also `workflow_dispatch`).
 4. Optional local install test:
    ```bash
    pip install dist/stackunderflow-*.whl
-   stackunderflow --version
+   stax --version
    ```
 5. Tag and push:
    ```bash
@@ -408,14 +408,14 @@ and `docs.yml` (also `workflow_dispatch`).
    ```
 6. Create a GitHub release from the tag. `publish.yml` uploads to PyPI.
 
-Once on PyPI, `uvx stackunderflow init` works immediately.
+Once on PyPI, `uvx stax init` works immediately.
 
 ## Debugging
 
 - Server won't start: `lsof -i :8081` to check the port.
 - Stale Python bytecode after a refactor: `find . -name __pycache__ -type d -exec rm -rf {} +`.
-- Verbose logs: `LOG_LEVEL=DEBUG stackunderflow start`.
-- Store looks wrong or out of date: `stackunderflow reindex` re-applies migrations and re-runs ingest against `~/.stackunderflow/store.db`. For a clean rebuild, delete `~/.stackunderflow/store.db` first — it is derived data and the next ingest recreates it. `stackunderflow start --fresh` separately wipes the JSON cache at `~/.stackunderflow/cache/`.
+- Verbose logs: `LOG_LEVEL=DEBUG stax start`.
+- Store looks wrong or out of date: `stax reindex` re-applies migrations and re-runs ingest against `~/.stackunderflow/store.db`. For a clean rebuild, delete `~/.stackunderflow/store.db` first — it is derived data and the next ingest recreates it. `stax start --fresh` separately wipes the JSON cache at `~/.stackunderflow/cache/`.
 - Frontend not reflecting API changes: confirm the Vite proxy target matches the backend port (`stackunderflow-ui/vite.config.ts` hardcodes `:8081`).
 
 ## Contributing

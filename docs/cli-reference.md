@@ -1,4 +1,4 @@
-# StackUnderflow CLI Reference
+# staxtrace CLI Reference
 
 The `stackunderflow` command covers dashboard launch, usage reports, data export,
 config management, session backups, and the agent-facing `memory` namespace. All
@@ -12,113 +12,113 @@ command accepts `--help` for a quick reminder.
 
 ```
 # Dashboard
-stackunderflow init [--port N] [--host H] [--no-browser] [--clear-cache] [--install-skills] [--skills-dest DIR] [--skills-force]
-stackunderflow start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-lock]
-stackunderflow reindex
-stackunderflow clear-cache [PROJECT]
+stax init [--port N] [--host H] [--no-browser] [--clear-cache] [--install-skills] [--skills-dest DIR] [--skills-force]
+stax start [-p N] [-H H] [--headless] [--fresh] [--no-watcher] [--no-lock]
+stax reindex
+stax clear-cache [PROJECT]
 
 # Reports  (all eight also accept --ingest / --no-auto-ingest — see "Reading freshness")
-stackunderflow status [--format text|json]
-stackunderflow today [--format text|json] [--project P] [--exclude P]
-stackunderflow month [--format text|json] [--project P] [--exclude P]
-stackunderflow report [-p PERIOD] [--format text|json] [--project P] [--exclude P] [--provider PROV]
-stackunderflow export -f csv|json -o PATH [-p today|week|month|all] [--provider X] [--project P] [--exclude P] [--force]
-stackunderflow optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
-stackunderflow compare [-p today|week|month|all] [--provider X] [--project P] [--format text|json]
-stackunderflow yield [-p PERIOD] [--format text|json] [--project SLUG]
-stackunderflow context-budget [--project DIR] [--global] [--format text|json]
+stax status [--format text|json]
+stax today [--format text|json] [--project P] [--exclude P]
+stax month [--format text|json] [--project P] [--exclude P]
+stax report [-p PERIOD] [--format text|json] [--project P] [--exclude P] [--provider PROV]
+stax export -f csv|json -o PATH [-p today|week|month|all] [--provider X] [--project P] [--exclude P] [--force]
+stax optimize [-p PERIOD] [--format text|json] [--project P] [--exclude P]
+stax compare [-p today|week|month|all] [--provider X] [--project P] [--format text|json]
+stax yield [-p PERIOD] [--format text|json] [--project SLUG]
+stax context-budget [--project DIR] [--global] [--format text|json]
 
 # Memory — the agent-facing namespace (stable JSON envelope; see "Memory Commands")
-stackunderflow memory decisions QUERY  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
-stackunderflow memory file PATH        [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
-stackunderflow memory worked ACTION    [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
-stackunderflow memory sessions [PATH]  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
-stackunderflow memory ask QUESTION     [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
-stackunderflow memory embed [--batch N]   # one-time embedding backfill for semantic recall (needs Ollama)
+stax memory decisions QUERY  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stax memory file PATH        [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stax memory worked ACTION    [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stax memory sessions [PATH]  [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stax memory ask QUESTION     [--project SLUG] [--since X] [--limit N] [--context-budget N] [--format text|json] [--json]
+stax memory embed [--batch N]   # one-time embedding backfill for semantic recall (needs Ollama)
 
 # Discovery — lower-level self-referential queries (the `memory` namespace wraps these)
-stackunderflow find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
-stackunderflow find-sessions-touching-file FILE [--limit N] [--mode read|write|any] [--format text|json] [--context-budget N]
-stackunderflow search-past-decisions QUERY [--project P] [--since X] [--limit N] [--use-embeddings] [--embed-model M] [--format text|json] [--context-budget N]
-stackunderflow find-sessions-where-action-worked ACTION [--project P] [--file F] [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
-stackunderflow find-failure-modes-for-file FILE [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
-stackunderflow risk file PATH [--since X] [--format text|json]
+stax find-sessions-in-path PATH [--since X] [--limit N] [--provider P] [--format text|json] [--context-budget N]
+stax find-sessions-touching-file FILE [--limit N] [--mode read|write|any] [--format text|json] [--context-budget N]
+stax search-past-decisions QUERY [--project P] [--since X] [--limit N] [--use-embeddings] [--embed-model M] [--format text|json] [--context-budget N]
+stax find-sessions-where-action-worked ACTION [--project P] [--file F] [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
+stax find-failure-modes-for-file FILE [--since X] [--limit N] [--min-confidence F] [-v] [--format text|json]
+stax risk file PATH [--since X] [--format text|json]
 
 # Auto-generated skills (mined from the local store — see docs/skills.md)
-stackunderflow skills generate [--project P] [--projects A,B] [--scope project|user] [--min-occurrences N] [--kind K] [--window W] [--out DIR] [--dry-run] [--format text|json]
-stackunderflow skills list [--scope project|user] [--out DIR] [--format text|json]
-stackunderflow skills clean [--scope project|user] [--out DIR] [--older-than X] [--dry-run] [--yes]
+stax skills generate [--project P] [--projects A,B] [--scope project|user] [--min-occurrences N] [--kind K] [--window W] [--out DIR] [--dry-run] [--format text|json]
+stax skills list [--scope project|user] [--out DIR] [--format text|json]
+stax skills clean [--scope project|user] [--out DIR] [--older-than X] [--dry-run] [--yes]
 
 # Recommendations (mined from the local store — read-only, never auto-applied)
-stackunderflow recommend skills [--project P] [--threshold N] [--window-days N] [--no-cache] [--format text|json]
-stackunderflow recommend mode --prompt TEXT [--current-model M] [--no-cache] [--format text|json]
+stax recommend skills [--project P] [--threshold N] [--window-days N] [--no-cache] [--format text|json]
+stax recommend mode --prompt TEXT [--current-model M] [--no-cache] [--format text|json]
 
 # Discovery citation-feedback telemetry
-stackunderflow discovery telemetry [--command C] [--session S] [--limit N] [--format text|json]
-stackunderflow discovery demote-uncited [--dry-run] [--min-loads N] [--min-age-days N] [--format text|json]
+stax discovery telemetry [--command C] [--session S] [--limit N] [--format text|json]
+stax discovery demote-uncited [--dry-run] [--min-loads N] [--min-age-days N] [--format text|json]
 
 # Config  (legacy: config show/set/unset still works as hidden aliases for cfg ls/set/rm)
-stackunderflow cfg ls [--json]
-stackunderflow cfg set KEY VALUE
-stackunderflow cfg rm KEY
-stackunderflow cfg model-alias set FROM TO
-stackunderflow cfg model-alias rm FROM
-stackunderflow cfg model-alias ls [--json]
+stax cfg ls [--json]
+stax cfg set KEY VALUE
+stax cfg rm KEY
+stax cfg model-alias set FROM TO
+stax cfg model-alias rm FROM
+stax cfg model-alias ls [--json]
 
 # Plan budgets
-stackunderflow plan show [--format text|json]
-stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]
-stackunderflow plan reset
-stackunderflow plan thresholds show [--format text|json]
-stackunderflow plan thresholds set N [N ...]
-stackunderflow plan thresholds reset
+stax plan show [--format text|json]
+stax plan set NAME [--monthly-usd N] [--reset-day D]
+stax plan reset
+stax plan thresholds show [--format text|json]
+stax plan thresholds set N [N ...]
+stax plan thresholds reset
 
 # ETL pipeline
-stackunderflow etl backfill [--force]
-stackunderflow etl status [--format text|json]
+stax etl backfill [--force]
+stax etl status [--format text|json]
 
 # Hooks (opt-in Claude Code lifecycle hooks — see docs/hooks.md)
-stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
-stackunderflow hooks uninstall [--scope project|user]
-stackunderflow hooks status    [--scope project|user] [--format text|json]
-stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
-stackunderflow hooks run <hook-id> [--capture-content]   # internal — invoked by Claude Code
+stax hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
+stax hooks uninstall [--scope project|user]
+stax hooks status    [--scope project|user] [--format text|json]
+stax hooks repair    [--scope project|user|all] [--dry-run]
+stax hooks run <hook-id> [--capture-content]   # internal — invoked by Claude Code
 
 # Agent-discovery guide snippet in CLAUDE.md / AGENTS.md (see docs/hooks.md)
-stackunderflow guide install   [--scope project|user] [--dry-run]
-stackunderflow guide uninstall [--scope project|user]
-stackunderflow guide status    [--scope project|user] [--format text|json]
+stax guide install   [--scope project|user] [--dry-run]
+stax guide uninstall [--scope project|user]
+stax guide status    [--scope project|user] [--format text|json]
 
 # Pricing health (read-only)
-stackunderflow pricing doctor [--format text|json] [--stale-days N] [--limit N] [--strict]
+stax pricing doctor [--format text|json] [--stale-days N] [--limit N] [--strict]
 
 # Static analysis + session grading
-stackunderflow analyze session SESSION_ID [--language python|typescript|go] [--format text|json]
-stackunderflow analyze backfill [--since X] [-N LIMIT] [--concurrency N] [--format text|json]
-stackunderflow analyze quality [SESSION_ID] [--all] [--force] [--format text|json]
+stax analyze session SESSION_ID [--language python|typescript|go] [--format text|json]
+stax analyze backfill [--since X] [-N LIMIT] [--concurrency N] [--format text|json]
+stax analyze quality [SESSION_ID] [--all] [--force] [--format text|json]
 
 # Backup
-stackunderflow backup create [--label TEXT] [--keep N]
-stackunderflow backup verify [--name NAME]
-stackunderflow backup list
-stackunderflow backup restore NAME [--dry-run]
-stackunderflow backup auto [--enable|--disable]
+stax backup create [--label TEXT] [--keep N]
+stax backup verify [--name NAME]
+stax backup list
+stax backup restore NAME [--dry-run]
+stax backup auto [--enable|--disable]
 
 # PR / CI ingest (opt-in — REST backfill + webhook receiver)
-stackunderflow ingest github --repo OWNER/REPO [--token T] [--state all|open|closed] [--max-pages N] [--no-ci] [--format text|json]
-stackunderflow ingest webhook serve [--port N] [--host H]
+stax ingest github --repo OWNER/REPO [--token T] [--state all|open|closed] [--max-pages N] [--no-ci] [--format text|json]
+stax ingest webhook serve [--port N] [--host H]
 ```
 
 ---
 
 ## Dashboard Commands
 
-### `stackunderflow start`
+### `stax start`
 
-Launch the StackUnderflow dashboard.
+Launch the staxtrace dashboard.
 
 ```
-Usage: stackunderflow start [OPTIONS]
+Usage: stax start [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -133,17 +133,17 @@ Usage: stackunderflow start [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow start
-  StackUnderflow is live at http://127.0.0.1:8081
+$ stax start
+  staxtrace is live at http://127.0.0.1:8081
   Ctrl+C to stop
 
-$ stackunderflow start -p 9000 --headless
-  StackUnderflow is live at http://127.0.0.1:9000
+$ stax start -p 9000 --headless
+  staxtrace is live at http://127.0.0.1:9000
   Ctrl+C to stop
 
-$ stackunderflow start --fresh
+$ stax start --fresh
   cache cleared: /Users/you/.stackunderflow/cache
-  StackUnderflow is live at http://127.0.0.1:8081
+  staxtrace is live at http://127.0.0.1:8081
   Ctrl+C to stop
 ```
 
@@ -167,23 +167,23 @@ race). Both print the same two-line banner as a normal start.
 > the marts. Pass `--no-watcher` (or set `STACKUNDERFLOW_DISABLE_WATCHER=1`)
 > to skip the spawn and rely on the periodic-ingest path instead.
 
-> **Restart after upgrades.** `stackunderflow start` is a long-lived
+> **Restart after upgrades.** `stax start` is a long-lived
 > process that loads the application code into memory once at boot.
 > New releases (`pip install -U stackunderflow`) and any locally
 > installed code changes only take effect after the server restarts —
-> stop with Ctrl+C and re-run `stackunderflow start`. Routes added in a
+> stop with Ctrl+C and re-run `stax start`. Routes added in a
 > new version will return `404` until then.
 
 ---
 
-### `stackunderflow init`
+### `stax init`
 
 Start the dashboard. A backward-compatible alias for `start` with
 slightly different flag names. With `--install-skills`, it also copies
 the three shipped Claude Code skills into place before the server boots.
 
 ```
-Usage: stackunderflow init [OPTIONS]
+Usage: stax init [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -205,10 +205,10 @@ is skipped with a warning unless `--skills-force` is set. See
 **Examples:**
 
 ```
-$ stackunderflow init
-$ stackunderflow init --port 9000 --no-browser
-$ stackunderflow init --clear-cache
-$ stackunderflow init --install-skills
+$ stax init
+$ stax init --port 9000 --no-browser
+$ stax init --clear-cache
+$ stax init --install-skills
   + installed skill: check-prior-work → /Users/you/.claude/skills/check-prior-work/SKILL.md
   + installed skill: find-related-sessions → /Users/you/.claude/skills/find-related-sessions/SKILL.md
   + installed skill: recall-past-decisions → /Users/you/.claude/skills/recall-past-decisions/SKILL.md
@@ -216,7 +216,7 @@ $ stackunderflow init --install-skills
 
 ---
 
-### `stackunderflow reindex`
+### `stax reindex`
 
 Re-ingest every registered adapter source into `~/.stackunderflow/store.db`,
 applying the current schema first. Ingest is incremental — each source
@@ -226,7 +226,7 @@ new release may add adapters or schema) or to force a catch-up when
 `start` and its watcher are not running.
 
 ```
-Usage: stackunderflow reindex [OPTIONS]
+Usage: stax reindex [OPTIONS]
 ```
 
 No options beyond `--help`.
@@ -234,7 +234,7 @@ No options beyond `--help`.
 **Example:**
 
 ```
-$ stackunderflow reindex
+$ stax reindex
 Reindexing into /Users/you/.stackunderflow/store.db
 Done: {'claude': 58203, 'codex': 1171, 'cursor': 1035, 'cline': 860}
 ```
@@ -244,7 +244,7 @@ pass (`run_ingest` returns a `{provider: messages_added}` dict).
 
 ---
 
-### `stackunderflow clear-cache`
+### `stax clear-cache`
 
 Wipe the on-disk Cursor parse cache (`~/.stackunderflow/cache/cursor-results.json`)
 and print guidance on clearing the rest. The Cursor parse cache is a
@@ -254,7 +254,7 @@ correct). The in-memory cache is always cleared on restart; pass `--fresh`
 to `start` to also wipe the broader disk cache.
 
 ```
-Usage: stackunderflow clear-cache [OPTIONS] [PROJECT]
+Usage: stax clear-cache [OPTIONS] [PROJECT]
 ```
 
 | Argument | Required | Description |
@@ -264,13 +264,13 @@ Usage: stackunderflow clear-cache [OPTIONS] [PROJECT]
 **Example:**
 
 ```
-$ stackunderflow clear-cache
+$ stax clear-cache
   cursor parse cache cleared.
   in-memory cache is cleared on restart.
-  use `stackunderflow start --fresh` to also wipe the disk cache.
+  use `stax start --fresh` to also wipe the disk cache.
 ```
 
-> To actually wipe the disk cache: `stackunderflow start --fresh`
+> To actually wipe the disk cache: `stax start --fresh`
 
 ---
 
@@ -282,7 +282,7 @@ The eight read-only data commands listed in this section
 (`status`, `today`, `month`, `report`, `compare`, `yield`,
 `optimize`, `export`) all read from the SQLite store at
 `~/.stackunderflow/store.db`. That store is normally kept fresh by
-the filesystem watcher that `stackunderflow start` spawns. When
+the filesystem watcher that `stax start` spawns. When
 `start` is not running, the store reflects whatever the last
 watcher snapshot wrote — which can be hours or days stale.
 
@@ -291,7 +291,7 @@ store before they run:
 
 | Flag | Default | Behaviour |
 |---|---|---|
-| `--ingest` | off | Force a fresh ingest + incremental backfill pass before the command's query. Use when `stackunderflow start` is not running and you need authoritative numbers right now. |
+| `--ingest` | off | Force a fresh ingest + incremental backfill pass before the command's query. Use when `stax start` is not running and you need authoritative numbers right now. |
 | `--auto-ingest / --no-auto-ingest` | `--auto-ingest` (on) | Refresh automatically when the store's newest event is older than 6 hours. A one-line `[stale data — ingesting...]` notice goes to stderr. Disable with `--no-auto-ingest` (e.g. inside scripts that don't want surprise latency). |
 
 `--ingest` overrides `--no-auto-ingest`: an explicit force always
@@ -299,7 +299,7 @@ runs the pass. The refresh runs **synchronously** in the CLI's
 lifetime — it blocks the command until the pass completes.
 
 The refresh path is identical to the one
-`stackunderflow start` runs at boot: enumerate every registered
+`stax start` runs at boot: enumerate every registered
 adapter, ingest new bytes via the per-file watermark, then call
 `backfill(conn, force=False)` to materialise any newly-inserted
 messages into `usage_events` and refresh the mart watermarks.
@@ -312,13 +312,13 @@ as already-ingested.
 
 ---
 
-### `stackunderflow status`
+### `stax status`
 
 Compact one-liner showing today's and this month's cost and message counts.
 Equivalent to running `today` and `month` together and condensing to a single line.
 
 ```
-Usage: stackunderflow status [OPTIONS]
+Usage: stax status [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -330,10 +330,10 @@ Usage: stackunderflow status [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow status
+$ stax status
 today: $34.61 (558 msg) | month: $558.65 (22681 msg)
 
-$ stackunderflow status --format json
+$ stax status --format json
 {
   "today": { ... },
   "month": { ... }
@@ -344,12 +344,12 @@ $ stackunderflow status --format json
 
 ---
 
-### `stackunderflow today`
+### `stax today`
 
 Today's usage broken down by project.
 
 ```
-Usage: stackunderflow today [OPTIONS]
+Usage: stax today [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -363,8 +363,8 @@ Usage: stackunderflow today [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow today
-StackUnderflow — today
+$ stax today
+staxtrace — today
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                       ┃   Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
@@ -373,17 +373,17 @@ StackUnderflow — today
 └───────────────────────────────────────────────┴────────┴──────────┴──────────┘
 Total: $18.16  241 messages  2 sessions
 
-$ stackunderflow today --project my-api --format json
+$ stax today --project my-api --format json
 ```
 
 ---
 
-### `stackunderflow month`
+### `stax month`
 
 This month's usage broken down by project.
 
 ```
-Usage: stackunderflow month [OPTIONS]
+Usage: stax month [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -397,27 +397,27 @@ Usage: stackunderflow month [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow month
-StackUnderflow — this month
+$ stax month
+staxtrace — this month
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                      ┃    Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ -Users-you-dev-StackUnderflow                │ $138.56 │    5,665 │       10 │
+│ -Users-you-dev-staxtrace                │ $138.56 │    5,665 │       10 │
 │ -Users-you-dev-my-api                        │  $91.91 │    2,939 │        3 │
 └──────────────────────────────────────────────┴─────────┴──────────┴──────────┘
 Total: $230.47  8,604 messages  13 sessions
 
-$ stackunderflow month --exclude StackUnderflow
+$ stax month --exclude staxtrace
 ```
 
 ---
 
-### `stackunderflow report`
+### `stax report`
 
 Dashboard-style summary over a configurable date range.
 
 ```
-Usage: stackunderflow report [OPTIONS]
+Usage: stax report [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -437,31 +437,31 @@ exits with code 1 and prints `Error: Unknown period '<value>'. Valid: today, 7da
 **Examples:**
 
 ```
-$ stackunderflow report
-StackUnderflow — last 7 days
+$ stax report
+staxtrace — last 7 days
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                      ┃    Cost ┃ Messages ┃ Sessions ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ -Users-you-dev-StackUnderflow                │ $138.56 │    5,665 │       10 │
+│ -Users-you-dev-staxtrace                │ $138.56 │    5,665 │       10 │
 │ -Users-you-dev-chimera                       │  $91.91 │    2,939 │        3 │
 └──────────────────────────────────────────────┴─────────┴──────────┴──────────┘
 Total: $453.88  14,782 messages  48 sessions
 
-$ stackunderflow report -p 30days --project StackUnderflow
-$ stackunderflow report -p all --format json
-$ stackunderflow report -p today --exclude sandbox
+$ stax report -p 30days --project staxtrace
+$ stax report -p all --format json
+$ stax report -p today --exclude sandbox
 ```
 
 ---
 
-### `stackunderflow export`
+### `stax export`
 
 Export aggregated, cross-project usage data to a file. Both `--format`
 and `--output` are required. Designed for spreadsheets, BI tools, and
 downstream automation.
 
 ```
-Usage: stackunderflow export [OPTIONS]
+Usage: stax export [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -500,15 +500,15 @@ place. Parent directories are created if missing.
 **Examples:**
 
 ```
-$ stackunderflow export --format csv --output ~/usage-week.csv --period week
+$ stax export --format csv --output ~/usage-week.csv --period week
   wrote /Users/you/usage-week.csv
 
-$ stackunderflow export -f json -o ~/usage-rollup.json
+$ stax export -f json -o ~/usage-rollup.json
   wrote /Users/you/usage-rollup.json
 
-$ stackunderflow export -f csv -o ~/claude-only.csv --provider claude --period month
+$ stax export -f csv -o ~/claude-only.csv --provider claude --period month
 
-$ stackunderflow export -f csv -o ~/big.csv -p all --exclude sandbox --force
+$ stax export -f csv -o ~/big.csv -p all --exclude sandbox --force
 
 $ jq '.last_30d.projects[] | select(.cost_usd > 10)' < ~/usage-rollup.json
 ```
@@ -519,7 +519,7 @@ matching query parameters (`format`, `period`, `provider`, `project`,
 
 ---
 
-### `stackunderflow optimize`
+### `stax optimize`
 
 Surface wasted spend in two blocks. **Q&A loops** lists projects where
 the assistant retried the same question repeatedly. **Structural
@@ -529,7 +529,7 @@ ghost agents, exploration-only sessions, files re-read excessively,
 cache thrash, and oversized bash output.
 
 ```
-Usage: stackunderflow optimize [OPTIONS]
+Usage: stax optimize [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -544,10 +544,10 @@ Usage: stackunderflow optimize [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow optimize --period 7days
+$ stax optimize --period 7days
 No waste or structural patterns found in last 7 days.
 
-$ stackunderflow optimize --period 30days
+$ stax optimize --period 30days
 Waste report — last 30 days
 
 Q&A loops:
@@ -561,7 +561,7 @@ Structural patterns:
       ~7,400 wasted tokens
       fix: Trim CLAUDE.md to the bare essentials — move long-form notes to project-local docs and reference them on demand.
 
-$ stackunderflow optimize --period all --format json
+$ stax optimize --period all --format json
 ```
 
 JSON output is `{"scope": "<label>", "waste": [...], "patterns": [...]}`.
@@ -572,12 +572,12 @@ that can't put a token figure on the waste.
 
 ---
 
-### `stackunderflow compare`
+### `stax compare`
 
 Side-by-side per-model comparison over a time window — answers "is it worth using Opus for this kind of work?" by surfacing one-shot rate, retry rate, cache hit rate, and unit economics ($/call, $/session) per model.
 
 ```
-Usage: stackunderflow compare [OPTIONS]
+Usage: stax compare [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -601,7 +601,7 @@ Usage: stackunderflow compare [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow compare
+$ stax compare
                               Compare — month
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┓
 ┃ Model                      ┃ Sessions ┃ Calls ┃ 1-shot% ┃ Retry ┃ Cache% ┃ $/call  ┃ $/session ┃ Total$ ┃
@@ -611,7 +611,7 @@ $ stackunderflow compare
 │ gpt-5                      │        4 │    18 │   75.0% │  3.50 │   0.0% │ $0.0040 │     $0.02 │  $0.07 │
 └────────────────────────────┴──────────┴───────┴─────────┴───────┴────────┴─────────┴───────────┴────────┘
 
-$ stackunderflow compare --period week --provider claude --format json
+$ stax compare --period week --provider claude --format json
 {
   "generated": 1746125443.117,
   "models": [
@@ -639,7 +639,7 @@ alphabetical. The same data is available via `GET /api/compare` — see
 
 ---
 
-### `stackunderflow yield`
+### `stax yield`
 
 Yield analysis — correlate AI sessions with the git commit history of their `cwd`.
 
@@ -660,7 +660,7 @@ classifies the result:
 > Sessions and commits don't have to share a topic to get matched up.
 
 ```
-Usage: stackunderflow yield [OPTIONS]
+Usage: stax yield [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -674,7 +674,7 @@ Usage: stackunderflow yield [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow yield -p week
+$ stax yield -p week
 Yield analysis — period: week
   productive:   13  ($724.77)
   reverted:      0  ($0.00)
@@ -690,7 +690,7 @@ Top sessions by cost:
 
   note: yield is correlated by time, not by content — a commit within 24h is credited to the session even if unrelated.
 
-$ stackunderflow yield -p month --format json
+$ stax yield -p month --format json
 ```
 
 The same data is available over HTTP at `GET /api/yield` with the matching
@@ -707,7 +707,7 @@ query parameters (`period`, `project`).
 
 ---
 
-### `stackunderflow context-budget`
+### `stax context-budget`
 
 Estimate the per-session "context tax" — the tokens every Claude Code
 turn pays before the user types: system prompt + registered MCP servers
@@ -715,7 +715,7 @@ turn pays before the user types: system prompt + registered MCP servers
 `CLAUDE.md`, global `~/.claude/CLAUDE.md`).
 
 ```
-Usage: stackunderflow context-budget [OPTIONS]
+Usage: stax context-budget [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -746,7 +746,7 @@ by the optimize report.
 **Examples:**
 
 ```
-$ stackunderflow context-budget
+$ stax context-budget
 Context budget (per-session estimate)
   heuristic: len(text) // 4; per-MCP-server 200 + 50/tool
 
@@ -762,8 +762,8 @@ Context budget (per-session estimate)
   cost per session: $0.0244
   estimated monthly cost: $2.44
 
-$ stackunderflow context-budget --global --format json
-$ stackunderflow context-budget --project ~/code/my-app
+$ stax context-budget --global --format json
+$ stax context-budget --project ~/code/my-app
 ```
 
 The same data is available over HTTP at `GET /api/context-budget` with
@@ -773,12 +773,12 @@ a `project=<slug>` query parameter (omit for the global budget).
 
 ## Config Commands
 
-### `stackunderflow cfg ls`
+### `stax cfg ls`
 
 Show all settings with their sources (`default`, `file`, or `env`).
 
 ```
-Usage: stackunderflow cfg ls [OPTIONS]
+Usage: stax cfg ls [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -792,7 +792,7 @@ The text table is sorted alphabetically; the JSON keeps declaration order.
 **Examples (fresh install — every key at its built-in default):**
 
 ```
-$ stackunderflow cfg ls
+$ stax cfg ls
 Settings:
   auto_browser                        True            [default]
   auto_reindex_on_ingest              True            [default]
@@ -810,7 +810,7 @@ Settings:
   plan_reset_day                      1               [default]
   port                                8081            [default]
 
-$ stackunderflow cfg ls --json
+$ stax cfg ls --json
 {
   "port": 8081,
   "host": "127.0.0.1",
@@ -834,16 +834,16 @@ $ stackunderflow cfg ls --json
 }
 ```
 
-> Legacy alias: `stackunderflow config show [--json]`
+> Legacy alias: `stax config show [--json]`
 
 ---
 
-### `stackunderflow cfg set`
+### `stax cfg set`
 
 Write a key-value pair to the config file (`~/.stackunderflow/config.json`).
 
 ```
-Usage: stackunderflow cfg set [OPTIONS] KEY VALUE
+Usage: stax cfg set [OPTIONS] KEY VALUE
 ```
 
 No options beyond `--help`.
@@ -851,13 +851,13 @@ No options beyond `--help`.
 **Examples:**
 
 ```
-$ stackunderflow cfg set port 9000
+$ stax cfg set port 9000
   port = 9000
 
-$ stackunderflow cfg set auto_browser false
+$ stax cfg set auto_browser false
   auto_browser = False
 
-$ stackunderflow cfg set log_level DEBUG
+$ stax cfg set log_level DEBUG
   log_level = DEBUG
 ```
 
@@ -869,16 +869,16 @@ exits with an error. Structured settings (`model_aliases`, the `plan_*` group)
 are rejected here — use their dedicated subcommands (`cfg model-alias`, `plan
 set`).
 
-> Legacy alias: `stackunderflow config set KEY VALUE`
+> Legacy alias: `stax config set KEY VALUE`
 
 ---
 
-### `stackunderflow cfg rm`
+### `stax cfg rm`
 
 Remove a key from the config file, reverting it to its built-in default.
 
 ```
-Usage: stackunderflow cfg rm [OPTIONS] KEY
+Usage: stax cfg rm [OPTIONS] KEY
 ```
 
 No options beyond `--help`.
@@ -886,18 +886,18 @@ No options beyond `--help`.
 **Examples:**
 
 ```
-$ stackunderflow cfg rm port
+$ stax cfg rm port
   port removed
 
-$ stackunderflow cfg rm auto_browser
+$ stax cfg rm auto_browser
   auto_browser removed
 ```
 
-> Legacy alias: `stackunderflow config unset KEY`
+> Legacy alias: `stax config unset KEY`
 
 ---
 
-### `stackunderflow cfg model-alias`
+### `stax cfg model-alias`
 
 Manage **model aliases** — a map from a proxy-rewritten model id to a
 canonical id our pricing tables know about. Use this when sessions go
@@ -913,9 +913,9 @@ spend on those sessions is silently misreported. Adding the alias
 dashboard shows the real number.
 
 ```
-Usage: stackunderflow cfg model-alias set FROM TO
-       stackunderflow cfg model-alias rm  FROM
-       stackunderflow cfg model-alias ls  [--json]
+Usage: stax cfg model-alias set FROM TO
+       stax cfg model-alias rm  FROM
+       stax cfg model-alias ls  [--json]
 ```
 
 | Argument | Required | Description |
@@ -936,31 +936,31 @@ falls through to the existing fallback behaviour rather than looping.
 **Examples:**
 
 ```
-$ stackunderflow cfg model-alias set openrouter/claude-opus claude-opus-4-6
+$ stax cfg model-alias set openrouter/claude-opus claude-opus-4-6
   openrouter/claude-opus -> claude-opus-4-6
 
-$ stackunderflow cfg model-alias set litellm/sonnet claude-sonnet-4-6
+$ stax cfg model-alias set litellm/sonnet claude-sonnet-4-6
   litellm/sonnet -> claude-sonnet-4-6
 
-$ stackunderflow cfg model-alias ls
+$ stax cfg model-alias ls
 Model aliases:
   litellm/sonnet           ->  claude-sonnet-4-6
   openrouter/claude-opus   ->  claude-opus-4-6
 
-$ stackunderflow cfg model-alias ls --json
+$ stax cfg model-alias ls --json
 {
   "litellm/sonnet": "claude-sonnet-4-6",
   "openrouter/claude-opus": "claude-opus-4-6"
 }
 
-$ stackunderflow cfg model-alias rm litellm/sonnet
+$ stax cfg model-alias rm litellm/sonnet
   litellm/sonnet removed
 ```
 
 **Worked end-to-end example.**
 
 ```
-$ stackunderflow cfg model-alias set my-proxy claude-opus-4-6
+$ stax cfg model-alias set my-proxy claude-opus-4-6
   my-proxy -> claude-opus-4-6
 
 $ python -c "from stackunderflow.infra.costs import compute_cost; \
@@ -997,16 +997,16 @@ running mean below that. Read it as a directional signal, not a forecast
 seasonality. The **Projection method** note under `plan show` covers the
 switch in detail.
 
-The cost rollup reuses the same engine as `stackunderflow month`
+The cost rollup reuses the same engine as `stax month`
 (`reports.aggregate.build_report`), so the `Used` number always matches
 what the dashboard's monthly spend shows.
 
-### `stackunderflow plan show`
+### `stax plan show`
 
 Print the active plan and current usage against budget.
 
 ```
-Usage: stackunderflow plan show [OPTIONS]
+Usage: stax plan show [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1016,7 +1016,7 @@ Usage: stackunderflow plan show [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow plan show
+$ stax plan show
 Plan:          claude-pro
 Budget:        $20.00 / month  (resets day 1)
 Period:        2026-05-01 → 2026-05-31  (day 12 of 31)
@@ -1027,7 +1027,7 @@ Days to limit: ~7 days at current burn
 Status:        ok
 Alert:         Crossed 50% of plan budget
 
-$ stackunderflow plan show --format json
+$ stax plan show --format json
 {
   "plan": {"name": "claude-pro", "monthly_usd": 20.0, "reset_day": 1},
   "usage": {
@@ -1057,8 +1057,8 @@ $ stackunderflow plan show --format json
 If no plan is set:
 
 ```
-$ stackunderflow plan show
-No plan set. Run: stackunderflow plan set claude-pro
+$ stax plan show
+No plan set. Run: stax plan set claude-pro
 ```
 
 The same payload is exposed over HTTP at `GET /api/plan`. With no plan
@@ -1073,21 +1073,21 @@ to `linear` (running mean over the period to date) and the response
 surfaces `projection_method: "linear"` so the cause is visible.
 
 **Alert thresholds.** Default to `50 / 75 / 90` percent of budget; override
-via `stackunderflow plan thresholds set N N N`. The CLI / route / UI
+via `stax plan thresholds set N N N`. The CLI / route / UI
 surface a banner when the most-severe threshold crossed bumps up; a
 separate "projected to overrun" banner supersedes the threshold notice
 when the forecast exceeds the budget before the period ends.
 
 ---
 
-### `stackunderflow plan set`
+### `stax plan set`
 
 Set the active plan. Preset names accept an optional `--monthly-usd` to
 override the listed amount (useful if you're grandfathered into an
 older price); `custom` requires `--monthly-usd`.
 
 ```
-Usage: stackunderflow plan set NAME [OPTIONS]
+Usage: stax plan set NAME [OPTIONS]
 ```
 
 | Argument | Required | Description |
@@ -1116,41 +1116,41 @@ Feb 28 (or 29 in leap years), then rolls back to 31 on March.
 **Examples:**
 
 ```
-$ stackunderflow plan set claude-pro
+$ stax plan set claude-pro
   plan = claude-pro  ($20.00/month, resets day 1)
 
-$ stackunderflow plan set claude-max --reset-day 15
+$ stax plan set claude-max --reset-day 15
   plan = claude-max  ($200.00/month, resets day 15)
 
-$ stackunderflow plan set custom --monthly-usd 75
+$ stax plan set custom --monthly-usd 75
   plan = custom  ($75.00/month, resets day 1)
 
-$ stackunderflow plan set claude-pro --monthly-usd 18
+$ stax plan set claude-pro --monthly-usd 18
   plan = claude-pro  ($18.00/month, resets day 1)   # grandfathered price
 ```
 
 ---
 
-### `stackunderflow plan reset`
+### `stax plan reset`
 
 Clear the active plan. Afterwards `plan show` prints `No plan set. Run:
-stackunderflow plan set claude-pro`, and `plan show --format json`
+stax plan set claude-pro`, and `plan show --format json`
 returns `{"plan": null, "usage": null}`.
 
 ```
-Usage: stackunderflow plan reset
+Usage: stax plan reset
 ```
 
 **Example:**
 
 ```
-$ stackunderflow plan reset
+$ stax plan reset
   plan cleared
 ```
 
 ---
 
-### `stackunderflow plan thresholds {show, set, reset}`
+### `stax plan thresholds {show, set, reset}`
 
 Manage the burn-projector alert thresholds — the percentages of the plan
 budget at which the CLI / `/api/plan` / UI surface a banner. Defaults to
@@ -1159,7 +1159,7 @@ and managed exclusively through this subcommand — `cfg set` rejects the
 key with a hint pointing here.
 
 ```
-Usage: stackunderflow plan thresholds {show, set, reset}
+Usage: stax plan thresholds {show, set, reset}
 ```
 
 | Subcommand | Args | Description |
@@ -1171,16 +1171,16 @@ Usage: stackunderflow plan thresholds {show, set, reset}
 **Examples:**
 
 ```
-$ stackunderflow plan thresholds show
+$ stax plan thresholds show
   thresholds = 50%, 75%, 90%
 
-$ stackunderflow plan thresholds set 60 80 95
+$ stax plan thresholds set 60 80 95
   thresholds = 60%, 80%, 95%
 
-$ stackunderflow plan thresholds set 90 50 50 75
+$ stax plan thresholds set 90 50 50 75
   thresholds = 50%, 75%, 90%   # deduped + sorted
 
-$ stackunderflow plan thresholds reset
+$ stax plan thresholds reset
   thresholds = 50%, 75%, 90%  (default)
 ```
 
@@ -1195,7 +1195,7 @@ eight indexed marts (`daily_mart`, `session_mart`, `project_mart`,
 commands let you do a one-shot backfill and check pipeline health from the command
 line.
 
-### `stackunderflow etl backfill`
+### `stax etl backfill`
 
 Convert all existing `messages` rows into `usage_events`, then refresh
 every mart from the new watermark. The default run is incremental:
@@ -1204,7 +1204,7 @@ messages already converted on a prior run are skipped via the
 is shown; otherwise the orchestrator logs a line every 10K events.
 
 ```
-Usage: stackunderflow etl backfill [OPTIONS]
+Usage: stax etl backfill [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1214,7 +1214,7 @@ Usage: stackunderflow etl backfill [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow etl backfill
+$ stax etl backfill
 
 Backfill complete.
   events inserted:            247,278
@@ -1234,7 +1234,7 @@ Backfill complete.
 All eight marts appear here because `backfill` refreshes every
 registered mart. `etl status` (below) reports only five of them.
 
-### `stackunderflow etl status`
+### `stax etl status`
 
 One-line health check for the ETL pipeline: watcher state, mart watermarks vs
 the max event id, per-provider event counts, and an overall `health` enum
@@ -1242,7 +1242,7 @@ the max event id, per-provider event counts, and an overall `health` enum
 Reads the store directly, so it works without a running server.
 
 ```
-Usage: stackunderflow etl status [OPTIONS]
+Usage: stax etl status [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1263,7 +1263,7 @@ slot is retained, regardless of mart lag.
 **Example:**
 
 ```
-$ stackunderflow etl status
+$ stax etl status
 ETL pipeline — live (last refresh 7s ago)
 
   Events:        228,311 total (228,311 max id)
@@ -1297,7 +1297,7 @@ so keys are alphabetical and every nested object is fully expanded; the
 inner objects are shown compact here only to keep the example short.
 
 ```
-$ stackunderflow etl status --format json
+$ stax etl status --format json
 {
   "current_job": null,
   "events": {
@@ -1340,7 +1340,7 @@ daemon thread that lives in another process.
 
 ## Pricing Commands
 
-### `stackunderflow pricing doctor`
+### `stax pricing doctor`
 
 Read-only pricing-health report: unpriced models, stale rate overlay, and
 `cost_source='unknown'` rows carrying a nonzero cost. Reads the live store
@@ -1349,7 +1349,7 @@ Read-only pricing-health report: unpriced models, stale rate overlay, and
 disagree. Works without a running server; no DB writes, no network.
 
 ```
-Usage: stackunderflow pricing doctor [OPTIONS]
+Usage: stax pricing doctor [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1367,7 +1367,7 @@ surfaced as warnings, not failures.
 
 ## Memory Commands
 
-`stackunderflow memory` is the agent-facing namespace — the single set of
+`stax memory` is the agent-facing namespace — the single set of
 commands a coding agent learns to ask the local store *"have I decided this
 before, what broke on this file, what worked last time"*. Each query
 subcommand wraps an existing discovery query (see
@@ -1385,13 +1385,13 @@ Every `memory` query subcommand (`decisions`, `file`, `worked`, `sessions`,
 |---|---|---|
 | `--format text\|json` | `text` | `text` for humans, `json` for agents |
 | `--json` | — | Shortcut for `--format json` |
-| `--project SLUG` | cwd → slug | Scope to one project. Default: the current directory's project when StackUnderflow recognises it, otherwise all projects |
+| `--project SLUG` | cwd → slug | Scope to one project. Default: the current directory's project when staxtrace recognises it, otherwise all projects |
 | `--since X` | (all time) | Time lower bound — `7d` / `1w` / `1m` / `24h` or an ISO date/datetime |
 | `--limit N` | `20` | Hard cap on the number of results |
 | `--context-budget N` | env or `2000` | Token budget — results are ranked and packed greedily until ~N estimated tokens are used; `0` disables |
 
 `--project` defaulting to the current directory is what makes these ergonomic
-inside a repo: `stackunderflow memory file src/foo.py` Just Works without
+inside a repo: `stax memory file src/foo.py` Just Works without
 naming the project.
 
 ### The JSON envelope (`--format json`)
@@ -1430,24 +1430,24 @@ means stdout is an `{"error": "..."}` envelope instead. `memory file` adds a
 `risk` block alongside the eight core fields; `memory ask` adds a `note` and a
 `vector_used` flag.
 
-### `stackunderflow memory decisions`
+### `stax memory decisions`
 
 "Did I decide something about this before?" — substring-searches `QUERY`
 across past message content, newest first, each result with a snippet. Wraps
 `search_past_decisions`.
 
 ```
-Usage: stackunderflow memory decisions [OPTIONS] QUERY
+Usage: stax memory decisions [OPTIONS] QUERY
 ```
 
 **Example:**
 
 ```
-$ stackunderflow memory decisions "watcher flag"
+$ stax memory decisions "watcher flag"
 Past decisions matching 'watcher flag'  (2 session(s))
   ...
 
-$ stackunderflow memory decisions "retry logic" --json
+$ stax memory decisions "retry logic" --json
 {
   "schema": "stackunderflow.memory/1",
   "command": "decisions",
@@ -1455,7 +1455,7 @@ $ stackunderflow memory decisions "retry logic" --json
 }
 ```
 
-### `stackunderflow memory file`
+### `stax memory file`
 
 "What do I know about this file?" — merges three file-scoped discovery calls
 into one report: known failure modes, every session that touched the file, and
@@ -1463,7 +1463,7 @@ a risk summary. `PATH` is resolved against the current directory. Wraps
 `find_failure_modes_for_file` + `find_sessions_touching_file` + `risk file`.
 
 ```
-Usage: stackunderflow memory file [OPTIONS] PATH
+Usage: stax memory file [OPTIONS] PATH
 ```
 
 Each `results[]` row carries a `kind` of `"failure_mode"` or `"touched"`; the
@@ -1472,20 +1472,20 @@ envelope's extra `risk` block carries `total_sessions`, `reverted`, `failed`,
 portions — the touching-sessions query has no time bound.
 
 ```
-$ stackunderflow memory file stackunderflow/routes/cost.py --json
+$ stax memory file stackunderflow/routes/cost.py --json
 ```
 
-### `stackunderflow memory worked`
+### `stax memory worked`
 
 "What worked last time I tried this?" — sessions where `ACTION` was performed
 and the next user turn confirmed success. Wraps
 `find_sessions_where_action_worked`.
 
 ```
-Usage: stackunderflow memory worked [OPTIONS] ACTION
+Usage: stax memory worked [OPTIONS] ACTION
 ```
 
-### `stackunderflow memory sessions`
+### `stax memory sessions`
 
 "Which past sessions ran here?" — with no `PATH`, lists sessions for the current
 directory's project; give a directory to scope to that tree, or a file to list
@@ -1494,10 +1494,10 @@ only the sessions that touched it. An explicit `--project SLUG` overrides
 form has no time bound, so `--since` applies to the path form only.
 
 ```
-Usage: stackunderflow memory sessions [OPTIONS] [PATH]
+Usage: stax memory sessions [OPTIONS] [PATH]
 ```
 
-### `stackunderflow memory ask`
+### `stax memory ask`
 
 A natural-language question of the local store. `ask` runs a **hybrid**
 retrieval: a keyword search over past decisions fused (reciprocal-rank fusion)
@@ -1513,10 +1513,10 @@ which retrieval ran) and `vector_used` (`true` when the vector half
 participated).
 
 ```
-Usage: stackunderflow memory ask [OPTIONS] QUESTION
+Usage: stax memory ask [OPTIONS] QUESTION
 ```
 
-### `stackunderflow memory embed`
+### `stax memory embed`
 
 One-time backfill of vector embeddings for messages already in the search
 index. Ingest embeds *new* messages as they arrive; `memory embed` covers
@@ -1524,7 +1524,7 @@ everything indexed before embeddings existed, so semantic recall (`memory
 ask`, `search-past-decisions --use-embeddings`) works over your whole history.
 
 ```
-Usage: stackunderflow memory embed [OPTIONS]
+Usage: stax memory embed [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1535,13 +1535,13 @@ Needs a reachable Ollama: a configured endpoint (`STACKUNDERFLOW_OLLAMA_URL`,
 with `STACKUNDERFLOW_OLLAMA_API_KEY` as a bearer token for hosted Ollama) is
 tried first, then a local daemon at `localhost:11434`. With neither, the
 command explains how to enable one and exits `1`. It also exits `1` when no
-search index exists yet (run `stackunderflow start` once to build it). The
+search index exists yet (run `stax start` once to build it). The
 embed model defaults to `nomic-embed-text` (`ollama pull nomic-embed-text`);
 override with `STACKUNDERFLOW_EMBED_MODEL`. Vectors land in
 `~/.stackunderflow/embeddings.db`, keyed by search-index message id.
 
 ```
-$ stackunderflow memory embed
+$ stax memory embed
 Embedding via http://localhost:11434 …
   … 512 embedded
   … 1024 embedded
@@ -1579,14 +1579,14 @@ calling them doesn't get an unprioritised dump into a tight context window.
 | Text output | when rows were dropped, a tail marker reports how many more matched |
 | JSON output | always carries `_budget_used_tokens` / `_budget_max_tokens`; adds `_truncated: true` + `_more_available: <count>` when rows were dropped |
 
-### `stackunderflow find-sessions-in-path`
+### `stax find-sessions-in-path`
 
 List sessions whose project root is `PATH` or any ancestor of `PATH` (ancestor-only
 — projects rooted *below* `PATH` don't match). Useful when an agent is working in
 `/a/b/c` and wants to know what's happened in the project rooted at `/a/b`.
 
 ```
-Usage: stackunderflow find-sessions-in-path [OPTIONS] PATH
+Usage: stax find-sessions-in-path [OPTIONS] PATH
 ```
 
 | Option | Type | Default | Description |
@@ -1600,23 +1600,23 @@ Usage: stackunderflow find-sessions-in-path [OPTIONS] PATH
 **Example:**
 
 ```
-$ stackunderflow find-sessions-in-path "$(pwd)" --since 30d --limit 5
+$ stax find-sessions-in-path "$(pwd)" --since 30d --limit 5
 Sessions in path /Users/you/dev/my-app  (3 session(s))
 
   [claude] abc123def456…  2026-05-10T14:22:01  msgs=128  $1.4210
       -Users-you-dev-my-app  /Users/you/dev/my-app
   ...
 
-$ stackunderflow find-sessions-in-path . --format json --limit 5 --context-budget 1500
+$ stax find-sessions-in-path . --format json --limit 5 --context-budget 1500
 ```
 
-### `stackunderflow find-sessions-touching-file`
+### `stax find-sessions-touching-file`
 
 List sessions where `FILE` shows up in tool calls (Read / Edit / Write /
 MultiEdit / NotebookEdit, Bash redirects, …) or message text.
 
 ```
-Usage: stackunderflow find-sessions-touching-file [OPTIONS] FILE
+Usage: stax find-sessions-touching-file [OPTIONS] FILE
 ```
 
 | Option | Type | Default | Description |
@@ -1629,20 +1629,20 @@ Usage: stackunderflow find-sessions-touching-file [OPTIONS] FILE
 **Example:**
 
 ```
-$ stackunderflow find-sessions-touching-file stackunderflow/store/queries.py --mode write
+$ stax find-sessions-touching-file stackunderflow/store/queries.py --mode write
 Sessions touching stackunderflow/store/queries.py  (mode=write)  (2 session(s))
   ...
 
-$ stackunderflow find-sessions-touching-file ~/code/app/main.py --format json --limit 5
+$ stax find-sessions-touching-file ~/code/app/main.py --format json --limit 5
 ```
 
-### `stackunderflow search-past-decisions`
+### `stax search-past-decisions`
 
 Substring-search `QUERY` across past message content (and tool-call arguments);
 return matching sessions, each with a short snippet for context.
 
 ```
-Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
+Usage: stax search-past-decisions [OPTIONS] QUERY
 ```
 
 | Option | Type | Default | Description |
@@ -1658,14 +1658,14 @@ Usage: stackunderflow search-past-decisions [OPTIONS] QUERY
 **Example:**
 
 ```
-$ stackunderflow search-past-decisions "watchfiles inotify" --limit 10
+$ stax search-past-decisions "watchfiles inotify" --limit 10
 Past decisions matching 'watchfiles inotify'  (1 session(s))
 
   [claude] def456abc789…  2026-04-25T09:11:33  msgs=64  $0.8800
       -Users-you-dev-app  /Users/you/dev/app
       … "watchfiles is Rust-backed and cross-platform; raw inotify would mean a separate macOS path…"
 
-$ stackunderflow search-past-decisions "auth middleware" --project -Users-you-dev-api --format json
+$ stax search-past-decisions "auth middleware" --project -Users-you-dev-api --format json
 ```
 
 **Semantic search (opt-in).** Plain substring matching misses phrases that
@@ -1685,7 +1685,7 @@ on the fly per query. When no Ollama answers, the re-rank silently degrades
 to substring ordering — there is no extra dependency to install.
 
 ```
-$ stackunderflow search-past-decisions "watcher behind a flag" --use-embeddings
+$ stax search-past-decisions "watcher behind a flag" --use-embeddings
 Past decisions matching 'watcher behind a flag'  (2 session(s))
 
   [claude] def456abc789…  2026-04-25T09:11:33  msgs=64  $0.8800  cos=0.87
@@ -1697,7 +1697,7 @@ Past decisions matching 'watcher behind a flag'  (2 session(s))
       … "the file watcher behind the etl service occasionally drops events…"
 ```
 
-### `stackunderflow find-sessions-where-action-worked`
+### `stax find-sessions-where-action-worked`
 
 List sessions where `ACTION` was performed *and the next user turn confirmed it
 worked* (an explicit "thanks"/"that worked", or no revert and no complaint before
@@ -1707,7 +1707,7 @@ or a phrase (`add caching`). The positive-signal counterpart to
 `find-failure-modes-for-file`. Not budget-aware — `--limit` is the only cap.
 
 ```
-Usage: stackunderflow find-sessions-where-action-worked [OPTIONS] ACTION
+Usage: stax find-sessions-where-action-worked [OPTIONS] ACTION
 ```
 
 | Option | Type | Default | Description |
@@ -1728,7 +1728,7 @@ shows the confidence score.
 **Example:**
 
 ```
-$ stackunderflow find-sessions-where-action-worked "add caching" --file stackunderflow/infra/cache.py
+$ stax find-sessions-where-action-worked "add caching" --file stackunderflow/infra/cache.py
 Sessions where 'add caching' worked  (1 session(s))
 
   [claude] aaa111bbb222…  2026-05-08T16:40:02  msgs=92  $1.1000
@@ -1736,7 +1736,7 @@ Sessions where 'add caching' worked  (1 session(s))
       → worked: user replied "perfect, that's exactly it" two turns later
 ```
 
-### `stackunderflow find-failure-modes-for-file`
+### `stax find-failure-modes-for-file`
 
 List sessions where editing `FILE` led to a follow-up correction — the user
 reporting it broke, the agent reverting it (`git revert` / `git reset --hard` /
@@ -1745,7 +1745,7 @@ The negative-signal counterpart to `find-sessions-where-action-worked`. Not
 budget-aware.
 
 ```
-Usage: stackunderflow find-failure-modes-for-file [OPTIONS] FILE
+Usage: stax find-failure-modes-for-file [OPTIONS] FILE
 ```
 
 | Option | Type | Default | Description |
@@ -1762,7 +1762,7 @@ Each result carries `outcome` (`"failed"` or `"reverted"`), `outcome_evidence`,
 **Example:**
 
 ```
-$ stackunderflow find-failure-modes-for-file stackunderflow/routes/cost.py --since 90d
+$ stax find-failure-modes-for-file stackunderflow/routes/cost.py --since 90d
 Failure modes for stackunderflow/routes/cost.py  (1 session(s))
 
   [claude] ccc333ddd444…  2026-04-29T11:02:55  msgs=140  $2.0100
@@ -1774,7 +1774,7 @@ Failure modes for stackunderflow/routes/cost.py  (1 session(s))
 
 ## Risk Command
 
-### `stackunderflow risk file`
+### `stax risk file`
 
 Risk summary for a file before you edit it: how many distinct past
 sessions that touched it ended `reverted`, `failed`, or `worked`. A
@@ -1782,10 +1782,10 @@ read-only aggregator over the same outcome heuristic that powers
 `find-failure-modes-for-file` — no extra schema, the counts are computed
 from `messages` / `sessions` rows on each call. Also surfaced, merged with
 failure modes and touching sessions, by
-[`stackunderflow memory file`](#stackunderflow-memory-file).
+[`stax memory file`](#stackunderflow-memory-file).
 
 ```
-Usage: stackunderflow risk file [OPTIONS] PATH
+Usage: stax risk file [OPTIONS] PATH
 ```
 
 | Argument | Required | Description |
@@ -1804,7 +1804,7 @@ sessions (`reverted` ∪ `failed`) for the file — read them with
 **Example:**
 
 ```
-$ stackunderflow risk file stackunderflow/routes/cost.py --since 90d
+$ stax risk file stackunderflow/routes/cost.py --since 90d
 File risk for /Users/you/dev/app/stackunderflow/routes/cost.py
   since: 90d
 
@@ -1839,10 +1839,10 @@ explicit `--project`/`--projects` allowlist. Generated skills land under
 never into the package, never released. Idempotent (`.bak` written before any
 overwrite); never clobbers a hand-authored skill.
 
-### `stackunderflow skills generate`
+### `stax skills generate`
 
 ```
-Usage: stackunderflow skills generate [OPTIONS]
+Usage: stax skills generate [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1860,22 +1860,22 @@ Usage: stackunderflow skills generate [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow skills generate
+$ stax skills generate
 Generated 2 skill(s) under /Users/you/dev/app/.claude/skills:
   [created] auto-canonical-test-command  (.../auto-canonical-test-command/SKILL.md)
   [updated] auto-never-touches-store-db  (.../auto-never-touches-store-db/SKILL.md)
     · auto-canonical-test-command: canonical-test-command, 14 sessions
     · auto-never-touches-store-db: never-touches-paths, 9 sessions
 
-$ stackunderflow skills generate --dry-run --format json
-$ stackunderflow skills generate --project -Users-you-dev-foo --min-occurrences 8 --window 60d
-$ stackunderflow skills generate --scope user --projects app,api,infra
+$ stax skills generate --dry-run --format json
+$ stax skills generate --project -Users-you-dev-foo --min-occurrences 8 --window 60d
+$ stax skills generate --scope user --projects app,api,infra
 ```
 
-### `stackunderflow skills list`
+### `stax skills list`
 
 ```
-Usage: stackunderflow skills list [OPTIONS]
+Usage: stax skills list [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1887,10 +1887,10 @@ Usage: stackunderflow skills list [OPTIONS]
 Lists only the auto-generated skills (directory prefix `auto-`, frontmatter
 `auto_generated: true`).
 
-### `stackunderflow skills clean`
+### `stax skills clean`
 
 ```
-Usage: stackunderflow skills clean [OPTIONS]
+Usage: stax skills clean [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1905,8 +1905,8 @@ Only ever removes `auto-*` directories marked `auto_generated: true` — never a
 hand-authored skill. Without `--yes` it prints the would-be deletions and exits.
 
 ```
-$ stackunderflow skills clean --older-than 30d        # preview
-$ stackunderflow skills clean --older-than 30d --yes  # delete
+$ stax skills clean --older-than 30d        # preview
+$ stax skills clean --older-than 30d --yes  # delete
 ```
 
 ---
@@ -1917,7 +1917,7 @@ Proactive suggestions mined from your local session store. Both
 subcommands are read-only — they never write a file or change a setting;
 acting on a recommendation is always a separate, explicit step.
 
-### `stackunderflow recommend skills`
+### `stax recommend skills`
 
 List workflow patterns you've re-run by hand often enough to be worth a
 skill and don't already have one for. Reads `messages` plus the skills
@@ -1925,7 +1925,7 @@ already on disk; each row carries an `accept_command` you can paste to
 generate that skill. The proactive counterpart to `skills generate`.
 
 ```
-Usage: stackunderflow recommend skills [OPTIONS]
+Usage: stax recommend skills [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1939,14 +1939,14 @@ Usage: stackunderflow recommend skills [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow recommend skills
+$ stax recommend skills
 Found 2 skill recommendation(s) for -Users-you-dev-app:
   • run-pytest-after-edit  [always-runs-X-after-Y]  occurrences=18
       You ran `pytest` right after editing a source file in 18 sessions.
-      accept: stackunderflow skills generate --project -Users-you-dev-app --pattern always_runs_pytest_after_edit
+      accept: stax skills generate --project -Users-you-dev-app --pattern always_runs_pytest_after_edit
   • avoid-pkill  [avoids-X]  occurrences=7
       You consistently steered away from `pkill` across 7 sessions.
-      accept: stackunderflow skills generate --project -Users-you-dev-app --pattern avoids_pkill
+      accept: stax skills generate --project -Users-you-dev-app --pattern avoids_pkill
 ```
 
 The `--pattern` selector in each `accept` command is forward-compatible —
@@ -1955,7 +1955,7 @@ today means re-running `skills generate` for the whole project. If the
 current directory can't be mapped to a project, the command exits with a
 usage error; pass `--project` explicitly.
 
-### `stackunderflow recommend mode`
+### `stax recommend mode`
 
 Pattern-match a task prompt against your own past sessions and suggest
 the cheapest model whose similar sessions had the lowest cost. Heuristic
@@ -1964,7 +1964,7 @@ of `0.00` means there isn't enough similar history to have an opinion.
 Nothing leaves the machine.
 
 ```
-Usage: stackunderflow recommend mode [OPTIONS]
+Usage: stax recommend mode [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -1977,7 +1977,7 @@ Usage: stackunderflow recommend mode [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow recommend mode --prompt "rename a local variable" --current-model claude-opus-4-6
+$ stax recommend mode --prompt "rename a local variable" --current-model claude-opus-4-6
 Recommended model:  claude-sonnet-4-6
 Current model:      claude-opus-4-6
 Confidence:         0.82
@@ -1999,13 +1999,13 @@ is local-only (session ids + counters, no transcript content) and the passive
 recording is gated behind `STACKUNDERFLOW_DISCOVERY_TELEMETRY` (default on; set to
 `0` to disable).
 
-### `stackunderflow discovery telemetry`
+### `stax discovery telemetry`
 
 Show the telemetry table: loaded/cited counters + cite-rate per session, sorted
 most-recently-surfaced first.
 
 ```
-Usage: stackunderflow discovery telemetry [OPTIONS]
+Usage: stax discovery telemetry [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2015,14 +2015,14 @@ Usage: stackunderflow discovery telemetry [OPTIONS]
 | `--limit` | INTEGER | `50` | Max rows to show; ≤ 0 means no limit |
 | `--format` | `text\|json` | text | Output format |
 
-### `stackunderflow discovery demote-uncited`
+### `stax discovery demote-uncited`
 
 Flag sessions surfaced N+ times over M+ days that were never cited. Demoted
 sessions drop out of default discovery ranking (their cite-rate term is zeroed)
 but stay reachable via direct lookup.
 
 ```
-Usage: stackunderflow discovery demote-uncited [OPTIONS]
+Usage: stax discovery demote-uncited [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2043,14 +2043,14 @@ LLM-graded session quality. Optional dependencies: `pip install
 `eslint` / `go` / `gocyclo` must be on `PATH` for TypeScript and Go. A
 missing tool produces a warning for that language and skips cleanly.
 
-### `stackunderflow analyze session`
+### `stax analyze session`
 
 Run the analyzers on every file `SESSION_ID` touched and persist findings to
 the `static_analysis_findings` table. Idempotent — re-running overwrites
 prior rows for the same (session, file, metric).
 
 ```
-Usage: stackunderflow analyze session [OPTIONS] SESSION_ID
+Usage: stax analyze session [OPTIONS] SESSION_ID
 ```
 
 | Option | Type | Default | Description |
@@ -2058,13 +2058,13 @@ Usage: stackunderflow analyze session [OPTIONS] SESSION_ID
 | `--language` | `python\|typescript\|go` | (all) | Restrict to these languages (repeatable) |
 | `--format` | `text\|json` | `text` | Output format |
 
-### `stackunderflow analyze backfill`
+### `stax analyze backfill`
 
 Analyze every recent session that has no `static_analysis_findings` rows
 yet. Idempotent — already-analyzed sessions are skipped.
 
 ```
-Usage: stackunderflow analyze backfill [OPTIONS]
+Usage: stax analyze backfill [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2074,7 +2074,7 @@ Usage: stackunderflow analyze backfill [OPTIONS]
 | `--concurrency` | INTEGER (1–16) | min(4, cpu_count) | Worker count |
 | `--format` | `text\|json` | `text` | Output format |
 
-### `stackunderflow analyze quality`
+### `stax analyze quality`
 
 Grade a session's quality (goal clarity, execution efficiency, success)
 with a local Ollama model; results are cached in
@@ -2082,7 +2082,7 @@ with a local Ollama model; results are cached in
 ungraded session.
 
 ```
-Usage: stackunderflow analyze quality [OPTIONS] [SESSION_ID]
+Usage: stax analyze quality [OPTIONS] [SESSION_ID]
 ```
 
 | Option | Type | Default | Description |
@@ -2102,7 +2102,7 @@ Long-form discussion of the snapshot directory layout, the rsync
 launchd auto-backup integration lives in
 [docs/backup.md](backup.md).
 
-### `stackunderflow backup create`
+### `stax backup create`
 
 Create an incremental backup of all `~/.claude/` data. Backs up sessions, file history,
 plans, tasks, todos, settings, shell snapshots, and prompt history. Excludes debug logs
@@ -2110,7 +2110,7 @@ and plugin binaries to save space. Uses hard links for efficiency — unchanged 
 zero additional disk space.
 
 ```
-Usage: stackunderflow backup create [OPTIONS]
+Usage: stax backup create [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2124,12 +2124,12 @@ Backups are stored in `~/.stackunderflow/backups/` as timestamped directories
 **Examples:**
 
 ```
-$ stackunderflow backup create
+$ stax backup create
   Backing up ~/.claude → /Users/you/.stackunderflow/backups/20260419-143209
   (excluding: debug, plugins, cache, statsig...)
   Done: 2884 files (1102 JSONL), 3216.6 MB
 
-$ stackunderflow backup create --label pre-upgrade --keep 5
+$ stax backup create --label pre-upgrade --keep 5
   Backing up ~/.claude → /Users/you/.stackunderflow/backups/20260419-143209-pre-upgrade
   (excluding: debug, plugins, cache, statsig...)
   Done: 2884 files (1102 JSONL), 3216.6 MB
@@ -2137,7 +2137,7 @@ $ stackunderflow backup create --label pre-upgrade --keep 5
 
 ---
 
-### `stackunderflow backup verify`
+### `stax backup verify`
 
 Verify a backup contains every artifact needed for a full restore —
 `store.db` plus the search / Q&A / tags sidecars. The SQLite store alone is
@@ -2147,7 +2147,7 @@ non-zero when the backup is missing or incomplete, so wrapper scripts can
 detect it.
 
 ```
-Usage: stackunderflow backup verify [OPTIONS]
+Usage: stax backup verify [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2157,7 +2157,7 @@ Usage: stackunderflow backup verify [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow backup verify
+$ stax backup verify
   Verifying 20260419-143209-pre-upgrade
     store.db         ok
     search_index.db  ok
@@ -2168,12 +2168,12 @@ $ stackunderflow backup verify
 
 ---
 
-### `stackunderflow backup list`
+### `stax backup list`
 
 List all existing backups with their file counts and sizes.
 
 ```
-Usage: stackunderflow backup list [OPTIONS]
+Usage: stax backup list [OPTIONS]
 ```
 
 No options beyond `--help`.
@@ -2181,7 +2181,7 @@ No options beyond `--help`.
 **Example:**
 
 ```
-$ stackunderflow backup list
+$ stax backup list
   7 backup(s) in /Users/you/.stackunderflow/backups
 
   20260409-153720-full                      (2743 files, 3018.2 MB)
@@ -2192,12 +2192,12 @@ $ stackunderflow backup list
 
 ---
 
-### `stackunderflow backup restore`
+### `stax backup restore`
 
 Restore `~/.claude/` from a named backup. Prompts for confirmation before overwriting.
 
 ```
-Usage: stackunderflow backup restore [OPTIONS] NAME
+Usage: stax backup restore [OPTIONS] NAME
 ```
 
 | Argument | Required | Description |
@@ -2211,11 +2211,11 @@ Usage: stackunderflow backup restore [OPTIONS] NAME
 **Examples:**
 
 ```
-$ stackunderflow backup restore 20260409-153720-full --dry-run
+$ stax backup restore 20260409-153720-full --dry-run
   Would restore 2743 files from /Users/you/.stackunderflow/backups/20260409-153720-full
   → /Users/you/.claude
 
-$ stackunderflow backup restore 20260409-153720-full
+$ stax backup restore 20260409-153720-full
   This will overwrite files in /Users/you/.claude. Continue? [y/N]: y
   Restoring 2743 files from ... → /Users/you/.claude
   Restore complete.
@@ -2223,14 +2223,14 @@ $ stackunderflow backup restore 20260409-153720-full
 
 ---
 
-### `stackunderflow backup auto`
+### `stax backup auto`
 
 Set up or remove daily automatic backups. On macOS, installs a launchd plist
 (`~/Library/LaunchAgents/com.stackunderflow.backup.plist`) that runs at 3:00 AM.
 On Linux, prints the cron line to add manually via `crontab -e`.
 
 ```
-Usage: stackunderflow backup auto [OPTIONS]
+Usage: stax backup auto [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2240,11 +2240,11 @@ Usage: stackunderflow backup auto [OPTIONS]
 **Examples:**
 
 ```
-$ stackunderflow backup auto --enable
+$ stax backup auto --enable
   Daily backup enabled (3:00 AM). Keeps last 10.
   Plist: /Users/you/Library/LaunchAgents/com.stackunderflow.backup.plist
 
-$ stackunderflow backup auto --disable
+$ stax backup auto --disable
   Automatic backups disabled.
 ```
 
@@ -2258,14 +2258,14 @@ the environment, never the database. This `ingest` command group is
 separate from the `--ingest` flag on the read commands, which refreshes
 session data.
 
-### `stackunderflow ingest github`
+### `stax ingest github`
 
 Backfill a repository's pull requests and workflow runs over the GitHub
 REST API into the local store — a one-shot catch-up for history from
 before the webhook receiver was turned on.
 
 ```
-Usage: stackunderflow ingest github [OPTIONS]
+Usage: stax ingest github [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2280,8 +2280,8 @@ Usage: stackunderflow ingest github [OPTIONS]
 **Example:**
 
 ```
-$ stackunderflow ingest github --repo 0bserver07/StackUnderflow --max-pages 5
-Backfill complete for 0bserver07/StackUnderflow
+$ stax ingest github --repo 0bserver07/staxtrace --max-pages 5
+Backfill complete for 0bserver07/staxtrace
   PRs:  inserted=42  updated=3   pages=2
   CI:   inserted=118 updated=0   pages=5
   duration: 6.30s
@@ -2289,7 +2289,7 @@ Backfill complete for 0bserver07/StackUnderflow
 
 A request that exhausts the GitHub rate limit exits with an error.
 
-### `stackunderflow ingest webhook serve`
+### `stax ingest webhook serve`
 
 Run a small FastAPI receiver that serves the
 `/api/webhooks/{github,gitlab,ci}` endpoints on a dedicated port,
@@ -2298,7 +2298,7 @@ returns `503` until its secret is set, so the receiver never accepts an
 anonymous payload.
 
 ```
-Usage: stackunderflow ingest webhook serve [OPTIONS]
+Usage: stax ingest webhook serve [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -2318,7 +2318,7 @@ comparison for GitLab):
 **Example:**
 
 ```
-$ STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET=... stackunderflow ingest webhook serve
+$ STACKUNDERFLOW_GITHUB_WEBHOOK_SECRET=... stax ingest webhook serve
   configured receivers: github
 Webhook receiver listening on http://127.0.0.1:8096/api/webhooks/
 ```
@@ -2348,14 +2348,14 @@ Webhook receiver listening on http://127.0.0.1:8096/api/webhooks/
 **Example — set, verify, then reset a key:**
 
 ```
-$ stackunderflow cfg set port 9000
+$ stax cfg set port 9000
   port = 9000
-$ stackunderflow cfg ls
+$ stax cfg ls
 Settings:
   ...
   port                                9000            [file]
   ...
-$ stackunderflow cfg rm port
+$ stax cfg rm port
   port removed
 ```
 
@@ -2369,16 +2369,16 @@ Environment variables take precedence over the config file.
 
 | Config key | Env var | Example |
 |---|---|---|
-| `port` | `PORT` | `PORT=9000 stackunderflow start` |
-| `host` | `HOST` | `HOST=0.0.0.0 stackunderflow start` |
-| `auto_browser` | `AUTO_BROWSER` | `AUTO_BROWSER=false stackunderflow start` |
-| `max_date_range_days` | `MAX_DATE_RANGE_DAYS` | `MAX_DATE_RANGE_DAYS=90 stackunderflow start` |
-| `messages_initial_load` | `MESSAGES_INITIAL_LOAD` | `MESSAGES_INITIAL_LOAD=1000 stackunderflow start` |
-| `log_level` | `LOG_LEVEL` | `LOG_LEVEL=DEBUG stackunderflow start` |
-| `auto_reindex_on_ingest` | `AUTO_REINDEX_ON_INGEST` | `AUTO_REINDEX_ON_INGEST=false stackunderflow start` |
-| `currency` | `STACKUNDERFLOW_CURRENCY` | `STACKUNDERFLOW_CURRENCY=GBP stackunderflow start` |
-| `discovery_budget_tokens` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=4000 stackunderflow memory decisions "retry logic"` |
-| `discovery_rank_weights` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS=0.6,0.1,0.3 stackunderflow find-sessions-in-path .` |
+| `port` | `PORT` | `PORT=9000 stax start` |
+| `host` | `HOST` | `HOST=0.0.0.0 stax start` |
+| `auto_browser` | `AUTO_BROWSER` | `AUTO_BROWSER=false stax start` |
+| `max_date_range_days` | `MAX_DATE_RANGE_DAYS` | `MAX_DATE_RANGE_DAYS=90 stax start` |
+| `messages_initial_load` | `MESSAGES_INITIAL_LOAD` | `MESSAGES_INITIAL_LOAD=1000 stax start` |
+| `log_level` | `LOG_LEVEL` | `LOG_LEVEL=DEBUG stax start` |
+| `auto_reindex_on_ingest` | `AUTO_REINDEX_ON_INGEST` | `AUTO_REINDEX_ON_INGEST=false stax start` |
+| `currency` | `STACKUNDERFLOW_CURRENCY` | `STACKUNDERFLOW_CURRENCY=GBP stax start` |
+| `discovery_budget_tokens` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS` | `STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS=4000 stax memory decisions "retry logic"` |
+| `discovery_rank_weights` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS` | `STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS=0.6,0.1,0.3 stax find-sessions-in-path .` |
 
 Boolean env vars accept `1`, `true`, `yes`, `on` (case-insensitive) as truthy values;
 anything else is treated as false.
@@ -2415,7 +2415,7 @@ floats); a malformed value or the wrong component count falls back to the defaul
 ## Currency
 
 Cost figures default to USD. To display them in another currency set the `currency`
-key to any 3-letter ISO 4217 code (`stackunderflow cfg set currency GBP` or
+key to any 3-letter ISO 4217 code (`stax cfg set currency GBP` or
 `STACKUNDERFLOW_CURRENCY=EUR`). Validation only checks the format — runtime resolves
 the rate via the public Frankfurter API (ECB FX data, no auth) and caches it for
 24h at `~/.stackunderflow/cache/exchange-rate.json`. Cost computation stays in USD
@@ -2462,13 +2462,13 @@ Opt-in integration with Claude Code's lifecycle hooks (`PostToolUse`,
 `hooks install`. Full details — what's captured, the privacy model, the
 performance characteristics, the Windows status — in [`docs/hooks.md`](hooks.md).
 
-### `stackunderflow hooks install`
+### `stax hooks install`
 
 ```
-stackunderflow hooks install [--scope project|user] [--dry-run] [--capture-content] [--inject]
+stax hooks install [--scope project|user] [--dry-run] [--capture-content] [--inject]
 ```
 
-Merges StackUnderflow's hook entries into a `settings.json` —
+Merges staxtrace's hook entries into a `settings.json` —
 `<git-root>/.claude/settings.json` for `--scope project` (default), or
 `~/.claude/settings.json` for `--scope user`. Idempotent and convergent: a
 re-run lands on exactly the config the current flags describe (a stale entry or
@@ -2479,43 +2479,43 @@ would-be `hooks` block and writes nothing. `--capture-content` makes the
 installed hook commands store full payloads (prompt text, tool output) instead
 of the conservative sanitised-metadata default. `--inject` additionally
 installs the context-injection hooks (`SessionStart` / `UserPromptSubmit` /
-`PreToolUse`) that feed StackUnderflow's memory back into the live agent —
+`PreToolUse`) that feed staxtrace's memory back into the live agent —
 opt-in separately from capture, off by default.
 
-### `stackunderflow hooks uninstall`
+### `stax hooks uninstall`
 
 ```
-stackunderflow hooks uninstall [--scope project|user]
+stax hooks uninstall [--scope project|user]
 ```
 
-Removes only the entries StackUnderflow recognises as its own. Never deletes the
+Removes only the entries staxtrace recognises as its own. Never deletes the
 file, never touches other entries. Backs up first iff the file actually changes.
 
-### `stackunderflow hooks status`
+### `stax hooks status`
 
 ```
-stackunderflow hooks status [--scope project|user] [--format text|json]
+stax hooks status [--scope project|user] [--format text|json]
 ```
 
-Shows which StackUnderflow hooks are installed in which scope (default: both),
+Shows which staxtrace hooks are installed in which scope (default: both),
 whether any are *stale* (recognisably ours but not in the portable form), and how
-many non-StackUnderflow hook entries the file carries.
+many non-staxtrace hook entries the file carries.
 
-### `stackunderflow hooks repair`
+### `stax hooks repair`
 
 ```
-stackunderflow hooks repair [--scope project|user|all] [--dry-run]
+stax hooks repair [--scope project|user|all] [--dry-run]
 ```
 
-Rewrites stale StackUnderflow hook commands (e.g. a hardcoded path left over from
-a moved venv) back to the portable `stackunderflow hooks run <id>` form,
+Rewrites stale staxtrace hook commands (e.g. a hardcoded path left over from
+a moved venv) back to the portable `stax hooks run <id>` form,
 preserving `--capture-content`. Changes nothing else; backs up each file first;
 `--dry-run` reports without writing. `--scope all` walks `$HOME` for every
 project's `.claude/settings.json` — bounded (depth ≤ 8), never follows symlinks,
 prunes `node_modules`/`.git`/`.npm`/`.cache`/`.nvm` and other heavy trees. Only
 ever runs when you invoke it.
 
-### `stackunderflow hooks run <hook-id>`
+### `stax hooks run <hook-id>`
 
 Internal — Claude Code invokes this; reads the hook payload as JSON on stdin and
 records a `captured_events` row when warranted. Always exits `0` (it must never
@@ -2525,15 +2525,15 @@ disrupt Claude Code). Not for direct use.
 
 ## Guide Commands
 
-Manage the StackUnderflow agent-discovery snippet in `CLAUDE.md` /
+Manage the staxtrace agent-discovery snippet in `CLAUDE.md` /
 `AGENTS.md` — ~15 lines naming the `memory` commands and their `--json`
 output contract, so an agent discovers the query surface without any
 protocol support. Details in [`docs/hooks.md`](hooks.md).
 
-### `stackunderflow guide install`
+### `stax guide install`
 
 ```
-stackunderflow guide install [--scope project|user] [--dry-run]
+stax guide install [--scope project|user] [--dry-run]
 ```
 
 Writes the snippet into the instruction file(s): `--scope project`
@@ -2543,18 +2543,18 @@ between marker comments and a re-run replaces the block in place; a
 timestamped backup is written before any mutation. `--dry-run` shows what
 would change and writes nothing.
 
-### `stackunderflow guide uninstall`
+### `stax guide uninstall`
 
 ```
-stackunderflow guide uninstall [--scope project|user]
+stax guide uninstall [--scope project|user]
 ```
 
-Removes only the marked StackUnderflow block; never deletes the file.
+Removes only the marked staxtrace block; never deletes the file.
 
-### `stackunderflow guide status`
+### `stax guide status`
 
 ```
-stackunderflow guide status [--scope project|user] [--format text|json]
+stax guide status [--scope project|user] [--format text|json]
 ```
 
 Shows, per instruction file, whether the snippet is installed, missing, or

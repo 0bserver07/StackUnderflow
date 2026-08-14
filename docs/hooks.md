@@ -1,17 +1,17 @@
 # Opt-in Claude Code hooks — capture and injection
 
-StackUnderflow normally learns about your sessions *after the fact*: a filesystem
+staxtrace normally learns about your sessions *after the fact*: a filesystem
 watcher reads the JSONL transcripts once Claude Code has written them. That tells
 you *what was said* but loses *what just happened* — a tool call that failed, a
 correction mid-flight, a session about to compact.
 
 Claude Code exposes lifecycle **hooks**: commands it runs on certain events.
-StackUnderflow can register a handful of them so it gets that signal *as the
+staxtrace can register a handful of them so it gets that signal *as the
 action completes*, deterministically — no scanning stdout for `ERROR`, no waiting
 on the debounce. This is **opt-in**: nothing is installed unless you run
-`stackunderflow hooks install` yourself, and uninstalling is one command.
+`stax hooks install` yourself, and uninstalling is one command.
 
-If you don't install hooks, nothing changes — StackUnderflow keeps working off the
+If you don't install hooks, nothing changes — staxtrace keeps working off the
 transcripts, and the consumers that benefit from hook data fall back to a transcript
 heuristic. Outcome-aware discovery is the clearest example: the outcome-aware
 `memory` commands prefer the deterministic `captured_events` feed but degrade
@@ -78,11 +78,11 @@ keeps everything.
 ## CLI
 
 ```
-stackunderflow hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
-stackunderflow hooks uninstall [--scope project|user]
-stackunderflow hooks status    [--scope project|user] [--format text|json]
-stackunderflow hooks repair    [--scope project|user|all] [--dry-run]
-stackunderflow hooks run <hook-id>     # internal — Claude Code calls this; reads the payload on stdin
+stax hooks install   [--scope project|user] [--dry-run] [--capture-content] [--inject]
+stax hooks uninstall [--scope project|user]
+stax hooks status    [--scope project|user] [--format text|json]
+stax hooks repair    [--scope project|user|all] [--dry-run]
+stax hooks run <hook-id>     # internal — Claude Code calls this; reads the payload on stdin
 ```
 
 **Scope** is explicit and never implicitly broadened:
@@ -101,7 +101,7 @@ everywhere; see [Why hook commands are portable](#why-hook-commands-are-portable
 
 ### install
 
-Merges StackUnderflow's hook entries into the target `settings.json`. It is
+Merges staxtrace's hook entries into the target `settings.json`. It is
 **idempotent and convergent**: re-running it lands on exactly the config the
 current flags describe — a stale entry (e.g. an old hardcoded path) or a changed
 `--capture-content` choice is *replaced*, never duplicated. Before any mutation it
@@ -114,14 +114,14 @@ exactly as found.
 
 ### uninstall
 
-Removes only the entries StackUnderflow recognises as its own (by the
+Removes only the entries staxtrace recognises as its own (by the
 `stackunderflow-<event>` id token in the command). It never deletes the file and
 never touches other entries. A backup is written first — but only if the file
 actually changes.
 
 ### status
 
-Shows which StackUnderflow hooks are installed, in which scope, whether any are
+Shows which staxtrace hooks are installed, in which scope, whether any are
 *stale* (a recognisably-ours command that isn't in the canonical portable form),
 and how many *other* hook entries the file carries. `--format json` for a stable
 machine-readable shape.
@@ -129,11 +129,11 @@ machine-readable shape.
 ### repair
 
 If a hook command ever ends up with a stale absolute path
-(`/old/venv/bin/stackunderflow hooks run …` after a venv move) or the legacy
+(`/old/venv/bin/stax hooks run …` after a venv move) or the legacy
 singular `hook run` spelling, `repair` rewrites just that `command` string back to
-the portable `stackunderflow hooks run <id>` form (preserving `--capture-content`
+the portable `stax hooks run <id>` form (preserving `--capture-content`
 if it was there). It **changes nothing else** — no hooks added or removed, every
-non-StackUnderflow entry untouched, a per-file backup written first, and
+non-staxtrace entry untouched, a per-file backup written first, and
 `--dry-run` reports without writing.
 
 `--scope all` walks `$HOME`. That walk is bounded and conservative: it never
@@ -145,13 +145,13 @@ automatically.
 
 ## Why hook commands are portable, not absolute paths
 
-The installed command is always `stackunderflow hooks run <id>` — the bare
+The installed command is always `stax hooks run <id>` — the bare
 `stackunderflow` binary, resolved on `PATH` — never `/path/to/some/venv/bin/...`.
 That survives a venv move, a `pipx reinstall`, a Python upgrade. The cost: the
 `stackunderflow` binary must be on the `PATH` that Claude Code uses when it runs
 the hook. `install` warns if it can't find `stackunderflow` on your `PATH`. If
-hooks silently stop firing after an environment change, `stackunderflow hooks
-status` will show them as stale and `stackunderflow hooks repair` will fix the
+hooks silently stop firing after an environment change, `stax hooks
+status` will show them as stale and `stax hooks repair` will fix the
 command form (though if the binary genuinely isn't on `PATH` anymore you'll need
 to make it resolvable — that's the one thing `repair` can't do for you).
 
@@ -171,7 +171,7 @@ different environment. Two ways out:
 ## Performance notes (read before installing widely)
 
 - Each hook fire is a **separate process** Claude Code spawns
-  (`stackunderflow hooks run …`). Python interpreter startup + imports dominates —
+  (`stax hooks run …`). Python interpreter startup + imports dominates —
   expect a couple hundred milliseconds per fire, not microseconds. That's why
   `PostToolUse` is scoped to `Bash` only (the tool whose exit code is the clean
   failure signal) rather than firing after *every* tool call: it keeps the
@@ -194,12 +194,12 @@ different environment. Two ways out:
 ## Context injection (opt-in)
 
 Capture hooks record *what happened*. **Injection hooks** do the opposite — they
-read what StackUnderflow already knows and feed it back into the live agent,
+read what staxtrace already knows and feed it back into the live agent,
 before it acts. Injection is opt-in *separately* from capture:
 
 ```
-stackunderflow hooks install --inject     # capture hooks + 3 injection hooks + the recall hook
-stackunderflow hooks install              # capture hooks only (unchanged)
+stax hooks install --inject     # capture hooks + 3 injection hooks + the recall hook
+stax hooks install              # capture hooks only (unchanged)
 ```
 
 `--inject` adds three in-process injection hooks alongside the capture four
@@ -259,10 +259,10 @@ edit if that file has real failure history:
 
 | Claude Code event | hook id | injects |
 |-------------------|---------|---------|
-| `PreToolUse` (Edit/Write/Bash) | `stackunderflow-pretool-recall` | the file's failure history, via `stackunderflow memory file <path> --json` |
+| `PreToolUse` (Edit/Write/Bash) | `stackunderflow-pretool-recall` | the file's failure history, via `stax memory file <path> --json` |
 
 Unlike the three injection hooks above (in-process store reads), the recall
-hook **shells the public CLI** — `stackunderflow memory file <path> --json` —
+hook **shells the public CLI** — `stax memory file <path> --json` —
 as a subprocess under a hard deadline, and parses the token-bounded
 `stackunderflow.memory/1` envelope. That buys two things: the lookup runs the
 exact code path agents and humans already use (one contract to trust), and the
@@ -282,11 +282,11 @@ block plus its failure-mode rows). A clean file — even one with plenty of
 recorded history — injects nothing. When it fires, the block looks like:
 
 ```
-[StackUnderflow memory] risky.py has failure history (2 failed and 1 reverted
+[staxtrace memory] risky.py has failure history (2 failed and 1 reverted
 of 7 past sessions touching it). Recent trouble:
   • 2026-05-17  failed: that broke the build — please look again
   • 2026-05-12  reverted: git checkout undid the change
-Full history: `stackunderflow memory file /path/to/risky.py --json`.
+Full history: `stax memory file /path/to/risky.py --json`.
 ```
 
 The block is hard-capped at ~600 tokens (the same chars/4 estimate the other
@@ -322,7 +322,7 @@ it to `Edit|Write|Bash`, and the Bash heuristic means most shell commands
 ## Only Claude Code, for now
 
 Every hook family — capture, injection, recall — wires **Claude Code's** hook system.
-Other coding agents StackUnderflow ingests (Codex, Cursor, Cline, the beta
+Other coding agents staxtrace ingests (Codex, Cursor, Cline, the beta
 providers) don't expose an equivalent lifecycle-hook mechanism, so there's
 nothing analogous to install for them — those providers stay on passive
 transcript ingestion. Outcome-aware discovery accounts for this: hook-installed
@@ -332,16 +332,16 @@ else gets the transcript heuristic. Same surface, different fidelity.
 The one cross-agent piece is the agent-discovery snippet (next section): its
 `AGENTS.md` half is how a Codex agent finds the same `memory` commands.
 
-## The agent-discovery snippet (`stackunderflow guide`)
+## The agent-discovery snippet (`stax guide`)
 
 Hooks are one way memory reaches the agent. The other is plain discoverability:
-teaching the agent that the `stackunderflow memory` commands *exist* at all. The
+teaching the agent that the `stax memory` commands *exist* at all. The
 `guide` command writes a short, marked snippet into the agent instruction file:
 
 ```
-stackunderflow guide install   [--scope project|user] [--dry-run]
-stackunderflow guide uninstall [--scope project|user]
-stackunderflow guide status    [--scope project|user] [--format text|json]
+stax guide install   [--scope project|user] [--dry-run]
+stax guide uninstall [--scope project|user]
+stax guide status    [--scope project|user] [--format text|json]
 ```
 
 - **Scope.** `project` (default) writes `./CLAUDE.md` *and* `./AGENTS.md` in the

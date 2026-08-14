@@ -1590,7 +1590,7 @@ export interface WorktreeInfo {
   /** Already in the active display currency. */
   cost_usd: number
   /** PREVIEW-only shell commands (git worktree remove / git branch -D …).
-   *  StackUnderflow never executes these — the user copies and runs them. */
+   *  staxtrace never executes these — the user copies and runs them. */
   prune_commands: string[]
 }
 

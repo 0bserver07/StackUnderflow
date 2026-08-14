@@ -106,15 +106,15 @@ the old PyPI packages have been removed — install from this repo.
 
 Browser opens to `http://localhost:8081` with every project the local store knows about, indexed and ready. Background ingest + watcher start immediately; the dashboard is interactive while ingest runs.
 
-If port 8081 is taken: `stackunderflow cfg set port 8090` then re-run.
+If port 8081 is taken: `stax cfg set port 8090` then re-run.
 
 ```bash
 # common knobs
-stackunderflow cfg set port 8090            # change the port
-stackunderflow cfg set currency GBP         # display costs in another currency
-stackunderflow plan set claude-pro          # track against a monthly budget
-stackunderflow init --no-browser            # don't auto-open the browser
-stackunderflow --help                       # full CLI  (or: stax --help)
+stax cfg set port 8090            # change the port
+stax cfg set currency GBP         # display costs in another currency
+stax plan set claude-pro          # track against a monthly budget
+stax init --no-browser            # don't auto-open the browser
+stax --help                       # full CLI  (or: stax --help)
 ```
 
 ### From source
@@ -136,17 +136,17 @@ stax init
 
 staxtrace features a robust, colorful terminal interface powered by `rich`. Here is a direct look at the CLI in action, showing how you can query cost, audit waste, and query past sessions:
 
-### 1. Cost & Ingest Status (`stackunderflow status`)
+### 1. Cost & Ingest Status (`stax status`)
 Get a quick, one-line summary of your active token spending and message counts for the day and the current billing cycle:
 ```bash
-$ stackunderflow status
+$ stax status
 today: $35.63 (75 msg) | month: $7974.71 (31728 msg)
 ```
 
-### 2. Multi-project reports (`stackunderflow report`)
+### 2. Multi-project reports (`stax report`)
 Generate high-fidelity, ASCII table summaries of your spending across all active agent workspaces over a custom date range (e.g., the last 7 days):
 ```ansi
-$ stackunderflow report
+$ stax report
 staxtrace — last 7 days
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ Project                                     ┃     Cost ┃ Messages ┃ Sessions ┃
@@ -161,10 +161,10 @@ staxtrace — last 7 days
 Total: $2894.57  8,315 messages  59 sessions
 ```
 
-### 3. Waste audit & cost optimization (`stackunderflow optimize`)
+### 3. Waste audit & cost optimization (`stax optimize`)
 Run automated, offline waste detectors (looped Q&A pairs, cache thrashing, excessive file re-reads, and unused MCP servers) to cut down your active developer billing:
 ```ansi
-$ stackunderflow optimize
+$ stax optimize
 Waste report — last 30 days
 
 Q&A loops:
@@ -265,18 +265,18 @@ A `watchfiles`-backed daemon thread watches every registered adapter's source pa
 
 ### Export
 ```bash
-stackunderflow export -f csv -o usage.csv -p month
-stackunderflow export -f json -o usage.json   # multi-period rollup (today + 7d + 30d)
+stax export -f csv -o usage.csv -p month
+stax export -f json -o usage.json   # multi-period rollup (today + 7d + 30d)
 ```
 
 The dashboard's "Download" button hits the same `/api/export` endpoint.
 
 ### Backup
 ```bash
-stackunderflow backup create               # snapshot ~/.claude/ via rsync --link-dest
-stackunderflow backup auto --enable        # daily on macOS via launchd
-stackunderflow backup list
-stackunderflow backup restore <name>
+stax backup create               # snapshot ~/.claude/ via rsync --link-dest
+stax backup auto --enable        # daily on macOS via launchd
+stax backup list
+stax backup restore <name>
 ```
 
 Snapshots land under `~/.stackunderflow/backups/<ts>[-label]/`. Unchanged files are hard-linked from the previous snapshot, so a daily backup of a quiet `~/.claude/` is roughly zero on-disk delta. Full surface in [docs/backup.md](docs/backup.md).
@@ -319,7 +319,7 @@ flowchart TD
     %% 3. Interfaces & Presentation
     subgraph Frontends ["🖥️ Interfaces & Presenters"]
         API["FastAPI REST Web Server<br/>• Serving /api/* routes"]
-        CLI["Command Line Interface (CLI)<br/>• stackunderflow today / month<br/>• stackunderflow optimize / report<br/>• stackunderflow memory (agent queries)"]
+        CLI["Command Line Interface (CLI)<br/>• stax today / month<br/>• stax optimize / report<br/>• stax memory (agent queries)"]
     end
     class API interface;
     class CLI cli;
@@ -354,7 +354,7 @@ flowchart TD
     CLI <-->|Developer CLI Reports| Dashboard
 ```
 
-Most dashboard routes read from the marts when populated, falling back to a live aggregation pass otherwise. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stackunderflow etl backfill` populates the marts.
+Most dashboard routes read from the marts when populated, falling back to a live aggregation pass otherwise. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stax etl backfill` populates the marts.
 
 ```
 stackunderflow/
@@ -439,25 +439,25 @@ The pipeline is incremental + idempotent. Most users never need to think about i
 
 ```bash
 # Health check — watcher status, mart watermarks vs max event id, lag
-stackunderflow etl status
+stax etl status
 
 # Populate marts from existing messages (one-time on first install or after a crash)
-stackunderflow etl backfill          # incremental — skips converted msgs
-stackunderflow etl backfill --force  # drop + rebuild from scratch
+stax etl backfill          # incremental — skips converted msgs
+stax etl backfill --force  # drop + rebuild from scratch
 
 # Same backfill, kicked off in the background from HTTP (used by the
 # Settings page "Backfill now" button); poll /api/etl/status to follow it
 curl -X POST http://127.0.0.1:8081/api/etl/backfill
 
 # Disable the watcher (headless / debugging)
-stackunderflow start --no-watcher
+stax start --no-watcher
 # or via env var:
-STACKUNDERFLOW_DISABLE_WATCHER=1 stackunderflow start
+STACKUNDERFLOW_DISABLE_WATCHER=1 stax start
 
 # Skip the watcher single-instance lock (multi-server, or stale lock file)
-stackunderflow start --no-lock
+stax start --no-lock
 # or via env var:
-STACKUNDERFLOW_DISABLE_LOCK=1 stackunderflow start
+STACKUNDERFLOW_DISABLE_LOCK=1 stax start
 ```
 
 Watcher state (including the PID currently holding the watcher lock),
@@ -470,9 +470,9 @@ dashboard header.
 ## Configuration
 
 ```bash
-stackunderflow cfg ls                   # show current settings
-stackunderflow cfg set port 8090
-stackunderflow cfg rm port              # reset to default
+stax cfg ls                   # show current settings
+stax cfg set port 8090
+stax cfg rm port              # reset to default
 ```
 
 Selected keys (full list in [docs/cli-reference.md](docs/cli-reference.md)):

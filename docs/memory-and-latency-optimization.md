@@ -23,7 +23,7 @@ resulting in a ~1.6 GB store (60% of raw, due to structured column extraction).
 
 There is no warm-up phase. Apart from the dashboard memo described below, every
 request reads SQLite directly. The OS page cache keeps hot pages in RAM
-automatically; StackUnderflow does not manage that memory.
+automatically; staxtrace does not manage that memory.
 
 ## Storage Architecture
 

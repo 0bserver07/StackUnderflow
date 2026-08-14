@@ -1,6 +1,6 @@
 # Writing a source adapter
 
-This is the canonical guide for adding a new source adapter to StackUnderflow. It supersedes `docs/codex-adapter-spec.md`, which is preserved as historical design context for the Codex work.
+This is the canonical guide for adding a new source adapter to staxtrace. It supersedes `docs/codex-adapter-spec.md`, which is preserved as historical design context for the Codex work.
 
 A source adapter turns one tool's on-disk session format into a stream of normalized `Record`s. The ingest layer drives adapters; route handlers and the React UI only ever see store rows downstream.
 

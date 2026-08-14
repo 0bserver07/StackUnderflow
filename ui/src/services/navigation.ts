@@ -1,5 +1,5 @@
 /**
- * Cross-tab navigation service for the StackUnderflow dashboard.
+ * Cross-tab navigation service for the staxtrace dashboard.
  *
  * Provides a small, framework-agnostic API for moving between tabs
  * (Overview / Sessions / Messages / Cost / etc.) and deep-linking to

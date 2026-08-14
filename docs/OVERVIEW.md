@@ -1,12 +1,12 @@
-# StackUnderflow Technical Overview
+# staxtrace Technical Overview
 
-StackUnderflow is a local log parser, transaction analyzer, and command-history indexer for terminal-based code generators and IDE extensions. It runs as a lightweight, single-process service on your local machine with zero external network dependencies or telemetry.
+staxtrace is a local log parser, transaction analyzer, and command-history indexer for terminal-based code generators and IDE extensions. It runs as a lightweight, single-process service on your local machine with zero external network dependencies or telemetry.
 
 ---
 
 ## What It Does (The Core Mechanics)
 
-Instead of relying on cloud telemetry, StackUnderflow acts as a local database engine that parses, normalizes, and aggregates command-line and filesystem action logs written by coding tools (such as Claude Code, Cursor, or Cline).
+Instead of relying on cloud telemetry, staxtrace acts as a local database engine that parses, normalizes, and aggregates command-line and filesystem action logs written by coding tools (such as Claude Code, Cursor, or Cline).
 
 ```
 [Local Logs] ──(Watcher)──> [Raw DB Rows] ──(Normalizer)──> [Unified Transactions] ──(ETL Marts)──> [Fast REST API]
@@ -21,7 +21,7 @@ It solves three practical problems:
 
 ## Under the Hood: The Data Pipeline
 
-StackUnderflow’s backend is a Python service structured as a classic data-warehousing pipeline:
+staxtrace’s backend is a Python service structured as a classic data-warehousing pipeline:
 
 ### 1. Ingest & Watcher Layer
 * **Log Watcher:** A background thread monitors file system paths where supported tools write their run logs (e.g., `~/.claude/projects/`, Cursor's SQLite database, or Cline's JSON tasks).
@@ -33,7 +33,7 @@ StackUnderflow’s backend is a Python service structured as a classic data-ware
 * **Unified Schema:** Writes these standard records to a centralized `usage_events` table.
 
 ### 3. Marts Layer (Data Agregation)
-To keep the dashboard fast (rendering in under 50ms), StackUnderflow runs a local ETL builder. It aggregates data from the `usage_events` table into high-performance reporting tables ("marts"):
+To keep the dashboard fast (rendering in under 50ms), staxtrace runs a local ETL builder. It aggregates data from the `usage_events` table into high-performance reporting tables ("marts"):
 * **`daily_mart`:** Rolled up token consumption and costs per calendar day.
 * **`session_mart`:** Total duration, costs, and statuses for each unique coding run.
 * **`tool_mart` & `command_mart`:** Execution counts and costs for specific terminal commands (e.g., `grep`, `git`, `npm run build`).
@@ -44,12 +44,12 @@ To keep the dashboard fast (rendering in under 50ms), StackUnderflow runs a loca
 ## Key Technical Features
 
 ### 🕒 Filesystem Playback (Time-Travel)
-When a coding tool runs edits on a project, it issues file-modification commands. StackUnderflow's playback engine parses these mutations (Read, Write, Edit, Multi-Edit, and Notebook edits) and reconstructs a sandboxed virtual directory at any specific millisecond in the timeline. You can scrub through a session's history and see exactly what the files looked like before and after each automated edit.
+When a coding tool runs edits on a project, it issues file-modification commands. staxtrace's playback engine parses these mutations (Read, Write, Edit, Multi-Edit, and Notebook edits) and reconstructs a sandboxed virtual directory at any specific millisecond in the timeline. You can scrub through a session's history and see exactly what the files looked like before and after each automated edit.
 
 ### 🧠 Local Command & Session Memory (CLI)
-StackUnderflow exposes a local CLI — the `stackunderflow memory ...` command namespace. 
-* This allows active terminal tools to query their own local run history *before* starting a new task (e.g., running `stackunderflow memory file <path>` to see what previous runs changed in a file, or finding what actions succeeded/failed previously).
-* It provides programmatic semantic search over past sessions: `stackunderflow memory ask` fuses keyword search with a vector search over Ollama-served embeddings, and degrades to keyword-only matching when no Ollama is reachable.
+staxtrace exposes a local CLI — the `stax memory ...` command namespace. 
+* This allows active terminal tools to query their own local run history *before* starting a new task (e.g., running `stax memory file <path>` to see what previous runs changed in a file, or finding what actions succeeded/failed previously).
+* It provides programmatic semantic search over past sessions: `stax memory ask` fuses keyword search with a vector search over Ollama-served embeddings, and degrades to keyword-only matching when no Ollama is reachable.
 
 ### 💬 Local Chat Proxy
 The dashboard sidebar links directly to your localhost Ollama instance (`http://localhost:11434`). It proxies requests through a local FastAPI controller to avoid CORS friction, letting you chat with your local command history using models like `qwen2.5-coder` or `llama3.2` without sending any data over the internet.

@@ -202,5 +202,5 @@ python -m pytest -k "classifier and error"
 
 ### With Coverage
 ```bash
-python -m pytest --cov=stackunderflow --cov-report=html
+python -m pytest --cov=stax --cov-report=html
 ```

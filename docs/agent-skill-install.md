@@ -1,6 +1,6 @@
 # The `stackunderflow-memory` agent skill
 
-StackUnderflow's `memory` CLI lets a coding agent ask the local store what past
+staxtrace's `memory` CLI lets a coding agent ask the local store what past
 sessions already know — a decision, a failure mode, the exact working command —
 *before* it re-derives the answer or repeats a mistake. For the agent to reach
 for it at the right moment, the agent has to know it exists and when to use it.
@@ -29,7 +29,7 @@ construction — see [Keeping the copies in sync](#keeping-the-copies-in-sync).
 ## The short command
 
 The skill teaches `stax memory …` (the short alias) and notes the long form
-`stackunderflow memory …` works anywhere `stax` is not on `PATH`. The subcommands:
+`stax memory …` works anywhere `stax` is not on `PATH`. The subcommands:
 
 ```
 stax memory decisions "<topic>"   # past decisions on a topic
@@ -47,7 +47,7 @@ Claude Code has first-class plugin + marketplace support. Point it at the
 `plugins/` directory (the marketplace root) and install the plugin:
 
 ```
-/plugin marketplace add /path/to/StackUnderflow/plugins
+/plugin marketplace add /path/to/staxtrace/plugins
 /plugin install stackunderflow-memory@stackunderflow
 ```
 
@@ -77,7 +77,7 @@ and, where supported, a skill file. Two paths:
 1. **The skill file.** Copy `skills/stackunderflow-memory/SKILL.md` into the
    location your host reads skills from (e.g. a project or user skills directory).
    The body is host-agnostic — it only teaches the `stax memory` CLI.
-2. **The instruction-file snippet.** `stackunderflow guide install` writes a
+2. **The instruction-file snippet.** `stax guide install` writes a
    short, marked, idempotent block into `AGENTS.md` (and `CLAUDE.md`) teaching the
    `memory` commands — the always-available fallback that needs no plugin system.
    See [Move 4 in the memory-CLI spec](specs/agent-memory-cli.md).
@@ -95,10 +95,10 @@ The skill assumes the CLI is on `PATH` and the local store is populated:
 
 ```bash
 which stax || which stackunderflow      # the CLI is installed and on PATH
-stackunderflow etl status               # usage_events count > 0
+stax etl status               # usage_events count > 0
 ```
 
-If the store is empty, run `stackunderflow etl backfill` first. Every `memory`
+If the store is empty, run `stax etl backfill` first. Every `memory`
 query is local (a SQLite read) — no network, no LLM call for the structured
 subcommands — so the skill is always cheap to fire, and an empty result is itself
 a useful signal.

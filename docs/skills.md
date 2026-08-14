@@ -1,6 +1,6 @@
 # Claude Code skills
 
-StackUnderflow ships **Claude Code skills** — markdown files that teach Claude Code *when* to invoke StackUnderflow's discovery commands. With these installed, Claude Code surfaces prior session context at the right moments: starting work in a known project, touching a specific file, or recalling a past decision.
+staxtrace ships **Claude Code skills** — markdown files that teach Claude Code *when* to invoke staxtrace's discovery commands. With these installed, Claude Code surfaces prior session context at the right moments: starting work in a known project, touching a specific file, or recalling a past decision.
 
 > **What's a skill?** A skill is a directory under `~/.claude/skills/<name>/` containing a `SKILL.md` file with YAML frontmatter (`name`, `description`) and a markdown body. Claude Code reads the descriptions of every installed skill at session start and decides which to invoke based on the user's request. Skills are documented at <https://code.claude.com/docs/en/skills>.
 
@@ -10,9 +10,9 @@ Three skills, one directory each, under `stackunderflow/skills/` in this repo:
 
 | Skill | Trigger | What it runs |
 |---|---|---|
-| `check-prior-work` | First substantive coding task in a project | `stackunderflow find-sessions-in-path "$(pwd)" --format json --limit 5 --since 30d` |
-| `find-related-sessions` | User mentions a specific file path | `stackunderflow find-sessions-touching-file <path> --format json --limit 5 --mode any` |
-| `recall-past-decisions` | User references a past decision or rationale | `stackunderflow search-past-decisions "<query>" --format json --limit 10` |
+| `check-prior-work` | First substantive coding task in a project | `stax find-sessions-in-path "$(pwd)" --format json --limit 5 --since 30d` |
+| `find-related-sessions` | User mentions a specific file path | `stax find-sessions-touching-file <path> --format json --limit 5 --mode any` |
+| `recall-past-decisions` | User references a past decision or rationale | `stax search-past-decisions "<query>" --format json --limit 10` |
 
 Each skill body documents both the JSON form (for the agent to consume internally) and the human-readable `--format text` form (for when the user asks Claude Code to *show* them the result).
 
@@ -20,17 +20,17 @@ Each skill body documents both the JSON form (for the agent to consume internall
 
 Claude Code discovers skills from two locations, in order:
 
-1. **User-level**: `~/.claude/skills/<name>/SKILL.md` — applies to every Claude Code session on this machine. **Recommended for StackUnderflow skills** since the store is per-machine anyway.
-2. **Project-level**: `<repo>/.claude/skills/<name>/SKILL.md` — applies only when Claude Code is run from inside that repo. Useful for project-specific skills, but redundant for StackUnderflow's, which apply to every project.
+1. **User-level**: `~/.claude/skills/<name>/SKILL.md` — applies to every Claude Code session on this machine. **Recommended for staxtrace skills** since the store is per-machine anyway.
+2. **Project-level**: `<repo>/.claude/skills/<name>/SKILL.md` — applies only when Claude Code is run from inside that repo. Useful for project-specific skills, but redundant for staxtrace's, which apply to every project.
 
 Project-level skills override user-level skills with the same name.
 
 ## Install
 
-The recommended path is the bundled installer flag — `stackunderflow init` will copy the three shipped `SKILL.md` files into `~/.claude/skills/` for you:
+The recommended path is the bundled installer flag — `stax init` will copy the three shipped `SKILL.md` files into `~/.claude/skills/` for you:
 
 ```bash
-stackunderflow init --install-skills
+stax init --install-skills
 ```
 
 The install is idempotent — byte-identical files are skipped silently on re-run, and a destination file that differs from the shipped copy is preserved unless you pass `--skills-force`. Useful flags:
@@ -70,10 +70,10 @@ The skills assume `stackunderflow` is on `PATH` and the local store is populated
 pip install -e .
 
 # Populate the store from existing Claude / Codex / Cursor session files
-stackunderflow etl backfill
+stax etl backfill
 ```
 
-Once `stackunderflow etl status` shows your usage_events count > 0, the skills have data to query.
+Once `stax etl status` shows your usage_events count > 0, the skills have data to query.
 
 ## Example transcripts
 
@@ -84,7 +84,7 @@ User: Add a /api/projects/<slug>/timeline endpoint that returns events ordered b
 
 [Claude Code recognizes this as new feature work in an existing project, fires check-prior-work]
 
-[Claude Code runs: stackunderflow find-sessions-in-path "$(pwd)" --format json --limit 5 --since 30d]
+[Claude Code runs: stax find-sessions-in-path "$(pwd)" --format json --limit 5 --since 30d]
 
 Claude Code: Before I dive in, I checked recent sessions on this project:
   - 2026-05-04: "add session export to /api/sessions" (merged)
@@ -105,7 +105,7 @@ User: Why is stackunderflow/store/queries.py so long? Can we split it up?
 
 [Claude Code recognizes a specific file reference, fires find-related-sessions]
 
-[Claude Code runs: stackunderflow find-sessions-touching-file stackunderflow/store/queries.py --format json --limit 5 --mode any]
+[Claude Code runs: stax find-sessions-touching-file stackunderflow/store/queries.py --format json --limit 5 --mode any]
 
 Claude Code: I checked the recent sessions on queries.py. The last write was
 on 2026-04-30 (session abc123…) — the "Wave 4 mart migration" PR added
@@ -129,7 +129,7 @@ User: Wait, didn't we decide to keep watchfiles instead of inotify?
 
 [Claude Code recognizes a past-decision reference, fires recall-past-decisions]
 
-[Claude Code runs: stackunderflow search-past-decisions "watchfiles inotify" --format json --limit 10]
+[Claude Code runs: stax search-past-decisions "watchfiles inotify" --format json --limit 10]
 
 Claude Code: Yes — on 2026-04-25 (session def456…) you and the prior session
 landed on watchfiles. The reasoning recorded was:
@@ -149,7 +149,7 @@ The agent corrects itself with a verifiable citation. If the recall is wrong, th
 `recall-past-decisions` runs over plain `LIKE` substrings by default. If the original conversation used different wording from the user's recall ("watchfiles" vs. "file watching library"), the substring match misses. With a reachable Ollama, `--use-embeddings` re-ranks the substring-matched candidate set by cosine similarity:
 
 ```
-stackunderflow search-past-decisions "file watching library" --use-embeddings
+stax search-past-decisions "file watching library" --use-embeddings
 ```
 
 Each result gains an `embedding_score` in `[0, 1]`; the substring filter still runs first (`--use-embeddings` only re-orders, never widens). The embeddings come from the same Ollama backend `memory ask` uses — a configured endpoint (`STACKUNDERFLOW_OLLAMA_URL`, with `STACKUNDERFLOW_OLLAMA_API_KEY` as a bearer token) or a local daemon at `localhost:11434`. Default model is `nomic-embed-text` (`ollama pull nomic-embed-text`); override via `STACKUNDERFLOW_EMBED_MODEL` or `--embed-model`. When no Ollama answers, the re-rank silently degrades to substring ordering.
@@ -168,32 +168,32 @@ Project-level wins over user-level for the same skill name.
 
 ## Auto-generated skills
 
-The three skills above are **static** — they teach Claude Code *how* to query the store, and ship with the package. StackUnderflow can also mine your local store for the workflows specific to one project and emit `SKILL.md` files for them: "always run `pytest tests/ -q` after editing `stackunderflow/`", "lint with `ruff check --fix`", "never `pkill` — use a graceful SIGTERM first", "never modify `~/.stackunderflow/store.db`". These are derived from what actually happened across your sessions, not from declarations in `CLAUDE.md`.
+The three skills above are **static** — they teach Claude Code *how* to query the store, and ship with the package. staxtrace can also mine your local store for the workflows specific to one project and emit `SKILL.md` files for them: "always run `pytest tests/ -q` after editing `stackunderflow/`", "lint with `ruff check --fix`", "never `pkill` — use a graceful SIGTERM first", "never modify `~/.stackunderflow/store.db`". These are derived from what actually happened across your sessions, not from declarations in `CLAUDE.md`.
 
 ```bash
 # Mine the project the current directory belongs to; write to ./.claude/skills/auto-*/
-stackunderflow skills generate
+stax skills generate
 
 # Preview without writing
-stackunderflow skills generate --dry-run --format json
+stax skills generate --dry-run --format json
 
 # Tune the bar / window / scope
-stackunderflow skills generate --project -Users-you-dev-foo --min-occurrences 8 --window 60d
+stax skills generate --project -Users-you-dev-foo --min-occurrences 8 --window 60d
 
 # See what's been generated
-stackunderflow skills list
+stax skills list
 
 # Remove generated skills (only auto-* dirs marked auto_generated: true — never your own)
-stackunderflow skills clean --older-than 30d   # preview; add --yes to delete
+stax skills clean --older-than 30d   # preview; add --yes to delete
 ```
 
 What gets mined (pattern kinds): `canonical-test-command`, `always-runs-X-after-Y` (a command that reliably follows edits), `uses-tool-flag-combo` (a flag combo this project favours), `avoids-X` (a command the user keeps correcting away from), `never-touches-paths` (a file the user keeps steering edits away from). Restrict with `--kind` (repeatable).
 
 ### Guardrails (these are deliberate, not optional)
 
-- **Project-scoped by default.** `stackunderflow skills generate` mines exactly one project — the one the current directory belongs to, or `--project SLUG`. There is no `--all-projects` flag. Cross-project mining is opt-in via `--scope user --projects A,B,C` (an explicit allowlist), which writes global skills to `~/.claude/skills/`.
+- **Project-scoped by default.** `stax skills generate` mines exactly one project — the one the current directory belongs to, or `--project SLUG`. There is no `--all-projects` flag. Cross-project mining is opt-in via `--scope user --projects A,B,C` (an explicit allowlist), which writes global skills to `~/.claude/skills/`.
 - **Never written into the package, never released.** Generated skills land under `<project>/.claude/skills/auto-*/SKILL.md` (or `~/.claude/skills/` with `--scope user`) — never into `stackunderflow/skills/`. `.gitignore` ignores `.claude/skills/auto-*/`; the wheel/sdist build explicitly excludes `**/auto-*/SKILL.md`.
-- **Labelled.** Directory prefix `auto-`, frontmatter `auto_generated: true` + `pattern_kind` + `pattern_id` + `evidence_count`, and the body opens with a `<!-- Generated by stackunderflow skills generate at <ts> from <N> sessions -->` marker.
+- **Labelled.** Directory prefix `auto-`, frontmatter `auto_generated: true` + `pattern_kind` + `pattern_id` + `evidence_count`, and the body opens with a `<!-- Generated by stax skills generate at <ts> from <N> sessions -->` marker.
 - **Idempotent + non-destructive.** Re-running overwrites in place (the previous `SKILL.md` is backed up to `SKILL.md.bak` first) and never touches a hand-authored skill — writing skips any target directory whose `SKILL.md` isn't marked `auto_generated: true`. The directory name is derived deterministically from the pattern; the rare slug collision gets a `-<hash>` suffix so it's explicit, not silent.
 - **Pure-regex synthesis, no network.** No LLM call — patterns come from parsing `messages` in the local SQLite store. (An opt-in `--use-llm` refinement pass is a possible future addition.)
 
@@ -201,21 +201,21 @@ The synthesis lives in `stackunderflow/services/skill_synth.py`; the bulk-load h
 
 ## Proactive recommendations
 
-`stackunderflow skills generate` is reactive — you have to remember to run it. `stackunderflow recommend skills` is the proactive counterpart: it mines the same patterns and surfaces "you ran X N times — want a skill?" without writing anything to disk.
+`stax skills generate` is reactive — you have to remember to run it. `stax recommend skills` is the proactive counterpart: it mines the same patterns and surfaces "you ran X N times — want a skill?" without writing anything to disk.
 
 ```bash
 # Scan the current directory's project for skill-worthy patterns
-stackunderflow recommend skills
+stax recommend skills
 
 # Tune the bar and window, or scan another project
-stackunderflow recommend skills --project -Users-you-dev-foo --threshold 8 --window-days 60
+stax recommend skills --project -Users-you-dev-foo --threshold 8 --window-days 60
 ```
 
 It filters out patterns you already have a skill for. Each row carries an `accept_command` you paste to install the skill — acceptance is always an explicit step. The same recommender is exposed to the meta-agent sidebar; see [`docs/meta-agent.md`](meta-agent.md).
 
 ## Future work
 
-`stackunderflow init --install-skills` covers the idempotent install of the three static skills today; there's no longer a manual-only path. Possible follow-ups: a `stackunderflow skills update` subcommand that diffs the destination against the shipped copy without writing anything (preview), or a per-skill opt-out flag (`--skip-skill <name>`) for users who want only a subset of the three.
+`stax init --install-skills` covers the idempotent install of the three static skills today; there's no longer a manual-only path. Possible follow-ups: a `stax skills update` subcommand that diffs the destination against the shipped copy without writing anything (preview), or a per-skill opt-out flag (`--skip-skill <name>`) for users who want only a subset of the three.
 
 ## Validation
 
@@ -229,7 +229,7 @@ pytest tests/stackunderflow/test_skills.py -q
 
 **Skill descriptions not appearing in Claude Code's skill list.** Check the file lives at `~/.claude/skills/<name>/SKILL.md` (not `~/.claude/skills/<name>.md`). The directory layout is required.
 
-**Skill fires but the CLI command fails.** `stackunderflow` not on `PATH`, or the store is empty. Run `which stackunderflow` and `stackunderflow etl status`. If the store has zero events, run `stackunderflow etl backfill` first.
+**Skill fires but the CLI command fails.** `stackunderflow` not on `PATH`, or the store is empty. Run `which stackunderflow` and `stax etl status`. If the store has zero events, run `stax etl backfill` first.
 
 **Skill never fires.** The `description` frontmatter is the trigger surface — Claude Code reads it and decides. If the skill is too narrow ("only use when user says X verbatim"), it won't fire on paraphrases. The shipped descriptions are tuned with example phrasings; if you customize, keep them example-driven.
 

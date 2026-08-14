@@ -75,7 +75,7 @@ If you use both, re-run the `cargo install` above after any Python
 ## Launch the dashboard
 
 ```bash
-stackunderflow init
+stax init
 ```
 
 This:
@@ -89,18 +89,18 @@ Use `Ctrl+C` to stop.
 ## Common first-run commands
 
 ```bash
-stackunderflow status          # one-liner: today and this month
-stackunderflow today           # today's usage per project
-stackunderflow month           # this month's usage per project
-stackunderflow report -p 7days # custom date-ranged report
-stackunderflow --help          # everything else
+stax status          # one-liner: today and this month
+stax today           # today's usage per project
+stax month           # this month's usage per project
+stax report -p 7days # custom date-ranged report
+stax --help          # everything else
 ```
 
 If port 8081 is taken, configure a different one:
 
 ```bash
-stackunderflow cfg set port 8099
-stackunderflow init
+stax cfg set port 8099
+stax init
 ```
 
 ## Where things live
@@ -112,7 +112,7 @@ stackunderflow init
 | `~/.stackunderflow/cache/pricing.json` | Cached model pricing from LiteLLM |
 | `~/.claude/` | Read-only source data — staxtrace never writes here |
 
-To start over from scratch, delete `~/.stackunderflow/store.db` and run `stackunderflow reindex`.
+To start over from scratch, delete `~/.stackunderflow/store.db` and run `stax reindex`.
 
 ## Upgrade
 

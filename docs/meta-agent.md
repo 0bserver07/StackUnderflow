@@ -1,8 +1,8 @@
 # Meta-agent sidebar
 
-StackUnderflow ships a right-docked meta-agent sidebar that lets you talk to a local LLM about your own AI coding history — sessions, projects, costs, file touches, past decisions. The model gets a set of read-only backend tools that query the same SQLite store the dashboard reads, so its answers are grounded in your real data.
+staxtrace ships a right-docked meta-agent sidebar that lets you talk to a local LLM about your own AI coding history — sessions, projects, costs, file touches, past decisions. The model gets a set of read-only backend tools that query the same SQLite store the dashboard reads, so its answers are grounded in your real data.
 
-> **TL;DR.** Run a tool-capable model under Ollama (e.g. `qwen2.5-coder` or `llama3.2`). Open StackUnderflow. Ask "what did I spend this month?", "have I dealt with stripe webhooks before?", "who touched `src/auth/middleware.py`?". The sidebar's LLM calls a backend tool, the route executes it against your local store, and the model answers in its own words. With a local Ollama, nothing leaves your machine.
+> **TL;DR.** Run a tool-capable model under Ollama (e.g. `qwen2.5-coder` or `llama3.2`). Open staxtrace. Ask "what did I spend this month?", "have I dealt with stripe webhooks before?", "who touched `src/auth/middleware.py`?". The sidebar's LLM calls a backend tool, the route executes it against your local store, and the model answers in its own words. With a local Ollama, nothing leaves your machine.
 
 The sidebar *is* the chat sidebar — there is one chat surface, not two. For Ollama setup and how models are discovered, see [`docs/chat.md`](chat.md).
 

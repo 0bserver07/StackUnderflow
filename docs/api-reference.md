@@ -1,7 +1,7 @@
-# StackUnderflow API Reference
+# staxtrace API Reference
 
-The REST API is served by `stackunderflow start` (or its alias `stackunderflow init`) on
-`http://localhost:8081` by default — change the port with `--port` or `stackunderflow cfg set port <N>`.
+The REST API is served by `stax start` (or its alias `stax init`) on
+`http://localhost:8081` by default — change the port with `--port` or `stax cfg set port <N>`.
 FastAPI's auto-generated Swagger UI is at `/docs`. This file is the human-written companion: it explains
 intent, payload shapes, and status codes. Most endpoints return JSON; the export, meta-agent, and live
 routes stream instead.
@@ -18,7 +18,7 @@ routes stream instead.
 `/api/projects`, `/api/cost-data`, `/api/cost-data/by-provider`, `/api/commands`, `/api/jsonl-files`,
 `/api/sessions/compare`, `/api/yield`, `/api/plan` — carry a top-level
 `currency: {code, symbol, rate_from_usd}` block, and their cost amounts are pre-converted from USD into the
-active currency (set via `stackunderflow cfg set currency GBP` or `STACKUNDERFLOW_CURRENCY=GBP`).
+active currency (set via `stax cfg set currency GBP` or `STACKUNDERFLOW_CURRENCY=GBP`).
 `/api/global-stats` and `/api/compare` are the exceptions: both return raw USD with no `currency` block.
 FX rates are fetched from Frankfurter and cached for 24h; if a fetch fails the API falls back to USD with
 `rate_from_usd=1.0`.
@@ -172,7 +172,7 @@ This is the endpoint the React UI calls when the user picks a project from the s
 **Request body**
 
 ```json
-{"dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow"}
+{"dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-staxtrace"}
 ```
 
 **Response**
@@ -180,10 +180,10 @@ This is the endpoint the React UI calls when the user picks a project from the s
 ```json
 {
   "status": "success",
-  "project_path": "Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
-  "log_path": "/Users/yadkonrad/.claude/projects/-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
-  "log_dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
-  "message": "Now analyzing logs from: -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow"
+  "project_path": "Users/yadkonrad/dev/dev/year26/jan26/staxtrace",
+  "log_path": "/Users/yadkonrad/.claude/projects/-Users-yadkonrad-dev-dev-year26-jan26-staxtrace",
+  "log_dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-staxtrace",
+  "message": "Now analyzing logs from: -Users-yadkonrad-dev-dev-year26-jan26-staxtrace"
 }
 ```
 
@@ -350,8 +350,8 @@ Key nested sections include `overview`, `tools`, `sessions`, `daily_usage`, `mod
 ```json
 {
   "overview": {
-    "project_name": "StackUnderflow",
-    "log_dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
+    "project_name": "staxtrace",
+    "log_dir_name": "-Users-yadkonrad-dev-dev-year26-jan26-staxtrace",
     "total_messages": 11341,
     "date_range": {"start": "2026-01-30T20:58:11.193Z", "end": "2026-04-20T01:39:11.887Z"},
     "sessions": 20,
@@ -1290,7 +1290,7 @@ List all bookmarks attached to a specific session.
 ## Settings
 
 These endpoints back the **Settings page** (`/settings` in the React UI) so the dashboard can
-read and write the same persistent settings that the `stackunderflow cfg` CLI manipulates.
+read and write the same persistent settings that the `stax cfg` CLI manipulates.
 Writes go through the same `Settings.persist` machinery (validators run; the config file at
 `~/.stackunderflow/config.json` is the single source of truth) and invalidate the dashboard
 cache so the next `/api/dashboard-data` reflects the new values.
@@ -1479,7 +1479,7 @@ Force a re-fetch of pricing data from LiteLLM, bypassing the local cache.
 
 ### GET /api/pricing/doctor
 
-Read-only pricing-health report — the same payload `stackunderflow pricing doctor` renders, assembled by
+Read-only pricing-health report — the same payload `stax pricing doctor` renders, assembled by
 the shared `assemble_pricing_health` function so the CLI and HTTP surfaces never disagree. Only `SELECT`
 queries; no writes, no network.
 
@@ -1591,7 +1591,7 @@ using the pricing table.
 ### GET /api/export
 
 Stream a downloadable CSV or JSON file of cross-project usage data.
-Same surface as the `stackunderflow export` CLI — both share a single
+Same surface as the `stax export` CLI — both share a single
 internal helper.
 
 **Query parameters**
@@ -1624,7 +1624,7 @@ period dict (with `--period`) or a `{today, last_7d, last_30d}` rollup
 
 ### GET /api/compare
 
-Per-model side-by-side comparison over a window. Same surface as the `stackunderflow compare` CLI — both
+Per-model side-by-side comparison over a window. Same surface as the `stax compare` CLI — both
 call `stackunderflow.services.compare.build_compare_payload`.
 
 **Query parameters**
@@ -1679,7 +1679,7 @@ epoch float. Per-row fields:
 ### GET /api/yield
 
 Productive vs reverted vs abandoned breakdown for the sessions in a window. Same surface as
-`stackunderflow yield`.
+`stax yield`.
 
 **Query parameters**
 
@@ -1742,7 +1742,7 @@ per-class definitions.
 ### GET /api/plan
 
 Active plan + current usage against budget + burn-projector v2 forecast.
-Same payload as `stackunderflow plan show --format json`; see the CLI
+Same payload as `stax plan show --format json`; see the CLI
 reference's "Plan Budget Commands" section for the field-by-field
 semantics. Status banding (`ok` / `warn` / `over`) is computed
 identically to the CLI.
@@ -1828,7 +1828,7 @@ the frontend can render an "add a plan" CTA without parsing fields.
   message supersedes a threshold-crossed message when the forecast
   exceeds the budget before the period ends.
 - `projection.thresholds` echoes the active alert ladder (default
-  `[50, 75, 90]`; configurable via `stackunderflow plan thresholds set`).
+  `[50, 75, 90]`; configurable via `stax plan thresholds set`).
 - `currency` is always present on both branches.
 
 **Status codes:** `200` always.
@@ -1954,7 +1954,7 @@ Clears both ceilings. **Response** — the now-empty `GET` shape. **Status codes
 Run waste-detection (legacy looped Q&A heuristic) and structural-pattern
 findings (CLAUDE.md bloat, unused MCP, ghost agents, junk reads, cache
 thrash, oversized bash output, exploration-only sessions) over a period.
-Same surface as `stackunderflow optimize`.
+Same surface as `stax optimize`.
 
 **Query parameters**
 
@@ -2043,7 +2043,7 @@ Same surface as `stackunderflow optimize`.
 
 Per-session "context tax" estimator — system prompt, registered MCP
 servers, available skills, agent definitions, memory files. Same payload
-as `stackunderflow context-budget --format json`. The estimator walks
+as `stax context-budget --format json`. The estimator walks
 visible config files defensively: any missing file contributes a
 zero-token slice rather than raising.
 
@@ -2185,7 +2185,7 @@ never blocked by an in-flight bring-up).
 ### POST /api/etl/backfill
 
 Kick off an ETL backfill in the background. Equivalent to running
-`stackunderflow etl backfill` from the CLI, but non-blocking — the route
+`stax etl backfill` from the CLI, but non-blocking — the route
 returns immediately with a job identifier and the caller polls
 `GET /api/etl/status` (`current_job` block) to track progress. Powers the
 "Backfill now" button on the Settings page.
@@ -2383,7 +2383,7 @@ but keeps `byte_count`, the metadata, and `risk`.
 ## Static Analysis & Session Quality
 
 Read-only surface over the per-session static-analysis findings (complexity / lint / type-completeness
-deltas, written by `stackunderflow analyze session` / `analyze backfill`) and the LLM-graded session
+deltas, written by `stax analyze session` / `analyze backfill`) and the LLM-graded session
 quality metrics.
 
 ### GET /api/static-analysis/session/{session_id}

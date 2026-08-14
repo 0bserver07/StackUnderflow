@@ -117,7 +117,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
       {/* Logo */}
       <Link to="/" className="flex items-center gap-2 text-indigo-400 hover:text-indigo-300 shrink-0">
         <IconStack2 size={22} />
-        <span className="font-semibold text-sm hidden sm:inline">StackUnderflow</span>
+        <span className="font-semibold text-sm hidden sm:inline">staxtrace</span>
       </Link>
 
       {/* Project Selector */}
@@ -227,7 +227,7 @@ export default function Header({ onToggleChat, chatOpen }: HeaderProps) {
             ? 'bg-indigo-600 text-white'
             : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800'
         }`}
-        title="Toggle Ask StackUnderflow"
+        title="Toggle Ask staxtrace"
       >
         <IconMessageChatbot size={18} />
       </button>

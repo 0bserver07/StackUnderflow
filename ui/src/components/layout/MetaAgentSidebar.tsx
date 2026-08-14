@@ -82,7 +82,7 @@ export default function MetaAgentSidebar({
       <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white dark:bg-gray-950 border-l border-gray-200 dark:border-gray-800 shadow-2xl z-40 flex flex-col">
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-800">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Ask StackUnderflow
+            Ask staxtrace
           </span>
           <button
             onClick={onCloseOverlay}
@@ -118,7 +118,7 @@ export default function MetaAgentSidebar({
         <button
           onClick={expand}
           className="p-1.5 rounded text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-800"
-          title="Open Ask StackUnderflow"
+          title="Open Ask staxtrace"
           aria-label="Expand meta-agent sidebar"
         >
           <IconMessageChatbot size={18} />
@@ -136,7 +136,7 @@ export default function MetaAgentSidebar({
       <header className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-800">
         <IconMessageChatbot size={16} className="text-indigo-500" />
         <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-          Ask StackUnderflow
+          Ask staxtrace
         </span>
         {selectedProject && (
           <span

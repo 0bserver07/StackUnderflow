@@ -20,7 +20,7 @@ Everything runs on the user's machine. There is no cloud component, no sharing f
 
 - Python 3.10 – 3.12
 - Node.js 18+ and npm (for the frontend)
-- `rsync` on the system `PATH` (used by `stackunderflow backup create`; falls back to `shutil.copytree` if missing)
+- `rsync` on the system `PATH` (used by `stax backup create`; falls back to `shutil.copytree` if missing)
 
 ## Setup
 
@@ -48,7 +48,7 @@ There are two processes: the Python backend and the Vite dev server.
 **Backend** (port 8081):
 
 ```bash
-stackunderflow start          # also aliased as `stackunderflow init`
+stax start          # also aliased as `stax init`
 # or
 python -m stackunderflow.server
 ```
@@ -186,7 +186,7 @@ Key properties:
 - **Stats modules** are pure functions over query results. No file reads, no HTTP, no clock calls outside the data that's passed in. Easy to test.
 - **Routes and CLI reports** both read through `store.queries`; neither touches `sqlite3` directly.
 
-`server.py` runs one ingest pass inside the FastAPI `lifespan` at boot. The CLI exposes `stackunderflow reindex` to rebuild the store from scratch.
+`server.py` runs one ingest pass inside the FastAPI `lifespan` at boot. The CLI exposes `stax reindex` to rebuild the store from scratch.
 
 ## Shared state (`deps.py`)
 
@@ -221,12 +221,12 @@ Available keys (from `settings.py`):
 Managed from the CLI:
 
 ```bash
-stackunderflow cfg ls                    # show all settings with source
-stackunderflow cfg set port 9000         # persist to ~/.stackunderflow/config.json
-stackunderflow cfg rm port               # remove from config file
+stax cfg ls                    # show all settings with source
+stax cfg set port 9000         # persist to ~/.stackunderflow/config.json
+stax cfg rm port               # remove from config file
 ```
 
-The hidden `config` group is still wired as an alias (`stackunderflow config show|set|unset`) for backward compatibility.
+The hidden `config` group is still wired as an alias (`stax config show|set|unset`) for backward compatibility.
 
 ## CLI reference
 
@@ -234,24 +234,24 @@ Defined in `stackunderflow/cli.py`. Runs via the `stackunderflow` entry point.
 
 | Command                                | Purpose                                                            |
 | -------------------------------------- | ------------------------------------------------------------------ |
-| `stackunderflow start`                 | Launch the dashboard (primary command).                            |
-| `stackunderflow init`                  | Alias for `start`.                                                 |
-| `stackunderflow start --fresh`         | Wipe disk cache before starting.                                   |
-| `stackunderflow start --headless`      | Don't auto-open the browser.                                       |
-| `stackunderflow cfg ls`                | Show settings with their source (`env`/`file`/`default`).          |
-| `stackunderflow cfg set KEY VALUE`     | Persist setting to config file.                                    |
-| `stackunderflow cfg rm KEY`            | Remove persisted setting.                                          |
-| `stackunderflow clear-cache`           | Informational; cache is cleared on restart with `--fresh`.         |
-| `stackunderflow reindex`               | Rebuild the session store from scratch.                            |
-| `stackunderflow report`                | Dashboard-style summary over a date range.                         |
-| `stackunderflow today` / `month`       | Shortcuts for common report periods.                               |
-| `stackunderflow status`                | One-liner: today + month cost and message counts.                  |
-| `stackunderflow export`                | Export aggregated data as CSV or JSON.                             |
-| `stackunderflow optimize`              | Surface sessions with repeated retry loops.                        |
-| `stackunderflow backup create`         | Incremental rsync-based backup of `~/.claude/` (hard-links).       |
-| `stackunderflow backup list`           | List existing backups.                                             |
-| `stackunderflow backup restore NAME`   | Restore `~/.claude/` from a named backup (confirms first).         |
-| `stackunderflow backup auto --enable`  | Install a daily launchd job (macOS) or print cron line (Linux).    |
+| `stax start`                 | Launch the dashboard (primary command).                            |
+| `stax init`                  | Alias for `start`.                                                 |
+| `stax start --fresh`         | Wipe disk cache before starting.                                   |
+| `stax start --headless`      | Don't auto-open the browser.                                       |
+| `stax cfg ls`                | Show settings with their source (`env`/`file`/`default`).          |
+| `stax cfg set KEY VALUE`     | Persist setting to config file.                                    |
+| `stax cfg rm KEY`            | Remove persisted setting.                                          |
+| `stax clear-cache`           | Informational; cache is cleared on restart with `--fresh`.         |
+| `stax reindex`               | Rebuild the session store from scratch.                            |
+| `stax report`                | Dashboard-style summary over a date range.                         |
+| `stax today` / `month`       | Shortcuts for common report periods.                               |
+| `stax status`                | One-liner: today + month cost and message counts.                  |
+| `stax export`                | Export aggregated data as CSV or JSON.                             |
+| `stax optimize`              | Surface sessions with repeated retry loops.                        |
+| `stax backup create`         | Incremental rsync-based backup of `~/.claude/` (hard-links).       |
+| `stax backup list`           | List existing backups.                                             |
+| `stax backup restore NAME`   | Restore `~/.claude/` from a named backup (confirms first).         |
+| `stax backup auto --enable`  | Install a daily launchd job (macOS) or print cron line (Linux).    |
 
 Full details: [cli-reference.md](cli-reference.md).
 
@@ -348,7 +348,7 @@ Workflows live in `.github/workflows/`:
 4. Optional local install test:
    ```bash
    pip install dist/stackunderflow-*.whl
-   stackunderflow --version
+   stax --version
    ```
 5. Tag and push:
    ```bash
@@ -358,14 +358,14 @@ Workflows live in `.github/workflows/`:
    ```
 6. Create a GitHub release from the tag. `publish.yml` uploads to PyPI.
 
-Once on PyPI, `uvx stackunderflow init` works immediately; no separate publish step for `uv`.
+Once on PyPI, `uvx stax init` works immediately; no separate publish step for `uv`.
 
 ## Debugging
 
 - Server won't start: `lsof -i :8081` to check the port.
 - Stale Python bytecode after a refactor: `find . -name __pycache__ -type d -exec rm -rf {} +`.
-- Verbose logs: `LOG_LEVEL=DEBUG stackunderflow start`.
-- Store looks wrong / out of date: `stackunderflow reindex` rebuilds `~/.stackunderflow/store.db` from scratch. `stackunderflow start --fresh` also wipes any residual JSON cache at `~/.stackunderflow/cache/`.
+- Verbose logs: `LOG_LEVEL=DEBUG stax start`.
+- Store looks wrong / out of date: `stax reindex` rebuilds `~/.stackunderflow/store.db` from scratch. `stax start --fresh` also wipes any residual JSON cache at `~/.stackunderflow/cache/`.
 - Frontend not reflecting API changes: confirm the Vite proxy target matches the backend port (`stackunderflow-ui/vite.config.ts` hardcodes `:8081`).
 
 ## Contributing

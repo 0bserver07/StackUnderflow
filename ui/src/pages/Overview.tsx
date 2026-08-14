@@ -398,7 +398,7 @@ export default function Overview() {
         <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
           <h3 className="text-gray-700 dark:text-gray-300 font-medium text-sm">Couldn't load dashboard data</h3>
           <p className="text-gray-500 text-xs max-w-sm">
-            The projects or global-stats request failed. Make sure the StackUnderflow server is running, then retry.
+            The projects or global-stats request failed. Make sure the staxtrace server is running, then retry.
           </p>
           <button
             onClick={() => { refetchProjects(); refetchStats() }}

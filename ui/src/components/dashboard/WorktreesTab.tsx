@@ -30,7 +30,7 @@ import { useCurrency } from '../../services/currency'
 // worktrees — which parallel-agent checkouts exist, what they cost, and a
 // per-worktree prune verdict (ACTIVE / MERGED_SAFE_TO_PRUNE /
 // HAS_UNIQUE_WORK). Prune output is strictly a PREVIEW: the exact commands
-// are shown for the user to copy and run — StackUnderflow never mutates git
+// are shown for the user to copy and run — staxtrace never mutates git
 // state. "Attribute fragments" fires POST /api/worktrees/attribute, which
 // folds phantom worktree "projects" into their parent's analytics
 // (store-only write, additive column).
@@ -175,7 +175,7 @@ function WorktreeDetail({ worktree }: { worktree: WorktreeInfo }) {
             {commands}
           </pre>
           <div className="px-3 pb-2.5 text-[11px] text-gray-400 dark:text-gray-500">
-            Preview only — StackUnderflow never runs these commands or touches git state. Review
+            Preview only — staxtrace never runs these commands or touches git state. Review
             them, then copy and run them yourself when you&apos;re sure.
           </div>
         </div>
