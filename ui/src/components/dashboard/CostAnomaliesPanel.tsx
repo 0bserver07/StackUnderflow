@@ -57,11 +57,17 @@ function AnomalyRow({ anomaly }: { anomaly: CostAnomaly }) {
   )
 }
 
-function CostAnomaliesPanel() {
+interface CostAnomaliesPanelProps {
+  /** Scope to one project slug; absent = whole store. */
+  projectSlug?: string
+}
+
+function CostAnomaliesPanel({ projectSlug }: CostAnomaliesPanelProps) {
   const { filters } = useFilters()
   const { data, isLoading, error } = useQuery({
-    queryKey: ['optimize', 'month', filters.providers, filters.models],
-    queryFn: () => getOptimize('month', { providers: filters.providers, models: filters.models }),
+    queryKey: ['optimize', 'month', filters.providers, filters.models, projectSlug ?? null],
+    queryFn: () =>
+      getOptimize('month', { providers: filters.providers, models: filters.models }, projectSlug),
     staleTime: 5 * 60_000,
   })
 

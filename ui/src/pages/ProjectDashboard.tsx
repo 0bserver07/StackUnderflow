@@ -385,7 +385,7 @@ export default function ProjectDashboard() {
       >
         <ErrorBoundary key={activeTab}>
           <Suspense fallback={<LoadingSpinner size="md" message="Loading..." />}>
-            {activeTab === 'overview' && <OverviewTab stats={stats} />}
+            {activeTab === 'overview' && <OverviewTab stats={stats} projectSlug={name} />}
             {activeTab === 'cost' && <CostTab stats={stats} />}
             {activeTab === 'budgets' && <BudgetsTab />}
             {activeTab === 'compare' && <CompareTab />}

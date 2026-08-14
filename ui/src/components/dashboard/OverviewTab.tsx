@@ -33,6 +33,8 @@ import { setTab } from '../../services/navigation'
 
 interface OverviewTabProps {
   stats: DashboardStats
+  /** The project page passes its slug so per-project cards scope to it. */
+  projectSlug?: string
 }
 
 /**
@@ -82,7 +84,7 @@ function MiniStatCard({ icon, label, value, sublabel, color = 'text-gray-600 dar
   )
 }
 
-export default function OverviewTab({ stats }: OverviewTabProps) {
+export default function OverviewTab({ stats, projectSlug }: OverviewTabProps) {
   const { currency } = useCurrency()
   // #33: the command/tool-count distribution must honour the active
   // provider/model filter. `queryString` is `&provider=…&model=…` (or '').
@@ -202,11 +204,11 @@ export default function OverviewTab({ stats }: OverviewTabProps) {
 
       {/* Optimize findings — v0.6.0. Self-hides when /api/optimize returns
           zero patterns so we don't surface noise on a healthy install. */}
-      <OptimizeFindingsPanel />
+      <OptimizeFindingsPanel projectSlug={projectSlug} />
 
       {/* Cost anomalies — audit #7. Statistical outlier days/sessions from the
           same /api/optimize payload. Self-hides when there are no outliers. */}
-      <CostAnomaliesPanel />
+      <CostAnomaliesPanel projectSlug={projectSlug} />
 
       {/* Cache ROI + Token composition share a row on wide screens so the
           donut doesn't stretch to a full-width band on its own. */}

@@ -63,6 +63,32 @@ pub const TOOL_NAME_MAP: [(&str, &str); 9] = [
 /// [`crate::jsonl::MAX_SESSION_FILE_BYTES`].
 pub const LARGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Codex writes its own framing as `role: "user"` messages — the AGENTS.md
+/// dump, the environment block, the goal-thread context. They are framework
+/// text, not the human: left in, they become session "titles"
+/// (`<codex_internal_context source="goal">Continue working toward…` on every
+/// fleet session), pollute `memory decisions` search, and inflate
+/// `message_count`. Skipping them is the same conversational filtering the
+/// adapter already applies to Codex's `developer`/`system` pseudo-turns — a
+/// mislabelled framework message is still a framework message. Measured
+/// prefixes from real rollouts; an unknown future prefix fails open (the
+/// message is kept), never silently drops a human prompt.
+pub const INTERNAL_USER_PREFIXES: [&str; 5] = [
+    "<codex_internal_context",
+    "<environment_context>",
+    "<user_instructions>",
+    "<turn_context>",
+    "# AGENTS.md instructions",
+];
+
+/// Is this `role: user` text Codex's own framing rather than the human?
+#[must_use]
+pub fn is_internal_user_text(text: &str) -> bool {
+    INTERNAL_USER_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
 /// The Codex CLI source adapter (`CodexAdapter`).
 #[derive(Debug, Clone)]
 pub struct CodexAdapter {
@@ -222,7 +248,12 @@ impl CodexAdapter {
                 if role != "user" && role != "assistant" {
                     return None;
                 }
-                Some(base(role, message_text(payload.get("content")), Vec::new()))
+                let text = message_text(payload.get("content"));
+                // Framework text mislabelled `user` — see INTERNAL_USER_PREFIXES.
+                if role == "user" && is_internal_user_text(&text) {
+                    return None;
+                }
+                Some(base(role, text, Vec::new()))
             }
             Some("function_call") => {
                 let raw_name = payload
@@ -682,5 +713,30 @@ mod tests {
         assert_eq!(message_text(Some(&json!([{"type": "text"}]))), "");
         assert_eq!(message_text(None), "");
         assert_eq!(message_text(Some(&json!(42))), "");
+    }
+
+    #[test]
+    fn codex_framing_mislabelled_user_is_skipped_and_humans_are_kept() {
+        // Measured from real rollouts: the boot burst writes these as
+        // role:"user" before the human ever types.
+        for text in [
+            "<codex_internal_context source=\"goal\"> Continue working toward the active thread goal.",
+            "<environment_context>\n  <cwd>/x</cwd>",
+            "<user_instructions>\nbe terse\n</user_instructions>",
+            "<turn_context>\nmodel: gpt-5.6\n</turn_context>",
+            "# AGENTS.md instructions for /Users/x/proj\n\n<contents…>",
+        ] {
+            assert!(is_internal_user_text(text), "{text:?} must be framing");
+        }
+        // The human's own prompt survives, even one that talks about the
+        // framing or starts with markdown.
+        for text in [
+            "can you please tell me what we can borrow as inspiration",
+            "## plan for today",
+            "why does <environment_context> appear in my titles?",
+            "# AGENTS review — read the file and summarise",
+        ] {
+            assert!(!is_internal_user_text(text), "{text:?} must be kept");
+        }
     }
 }

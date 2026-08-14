@@ -82,21 +82,27 @@ function FindingRow({ finding }: FindingRowProps) {
   )
 }
 
-export default function OptimizeFindingsPanel() {
+interface OptimizeFindingsPanelProps {
+  /** Scope to one project slug; absent = whole store (the global Overview). */
+  projectSlug?: string
+}
+
+export default function OptimizeFindingsPanel({ projectSlug }: OptimizeFindingsPanelProps) {
   return (
     <>
-      <FindingsCard />
+      <FindingsCard projectSlug={projectSlug} />
       <PrescriptionsSection />
     </>
   )
 }
 
-function FindingsCard() {
+function FindingsCard({ projectSlug }: OptimizeFindingsPanelProps) {
   const [expanded, setExpanded] = useState(false)
   const { filters } = useFilters()
   const { data, isLoading, error } = useQuery({
-    queryKey: ['optimize', 'month', filters.providers, filters.models],
-    queryFn: () => getOptimize('month', { providers: filters.providers, models: filters.models }),
+    queryKey: ['optimize', 'month', filters.providers, filters.models, projectSlug ?? null],
+    queryFn: () =>
+      getOptimize('month', { providers: filters.providers, models: filters.models }, projectSlug),
     staleTime: 5 * 60_000,
   })
 

@@ -221,6 +221,13 @@ fn ingest_body(
     // Deferred until the first yielded record — see the module docs.
     let mut session_fk: Option<i64> = None;
     let mut max_ts: Option<String> = None;
+    // The batch's earliest timestamp, for `first_ts`. Writing max into both
+    // (the pre-fix shape) collapsed every bulk-ingested session to zero
+    // duration: on a first read the whole file is one batch, so
+    // `first_ts = COALESCE(first_ts, max)` pinned start == end. Only sessions
+    // ingested incrementally from birth (a live watcher) escaped, which is why
+    // claude looked fine and codex looked broken.
+    let mut min_ts: Option<String> = None;
     // The highest `record.seq` observed in this batch. For both source kinds the
     // semantic on the next ingest is "give me records strictly past this seq" —
     // a rowid for database mode, the byte offset of the last line for file mode.
@@ -244,6 +251,7 @@ fn ingest_body(
             session,
             &record,
             &mut session_fk,
+            &mut min_ts,
             &mut max_ts,
             &mut max_seq,
             &mut count_added,
@@ -268,13 +276,21 @@ fn ingest_body(
     }
 
     if count_added > 0 {
-        let ts = max_ts.clone().unwrap_or_default();
+        let newest = max_ts.clone().unwrap_or_default();
+        let oldest = min_ts.clone().unwrap_or_default();
+        // `last_ts` advances to the batch's newest; `first_ts` retreats to the
+        // batch's oldest — never the same value unless the batch really is one
+        // instant. Empty-string guards on both sides: a record with no
+        // parseable timestamp must not pin either bound.
         conn.execute(
-            "UPDATE sessions SET message_count = message_count + ?, \
-             last_ts = COALESCE(MAX(COALESCE(last_ts, ''), ?), last_ts), \
-             first_ts = COALESCE(first_ts, ?) \
-             WHERE id = ?",
-            rusqlite::params![count_added as i64, ts, ts, session_fk],
+            "UPDATE sessions SET message_count = message_count + ?1, \
+             last_ts = COALESCE(MAX(COALESCE(last_ts, ''), ?2), last_ts), \
+             first_ts = CASE \
+               WHEN ?3 = '' THEN first_ts \
+               WHEN first_ts IS NULL OR first_ts = '' THEN ?3 \
+               ELSE MIN(first_ts, ?3) END \
+             WHERE id = ?4",
+            rusqlite::params![count_added as i64, newest, oldest, session_fk],
         )?;
     }
 
@@ -315,6 +331,7 @@ fn handle_record(
     session: &SessionRef,
     record: &Record,
     session_fk: &mut Option<i64>,
+    min_ts: &mut Option<String>,
     max_ts: &mut Option<String>,
     max_seq: &mut i64,
     count_added: &mut u64,
@@ -342,6 +359,15 @@ fn handle_record(
             .is_none_or(|current| record.timestamp > *current)
         {
             *max_ts = Some(record.timestamp.clone());
+        }
+        // Empty timestamps never bound the batch — an unstamped record would
+        // otherwise win every min comparison and blank `first_ts`.
+        if !record.timestamp.is_empty()
+            && min_ts
+                .as_ref()
+                .is_none_or(|current| record.timestamp < *current)
+        {
+            *min_ts = Some(record.timestamp.clone());
         }
         if record.seq > *max_seq {
             *max_seq = record.seq;

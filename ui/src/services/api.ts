@@ -565,9 +565,15 @@ export async function getWhatIf(): Promise<WhatIfResponse> {
 export async function getOptimize(
   period: OptimizePeriod = 'month',
   filters?: FilterParams,
+  project?: string,
 ): Promise<OptimizeResponse> {
   const params = new URLSearchParams({ period })
   buildFilterParams(params, filters)
+  // Scope to one project when a slug is given. Without this, the findings
+  // and anomalies cards on a PROJECT page silently reported whole-store
+  // waste — the same numbers on every project (observed: novalis and
+  // SutroYaro both showing "20 sessions with cache thrash").
+  if (project && project.trim()) params.append('project', project.trim())
   return fetchJson(`${BASE}/optimize?${params}`)
 }
 
