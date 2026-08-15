@@ -243,6 +243,12 @@ fn bulk_session_aggregates(
 }
 
 /// `_bulk_session_titles` — the first non-empty user message per session.
+///
+/// The Codex-framing exclusions mirror the adapter's
+/// `INTERNAL_USER_PREFIXES`: newer ingests never store those rows, but a store
+/// carrying pre-fix history still has them, and a title reading
+/// `<codex_internal_context source="goal">Continue working toward…` on every
+/// fleet session is the bug this closes. Display-layer only — the rows stay.
 fn bulk_session_titles(
     conn: &Connection,
     project_ids: &[i64],
@@ -257,6 +263,11 @@ fn bulk_session_titles(
          FROM messages \
          WHERE {} \
          AND role = 'user' AND content_text IS NOT NULL AND content_text != '' \
+         AND content_text NOT LIKE '<codex_internal_context%' \
+         AND content_text NOT LIKE '<environment_context>%' \
+         AND content_text NOT LIKE '<user_instructions>%' \
+         AND content_text NOT LIKE '<turn_context>%' \
+         AND content_text NOT LIKE '# AGENTS.md instructions%' \
          ) WHERE rn = 1",
         session_fk_subquery(project_ids.len())
     );
