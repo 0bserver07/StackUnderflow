@@ -195,7 +195,10 @@ mod tests {
         assert_eq!(batch.session_id, "abc-123");
         assert_eq!(batch.last_seq, 2);
         let lines = render_lines(&batch);
-        assert!(lines.contains("[2026-08-10T12:00:01+00:00 user] hello"), "{lines}");
+        assert!(
+            lines.contains("[2026-08-10T12:00:01+00:00 user] hello"),
+            "{lines}"
+        );
         // Newlines inside a message stay on one tail line.
         assert!(lines.contains("assistant] hi there"), "{lines}");
     }

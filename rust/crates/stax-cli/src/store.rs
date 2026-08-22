@@ -109,8 +109,7 @@ pub struct TailRow {
 pub fn run_tail(conn: &Connection, args: &TailArgs) -> Result<String> {
     let session_id = match &args.session {
         Some(id) => id.clone(),
-        None => latest_session(conn)?
-            .context("the store has no sessions to tail")?,
+        None => latest_session(conn)?.context("the store has no sessions to tail")?,
     };
     let rows = tail_rows(conn, &session_id, args.since_seq, args.limit)?;
     Ok(if args.json {
@@ -206,9 +205,15 @@ pub fn render_tail_json(session_id: &str, since_seq: i64, rows: &[TailRow]) -> S
                 .map(|row| {
                     let mut entry = serde_json::Map::new();
                     entry.insert("seq".to_owned(), serde_json::Value::from(row.seq));
-                    entry.insert("role".to_owned(), serde_json::Value::from(row.role.as_str()));
+                    entry.insert(
+                        "role".to_owned(),
+                        serde_json::Value::from(row.role.as_str()),
+                    );
                     entry.insert("ts".to_owned(), serde_json::Value::from(row.ts.as_str()));
-                    entry.insert("text".to_owned(), serde_json::Value::from(row.text.as_str()));
+                    entry.insert(
+                        "text".to_owned(),
+                        serde_json::Value::from(row.text.as_str()),
+                    );
                     serde_json::Value::Object(entry)
                 })
                 .collect(),
@@ -358,7 +363,10 @@ mod tests {
         let conn = tail_fixture();
         let rows = tail_rows(&conn, "live-session", 0, 50).expect("rows");
         let body = render_tail_json("live-session", 0, &rows);
-        assert!(body.contains("\"schema\": \"stackunderflow.observe/1\""), "{body}");
+        assert!(
+            body.contains("\"schema\": \"stackunderflow.observe/1\""),
+            "{body}"
+        );
         assert!(body.contains("\"last_seq\": 2"), "{body}");
         // An empty batch keeps the caller's cursor instead of resetting it.
         let body = render_tail_json("live-session", 7, &[]);

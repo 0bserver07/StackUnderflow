@@ -99,7 +99,10 @@ pub fn run_remote(args: &RemoteArgs) -> Result<Output> {
             ssh_store::parse_ssh_url(&add.url).map_err(|error| anyhow!("{error}"))?;
             upsert(&mut config, &add.name, &add.url, add.stax_bin.as_deref());
             settings::save(&config)?;
-            Ok(Output::ok(format!("Registered {} -> {}\n", add.name, add.url)))
+            Ok(Output::ok(format!(
+                "Registered {} -> {}\n",
+                add.name, add.url
+            )))
         }
         RemoteVerb::Ls => {
             let entries = list(&config);
@@ -377,14 +380,33 @@ mod tests {
     fn the_registry_round_trips_add_list_remove() {
         let mut config = settings::ConfigFile::default();
         assert!(list(&config).is_empty());
-        upsert(&mut config, "tmos-hq", "ssh://user@host:2222/srv/data", None);
-        upsert(&mut config, "lab", "ssh://host/srv/other", Some("/opt/stax"));
+        upsert(
+            &mut config,
+            "tmos-hq",
+            "ssh://user@host:2222/srv/data",
+            None,
+        );
+        upsert(
+            &mut config,
+            "lab",
+            "ssh://host/srv/other",
+            Some("/opt/stax"),
+        );
         let entries = list(&config);
         assert_eq!(entries[0].1.url, "ssh://user@host:2222/srv/data");
-        assert_eq!(entries[0].1.stax(), "stax", "no override means the bare name");
+        assert_eq!(
+            entries[0].1.stax(),
+            "stax",
+            "no override means the bare name"
+        );
         assert_eq!(entries[1].1.stax(), "/opt/stax");
         // Upsert replaces in place, keeping order.
-        upsert(&mut config, "tmos-hq", "ssh://user@host:2223/srv/data", None);
+        upsert(
+            &mut config,
+            "tmos-hq",
+            "ssh://user@host:2223/srv/data",
+            None,
+        );
         assert_eq!(list(&config)[0].1.url, "ssh://user@host:2223/srv/data");
         assert!(remove(&mut config, "lab"));
         assert!(!remove(&mut config, "lab"), "second removal is a no-op");
@@ -436,7 +458,10 @@ mod tests {
             .collect();
         let argv = remote_argv(&target, entry.stax(), &tail);
         let command = argv.last().expect("the remote command");
-        assert_eq!(&argv[argv.len() - 4..argv.len() - 1], &["-p", "2222", "tmos@host.example"]);
+        assert_eq!(
+            &argv[argv.len() - 4..argv.len() - 1],
+            &["-p", "2222", "tmos@host.example"]
+        );
         assert_eq!(
             command,
             "STACKUNDERFLOW_HOME='/srv/su data' stax memory decisions 'cache keys' --json"

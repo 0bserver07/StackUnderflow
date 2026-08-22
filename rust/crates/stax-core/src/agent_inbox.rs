@@ -445,10 +445,7 @@ pub fn render_for_injection(root: Option<&Path>) -> String {
         return String::new();
     }
     let batch = &unseen[..unseen.len().min(MAX_INJECT)];
-    let mut lines = vec![format!(
-        "[staxtrace inbox] {} message(s):",
-        unseen.len()
-    )];
+    let mut lines = vec![format!("[staxtrace inbox] {} message(s):", unseen.len())];
     for message in batch {
         lines.push(format!(
             "  • from {} ({}): {}",

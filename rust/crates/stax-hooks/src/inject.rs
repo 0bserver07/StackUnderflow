@@ -185,9 +185,8 @@ fn session_start_context(payload: &Value, env: &HookEnv) -> anyhow::Result<Strin
     if result.sessions.is_empty() {
         return Ok(String::new());
     }
-    let mut lines = vec![
-        "[staxtrace memory] This project has prior recorded coding sessions:".to_string(),
-    ];
+    let mut lines =
+        vec!["[staxtrace memory] This project has prior recorded coding sessions:".to_string()];
     lines.extend(result.sessions.iter().map(session_line));
     lines.push(
         "Query this history with `stax memory sessions --json`, or \

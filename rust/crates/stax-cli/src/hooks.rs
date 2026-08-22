@@ -538,10 +538,7 @@ mod tests {
         let scratch = Scratch::new("again");
         let _ = install("project", false, false, false, &scratch.env());
         let out = install("project", false, false, false, &scratch.env());
-        assert!(
-            out.stdout
-                .starts_with("Already installed staxtrace hooks")
-        );
+        assert!(out.stdout.starts_with("Already installed staxtrace hooks"));
         assert!(!out.stdout.contains("backup written"));
     }
 
