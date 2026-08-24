@@ -211,7 +211,7 @@ messages/summary + refresh + async-sweep + writer-gate batch (§ D1-D5).
   with no STACKUNDERFLOW_HOME — recreated `~/.stackunderflow` twice now
   (22:04, 02:44). Repoint at the venv + env, or accept the stub.
 - memory/risk/find-* CLI queries full-scan 383K rows on leading-wildcard
-  LIKE while FTS sits unused — the ctx-teardown prediction, confirmed by
+  LIKE while FTS sits unused — the retrieval-hardening prediction (spec #9), confirmed by
   profile. Candidate flagship item for the intelligence-layer campaign.
 - `memory decisions` cwd-scopes to 0 results on this box (history under
   the Mac-era slug) while the unscoped variant finds 14 — UX trap.

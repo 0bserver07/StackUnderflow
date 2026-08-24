@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(RESUME_SCHEMA, "staxtrace.resume/1");
         assert_eq!(
             RESUME_SCHEMA,
-            format!("stackunderflow.resume/{RESUME_SCHEMA_VERSION}")
+            format!("staxtrace.resume/{RESUME_SCHEMA_VERSION}")
         );
     }
 

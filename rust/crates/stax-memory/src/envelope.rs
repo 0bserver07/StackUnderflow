@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(MEMORY_SCHEMA, "staxtrace.memory/1");
         assert_eq!(
             MEMORY_SCHEMA,
-            format!("stackunderflow.memory/{MEMORY_SCHEMA_VERSION}")
+            format!("staxtrace.memory/{MEMORY_SCHEMA_VERSION}")
         );
     }
 
