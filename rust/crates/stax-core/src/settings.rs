@@ -168,3 +168,30 @@ mod tests {
         );
     }
 }
+
+// ── the rename shim ─────────────────────────────────────────────────────────
+
+/// Read a knob by its **staxtrace** name, falling back to the StackUnderflow
+/// one.
+///
+/// Pass the suffix — `env_var("OLLAMA_URL")` tries `STAXTRACE_OLLAMA_URL`, then
+/// `STACKUNDERFLOW_OLLAMA_URL`. The old spelling is honored **forever**: it is
+/// baked into users' shells, scripts, CI, and the ssh command this project
+/// sends to other machines, and a rename that silently stops reading it turns
+/// a configured install into a defaulted one with no error to see.
+///
+/// An empty value counts as set, matching `std::env::var` — only absence falls
+/// through.
+#[must_use]
+pub fn env_var(suffix: &str) -> Option<String> {
+    env::var(format!("STAXTRACE_{suffix}"))
+        .ok()
+        .or_else(|| env::var(format!("STACKUNDERFLOW_{suffix}")).ok())
+}
+
+/// The [`env_var`] shim over `OsString`, for the two callers that need it.
+#[must_use]
+pub fn env_var_os(suffix: &str) -> Option<std::ffi::OsString> {
+    env::var_os(format!("STAXTRACE_{suffix}"))
+        .or_else(|| env::var_os(format!("STACKUNDERFLOW_{suffix}")))
+}

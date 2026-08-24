@@ -119,7 +119,9 @@ pub fn run_etl(args: &EtlArgs) -> Result<Output> {
 fn run_status(args: &StatusArgs) -> Result<Output> {
     let conn = open_store()?;
     let app_dir = stax_core::settings::app_dir();
-    let disable_watcher = std::env::var("STACKUNDERFLOW_DISABLE_WATCHER").ok();
+    let disable_watcher = stax_core::settings::env_var("DISABLE_WATCHER")
+        .ok_or(())
+        .ok();
     let payload = assemble_status(&conn, &app_dir, disable_watcher.as_deref(), None, None)?;
     drop(conn);
 

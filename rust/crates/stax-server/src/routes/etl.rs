@@ -90,7 +90,9 @@ pub fn register(router: Router<AppState>) -> Router<AppState> {
 /// construction.
 async fn get_etl_status(State(state): State<AppState>) -> HandlerResult {
     let worker = state.clone();
-    let disable_watcher = std::env::var("STACKUNDERFLOW_DISABLE_WATCHER").ok();
+    let disable_watcher = stax_core::settings::env_var("DISABLE_WATCHER")
+        .ok_or(())
+        .ok();
     let payload = tokio::task::spawn_blocking(move || {
         let conn = worker.connect().map_err(|err| any_500(&err))?;
         let app_dir = worker

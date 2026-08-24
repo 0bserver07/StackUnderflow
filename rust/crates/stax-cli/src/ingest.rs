@@ -774,7 +774,7 @@ fn run_ingest_github(args: &GithubArgs) -> Result<Output> {
     let resolved_token = args
         .token
         .clone()
-        .or_else(|| std::env::var("STACKUNDERFLOW_GITHUB_TOKEN").ok())
+        .or_else(|| stax_core::settings::env_var("GITHUB_TOKEN").ok_or(()).ok())
         .or_else(|| std::env::var("GITHUB_TOKEN").ok());
     let mut pre = String::new();
     if resolved_token.as_deref().is_none_or(str::is_empty) {

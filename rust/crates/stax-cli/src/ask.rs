@@ -50,10 +50,17 @@ pub fn hybrid_env_from_process() -> HybridEnv {
     HybridEnv::resolve(
         &settings::app_dir(),
         Some(&store_path),
-        std::env::var("STACKUNDERFLOW_EMBED_MODEL").ok().as_deref(),
+        stax_core::settings::env_var("EMBED_MODEL")
+            .ok_or(())
+            .ok()
+            .as_deref(),
         std::env::var("OLLAMA_URL").ok().as_deref(),
-        std::env::var("STACKUNDERFLOW_OLLAMA_URL").ok().as_deref(),
-        std::env::var("STACKUNDERFLOW_OLLAMA_API_KEY")
+        stax_core::settings::env_var("OLLAMA_URL")
+            .ok_or(())
+            .ok()
+            .as_deref(),
+        stax_core::settings::env_var("OLLAMA_API_KEY")
+            .ok_or(())
             .ok()
             .filter(|value| !value.is_empty())
             .or_else(|| std::env::var("OLLAMA_API_KEY").ok())

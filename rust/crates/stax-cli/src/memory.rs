@@ -345,13 +345,15 @@ impl MemoryEnv {
             home: paths::home_dir(),
             index: stax_core::lexical::LexicalIndex::beside_store(&settings::store_path()),
             budget_default: resolve_budget_default(
-                std::env::var("STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS")
+                stax_core::settings::env_var("DISCOVERY_BUDGET_TOKENS")
+                    .ok_or(())
                     .ok()
                     .as_deref(),
                 config.as_ref(),
             ),
             weights: resolve_weights(
-                std::env::var("STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS")
+                stax_core::settings::env_var("DISCOVERY_RANK_WEIGHTS")
+                    .ok_or(())
                     .ok()
                     .as_deref(),
                 config.as_ref(),

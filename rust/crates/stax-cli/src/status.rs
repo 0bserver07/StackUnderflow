@@ -266,7 +266,7 @@ pub fn package_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exe = std::env::current_exe().ok();
     resolve_package_dir(
-        std::env::var_os("STACKUNDERFLOW_PACKAGE_DIR").as_deref(),
+        stax_core::settings::env_var_os("PACKAGE_DIR").as_deref(),
         &cwd,
         exe.as_deref(),
     )

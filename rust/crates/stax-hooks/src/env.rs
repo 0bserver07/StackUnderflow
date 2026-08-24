@@ -94,7 +94,8 @@ impl HookEnv {
         let app_dir = settings::app_dir();
         let config = read_config(&app_dir);
         let weights = resolve_weights(
-            std::env::var("STACKUNDERFLOW_DISCOVERY_RANK_WEIGHTS")
+            stax_core::settings::env_var("DISCOVERY_RANK_WEIGHTS")
+                .ok_or(())
                 .ok()
                 .as_deref(),
             config.as_ref(),
@@ -107,8 +108,12 @@ impl HookEnv {
             now_micros: pytime::now_micros(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             config,
-            proactive_disabled: std::env::var("STACKUNDERFLOW_PROACTIVE_DISABLED").ok(),
-            recall_timeout: std::env::var("STACKUNDERFLOW_RECALL_TIMEOUT").ok(),
+            proactive_disabled: stax_core::settings::env_var("PROACTIVE_DISABLED")
+                .ok_or(())
+                .ok(),
+            recall_timeout: stax_core::settings::env_var("RECALL_TIMEOUT")
+                .ok_or(())
+                .ok(),
             // Post-split: the memory CLI is the native binary. The reference
             // spawned `stackunderflow` (recall.rs's header records why, and
             // named this field the seam for deciding otherwise) — since

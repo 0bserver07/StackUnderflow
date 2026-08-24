@@ -349,7 +349,8 @@ pub fn resolve_context_budget(flag: Option<&PyInt>) -> i64 {
                     .ok()
                     .and_then(|raw| stax_core::queries::pyjson::loads(&raw));
             crate::memory::resolve_budget_default(
-                std::env::var("STACKUNDERFLOW_DISCOVERY_BUDGET_TOKENS")
+                stax_core::settings::env_var("DISCOVERY_BUDGET_TOKENS")
+                    .ok_or(())
                     .ok()
                     .as_deref(),
                 config.as_ref(),

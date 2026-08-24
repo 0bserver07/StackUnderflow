@@ -24,7 +24,8 @@ use stax_core::queries;
 /// `embeddings._resolve_endpoints(None)` read from this process's environment.
 #[must_use]
 pub fn endpoints_from_process() -> Vec<(String, Option<String>)> {
-    let api_key = std::env::var("STACKUNDERFLOW_OLLAMA_API_KEY")
+    let api_key = stax_core::settings::env_var("OLLAMA_API_KEY")
+        .ok_or(())
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -34,7 +35,10 @@ pub fn endpoints_from_process() -> Vec<(String, Option<String>)> {
         });
     ask::resolve_endpoints(
         std::env::var("OLLAMA_URL").ok().as_deref(),
-        std::env::var("STACKUNDERFLOW_OLLAMA_URL").ok().as_deref(),
+        stax_core::settings::env_var("OLLAMA_URL")
+            .ok_or(())
+            .ok()
+            .as_deref(),
         api_key.as_deref(),
     )
 }
@@ -45,7 +49,8 @@ pub fn model_from_process(flag: Option<&str>) -> String {
     if let Some(model) = flag.filter(|value| !value.is_empty()) {
         return model.to_owned();
     }
-    std::env::var("STACKUNDERFLOW_EMBED_MODEL")
+    stax_core::settings::env_var("EMBED_MODEL")
+        .ok_or(())
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| ask::DEFAULT_EMBED_MODEL.to_owned())
@@ -132,7 +137,8 @@ mod tests {
         let fallthrough = model_from_process(Some(""));
         assert!(
             fallthrough == ask::DEFAULT_EMBED_MODEL
-                || Some(fallthrough.clone()) == std::env::var("STACKUNDERFLOW_EMBED_MODEL").ok(),
+                || Some(fallthrough.clone())
+                    == stax_core::settings::env_var("EMBED_MODEL").ok_or(()).ok(),
             "empty flag falls through to env or default, got {fallthrough}"
         );
     }
