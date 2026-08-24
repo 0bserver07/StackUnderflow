@@ -3,10 +3,11 @@ resolver = "2"
 members = ["crates/*", "parity"]
 
 # Versions are maintainer-only (CLAUDE.md / AGENTS.md, and docs/specs/rust-port.md
-# §5 restates it for this branch). Every crate in this workspace stays at 0.0.0
-# for the whole campaign; no agent moves it, not even a -dev suffix.
+# §5 restates it for this branch). The 0.0.0 freeze held for the whole port
+# campaign; the maintainer lifted it on 2026-08-23 for the first Rust release.
+# It stays maintainer-only: no agent moves this line without their word.
 [workspace.package]
-version = "0.0.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 publish = false

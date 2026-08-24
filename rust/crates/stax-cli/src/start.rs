@@ -31,7 +31,7 @@
 //! # Recorded divergences
 //!
 //! * **DIV-303** — `_ensure_state_dir`'s `config.json` carries `__version__` and
-//!   `datetime.now().isoformat()`. The port's version is pinned `0.0.0` (§5,
+//!   `datetime.now().isoformat()`. The port's version was pinned `0.0.0` through the campaign (§5,
 //!   maintainer-only) and the timestamp is a wall clock, so this file can never
 //!   be byte-compared, not even between two runs of the *same* implementation.
 //!   The differ compares its key set and shape instead.
@@ -334,7 +334,7 @@ fn ensure_state_dir(state_dir: &Path) -> Result<String> {
 
 /// `json.dumps({"version": __version__, "created": datetime.now().isoformat()})`.
 ///
-/// DIV-303: `__version__` is `0.0.0` here by §5, and `created` is a wall clock.
+/// DIV-303: `__version__` tracks the workspace version (`0.0.0` through the campaign, `1.0.0` from the first Rust release), and `created` is a wall clock.
 fn marker_json() -> String {
     format!(
         "{{\"version\": \"{}\", \"created\": \"{}\"}}",

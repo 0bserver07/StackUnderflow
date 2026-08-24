@@ -69,7 +69,7 @@ The legacy package installs **two** console scripts — `stackunderflow` and a
 `stax` alias — and the alias lands on your `PATH` over the native Rust `stax`.
 If you use both, re-run the `cargo install` above after any Python
 (re)install, and confirm with `stax --version` (the native binary answers
-`stax 0.0.0`, the alias answers `stackunderflow, version 0.9.x`).
+`stax 1.0.0`, the alias answers `stackunderflow, version 0.9.x`).
 :::
 
 ## Launch the dashboard

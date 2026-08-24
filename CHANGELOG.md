@@ -5,6 +5,60 @@ All notable changes to StackUnderflow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-08-23
+
+**The first release of the Rust engine, and the first release under the name
+staxtrace.** The last published release, v0.9.2 (2026-05-29), was the Python
+implementation; that tree now lives frozen on `python-legacy`. `main` is Rust.
+
+### The product
+
+- **Three binaries**: `stax` (the CLI), `stax-server` (the dashboard),
+  `stax-hooks` (the injection fast path Claude Code spawns). All three are
+  required, and all three are relocatable — every data file they read is
+  compiled in, proven by running them with the source tree unreachable.
+- **20 provider adapters**, always on, no opt-in flags.
+- **The memory layer** — `stax memory decisions/file/worked/sessions/ask` —
+  behind a versioned, golden-fixtured JSON envelope any harness can parse.
+- **The agent telephone** — `stax msg send` / `inbox`, store-and-forward over
+  ssh, delivered into a live agent turn by the injection hooks.
+- **Agent remotes** — `stax remote add`, `--at <remote>` on the read-only
+  memory/resume namespaces, and `stax observe <remote>` to tail another
+  machine's session live.
+
+### The rename
+
+Every user-visible surface now says staxtrace: the CLI, the dashboard, the
+docs, the skills, the injected banners. Identifiers moved with compatibility
+kept, deliberately and permanently:
+
+- `STAXTRACE_*` env vars are canonical; `STACKUNDERFLOW_*` is still read.
+- Hook ids are `staxtrace-*`; a pre-rename `settings.json` still fires, is
+  recognised as ours, and is rewritten in place by `hooks install`/`repair`.
+- Envelopes are `staxtrace.memory/1` (and `.resume`/`.anchor`/`.observe`);
+  readers accept the pre-rename name, because the envelope crosses machines and
+  a peer may be older.
+- The launchd label is `com.staxtrace.backup`; the old label is torn down on
+  disable rather than left running.
+- `~/.stackunderflow/` is unchanged and still resolved. `$STAXTRACE_HOME` and
+  `~/.staxtrace/` are honored if you move it; no data is moved for you.
+
+### Fixed in this release
+
+- `status`/`today`/`month` no longer fail outside a source checkout — the rate
+  card falls back to the copy compiled into the binary.
+- `hooks install` writes the native `stax-hooks` command; the earlier form
+  invoked a Python entry point that a Rust-only install does not have.
+- Codex sessions carry the human's first message as their title instead of the
+  agent's own framing, and real durations instead of zero.
+- Project dashboards scope their findings and anomalies to the project.
+
+### Known
+
+- 11 models have no rate card entry (the cached LiteLLM overlay is stale), so
+  spend is understated; `stax pricing doctor` reports the exposure by model.
+- `stax reindex` is slow on large stores.
+
 ## [Unreleased]
 
 ### Added
