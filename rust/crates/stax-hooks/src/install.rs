@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(report.hooks_installed.len(), 4);
         let text = std::fs::read_to_string(scratch.settings()).unwrap();
         assert!(text.ends_with("}\n"), "{text}");
-        assert!(text.contains("stax-hooks run stackunderflow-stop"));
+        assert!(text.contains("stax-hooks run staxtrace-stop"));
         // Never the Python entry point — the program a post-split install
         // does not have.
         assert!(!text.contains("stax hooks run"), "{text}");
@@ -818,14 +818,14 @@ mod tests {
     fn install_is_convergent_over_a_stale_absolute_path() {
         let scratch = Scratch::new("stale");
         scratch.write_settings(
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/venv/bin/stax hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/venv/bin/stax hooks run staxtrace-stop"}]}]}}"#,
         );
         let report = install("project", false, false, false, &scratch.env()).unwrap();
         assert!(report.changed);
-        assert_eq!(report.stale_entries_replaced, vec!["stackunderflow-stop"]);
+        assert_eq!(report.stale_entries_replaced, vec!["staxtrace-stop"]);
         let text = std::fs::read_to_string(scratch.settings()).unwrap();
         assert!(!text.contains("/old/venv"), "{text}");
-        assert_eq!(text.matches("stackunderflow-stop").count(), 1, "{text}");
+        assert_eq!(text.matches("staxtrace-stop").count(), 1, "{text}");
     }
 
     #[test]
@@ -930,13 +930,13 @@ mod tests {
     fn status_marks_a_stale_entry_and_a_capture_choice() {
         let scratch = Scratch::new("status");
         scratch.write_settings(
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stax hooks run stackunderflow-stop --capture-content"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stax hooks run staxtrace-stop --capture-content"}]}]}}"#,
         );
         let entries = status(Some("project"), &scratch.env()).unwrap();
         let (_, entry) = &entries[0];
         assert!(entry.exists && entry.valid_json);
-        assert_eq!(entry.hooks, vec![("stackunderflow-stop".to_owned(), true)]);
-        assert_eq!(entry.stale, vec!["stackunderflow-stop"]);
+        assert_eq!(entry.hooks, vec![("staxtrace-stop".to_owned(), true)]);
+        assert_eq!(entry.stale, vec!["staxtrace-stop"]);
     }
 
     #[test]

@@ -26,59 +26,57 @@ use stax_core::queries::pyjson::Value;
 
 /// Claude Code event → our *capture* hook id (`EVENT_HOOK_IDS`).
 pub const EVENT_HOOK_IDS: [(&str, &str); 4] = [
-    ("PostToolUse", "stackunderflow-post-tool-use"),
-    ("UserPromptSubmit", "stackunderflow-user-prompt"),
-    ("Stop", "stackunderflow-stop"),
-    ("PreCompact", "stackunderflow-pre-compact"),
+    ("PostToolUse", "staxtrace-post-tool-use"),
+    ("UserPromptSubmit", "staxtrace-user-prompt"),
+    ("Stop", "staxtrace-stop"),
+    ("PreCompact", "staxtrace-pre-compact"),
 ];
 
 /// Claude Code event → our *injection* hook id (`INJECT_EVENT_HOOK_IDS`).
 pub const INJECT_EVENT_HOOK_IDS: [(&str, &str); 3] = [
-    ("SessionStart", "stackunderflow-inject-session-start"),
-    ("UserPromptSubmit", "stackunderflow-inject-user-prompt"),
-    ("PreToolUse", "stackunderflow-inject-pre-tool-use"),
+    ("SessionStart", "staxtrace-inject-session-start"),
+    ("UserPromptSubmit", "staxtrace-inject-user-prompt"),
+    ("PreToolUse", "staxtrace-inject-pre-tool-use"),
 ];
 
 /// Claude Code event → the *active-recall* hook id (`RECALL_EVENT_HOOK_IDS`).
-pub const RECALL_EVENT_HOOK_IDS: [(&str, &str); 1] =
-    [("PreToolUse", "stackunderflow-pretool-recall")];
+pub const RECALL_EVENT_HOOK_IDS: [(&str, &str); 1] = [("PreToolUse", "staxtrace-pretool-recall")];
 
 /// Claude Code event → the *proactive-nudge* hook id (`NUDGE_EVENT_HOOK_IDS`).
-pub const NUDGE_EVENT_HOOK_IDS: [(&str, &str); 1] =
-    [("PostToolUse", "stackunderflow-posttool-nudge")];
+pub const NUDGE_EVENT_HOOK_IDS: [(&str, &str); 1] = [("PostToolUse", "staxtrace-posttool-nudge")];
 
 /// The four capture ids (`HOOK_IDS`).
 pub const HOOK_IDS: [&str; 4] = [
-    "stackunderflow-post-tool-use",
-    "stackunderflow-user-prompt",
-    "stackunderflow-stop",
-    "stackunderflow-pre-compact",
+    "staxtrace-post-tool-use",
+    "staxtrace-user-prompt",
+    "staxtrace-stop",
+    "staxtrace-pre-compact",
 ];
 
 /// The three injection ids (`INJECT_HOOK_IDS`).
 pub const INJECT_HOOK_IDS: [&str; 3] = [
-    "stackunderflow-inject-session-start",
-    "stackunderflow-inject-user-prompt",
-    "stackunderflow-inject-pre-tool-use",
+    "staxtrace-inject-session-start",
+    "staxtrace-inject-user-prompt",
+    "staxtrace-inject-pre-tool-use",
 ];
 
 /// The one active-recall id (`RECALL_HOOK_IDS`).
-pub const RECALL_HOOK_IDS: [&str; 1] = ["stackunderflow-pretool-recall"];
+pub const RECALL_HOOK_IDS: [&str; 1] = ["staxtrace-pretool-recall"];
 
 /// The one proactive-nudge id (`NUDGE_HOOK_IDS`).
-pub const NUDGE_HOOK_IDS: [&str; 1] = ["stackunderflow-posttool-nudge"];
+pub const NUDGE_HOOK_IDS: [&str; 1] = ["staxtrace-posttool-nudge"];
 
 /// Every id we own, capture → inject → recall → nudge (`ALL_HOOK_IDS`).
 pub const ALL_HOOK_IDS: [&str; 9] = [
-    "stackunderflow-post-tool-use",
-    "stackunderflow-user-prompt",
-    "stackunderflow-stop",
-    "stackunderflow-pre-compact",
-    "stackunderflow-inject-session-start",
-    "stackunderflow-inject-user-prompt",
-    "stackunderflow-inject-pre-tool-use",
-    "stackunderflow-pretool-recall",
-    "stackunderflow-posttool-nudge",
+    "staxtrace-post-tool-use",
+    "staxtrace-user-prompt",
+    "staxtrace-stop",
+    "staxtrace-pre-compact",
+    "staxtrace-inject-session-start",
+    "staxtrace-inject-user-prompt",
+    "staxtrace-inject-pre-tool-use",
+    "staxtrace-pretool-recall",
+    "staxtrace-posttool-nudge",
 ];
 
 /// `EVENT_MATCHERS` — capture `PostToolUse` is scoped to `Bash`.
@@ -102,6 +100,8 @@ const CAPTURE_CONTENT_FLAG: &str = "--capture-content";
 /// `PostToolUse` each carry two hooks.
 #[must_use]
 pub fn hook_id_event(hook_id: &str) -> Option<&'static str> {
+    let hook_id = &canonical_hook_id(hook_id);
+    let hook_id = hook_id.as_str();
     for table in [
         EVENT_HOOK_IDS.as_slice(),
         INJECT_EVENT_HOOK_IDS.as_slice(),
@@ -115,6 +115,22 @@ pub fn hook_id_event(hook_id: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Fold a legacy `stackunderflow-*` id onto its `staxtrace-*` spelling.
+///
+/// The ids are written into users' `settings.json`, so both generations are
+/// live at once: a file written before the rename still invokes
+/// `stax-hooks run staxtrace-stop`, and that must keep firing until
+/// `hooks install`/`repair` rewrites it. Everything downstream — the event
+/// lookup, the dispatcher, ownership checks — works on the canonical form, so
+/// this is the single place the two spellings meet.
+#[must_use]
+pub fn canonical_hook_id(hook_id: &str) -> String {
+    match hook_id.strip_prefix("stackunderflow-") {
+        Some(rest) => format!("staxtrace-{rest}"),
+        None => hook_id.to_string(),
+    }
 }
 
 /// `EVENT_MATCHERS.get(event)` — `None` for the events with no tool dimension
@@ -162,7 +178,7 @@ pub fn canonical_command(hook_id: &str, capture_content: bool) -> String {
 /// matter (see the manifest's note on `regex`).
 static HOOK_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:stackunderflow|stax-hooks|stax)\b[^|&;]*?\b(?:hooks?\s+)?run\s+(?P<hook_id>stackunderflow-[a-z][a-z0-9-]*)\b(?P<rest>[^|&;]*)",
+        r"(?:stackunderflow|stax-hooks|stax)\b[^|&;]*?\b(?:hooks?\s+)?run\s+(?P<hook_id>(?:staxtrace|stackunderflow)-[a-z][a-z0-9-]*)\b(?P<rest>[^|&;]*)",
     )
     .expect("the hook-command pattern is a literal and compiles")
 });
@@ -183,7 +199,14 @@ pub fn parse_hook_command(command: &str) -> Option<(String, bool)> {
     // A `stackunderflow-…` token we do not know is not one of our hooks.
     hook_id_event(hook_id)?;
     let rest = caps.name("rest").map_or("", |m| m.as_str());
-    Some((hook_id.to_string(), rest.contains(CAPTURE_CONTENT_FLAG)))
+    // Report the CANONICAL id even when the command spells the legacy one:
+    // callers compare it against `canonical_command`, and returning the raw
+    // spelling would make a pre-rename entry look already-canonical and never
+    // get rewritten.
+    Some((
+        canonical_hook_id(hook_id),
+        rest.contains(CAPTURE_CONTENT_FLAG),
+    ))
 }
 
 /// `templates.is_canonical` — already exactly what `install` would write?
@@ -323,22 +346,22 @@ mod tests {
     #[test]
     fn every_id_maps_to_its_event() {
         assert_eq!(
-            hook_id_event("stackunderflow-post-tool-use"),
+            hook_id_event("staxtrace-post-tool-use"),
             Some("PostToolUse")
         );
         assert_eq!(
-            hook_id_event("stackunderflow-inject-user-prompt"),
+            hook_id_event("staxtrace-inject-user-prompt"),
             Some("UserPromptSubmit")
         );
         assert_eq!(
-            hook_id_event("stackunderflow-pretool-recall"),
+            hook_id_event("staxtrace-pretool-recall"),
             Some("PreToolUse")
         );
         assert_eq!(
-            hook_id_event("stackunderflow-posttool-nudge"),
+            hook_id_event("staxtrace-posttool-nudge"),
             Some("PostToolUse")
         );
-        assert_eq!(hook_id_event("stackunderflow-nope"), None);
+        assert_eq!(hook_id_event("staxtrace-nope"), None);
         for id in ALL_HOOK_IDS {
             assert!(hook_id_event(id).is_some(), "{id} has no event");
         }
@@ -347,69 +370,104 @@ mod tests {
     #[test]
     fn the_canonical_command_is_portable() {
         assert_eq!(
-            canonical_command("stackunderflow-stop", false),
-            "stax-hooks run stackunderflow-stop"
+            canonical_command("staxtrace-stop", false),
+            "stax-hooks run staxtrace-stop"
         );
         assert_eq!(
-            canonical_command("stackunderflow-stop", true),
-            "stax-hooks run stackunderflow-stop --capture-content"
+            canonical_command("staxtrace-stop", true),
+            "stax-hooks run staxtrace-stop --capture-content"
         );
     }
 
     #[test]
     fn parse_recognises_stale_paths_and_the_legacy_spelling() {
         assert_eq!(
-            parse_hook_command("stax hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("stax hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         assert_eq!(
-            parse_hook_command("/old/venv/bin/stax hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("/old/venv/bin/stax hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         // The legacy singular `hook run`.
         assert_eq!(
-            parse_hook_command(
-                "stackunderflow hook run stackunderflow-user-prompt --capture-content"
-            ),
-            Some(("stackunderflow-user-prompt".into(), true))
+            parse_hook_command("stackunderflow hook run staxtrace-user-prompt --capture-content"),
+            Some(("staxtrace-user-prompt".into(), true))
         );
         // An id we do not own is NOT ours — the conservative branch.
         assert_eq!(
-            parse_hook_command("stax hooks run stackunderflow-not-a-hook"),
+            parse_hook_command("stax hooks run staxtrace-not-a-hook"),
             None
         );
         assert_eq!(parse_hook_command("some-other-tool --do-a-thing"), None);
     }
 
     #[test]
+    fn a_pre_rename_settings_file_still_works_and_is_upgradable() {
+        // The ids live in users' settings.json, so both generations are live at
+        // once. A file written before the rename must keep FIRING (the runner
+        // resolves it) and must be RECOGNISED as ours (so install/repair can
+        // rewrite it in place rather than leaving a duplicate).
+        assert_eq!(canonical_hook_id("stackunderflow-stop"), "staxtrace-stop");
+        assert_eq!(canonical_hook_id("staxtrace-stop"), "staxtrace-stop");
+        assert_eq!(canonical_hook_id("someone-else-stop"), "someone-else-stop");
+
+        // Legacy id resolves to its event — this is what keeps an un-repaired
+        // install alive.
+        assert_eq!(hook_id_event("stackunderflow-stop"), Some("Stop"));
+        assert_eq!(
+            hook_id_event("stackunderflow-inject-pre-tool-use"),
+            Some("PreToolUse")
+        );
+
+        // Legacy command parses as ours, reported under the canonical id...
+        assert_eq!(
+            parse_hook_command("stax-hooks run stackunderflow-stop"),
+            Some(("staxtrace-stop".into(), false))
+        );
+        assert_eq!(
+            parse_hook_command("stackunderflow hooks run stackunderflow-stop"),
+            Some(("staxtrace-stop".into(), false))
+        );
+        // ...and is therefore STALE, which is what makes `repair` rewrite it.
+        assert!(!is_canonical("stax-hooks run stackunderflow-stop", false));
+
+        // An id we do not own stays unowned in either generation.
+        assert_eq!(
+            parse_hook_command("stax-hooks run stackunderflow-not-ours"),
+            None
+        );
+    }
+
+    #[test]
     fn parse_recognises_every_post_cutover_spelling() {
         // The canonical form `install` writes now.
         assert_eq!(
-            parse_hook_command("stax-hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("stax-hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         assert_eq!(
-            parse_hook_command("stax-hooks run stackunderflow-stop --capture-content"),
-            Some(("stackunderflow-stop".into(), true))
+            parse_hook_command("stax-hooks run staxtrace-stop --capture-content"),
+            Some(("staxtrace-stop".into(), true))
         );
         // A stale absolute path to the binary — what `repair` canonicalises.
         assert_eq!(
-            parse_hook_command("/old/prefix/bin/stax-hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("/old/prefix/bin/stax-hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         // The drop-in spelling the binary also accepts.
         assert_eq!(
-            parse_hook_command("stax-hooks hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("stax-hooks hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         // The CLI parity surface.
         assert_eq!(
-            parse_hook_command("stax hooks run stackunderflow-stop"),
-            Some(("stackunderflow-stop".into(), false))
+            parse_hook_command("stax hooks run staxtrace-stop"),
+            Some(("staxtrace-stop".into(), false))
         );
         // Ownership still gates on the id, whatever the program spelling.
         assert_eq!(
-            parse_hook_command("stax-hooks run stackunderflow-not-a-hook"),
+            parse_hook_command("stax-hooks run staxtrace-not-a-hook"),
             None
         );
     }
@@ -418,23 +476,23 @@ mod tests {
     fn the_pipeline_guard_stops_at_the_separator() {
         // `[^|&;]*` must not run past the `|` into the next command.
         let (id, flag) =
-            parse_hook_command("stax hooks run stackunderflow-stop | tee --capture-content")
+            parse_hook_command("stax hooks run staxtrace-stop | tee --capture-content")
                 .expect("ours");
-        assert_eq!(id, "stackunderflow-stop");
+        assert_eq!(id, "staxtrace-stop");
         assert!(!flag, "the flag lives in the NEXT pipeline stage");
     }
 
     #[test]
     fn is_canonical_is_exact() {
-        assert!(is_canonical("stax-hooks run stackunderflow-stop", false));
+        assert!(is_canonical("stax-hooks run staxtrace-stop", false));
         assert!(!is_canonical(
-            "/old/prefix/bin/stax-hooks run stackunderflow-stop",
+            "/old/prefix/bin/stax-hooks run staxtrace-stop",
             false
         ));
-        assert!(!is_canonical("stax-hooks run stackunderflow-stop", true));
+        assert!(!is_canonical("stax-hooks run staxtrace-stop", true));
         // The pre-cutover Python form is ours (parseable) but stale, which is
         // exactly what makes a re-`install` rewrite it in place.
-        assert!(!is_canonical("stax hooks run stackunderflow-stop", false));
+        assert!(!is_canonical("stax hooks run staxtrace-stop", false));
     }
 
     #[test]
@@ -443,7 +501,7 @@ mod tests {
         let rendered = pyjson::dumps_default(&block);
         assert!(
             rendered.starts_with(
-                r#"{"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "stax-hooks run stackunderflow-post-tool-use"}]}]"#
+                r#"{"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "stax-hooks run staxtrace-post-tool-use"}]}]"#
             ),
             "{rendered}"
         );

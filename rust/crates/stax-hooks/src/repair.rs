@@ -360,7 +360,7 @@ mod tests {
     }
 
     const STALE: &str = r#"{"hooks": {"Stop": [{"hooks": [
-        {"type": "command", "command": "/old/venv/bin/stax hooks run stackunderflow-stop"},
+        {"type": "command", "command": "/old/venv/bin/stax hooks run staxtrace-stop"},
         {"type": "command", "command": "someone-elses-tool"}
     ]}]}}"#;
 
@@ -371,7 +371,7 @@ mod tests {
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(report.repaired.len(), 1);
         assert_eq!(report.files_changed(), 1);
-        assert_eq!(report.repaired[0].new, "stax-hooks run stackunderflow-stop");
+        assert_eq!(report.repaired[0].new, "stax-hooks run staxtrace-stop");
         assert_eq!(report.backups.len(), 1);
         let text = std::fs::read_to_string(scratch.0.join(".claude/settings.json")).unwrap();
         assert!(text.contains("someone-elses-tool"), "{text}");
@@ -394,7 +394,7 @@ mod tests {
         let scratch = Scratch::new("clean");
         scratch.write(
             ".claude/settings.json",
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax-hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax-hooks run staxtrace-stop"}]}]}}"#,
         );
         let report = repair("project", false, &scratch.env()).unwrap();
         assert!(report.repaired.is_empty());
@@ -409,11 +409,11 @@ mod tests {
         let scratch = Scratch::new("python-form");
         scratch.write(
             ".claude/settings.json",
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax hooks run staxtrace-stop"}]}]}}"#,
         );
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(report.repaired.len(), 1);
-        assert_eq!(report.repaired[0].new, "stax-hooks run stackunderflow-stop");
+        assert_eq!(report.repaired[0].new, "stax-hooks run staxtrace-stop");
     }
 
     #[test]
@@ -421,12 +421,12 @@ mod tests {
         let scratch = Scratch::new("capture");
         scratch.write(
             ".claude/settings.json",
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x/stackunderflow hook run stackunderflow-stop --capture-content"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x/stackunderflow hook run staxtrace-stop --capture-content"}]}]}}"#,
         );
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(
             report.repaired[0].new,
-            "stax-hooks run stackunderflow-stop --capture-content"
+            "stax-hooks run staxtrace-stop --capture-content"
         );
     }
 

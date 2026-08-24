@@ -80,6 +80,13 @@ pub fn run(hook_id: &str, payload: &Value, capture_content: bool, env: &HookEnv)
         _ => Value::Object(Vec::new()),
     };
 
+    // A settings.json written before the rename invokes
+    // `stax-hooks run stackunderflow-stop`. Fold it here, once, so every table
+    // lookup below sees the canonical spelling and an un-repaired install keeps
+    // firing exactly as it did.
+    let canonical = templates::canonical_hook_id(hook_id);
+    let hook_id = canonical.as_str();
+
     if templates::INJECT_HOOK_IDS.contains(&hook_id) {
         return emit(inject::build_injection(hook_id, &payload, env));
     }

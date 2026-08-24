@@ -633,7 +633,7 @@ mod tests {
     fn repair_prints_the_arrow_block_for_each_rewrite() {
         let scratch = Scratch::new("repairstale");
         scratch.write_settings(
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stackunderflow hook run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stackunderflow hook run staxtrace-stop"}]}]}}"#,
         );
         let out = repair("project", true, &scratch.env());
         assert!(
@@ -642,7 +642,7 @@ mod tests {
         );
         assert!(
             out.stdout
-                .contains("      → stax-hooks run stackunderflow-stop\n")
+                .contains("      → stax-hooks run staxtrace-stop\n")
         );
         assert!(!out.stdout.contains("backups written"));
     }
