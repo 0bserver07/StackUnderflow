@@ -696,12 +696,14 @@ mod tests {
         let parsed: Value = serde_json::from_str(&body).expect("json");
         assert_eq!(parsed["source"], Value::from("default"));
         assert_eq!(parsed["is_stale"], Value::Bool(true));
-        // The reference, probed under a failed fetch, answered 53 entries whose
-        // first key is `claude-fable-5`. Both sides read the same manifest.
+        // The reference, probed under a failed fetch, answered entries in
+        // MANIFEST order — the property under test. The first key tracks
+        // whichever model heads `[canonical_ids].anthropic`; it became
+        // `claude-opus-5` when that model was added ahead of Fable 5.
         let pricing = parsed["pricing"].as_object().expect("object");
         assert_eq!(
             pricing.keys().next().map(String::as_str),
-            Some("claude-fable-5")
+            Some("claude-opus-5")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

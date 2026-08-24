@@ -831,8 +831,16 @@ mod tests {
         let e = engine();
         assert!(e.is_rate_card_model("claude-opus-4-8"));
         assert!(e.is_rate_card_model("gpt-5.5"));
-        // Priced (via the Anthropic fallback) but NOT a rate-card model.
-        assert!(!e.is_rate_card_model("claude-opus-5"));
+        // Priced (via the Anthropic fallback) but NOT a rate-card model. The
+        // example has to be an id the card does NOT list: this test used
+        // `claude-opus-5` until that model got a real entry, which is the
+        // failure mode it is guarding against — membership is identity, and a
+        // model gains it by being added to `[canonical_ids]`, not by being
+        // priceable.
+        assert!(!e.is_rate_card_model("claude-opus-4-9"));
+        assert!(e.get_model_pricing("claude-opus-4-9").is_some());
+        // The model that motivated the fix is now BOTH.
+        assert!(e.is_rate_card_model("claude-opus-5"));
         assert!(e.get_model_pricing("claude-opus-5").is_some());
         assert!(!e.is_rate_card_model(""));
         // Every canonical id resolves to a price; membership and the key list agree.

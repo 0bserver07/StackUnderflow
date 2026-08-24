@@ -625,7 +625,7 @@ mod tests {
         let obj = card.as_object().expect("object");
         assert!(!obj.is_empty());
         let (first_key, first_value) = obj.iter().next().expect("one entry");
-        assert_eq!(first_key, "claude-fable-5", "manifest order, not sorted");
+        assert_eq!(first_key, "claude-opus-5", "manifest order, not sorted");
         let entry = first_value.as_object().expect("entry object");
         assert_eq!(
             entry.keys().map(String::as_str).collect::<Vec<_>>(),
