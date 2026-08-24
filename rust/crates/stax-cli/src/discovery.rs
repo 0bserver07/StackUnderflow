@@ -11,7 +11,7 @@
 //! * **A different JSON shape.** These emit the original
 //!   `{"sessions": [...]}` object (plus `_truncated` / `_more_available` /
 //!   `_budget_used_tokens` / `_budget_max_tokens` when a budget applied), never
-//!   the `stackunderflow.memory/1` envelope. An agent that learned the alias
+//!   the `staxtrace.memory/1` envelope. An agent that learned the alias
 //!   output keeps working.
 //! * **Flags the `memory` verbs do not have.** `--mode read|write|any`,
 //!   `--provider`, `--file`, `--min-confidence`, `-v/--verbose`,

@@ -1,8 +1,8 @@
 {
-  "schema": "stackunderflow.memory/1",
-  "command": "worked",
+  "schema": "staxtrace.memory/1",
+  "command": "decisions",
   "query": {
-    "action": "npm run build",
+    "text": "retry",
     "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
     "since": "notadate",
     "limit": 20

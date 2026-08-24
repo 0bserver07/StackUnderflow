@@ -1,12 +1,11 @@
 {
-  "schema": "stackunderflow.memory/1",
-  "command": "sessions",
+  "schema": "staxtrace.memory/1",
+  "command": "worked",
   "query": {
-    "path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",
+    "action": "npm run build",
     "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
     "since": "notadate",
-    "limit": 20,
-    "scope": "path"
+    "limit": 20
   },
   "error": "Invalid since value 'notadate': expected '7d'/'1w'/'1m'/'24h' or an ISO date/datetime."
 }

@@ -1,8 +1,8 @@
-//! The `stackunderflow.resume/1` envelope — `stax resume --json`.
+//! The `staxtrace.resume/1` envelope — `stax resume --json`.
 //!
 //! A port of the payload assembled in `python-legacy: cli.py:resume_cmd`
 //! (the `payload: dict[str, Any]` literal and the loop that fills
-//! `providers`). Unlike `stackunderflow.memory/1` this contract has **no
+//! `providers`). Unlike `staxtrace.memory/1` this contract has **no
 //! shipped golden pack and no JSON-Schema** — it is pinned only by
 //! `tests/python-legacy: cli/test_resume_cmd.py::test_json_envelope_shape`,
 //! which asserts the schema tag, `path`, provider sort order and the session
@@ -34,7 +34,7 @@ use crate::envelope::{EnvelopeError, render, render_line};
 use crate::pyjson;
 
 /// The frozen contract id.
-pub const RESUME_SCHEMA: &str = "stackunderflow.resume/1";
+pub const RESUME_SCHEMA: &str = "staxtrace.resume/1";
 
 /// Bumps only on a breaking change to the envelope.
 pub const RESUME_SCHEMA_VERSION: u32 = 1;
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn schema_is_versioned() {
-        assert_eq!(RESUME_SCHEMA, "stackunderflow.resume/1");
+        assert_eq!(RESUME_SCHEMA, "staxtrace.resume/1");
         assert_eq!(
             RESUME_SCHEMA,
             format!("stackunderflow.resume/{RESUME_SCHEMA_VERSION}")
@@ -315,7 +315,7 @@ mod tests {
         let env = ResumeEnvelope::new("/Users/t");
         assert_eq!(
             env.render(),
-            "{\n  \"schema\": \"stackunderflow.resume/1\",\n  \"path\": \"/Users/t\",\n  \"providers\": []\n}"
+            "{\n  \"schema\": \"staxtrace.resume/1\",\n  \"path\": \"/Users/t\",\n  \"providers\": []\n}"
         );
     }
 
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn round_trip_preserves_unknown_fields() {
         let text = concat!(
-            "{\n  \"schema\": \"stackunderflow.resume/1\",\n",
+            "{\n  \"schema\": \"staxtrace.resume/1\",\n",
             "  \"path\": \"/w\",\n  \"providers\": [],\n",
             "  \"x_future\": {\n    \"added_later\": [\n      1,\n      2\n    ]\n  }\n}"
         );
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_missing_path_is_an_error_not_an_empty_string() {
-        let err = ResumeEnvelope::from_value(json!({"schema": "stackunderflow.resume/1"}))
+        let err = ResumeEnvelope::from_value(json!({"schema": "staxtrace.resume/1"}))
             .expect_err("path is required");
         assert!(matches!(err, EnvelopeError::Missing("path")), "{err}");
     }

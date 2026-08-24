@@ -5,7 +5,7 @@
 //! It is **not** a second implementation of the queries. Every row on this path
 //! comes out of [`stax_core::queries`] — the same functions, the same SQL
 //! shapes §6b calls load-bearing — and every byte of JSON comes out of
-//! [`stax_memory`]'s `stackunderflow.memory/1` writer. What is re-expressed
+//! [`stax_memory`]'s `staxtrace.memory/1` writer. What is re-expressed
 //! here is the ~200 lines of *assembly* that `stax-cli`'s `memory` module
 //! performs between the two: the `query` echo, the intent gate, the cwd-slug
 //! fallback, the file verb's merge/dedup/cap/pack, and the error envelope.

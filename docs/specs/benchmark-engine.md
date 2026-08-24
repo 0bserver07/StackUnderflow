@@ -333,7 +333,7 @@ House pattern: synthetic in-`tmp_path` stores, never `~/.stackunderflow/store.db
 - **Pricing invariant** — Phase-2 mart: assert `sum(benchmark_mart.cost_usd)` reconciles with `session_mart`/`usage_events` (extend `test_pricing_invariants.py`); assert `reasoning_tokens ≤ output_tokens`.
 - **Perf** — add `/api/benchmark` to `test_route_perf_regression.py` `_ROUTES` at the **200ms** budget against the 50K-session fixture; if it regresses, that's the Move-4 trigger.
 - **Empty/degenerate store** — schemaless and single-model stores return well-formed empty verdicts, never raise (mirror the forks/anomaly tests).
-- **`--json` envelope** — conforms to `contracts/stackunderflow-memory-v1/schema.json` (the existing golden-fixture check).
+- **`--json` envelope** — conforms to `contracts/staxtrace-memory-v1/schema.json` (the existing golden-fixture check).
 - **Late-arriving outcome** (Phase 2) — grade a session *after* its mart row exists; assert the next refresh updates `outcome_success` (guards the non-standard builder).
 
 ---

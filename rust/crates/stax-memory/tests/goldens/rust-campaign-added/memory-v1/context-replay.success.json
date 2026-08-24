@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "context-replay",
   "query": {
     "session_id": "43da8464-3633-45cc-a2a4-a056daaffb84",

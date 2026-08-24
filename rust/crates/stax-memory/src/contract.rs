@@ -1,7 +1,7 @@
-//! Conformance checking against the shipped `stackunderflow.memory/1` schema.
+//! Conformance checking against the shipped `staxtrace.memory/1` schema.
 //!
 //! A port of `scripts/check_memory_contract.py` — the checker CI runs. It reads
-//! `contracts/stackunderflow-memory-v1/schema.json` **unchanged**; nothing about
+//! `contracts/staxtrace-memory-v1/schema.json` **unchanged**; nothing about
 //! the contract is transcribed into Rust, which is the whole point of RS-1-026:
 //! the oracle stays one file, honoured by two implementations.
 //!

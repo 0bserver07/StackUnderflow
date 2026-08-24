@@ -4378,10 +4378,7 @@ mod tests {
     #[test]
     fn indent_two_matches_json_dumps() {
         let value = pyjson::Value::Object(vec![
-            (
-                "schema".into(),
-                pyjson::Value::from("stackunderflow.memory/1"),
-            ),
+            ("schema".into(), pyjson::Value::from("staxtrace.memory/1")),
             ("results".into(), pyjson::Value::Array(vec![])),
             (
                 "query".into(),
@@ -4394,7 +4391,7 @@ mod tests {
         ]);
         assert_eq!(
             pyjson::dumps_indent2(&value),
-            "{\n  \"schema\": \"stackunderflow.memory/1\",\n  \"results\": [],\n  \
+            "{\n  \"schema\": \"staxtrace.memory/1\",\n  \"results\": [],\n  \
              \"query\": {\n    \"limit\": 20,\n    \"project\": null\n  },\n  \
              \"truncated\": false\n}"
         );

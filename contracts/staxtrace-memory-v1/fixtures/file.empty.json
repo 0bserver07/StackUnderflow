@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "file",
   "query": {
     "path": "/private/tmp/stackunderflow-contract-nonexistent-zzz.py",

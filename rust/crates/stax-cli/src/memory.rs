@@ -13,7 +13,7 @@
 //!   every `…` (U+2026) is the reference's. `stax memory sessions` diffs
 //!   clean against `stax memory sessions` on the same store and cwd.
 //! * **JSON goes through the shared contract.** The envelope is
-//!   [`stax_memory`]'s `stackunderflow.memory/1` — same builder, same
+//!   [`stax_memory`]'s `staxtrace.memory/1` — same builder, same
 //!   CPython-compatible writer, so `--json` output is byte-identical too and
 //!   the goldens gate both crates.
 //! * **The bugs come along.** `memory decisions` scopes to the current
@@ -1347,7 +1347,7 @@ mod tests {
         assert!(envelope.ends_with('\n'));
         assert_eq!(
             envelope,
-            "{\n  \"schema\": \"stackunderflow.memory/1\",\n  \"command\": \"sessions\",\n  \
+            "{\n  \"schema\": \"staxtrace.memory/1\",\n  \"command\": \"sessions\",\n  \
              \"query\": {\n    \"path\": \"/tmp\",\n    \"project\": null,\n    \
              \"since\": null,\n    \"limit\": 20\n  },\n  \"results\": [],\n  \
              \"result_count\": 0,\n  \"token_estimate\": 1,\n  \"budget\": 2000,\n  \
@@ -1370,7 +1370,7 @@ mod tests {
         // wire exactly as CPython escapes it.
         assert_eq!(
             failure.stdout,
-            "{\n  \"schema\": \"stackunderflow.memory/1\",\n  \"command\": \"decisions\",\n  \
+            "{\n  \"schema\": \"staxtrace.memory/1\",\n  \"command\": \"decisions\",\n  \
              \"query\": {\n    \"text\": \"\",\n    \"project\": null,\n    \"since\": null,\n    \
              \"limit\": 20\n  },\n  \"error\": \"query has no searchable terms \\u2014 provide at \
              least one word to search for\"\n}\n"

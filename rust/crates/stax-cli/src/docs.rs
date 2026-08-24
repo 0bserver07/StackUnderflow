@@ -471,7 +471,7 @@ read-only — nothing leaves the machine.
 ## JSON for programmatic callers
 
 Pass `--format json` (or `--json` where offered) for a stable, token-bounded
-envelope tagged `schema: stackunderflow.memory/1`. The envelope's outer shape is
+envelope tagged `schema: staxtrace.memory/1`. The envelope's outer shape is
 a versioned, conformance-tested contract — safe to parse from a hook or another
 tool. Prefer text for a human reading the terminal; JSON is more expensive in
 tokens, so reach for it only when a program consumes the output.

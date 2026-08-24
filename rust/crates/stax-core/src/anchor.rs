@@ -32,9 +32,9 @@
 //!   and all three are needed — see [`AnchorDb::open_or_create`] and
 //!   [`BUSY_TIMEOUT_MS`].
 //!
-//! The wire contract is `stackunderflow.anchor/1`, defined by
-//! `contracts/stackunderflow-anchor-v1/schema.json` and pinned by the goldens
-//! under `contracts/stackunderflow-anchor-v1/fixtures/` (`RS-1-033`).
+//! The wire contract is `staxtrace.anchor/1`, defined by
+//! `contracts/staxtrace-anchor-v1/schema.json` and pinned by the goldens
+//! under `contracts/staxtrace-anchor-v1/fixtures/` (`RS-1-033`).
 
 use std::cell::Cell;
 use std::ffi::OsStr;
@@ -50,7 +50,7 @@ use serde_json::{Value, json};
 ///
 /// The trailing integer is the MAJOR version: it bumps only on a breaking change
 /// to the envelope, and a consumer pins it and refuses an unknown major.
-pub const SCHEMA: &str = "stackunderflow.anchor/1";
+pub const SCHEMA: &str = "staxtrace.anchor/1";
 
 /// The sidecar's `PRAGMA user_version` — the *storage* schema, versioned
 /// independently of the wire contract.
@@ -655,7 +655,7 @@ pub fn normalise_hint(hint: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// Build the `stackunderflow.anchor/1` envelope.
+/// Build the `staxtrace.anchor/1` envelope.
 ///
 /// `db` and `generated` are arguments rather than ambient state for the same
 /// reason the clock is injected: the fixture runner renders with a fixed path
@@ -695,10 +695,10 @@ pub fn envelope(
 /// newline.
 ///
 /// Pretty rather than compact to match the house style of
-/// `contracts/stackunderflow-memory-v1/fixtures/`, which is what makes a golden
+/// `contracts/staxtrace-memory-v1/fixtures/`, which is what makes a golden
 /// diff readable. Non-ASCII is emitted verbatim UTF-8 — serde_json does not
 /// `\u`-escape, unlike Python's `json.dumps` default. That is a *recorded*
-/// difference from `stackunderflow.memory/1`: a future Python producer of this
+/// difference from `staxtrace.memory/1`: a future Python producer of this
 /// contract must pass `ensure_ascii=False`.
 #[must_use]
 pub fn render_json(
@@ -891,7 +891,7 @@ mod tests {
     fn the_documented_names_are_pinned() {
         // Every one of these appears in a hook, a README, or an agent's muscle
         // memory: renaming one is a breaking change, so it fails here first.
-        assert_eq!(SCHEMA, "stackunderflow.anchor/1");
+        assert_eq!(SCHEMA, "staxtrace.anchor/1");
         assert_eq!(ANCHOR_DB_ENV, "STAX_ANCHOR_DB");
         assert_eq!(SESSION_HINT_ENV, "CLAUDE_SESSION_ID");
         assert_eq!(DEFAULT_DB_FILE, ".stax-anchors.db");
@@ -1457,7 +1457,7 @@ mod tests {
         );
         let expected = concat!(
             "{\n",
-            "  \"schema\": \"stackunderflow.anchor/1\",\n",
+            "  \"schema\": \"staxtrace.anchor/1\",\n",
             "  \"command\": \"log\",\n",
             "  \"db\": \"/campaign/.stax-anchors.db\",\n",
             "  \"generated\": \"2026-07-31T04:00:00.000Z\",\n",

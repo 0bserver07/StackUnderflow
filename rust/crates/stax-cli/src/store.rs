@@ -9,7 +9,7 @@
 //! `stax store tail` is agent-remotes Phase 2's remote half: new `messages`
 //! rows for one session (the most recent by `last_ts` when none is named),
 //! strictly after `--since-seq`, as text or as a versioned
-//! `stackunderflow.observe/1` envelope. `stax observe <remote>` runs exactly
+//! `staxtrace.observe/1` envelope. `stax observe <remote>` runs exactly
 //! this verb over ssh and renders the batches — which is why it exists here,
 //! on the store, rather than inside observe: both ends of the wire ship the
 //! same binary, and a remote that predates the verb fails loudly with clap's
@@ -63,7 +63,7 @@ pub struct TailArgs {
     /// Max rows per call.
     #[arg(long, value_name = "N", default_value_t = 50)]
     pub limit: i64,
-    /// Emit the stackunderflow.observe/1 envelope instead of text.
+    /// Emit the staxtrace.observe/1 envelope instead of text.
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub json: bool,
 }
@@ -180,13 +180,13 @@ pub fn render_tail_text(session_id: &str, rows: &[TailRow]) -> String {
     out
 }
 
-/// The `stackunderflow.observe/1` envelope.
+/// The `staxtrace.observe/1` envelope.
 #[must_use]
 pub fn render_tail_json(session_id: &str, since_seq: i64, rows: &[TailRow]) -> String {
     let mut body = serde_json::Map::new();
     body.insert(
         "schema".to_owned(),
-        serde_json::Value::from("stackunderflow.observe/1"),
+        serde_json::Value::from("staxtrace.observe/1"),
     );
     body.insert("session_id".to_owned(), serde_json::Value::from(session_id));
     body.insert("since_seq".to_owned(), serde_json::Value::from(since_seq));
@@ -364,7 +364,7 @@ mod tests {
         let rows = tail_rows(&conn, "live-session", 0, 50).expect("rows");
         let body = render_tail_json("live-session", 0, &rows);
         assert!(
-            body.contains("\"schema\": \"stackunderflow.observe/1\""),
+            body.contains("\"schema\": \"staxtrace.observe/1\""),
             "{body}"
         );
         assert!(body.contains("\"last_seq\": 2"), "{body}");

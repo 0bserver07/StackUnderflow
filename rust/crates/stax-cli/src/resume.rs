@@ -20,7 +20,7 @@
 //!   (grok) renders no per-session command because its CLI has nowhere to put an
 //!   id, and an agent with no template at all still lists its session ids rather
 //!   than inventing a flag that would not work.
-//! * **`--json` is the frozen `stackunderflow.resume/1` envelope** —
+//! * **`--json` is the frozen `staxtrace.resume/1` envelope** —
 //!   [`stax_memory::ResumeEnvelope`], the same types the golden pack gates, so
 //!   `--json` is byte-identical to Python's `json.dumps(payload, indent=2)`.
 //!
@@ -499,7 +499,7 @@ pub fn resolve_provider_filter(
 
 // ── the envelope ─────────────────────────────────────────────────────────────
 
-/// Build the `stackunderflow.resume/1` payload — `cli.py:6380`–`6401`.
+/// Build the `staxtrace.resume/1` payload — `cli.py:6380`–`6401`.
 ///
 /// `resume` is the capability template verbatim, and `resume_command` is
 /// rendered only for a `session`-scope agent; a `latest`-scope one (grok) and an
@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn the_json_envelope_has_the_pinned_shape() {
         let envelope = payload(&args("/Users/t/my_ws"));
-        assert_eq!(envelope.schema, "stackunderflow.resume/1");
+        assert_eq!(envelope.schema, "staxtrace.resume/1");
         assert_eq!(envelope.path, "/Users/t/my_ws");
         let names: Vec<&str> = envelope
             .providers
@@ -1155,7 +1155,7 @@ mod tests {
 
     // ── byte parity against the golden pack ──────────────────────────────────
 
-    /// The five `stackunderflow.resume/1` goldens are literal Python CLI stdout
+    /// The five `staxtrace.resume/1` goldens are literal Python CLI stdout
     /// over the seed above (`tests/goldens/generate.py`). Reproducing them from
     /// this port through the same seed is the parity gate: same store, same
     /// invocation, same bytes.

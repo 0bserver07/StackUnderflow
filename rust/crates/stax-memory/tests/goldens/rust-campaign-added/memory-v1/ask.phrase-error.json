@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "ask",
   "query": {
     "question": "what did we decide about the mart cost freeze",

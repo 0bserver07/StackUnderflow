@@ -1,9 +1,9 @@
 //! CPython-compatible JSON serialization — the byte-parity substrate.
 //!
-//! The wire contracts (`stackunderflow.memory/1`, `stackunderflow.resume/1`) are
+//! The wire contracts (`staxtrace.memory/1`, `staxtrace.resume/1`) are
 //! *byte* contracts: `cli_helpers/agent_output.py:render` promises "the same
 //! envelope dict always renders to a byte-identical string", the golden fixtures
-//! under `contracts/stackunderflow-memory-v1/fixtures/` are literal CLI stdout,
+//! under `contracts/staxtrace-memory-v1/fixtures/` are literal CLI stdout,
 //! and an agent diffing two envelopes across implementations must see nothing.
 //! `serde_json`'s own writer is *not* byte-compatible with `json.dumps` in three
 //! independent ways, each of which shows up in the shipped goldens:

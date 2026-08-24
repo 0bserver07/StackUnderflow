@@ -3,7 +3,7 @@
 //! Agent-remotes Phase 2. The wire is one verb, run where the data lives:
 //! `ssh <target> "STACKUNDERFLOW_HOME=<dir> stax store tail --json …"` — the
 //! registry entry supplies the address, [`crate::store`] supplies both ends of
-//! the contract (the `stackunderflow.observe/1` envelope), and this file is
+//! the contract (the `staxtrace.observe/1` envelope), and this file is
 //! the poll loop and the rendering.
 //!
 //! * No session named: the remote's `store tail` picks its most recent
@@ -38,7 +38,7 @@ pub struct ObserveArgs {
     /// Fetch one batch and exit instead of polling.
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub once: bool,
-    /// Pass the remote's stackunderflow.observe/1 envelopes through verbatim
+    /// Pass the remote's staxtrace.observe/1 envelopes through verbatim
     /// (one JSON document per batch) instead of rendering lines.
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub json: bool,
@@ -108,7 +108,7 @@ fn fetch_batch(
         .output()
         .with_context(|| format!("spawning {program}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.status.success() || !stdout.contains("stackunderflow.observe/1") {
+    if !output.status.success() || !stdout.contains("staxtrace.observe/1") {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
             "the remote did not answer the observe envelope.\n\
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
 
     const ENVELOPE: &str = r#"{
-  "schema": "stackunderflow.observe/1",
+  "schema": "staxtrace.observe/1",
   "session_id": "abc-123",
   "since_seq": 0,
   "last_seq": 2,

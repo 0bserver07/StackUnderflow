@@ -526,7 +526,7 @@ mod tests {
                 "{key} missing after core:\n{out}"
             );
         }
-        assert!(out.starts_with("{\n  \"schema\": \"stackunderflow.memory/1\","));
+        assert!(out.starts_with("{\n  \"schema\": \"staxtrace.memory/1\","));
         assert!(out.contains("\"command\": \"context-replay\""));
         assert!(out.ends_with("}\n"));
     }

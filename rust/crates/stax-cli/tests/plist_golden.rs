@@ -35,16 +35,16 @@ fn the_plist_matches_the_reference_byte_for_byte() {
 
 #[test]
 fn the_plist_names_the_label_the_program_and_the_log_twice() {
-    let plist = darwin_plist("/usr/local/bin/stackunderflow", "/home/u/.stackunderflow");
+    let plist = darwin_plist("/usr/local/bin/stax", "/home/u/.staxtrace");
     assert!(plist.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
     assert!(
         plist.ends_with("</plist>"),
         "no trailing newline in the source f-string"
     );
-    assert!(plist.contains("<string>com.stackunderflow.backup</string>"));
-    assert!(plist.contains("<string>/usr/local/bin/stackunderflow</string>"));
+    assert!(plist.contains("<string>com.staxtrace.backup</string>"));
+    assert!(plist.contains("<string>/usr/local/bin/stax</string>"));
     assert_eq!(
-        plist.matches("/home/u/.stackunderflow/backup.log").count(),
+        plist.matches("/home/u/.staxtrace/backup.log").count(),
         2,
         "StandardOutPath and StandardErrorPath both point at the log"
     );
@@ -57,7 +57,7 @@ fn the_plist_names_the_label_the_program_and_the_log_twice() {
 #[test]
 fn the_cron_line_carries_the_same_schedule_and_retention() {
     assert_eq!(
-        cron_line("/usr/local/bin/stackunderflow"),
+        cron_line("/usr/local/bin/stax"),
         "0 3 * * * /usr/local/bin/stax backup create --label auto --keep 10"
     );
 }

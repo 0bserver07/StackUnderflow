@@ -432,7 +432,7 @@ pub enum Command {
     /// Watch another machine's most recent agent session, live.
     ///
     /// Polls the remote's store over ssh (`store tail` on their side, the
-    /// versioned `stackunderflow.observe/1` envelope on the wire) and renders
+    /// versioned `staxtrace.observe/1` envelope on the wire) and renders
     /// a log tail. `--once` fetches a single batch; `--json` passes envelopes
     /// through verbatim.
     Observe(observe::ObserveArgs),

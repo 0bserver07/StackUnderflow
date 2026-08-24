@@ -1,9 +1,9 @@
-//! `RS-1-033` — the golden-fixture runner for `stackunderflow.anchor/1`.
+//! `RS-1-033` — the golden-fixture runner for `staxtrace.anchor/1`.
 //!
 //! One scenario drives everything: a scripted `set → set → … → get → log` flow,
 //! replayed through the *real* storage and rendering code against a scratch
 //! sidecar, then compared byte for byte with the goldens in
-//! `contracts/stackunderflow-anchor-v1/fixtures/`. Nothing is normalised after
+//! `contracts/staxtrace-anchor-v1/fixtures/`. Nothing is normalised after
 //! the fact — the clock is injected ([`anchor::FixedClock`]) and the rendered
 //! `db` path is an argument, so the bytes are identical on every machine and in
 //! every year. That is the whole reason the pattern law says inject rather than
@@ -12,7 +12,7 @@
 //! Regenerate after an intentional contract change:
 //!
 //! ```sh
-//! bash contracts/stackunderflow-anchor-v1/fixtures/regenerate.sh
+//! bash contracts/staxtrace-anchor-v1/fixtures/regenerate.sh
 //! ```
 //!
 //! The module is pulled in with `#[path]` rather than `use stax_core::anchor`
@@ -142,7 +142,7 @@ fn the_goldens_still_describe_what_the_code_renders() {
             rendered,
             golden,
             "\n{} drifted from the contract.\n--- rendered ---\n{rendered}\n--- golden ---\n{golden}\n\
-             Regenerate deliberately: bash contracts/stackunderflow-anchor-v1/fixtures/regenerate.sh",
+             Regenerate deliberately: bash contracts/staxtrace-anchor-v1/fixtures/regenerate.sh",
             path.display()
         );
     }
@@ -194,14 +194,14 @@ fn regenerate() {
     }
 }
 
-/// `contracts/stackunderflow-anchor-v1/fixtures/`, found relative to this crate
+/// `contracts/staxtrace-anchor-v1/fixtures/`, found relative to this crate
 /// so the test is independent of the working directory it is run from.
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../contracts/stackunderflow-anchor-v1/fixtures")
+        .join("../../../contracts/staxtrace-anchor-v1/fixtures")
         .canonicalize()
         .unwrap_or_else(|error| {
-            panic!("contracts/stackunderflow-anchor-v1/fixtures is missing: {error}")
+            panic!("contracts/staxtrace-anchor-v1/fixtures is missing: {error}")
         })
 }
 

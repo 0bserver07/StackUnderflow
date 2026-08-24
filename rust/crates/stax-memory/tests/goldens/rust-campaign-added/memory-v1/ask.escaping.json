@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "ask",
   "query": {
     "question": "why did the \ud83d\ude80 deploy of \"\u672c\u756a\" fail on C:\\Users\\dev\\tmp?",

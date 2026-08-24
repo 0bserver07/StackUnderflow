@@ -1,4 +1,4 @@
-//! Adversarial pins for the byte-parity claim of `stackunderflow.memory/1`.
+//! Adversarial pins for the byte-parity claim of `staxtrace.memory/1`.
 //!
 //! The wave-1 envelope landing proved 31/31 shipped goldens byte-exact. This
 //! file attacks the *general* claim the goldens cannot reach: that

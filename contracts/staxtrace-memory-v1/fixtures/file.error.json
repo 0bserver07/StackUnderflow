@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "file",
   "query": {
     "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py",

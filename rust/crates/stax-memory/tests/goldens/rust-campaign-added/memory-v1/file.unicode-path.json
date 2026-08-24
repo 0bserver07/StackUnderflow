@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "file",
   "query": {
     "path": "/Users/yadkonrad/dev/Mes Projets/na\u00efve caf\u00e9/src/r\u00e9sum\u00e9_builder.py",

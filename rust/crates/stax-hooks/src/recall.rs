@@ -4,7 +4,7 @@
 //! Where [`crate::inject`] reads the store *in-process*, this one shells the
 //! agent-facing surface — `stax memory file <path> --json` — as a
 //! subprocess under a **hard deadline**, parses the token-bounded
-//! `stackunderflow.memory/1` envelope, and injects a warning only when the file
+//! `staxtrace.memory/1` envelope, and injects a warning only when the file
 //! about to be touched has real failure history.
 //!
 //! The execution model is the reason it is a separate module in the reference
@@ -21,7 +21,7 @@
 //! ### The subprocess this port spawns
 //!
 //! `stax memory file … --json` — the native CLI, same argv, same
-//! `stackunderflow.memory/1` envelope. During the port this deliberately
+//! `staxtrace.memory/1` envelope. During the port this deliberately
 //! stayed on the *Python* bare name for comparable latency and an unchanged
 //! resolution story, with `HookEnv::memory_bin` named as the seam for
 //! deciding otherwise. The split (f6ac5f6) decided: main carries no Python,
@@ -43,7 +43,13 @@ use crate::templates;
 
 /// `recall._MEMORY_SCHEMA` — pinned exactly. An envelope from a different major
 /// is treated as unparseable (silent no-op).
-const MEMORY_SCHEMA: &str = "stackunderflow.memory/1";
+const MEMORY_SCHEMA: &str = "staxtrace.memory/1";
+
+/// The pre-rename spelling, still accepted. `stax-hooks` deliberately does not
+/// depend on `stax-memory` (it pays for what it links on every spawn), so the
+/// pair is restated here rather than imported — kept honest by
+/// `the_legacy_schema_name_is_still_accepted`.
+const MEMORY_SCHEMA_LEGACY: &str = "stackunderflow.memory/1";
 
 /// `recall._TOKEN_BUDGET` × `_CHARS_PER_TOKEN` — three times the inject hooks'
 /// per-event budget, because this block replaces a whole `memory file`
@@ -417,7 +423,11 @@ fn query_memory_file(path: &str, timeout: f64, cwd: Option<&str>, env: &HookEnv)
         return None; // the --json contract: non-zero exit means an error envelope
     }
     let envelope = pyjson::loads(&String::from_utf8(stdout).ok()?)?;
-    if envelope.get("schema").and_then(Value::as_str) != Some(MEMORY_SCHEMA) {
+    // Both generations of the name are valid: a peer running an older stax
+    // answers with the pre-rename spelling, and rejecting it would silently
+    // blank the recall block for anyone mid-upgrade.
+    let schema = envelope.get("schema").and_then(Value::as_str)?;
+    if schema != MEMORY_SCHEMA && schema != MEMORY_SCHEMA_LEGACY {
         return None;
     }
     Some(envelope)
@@ -614,6 +624,19 @@ fn assemble(header: &str, bullets: Vec<String>, footer: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_legacy_schema_name_is_still_accepted() {
+        // A peer running a pre-rename stax answers with the old name. Rejecting
+        // it would blank the recall block for anyone mid-upgrade, silently.
+        assert_eq!(MEMORY_SCHEMA, "staxtrace.memory/1");
+        assert_eq!(MEMORY_SCHEMA_LEGACY, "stackunderflow.memory/1");
+        assert_ne!(MEMORY_SCHEMA, MEMORY_SCHEMA_LEGACY);
+        // A different MAJOR is still rejected in both generations.
+        for bad in ["staxtrace.memory/2", "stackunderflow.memory/2", "other/1"] {
+            assert!(bad != MEMORY_SCHEMA && bad != MEMORY_SCHEMA_LEGACY, "{bad}");
+        }
+    }
     use super::*;
     use std::path::PathBuf;
 

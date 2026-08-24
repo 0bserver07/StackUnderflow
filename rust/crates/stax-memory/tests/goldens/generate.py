@@ -6,17 +6,17 @@
 
 Why these exist, and why they are NOT in ``contracts/``:
 
-* The shipped pack (``contracts/stackunderflow-memory-v1/fixtures/``, 15 files)
+* The shipped pack (``contracts/staxtrace-memory-v1/fixtures/``, 15 files)
   covers one query shape per command and every query in it is a single word.
   Findings-ledger #3 of the Rust campaign — *phrase queries silently zero on the
   LIKE path* — says multi-word asks must be pinned by wave-1 fixtures, and they
-  were not. ``stackunderflow.resume/1`` had no golden pack at all, only inline
+  were not. ``staxtrace.resume/1`` had no golden pack at all, only inline
   assertions in ``tests/python-legacy: cli/test_resume_cmd.py``.
 * They stay out of ``contracts/`` because the Python suite asserts that pack is
   exactly 15 files, one per command x {success, empty, error}
   (``test_one_fixture_per_command_and_case``). Adding files there would fail
   Python CI. Every file written here is still validated against the SHIPPED
-  ``contracts/stackunderflow-memory-v1/schema.json`` by the shipped checker
+  ``contracts/staxtrace-memory-v1/schema.json`` by the shipped checker
   before it lands — see the tail of this script.
 
 Every byte is produced by the PYTHON implementation:
@@ -88,7 +88,7 @@ def _write(directory: Path, name: str, envelope: dict) -> None:
     print(f"  rust-campaign-added/{directory.name}/{name}.json")
 
 
-# ── stackunderflow.memory/1 — the phrase pack ───────────────────────────────
+# ── staxtrace.memory/1 — the phrase pack ───────────────────────────────
 
 
 def build_memory_goldens() -> None:
@@ -322,7 +322,7 @@ def build_memory_goldens() -> None:
     ))
 
 
-# ── stackunderflow.resume/1 — a pack where none existed ─────────────────────
+# ── staxtrace.resume/1 — a pack where none existed ─────────────────────
 
 # The seed from tests/python-legacy: cli/test_resume_cmd.py, verbatim: it is the
 # only fixture in the tree that exercises session-scope, latest-scope and

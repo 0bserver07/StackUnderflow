@@ -183,7 +183,7 @@ output**. Write one ~150-line stdlib validator (`scripts/check_memory_contract.p
 walking `$ref`/`const`/`enum`/`required` over every fixture; wire it into CI; repoint
 the existing Python tests at the fixtures. The `/1` integer is a **maintainer-only**
 bump (project version rule) — never an agent's.
-**Scope (own).** `cli_helpers/agent_output.py`, new `contracts/stackunderflow-memory-v1/`
+**Scope (own).** `cli_helpers/agent_output.py`, new `contracts/staxtrace-memory-v1/`
 (`schema.json` + `fixtures/*.json`), new `scripts/check_memory_contract.py`, CI yaml,
 `tests/python-legacy: cli/test_agent_output.py` (repoint at fixtures). Envelope only —
 row internals belong to #9.

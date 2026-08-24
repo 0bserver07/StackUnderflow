@@ -147,7 +147,7 @@ fn decisions_finds_the_seeded_session_and_keeps_the_envelope_shape() {
     );
     assert_eq!(outcome.code, 0);
     let value = envelope(&outcome);
-    assert_eq!(value["schema"], "stackunderflow.memory/1");
+    assert_eq!(value["schema"], "staxtrace.memory/1");
     assert_eq!(value["command"], "decisions");
     assert_eq!(value["query"]["text"], "cache");
     // The cwd fell inside the project, so the scope echoed back is its slug —

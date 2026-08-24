@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Regenerate the golden fixtures for the `stackunderflow.memory/1` contract
+# Regenerate the golden fixtures for the `staxtrace.memory/1` contract
 # straight from real CLI output. One fixture per `memory` subcommand that emits
 # the envelope (decisions/file/worked/sessions/ask) x {success, empty, error}.
 #
-#   bash contracts/stackunderflow-memory-v1/fixtures/regenerate.sh
+#   bash contracts/staxtrace-memory-v1/fixtures/regenerate.sh
 #
 # The queries below are machine-specific (they target a project + file that have
 # recorded history on the maintainer's store). Override with env vars if the

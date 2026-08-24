@@ -1,8 +1,8 @@
 {
-  "schema": "stackunderflow.memory/1",
-  "command": "decisions",
+  "schema": "staxtrace.memory/1",
+  "command": "worked",
   "query": {
-    "text": "zqxjklmnopurpleelephantxyzzy",
+    "action": "zqxjklmnopurpleelephantxyzzy",
     "project": "-Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow",
     "since": null,
     "limit": 2

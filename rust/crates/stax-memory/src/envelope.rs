@@ -1,4 +1,4 @@
-//! The `stackunderflow.memory/1` agent-output envelope.
+//! The `staxtrace.memory/1` agent-output envelope.
 //!
 //! A port of `python-legacy: cli_helpers/agent_output.py` — same field names,
 //! same insertion order, same `chars/4 + 1` token estimate, same rule that a
@@ -13,7 +13,7 @@
 //! Like the Python module this one is **pure**: it builds and returns values, it
 //! never prints and it never opens a store. The CLI owns stdout.
 //!
-//! Two shapes, distinguished exactly as `contracts/stackunderflow-memory-v1/schema.json`
+//! Two shapes, distinguished exactly as `contracts/staxtrace-memory-v1/schema.json`
 //! distinguishes them: a success envelope carries `results`, an error envelope
 //! carries `error` instead and means the process exited non-zero.
 //!
@@ -34,7 +34,22 @@ use crate::pyjson;
 pub const MEMORY_SCHEMA_VERSION: u32 = 1;
 
 /// The frozen contract id every envelope carries.
-pub const MEMORY_SCHEMA: &str = "stackunderflow.memory/1";
+pub const MEMORY_SCHEMA: &str = "staxtrace.memory/1";
+
+/// The pre-rename spelling of [`MEMORY_SCHEMA`], still accepted by every reader.
+///
+/// The envelope is a wire contract: it crosses machines (`--at`, `observe`) and
+/// is parsed by scripts this project does not own. A machine running an older
+/// `stax` still ANSWERS with this string, so a reader that only knew the new
+/// name would reject a perfectly valid response from a peer that simply has not
+/// rebuilt yet. Same shape, same version — only the name moved.
+pub const MEMORY_SCHEMA_LEGACY: &str = "stackunderflow.memory/1";
+
+/// Does `schema` name this envelope, in either generation?
+#[must_use]
+pub fn is_memory_schema(schema: &str) -> bool {
+    schema == MEMORY_SCHEMA || schema == MEMORY_SCHEMA_LEGACY
+}
 
 /// The eight fields every success envelope carries, in emission order.
 ///
@@ -542,7 +557,7 @@ mod tests {
 
     #[test]
     fn schema_is_versioned() {
-        assert_eq!(MEMORY_SCHEMA, "stackunderflow.memory/1");
+        assert_eq!(MEMORY_SCHEMA, "staxtrace.memory/1");
         assert_eq!(
             MEMORY_SCHEMA,
             format!("stackunderflow.memory/{MEMORY_SCHEMA_VERSION}")
@@ -627,7 +642,7 @@ mod tests {
     fn round_trip_preserves_unknown_additive_fields() {
         // Phase 2 of the shipped checker, as a type-level property.
         let text = concat!(
-            "{\n  \"schema\": \"stackunderflow.memory/1\",\n  \"command\": \"ask\",\n",
+            "{\n  \"schema\": \"staxtrace.memory/1\",\n  \"command\": \"ask\",\n",
             "  \"query\": {},\n  \"results\": [],\n  \"result_count\": 0,\n",
             "  \"token_estimate\": 1,\n  \"budget\": 2000,\n  \"truncated\": false,\n",
             "  \"note\": \"n\",\n  \"x_future_additive_field\": {\n",
@@ -651,7 +666,7 @@ mod tests {
 
     #[test]
     fn missing_required_field_is_an_error_not_a_default() {
-        let err = MemoryEnvelope::from_json(r#"{"schema": "stackunderflow.memory/1"}"#)
+        let err = MemoryEnvelope::from_json(r#"{"schema": "staxtrace.memory/1"}"#)
             .expect_err("command is required");
         assert!(matches!(err, EnvelopeError::Missing("command")), "{err}");
     }

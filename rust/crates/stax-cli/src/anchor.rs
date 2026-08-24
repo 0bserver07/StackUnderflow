@@ -100,7 +100,7 @@ pub struct AnchorGetArgs {
     /// One key. Omit it for every key's newest anchor, key-sorted.
     pub key: Option<String>,
 
-    /// Emit the `stackunderflow.anchor/1` envelope instead of text.
+    /// Emit the `staxtrace.anchor/1` envelope instead of text.
     #[arg(long)]
     pub json: bool,
 }
@@ -111,7 +111,7 @@ pub struct AnchorLogArgs {
     /// The key whose history to print.
     pub key: String,
 
-    /// Emit the `stackunderflow.anchor/1` envelope instead of text.
+    /// Emit the `staxtrace.anchor/1` envelope instead of text.
     #[arg(long)]
     pub json: bool,
 }

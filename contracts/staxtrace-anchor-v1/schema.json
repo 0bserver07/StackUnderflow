@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://stackunderflow.local/contracts/stackunderflow-anchor-v1/schema.json",
-  "title": "stackunderflow.anchor/1 agent-continuity envelope",
-  "description": "The stable, versioned contract for `stax-rs anchor get --json` and `stax-rs anchor log --json`. Anchors are a keyed, append-only, timestamped state store an agent writes at every decision (`anchor set`) and re-reads after a context rotation (`anchor get --json` at session start) -- the ARCHITECT-STATE.md continuity pattern, productized. ORIGIN: added by the Rust-port campaign (rust/TASKS-RS.md RS-1-029..033); the Rust CLI is the first producer, and the envelope is renderered by stax-core's `anchor::render_json`. WIRE RULES: (1) key order is part of the contract -- producers emit the keys in the order this schema lists them (serde_json `preserve_order`, the wave-0 workspace decision), so goldens are compared byte for byte; (2) rendering is pretty-printed with a two-space indent and exactly one trailing newline, matching contracts/stackunderflow-memory-v1; (3) non-ASCII is emitted VERBATIM UTF-8 -- unlike stackunderflow.memory/1, which is produced by Python's `json.dumps` default and therefore \\u-escapes. A Python producer of this contract must pass ensure_ascii=False. (4) There is no error envelope: a failure goes to stderr with a non-zero exit and stdout stays empty, so stdout is either a complete envelope or nothing. An empty result -- unknown key, or no sidecar in this directory -- is a SUCCESS with `anchors: []`. Objects are intentionally open (no additionalProperties:false) so an unknown ADDITIVE field stays forward-compatible.",
+  "$id": "https://stackunderflow.local/contracts/staxtrace-anchor-v1/schema.json",
+  "title": "staxtrace.anchor/1 agent-continuity envelope",
+  "description": "The stable, versioned contract for `stax-rs anchor get --json` and `stax-rs anchor log --json`. Anchors are a keyed, append-only, timestamped state store an agent writes at every decision (`anchor set`) and re-reads after a context rotation (`anchor get --json` at session start) -- the ARCHITECT-STATE.md continuity pattern, productized. ORIGIN: added by the Rust-port campaign (rust/TASKS-RS.md RS-1-029..033); the Rust CLI is the first producer, and the envelope is renderered by stax-core's `anchor::render_json`. WIRE RULES: (1) key order is part of the contract -- producers emit the keys in the order this schema lists them (serde_json `preserve_order`, the wave-0 workspace decision), so goldens are compared byte for byte; (2) rendering is pretty-printed with a two-space indent and exactly one trailing newline, matching contracts/staxtrace-memory-v1; (3) non-ASCII is emitted VERBATIM UTF-8 -- unlike staxtrace.memory/1, which is produced by Python's `json.dumps` default and therefore \\u-escapes. A Python producer of this contract must pass ensure_ascii=False. (4) There is no error envelope: a failure goes to stderr with a non-zero exit and stdout stays empty, so stdout is either a complete envelope or nothing. An empty result -- unknown key, or no sidecar in this directory -- is a SUCCESS with `anchors: []`. Objects are intentionally open (no additionalProperties:false) so an unknown ADDITIVE field stays forward-compatible.",
   "type": "object",
   "required": [
     "schema",
@@ -39,7 +39,7 @@
   "$defs": {
     "schema_tag": {
       "description": "The frozen contract id. The trailing integer is the MAJOR version and bumps only on a breaking change to the envelope; a consumer pins it and refuses an unknown major.",
-      "const": "stackunderflow.anchor/1"
+      "const": "staxtrace.anchor/1"
     },
     "command": {
       "description": "Which read produced this envelope. Both shapes carry `anchors[]`, and this is what says whether the array is newest-per-key (`get`) or one key's history (`log`). ADDITIVE enum: a new producer appends a value without bumping the major.",

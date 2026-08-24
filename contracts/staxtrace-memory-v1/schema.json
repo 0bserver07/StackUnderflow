@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://stackunderflow.local/contracts/stackunderflow-memory-v1/schema.json",
-  "title": "stackunderflow.memory/1 agent-output envelope",
+  "$id": "https://stackunderflow.local/contracts/staxtrace-memory-v1/schema.json",
+  "title": "staxtrace.memory/1 agent-output envelope",
   "description": "The stable, versioned contract for `stackunderflow memory <cmd> --json`. Every envelope-emitting subcommand (decisions/file/worked/sessions/ask) renders through cli_helpers/agent_output.py into one of two shapes: a success envelope or, on a non-zero exit, an error envelope. This schema freezes the STABLE OUTER envelope only. The per-command `results[]` row internals are deliberately product-shaped and left unconstrained here (see $defs.result_row): they are owned by the discovery layer and evolve independently, so validate rows at the envelope level, not field-by-field. Objects are intentionally open (no additionalProperties:false) so an unknown ADDITIVE field is forward-compatible -- preserved and ignored, never rejected.",
   "oneOf": [
     { "$ref": "#/$defs/success_envelope" },
@@ -10,7 +10,7 @@
   "$defs": {
     "schema_tag": {
       "description": "The frozen contract id. The trailing integer is the MAJOR version and bumps only on a breaking change to the envelope; a consumer pins it and refuses an unknown major.",
-      "const": "stackunderflow.memory/1"
+      "const": "staxtrace.memory/1"
     },
     "command": {
       "description": "Which agent-facing command produced this envelope -- a `memory` subcommand (decisions/file/worked/sessions/ask) or a top-level command that reuses the same envelope (context-replay). Also tags which product-shaped row shape `results[]` carries. This enum is ADDITIVE: a new producer appends a value (existing consumers pinned to the old set still validate every envelope they were built for); it is not a breaking change and does not bump the schema major.",

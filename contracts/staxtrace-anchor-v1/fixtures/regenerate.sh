@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Regenerate the golden fixtures for the `stackunderflow.anchor/1` contract.
+# Regenerate the golden fixtures for the `staxtrace.anchor/1` contract.
 #
-#   bash contracts/stackunderflow-anchor-v1/fixtures/regenerate.sh
+#   bash contracts/staxtrace-anchor-v1/fixtures/regenerate.sh
 #
-# Unlike contracts/stackunderflow-memory-v1/fixtures/regenerate.sh, this one is
+# Unlike contracts/staxtrace-memory-v1/fixtures/regenerate.sh, this one is
 # DETERMINISTIC and machine-independent: re-running it on any box, in any year,
 # reproduces byte-identical files. Nothing here reads the live store, the live
 # clock or the environment. The scenario (three keys, five appends, covering

@@ -362,8 +362,12 @@ fn exit_code(code: i32) -> ExitCode {
 #[must_use]
 pub fn envelope_schema_is_ours(stdout: &str) -> bool {
     // The envelopes put `schema` first, but no parser is needed to be
-    // conservative: any `"schema": "stackunderflow.…"` in the body counts.
-    stdout.contains("\"schema\": \"stackunderflow.")
+    // conservative: any `"schema": "staxtrace.…"` in the body counts — and the
+    // pre-rename `stackunderflow.` prefix counts too, because the machine on
+    // the other end of this ssh call is frequently an OLDER build. Warning on a
+    // peer's valid answer just because it has not rebuilt yet is exactly the
+    // version-skew failure the spec says must degrade, not break.
+    stdout.contains("\"schema\": \"staxtrace.") || stdout.contains("\"schema\": \"stackunderflow.")
 }
 
 #[cfg(test)]
@@ -481,7 +485,7 @@ mod tests {
     #[test]
     fn envelope_recognition_is_prefix_scoped() {
         assert!(envelope_schema_is_ours(
-            "{\n  \"schema\": \"stackunderflow.memory/1\",\n}"
+            "{\n  \"schema\": \"staxtrace.memory/1\",\n}"
         ));
         assert!(!envelope_schema_is_ours(
             "{\n  \"schema\": \"somebody-else/9\"\n}"

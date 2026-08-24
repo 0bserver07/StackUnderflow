@@ -1,5 +1,5 @@
 {
-  "schema": "stackunderflow.memory/1",
+  "schema": "staxtrace.memory/1",
   "command": "sessions",
   "query": {
     "path": "/Users/yadkonrad/dev/dev/year26/jan26/StackUnderflow",

@@ -1260,8 +1260,16 @@ pub fn restore<R: Runner + ?Sized, C: Confirm + ?Sized>(
 
 // ── backup auto ──────────────────────────────────────────────────────────────
 
-/// `com.stackunderflow.backup` — the launchd label and the plist file stem.
-pub const PLIST_ID: &str = "com.stackunderflow.backup";
+/// `com.staxtrace.backup` — the launchd label and the plist file stem.
+pub const PLIST_ID: &str = "com.staxtrace.backup";
+
+/// The pre-rename label, still torn down by `--auto off`.
+///
+/// This one is REGISTERED WITH launchd on machines that enabled the schedule
+/// before the rename. Changing only the constant would leave that job loaded
+/// and running forever, invisible to every command that now looks for the new
+/// label — disabling backups would silently not disable them.
+pub const PLIST_ID_LEGACY: &str = "com.stackunderflow.backup";
 
 /// The launchd plist `backup auto --enable` writes on Darwin, byte for byte.
 ///
@@ -1348,13 +1356,28 @@ pub fn launchctl_argv(action: &str, plist_path: &Path) -> Vec<String> {
 fn auto_darwin(enable: bool, env: &Env) -> Output {
     let plist_dir = env.home.join("Library").join("LaunchAgents");
     let plist_path = plist_dir.join(format!("{PLIST_ID}.plist"));
+    let legacy_path = plist_dir.join(format!("{PLIST_ID_LEGACY}.plist"));
     if !enable {
-        if plist_path.exists() {
-            let _ = SystemRunner.run(&launchctl_argv("unload", &plist_path), NO_TIMEOUT);
-            let _ = std::fs::remove_file(&plist_path);
+        // Tear down BOTH generations: a machine that enabled backups before the
+        // rename has the old label loaded, and leaving it would mean "disabled"
+        // that keeps running.
+        let mut disabled = false;
+        for path in [&plist_path, &legacy_path] {
+            if path.exists() {
+                let _ = SystemRunner.run(&launchctl_argv("unload", path), NO_TIMEOUT);
+                let _ = std::fs::remove_file(path);
+                disabled = true;
+            }
+        }
+        if disabled {
             return Output::ok("  Automatic backups disabled.\n");
         }
         return Output::ok("  Automatic backups are not enabled.\n");
+    }
+    // Enabling replaces a pre-rename job rather than racing it.
+    if legacy_path.exists() {
+        let _ = SystemRunner.run(&launchctl_argv("unload", &legacy_path), NO_TIMEOUT);
+        let _ = std::fs::remove_file(&legacy_path);
     }
     let Some(su_bin) = &env.stackunderflow_bin else {
         return Output::ok("  Can't find stackunderflow in PATH. Install it first.\n");

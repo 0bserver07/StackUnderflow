@@ -57,7 +57,7 @@ pub const GUIDE_END: &str = "<!-- stackunderflow:guide:end -->";
 /// Transcribed from `agentsmd.py`, with one post-split departure: the
 /// commands name `stax`, because a snippet telling every agent on the machine
 /// to run the retired Python entry point is an instruction to fail. The
-/// envelope schema string stays `stackunderflow.memory/1` — that is the wire
+/// envelope schema string stays `staxtrace.memory/1` — that is the wire
 /// contract's version identifier, not a program name. The markers likewise
 /// keep their spelling: they are the anchors `install` uses to find and
 /// replace an existing block, and renaming them would orphan every
@@ -77,7 +77,7 @@ Before re-deriving something, check whether the answer is already recorded:
 - `stax memory ask \"<question>\"` — natural-language query over history.
 
 Pass `--json` for a stable, token-bounded envelope (`schema:
-stackunderflow.memory/1`) meant for programmatic use. Every query is local and
+staxtrace.memory/1`) meant for programmatic use. Every query is local and
 read-only — nothing leaves the machine.";
 
 /// `render_block()` — the markers plus the body.
@@ -647,7 +647,7 @@ mod tests {
         assert!(!block.contains("stackunderflow memory"));
         // The envelope's version identifier is a wire contract, not a program
         // name; it keeps its spelling.
-        assert!(block.contains("stackunderflow.memory/1"));
+        assert!(block.contains("staxtrace.memory/1"));
     }
 
     #[test]

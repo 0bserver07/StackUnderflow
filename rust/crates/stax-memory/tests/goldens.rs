@@ -4,19 +4,19 @@
 //! UNCHANGED and produces the same result as Python"*. Three packs, one rule —
 //! parse the file into this crate's types, serialise it back, and demand the
 //! **same bytes**. Not the same JSON tree: the same bytes, trailing newline
-//! included, because `stackunderflow.memory/1` promises "same store + same query
+//! included, because `staxtrace.memory/1` promises "same store + same query
 //! → byte-identical JSON" and an agent diffing two envelopes has to see nothing.
 //!
 //! | pack | files | provenance |
 //! |---|---|---|
-//! | `contracts/stackunderflow-memory-v1/fixtures/` | 15 | shipped; real CLI stdout, untouched by this campaign |
+//! | `contracts/staxtrace-memory-v1/fixtures/` | 15 | shipped; real CLI stdout, untouched by this campaign |
 //! | `tests/goldens/rust-campaign-added/memory-v1/` | 11 | added here; bytes from Python's `build_envelope` + `render` |
 //! | `tests/goldens/rust-campaign-added/resume-v1/` | 5 | added here; bytes from the real `resume --json` CLI |
 //!
 //! The added packs exist because the shipped one has a hole: every query in it
 //! is a single word, and findings-ledger #3 (*phrase queries silently zero on
 //! the LIKE path*) makes multi-word asks the exact case wave 1 must pin.
-//! `stackunderflow.resume/1` had no pack at all. See `tests/goldens/generate.py`
+//! `staxtrace.resume/1` had no pack at all. See `tests/goldens/generate.py`
 //! for how each file was produced and why they are not in `contracts/`.
 //!
 //! No normalisation. The shipped goldens embed absolute macOS paths, session
@@ -48,7 +48,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn shipped_dir() -> PathBuf {
-    repo_root().join("contracts/stackunderflow-memory-v1/fixtures")
+    repo_root().join("contracts/staxtrace-memory-v1/fixtures")
 }
 
 fn added_memory_dir() -> PathBuf {
@@ -60,7 +60,7 @@ fn added_resume_dir() -> PathBuf {
 }
 
 fn schema_doc() -> Value {
-    let path = repo_root().join("contracts/stackunderflow-memory-v1/schema.json");
+    let path = repo_root().join("contracts/staxtrace-memory-v1/schema.json");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     pyjson::loads(&text).expect("schema.json is valid JSON")
 }
@@ -257,7 +257,7 @@ fn negative_self_test_deliberately_broken_envelopes_are_rejected() {
         ("drop required 'results'", drop(&ok, "results")),
         (
             "corrupt 'schema' const",
-            set(&ok, "schema", json!("stackunderflow.memory/999")),
+            set(&ok, "schema", json!("staxtrace.memory/999")),
         ),
         (
             "out-of-enum 'command'",
