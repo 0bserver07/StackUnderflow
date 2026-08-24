@@ -48,9 +48,32 @@ use crate::click::Output;
 use crate::pyclock;
 
 /// `GUIDE_START`.
-pub const GUIDE_START: &str = "<!-- stackunderflow:guide:start -->";
+pub const GUIDE_START: &str = "<!-- staxtrace:guide:start -->";
 /// `GUIDE_END`.
-pub const GUIDE_END: &str = "<!-- stackunderflow:guide:end -->";
+pub const GUIDE_END: &str = "<!-- staxtrace:guide:end -->";
+
+/// The pre-rename markers, still found by `install`/`uninstall`/`status`.
+///
+/// These are ANCHORS in someone's CLAUDE.md, not branding: they are how the
+/// installer locates a block it wrote earlier. Emitting the new pair while only
+/// recognising the new pair would leave every existing block stranded — a
+/// second block appended below the first, and `uninstall` unable to remove
+/// what it wrote last month.
+pub const GUIDE_START_LEGACY: &str = "<!-- stackunderflow:guide:start -->";
+/// The pre-rename end marker. See [`GUIDE_START_LEGACY`].
+pub const GUIDE_END_LEGACY: &str = "<!-- stackunderflow:guide:end -->";
+
+/// The `(start, end)` marker pair present in `text`, newest generation first.
+#[must_use]
+pub fn markers_in(text: &str) -> Option<(&'static str, &'static str)> {
+    if text.contains(GUIDE_START) {
+        Some((GUIDE_START, GUIDE_END))
+    } else if text.contains(GUIDE_START_LEGACY) {
+        Some((GUIDE_START_LEGACY, GUIDE_END_LEGACY))
+    } else {
+        None
+    }
+}
 
 /// `_GUIDE_BODY` — the reference's snippet with the program renamed.
 ///
@@ -215,9 +238,10 @@ pub fn target_paths(scope: &str, env: &Env) -> Vec<PathBuf> {
 /// regex dependency for that would be a dependency for that.
 #[must_use]
 pub fn find_block(text: &str) -> Option<(usize, usize)> {
-    let start = text.find(GUIDE_START)?;
-    let after = start + GUIDE_START.len();
-    let end = text[after..].find(GUIDE_END)? + after + GUIDE_END.len();
+    let (marker_start, marker_end) = markers_in(text)?;
+    let start = text.find(marker_start)?;
+    let after = start + marker_start.len();
+    let end = text[after..].find(marker_end)? + after + marker_end.len();
     Some((start, end))
 }
 
@@ -232,7 +256,11 @@ pub fn strip_block(text: &str) -> String {
         rest = &rest[end..];
     }
     cleaned.push_str(rest);
-    if !cleaned.contains(GUIDE_START) && !cleaned.contains(GUIDE_END) {
+    if !cleaned.contains(GUIDE_START)
+        && !cleaned.contains(GUIDE_END)
+        && !cleaned.contains(GUIDE_START_LEGACY)
+        && !cleaned.contains(GUIDE_END_LEGACY)
+    {
         return cleaned;
     }
     // Orphan marker line(s) from a malformed prior state — drop them.
@@ -243,7 +271,10 @@ pub fn strip_block(text: &str) -> String {
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .filter(|line| {
             let trimmed = line.trim();
-            trimmed != GUIDE_START && trimmed != GUIDE_END
+            trimmed != GUIDE_START
+                && trimmed != GUIDE_END
+                && trimmed != GUIDE_START_LEGACY
+                && trimmed != GUIDE_END_LEGACY
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -637,6 +668,36 @@ mod tests {
     }
 
     #[test]
+    fn a_block_written_with_the_old_markers_is_still_found_and_replaced() {
+        // The markers are anchors in someone's CLAUDE.md. A block written before
+        // the rename must still be LOCATED (so install replaces it rather than
+        // appending a second one) and REMOVED (so uninstall can undo it).
+        let scratch = Scratch::new("legacymarkers");
+        let env = env_at(scratch.path());
+        let claude = scratch.path().join("CLAUDE.md");
+        std::fs::write(
+            &claude,
+            format!("keep me\n\n{GUIDE_START_LEGACY}\nold body\n{GUIDE_END_LEGACY}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            markers_in(&std::fs::read_to_string(&claude).unwrap()),
+            Some((GUIDE_START_LEGACY, GUIDE_END_LEGACY))
+        );
+
+        let _ = install("project", false, &env);
+        let text = std::fs::read_to_string(&claude).unwrap();
+        assert!(text.starts_with("keep me"), "{text}");
+        assert_eq!(
+            text.matches("guide:start").count(),
+            1,
+            "one block only: {text}"
+        );
+        assert!(!text.contains("old body"), "{text}");
+    }
+
+    #[test]
     fn the_block_is_the_markers_around_the_body() {
         let block = render_block();
         assert!(block.starts_with(GUIDE_START));
@@ -696,7 +757,7 @@ mod tests {
         std::fs::write(&claude, "# My rules\n\nBe careful.\n").unwrap();
         let _ = install("project", false, &env);
         let text = std::fs::read_to_string(&claude).unwrap();
-        assert!(text.starts_with("# My rules\n\nBe careful.\n\n<!-- stackunderflow"));
+        assert!(text.starts_with("# My rules\n\nBe careful.\n\n<!-- staxtrace"));
         assert!(text.ends_with("guide:end -->\n"));
     }
 
