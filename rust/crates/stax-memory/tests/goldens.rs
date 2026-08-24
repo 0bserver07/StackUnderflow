@@ -117,7 +117,7 @@ fn first_divergence(want: &str, got: &str) -> String {
 
 #[test]
 fn shipped_pack_is_fifteen_files_one_per_command_and_case() {
-    // Mirrors tests/stackunderflow/cli/test_agent_output.py's
+    // Mirrors tests/python-legacy: cli/test_agent_output.py's
     // test_one_fixture_per_command_and_case, so the two suites can never
     // silently disagree about what the pack contains.
     let pack = load_pack(&shipped_dir());
@@ -697,7 +697,7 @@ fn environment_dependent_values_ride_through_as_opaque_strings() {
     // An absolute macOS path from the maintainer's store, on a Linux runner.
     assert_eq!(
         env.query["path"].as_str(),
-        Some("/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py")
+        Some("/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py")
     );
     // A timestamp with a trailing Z, never re-parsed into a chrono type.
     assert_eq!(

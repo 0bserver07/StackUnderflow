@@ -25,7 +25,7 @@
 //!
 //! `find_waste` reaches the Q&A pair store through `_qa_service_factory()`,
 //! whose `__init__` runs `mkdir(parents=True)` + `_ensure_schema()`. So on a
-//! home with no `qa_pairs.db`, `stackunderflow optimize` **materialises one**
+//! home with no `qa_pairs.db`, `stax optimize` **materialises one**
 //! (a ~32 KB database with three empty tables) before answering "no waste". The
 //! port opens it read-only through [`stax_reports::optimize::find_waste`]'s
 //! `Option<&Path>` and treats a missing file as "every project totals 0", which

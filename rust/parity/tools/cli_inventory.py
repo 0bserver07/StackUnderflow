@@ -290,7 +290,7 @@ def main(out_path: Path) -> None:
 
     ghosts, unclaimed, ver_note = verify_against_binary(nodes)
 
-    cli_py = Path("stackunderflow/cli.py")
+    cli_py = Path("python-legacy: cli.py")
     line_count = len(cli_py.read_text().splitlines()) if cli_py.is_file() else 0
 
     L: list[str] = []
@@ -309,7 +309,7 @@ def main(out_path: Path) -> None:
     A("")
     A(
         f"Reference: Click **{importlib.metadata.version("click")}**, CPython "
-        f"**{sys.version.split()[0]}**, `stackunderflow/cli.py` at "
+        f"**{sys.version.split()[0]}**, `python-legacy: cli.py` at "
         f"**{line_count}** lines."
     )
     A("")

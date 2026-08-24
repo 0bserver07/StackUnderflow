@@ -311,7 +311,7 @@ answer is 47 and an implementation that rounded the burn, or divided
 tolerantly, would produce it — visibly, in the alert banner.
 
 **Every `build_projection` vector in the unit tests was checked against the real
-`stackunderflow/services/burn.py`** by importing the module and printing its
+`python-legacy: services/burn.py`** by importing the module and printing its
 output (thresholds fallback, dedupe, the overrun/dated/undated/epsilon alert
 legs, the stale-store fallback, `linear_projection` with a NaN, the window
 slice, and `pick_projection_method` on negatives). All agreed.

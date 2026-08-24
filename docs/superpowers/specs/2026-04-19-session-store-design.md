@@ -53,7 +53,7 @@ routes/            — unchanged filenames; handlers rewritten to query via stor
 ### 4.1 Adapter interface
 
 ```python
-# stackunderflow/adapters/base.py
+# python-legacy: adapters/base.py
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -97,7 +97,7 @@ class SourceAdapter(Protocol):
         """Yield records from `ref`, starting at `since_offset` bytes into the file."""
 ```
 
-Two methods. No lifecycle, no init arguments. Adapters are registered by instantiating them in `stackunderflow/adapters/__init__.py`.
+Two methods. No lifecycle, no init arguments. Adapters are registered by instantiating them in `python-legacy: adapters/__init__.py`.
 
 ### 4.2 SQLite schema (v1)
 

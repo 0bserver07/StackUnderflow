@@ -9,7 +9,7 @@ A source adapter is the bridge between a coding tool's native on-disk format (JS
 
 ## The Protocol
 
-`stackunderflow/adapters/base.py` defines the contract:
+`python-legacy: adapters/base.py` defines the contract:
 
 ```python
 class SourceAdapter(Protocol):
@@ -98,7 +98,7 @@ Field-by-field guidance:
 
 ### `watch_paths() -> list[Path]`
 
-Live ingest. Return canonical roots that the watcher (`stackunderflow/etl/watcher.py`) should monitor for changes. JSONL adapters return their parent directory; vscdb-style adapters return the SQLite file itself (`watchfiles` fires on byte-level change either way).
+Live ingest. Return canonical roots that the watcher (`python-legacy: etl/watcher.py`) should monitor for changes. JSONL adapters return their parent directory; vscdb-style adapters return the SQLite file itself (`watchfiles` fires on byte-level change either way).
 
 Returning `[]` opts out of live-watching — the adapter falls back to periodic ingest. Most beta adapters do this until they've been validated against real source data.
 
@@ -106,10 +106,10 @@ Returning `[]` opts out of live-watching — the adapter falls back to periodic 
 
 ## Registration
 
-Adapters register themselves at package import time. The registry is **self-discovering**: `stackunderflow/adapters/__init__.py` walks the package and registers every class satisfying the `SourceAdapter` shape, so the adapter file needs no `register()` call and `__init__.py` needs no per-adapter import:
+Adapters register themselves at package import time. The registry is **self-discovering**: `python-legacy: adapters/__init__.py` walks the package and registers every class satisfying the `SourceAdapter` shape, so the adapter file needs no `register()` call and `__init__.py` needs no per-adapter import:
 
 ```python
-# stackunderflow/adapters/myprovider.py — no registration boilerplate; being a
+# python-legacy: adapters/myprovider.py — no registration boilerplate; being a
 # SourceAdapter-shaped class in this package is enough to be discovered.
 
 class MyProviderAdapter:
@@ -149,11 +149,11 @@ The ingest layer calls `enumerate()` every cycle and `read()` every time a sessi
 
 Read these in this order:
 
-1. **`stackunderflow/adapters/codex.py`** — the cleanest JSONL-only example. Single file format, well-defined record shape, clear `read()` loop.
-2. **`stackunderflow/adapters/claude.py`** — the most-tested adapter; covers JSONL plus the legacy `~/.claude/history.jsonl` fallback and the `<synthetic>` model cleanup.
-3. **`stackunderflow/adapters/cursor.py`** — the canonical vscdb / SQLite-backed example. Shows `source_kind="database"`, rowid resume, and the per-workspace slug derivation (the bug that motivated v005).
-4. **`stackunderflow/adapters/cline.py`** — VS Code globalStorage walking. Also home to `KiloCodeAdapter` and `RooCodeAdapter` — sibling extensions on the same parser base, differing only in filesystem root.
-5. **`stackunderflow/adapters/_streaming.py`** — shared JSONL streaming helper used by several adapters.
+1. **`python-legacy: adapters/codex.py`** — the cleanest JSONL-only example. Single file format, well-defined record shape, clear `read()` loop.
+2. **`python-legacy: adapters/claude.py`** — the most-tested adapter; covers JSONL plus the legacy `~/.claude/history.jsonl` fallback and the `<synthetic>` model cleanup.
+3. **`python-legacy: adapters/cursor.py`** — the canonical vscdb / SQLite-backed example. Shows `source_kind="database"`, rowid resume, and the per-workspace slug derivation (the bug that motivated v005).
+4. **`python-legacy: adapters/cline.py`** — VS Code globalStorage walking. Also home to `KiloCodeAdapter` and `RooCodeAdapter` — sibling extensions on the same parser base, differing only in filesystem root.
+5. **`python-legacy: adapters/_streaming.py`** — shared JSONL streaming helper used by several adapters.
 
 The thirteen most recently added adapters are useful as case studies for unusual source formats (Kiro's missing tokens, Codeium's protobuf stub, Pi+OMP's shared parser).
 
@@ -167,7 +167,7 @@ The thirteen most recently added adapters are useful as case studies for unusual
 - [ ] Yield records with the canonical 4-token shape; flatten provider-native shapes inside the adapter.
 - [ ] Implement `watch_paths()` only when you've validated live ingest works for your source format.
 - [ ] Nothing to register by hand — dropping the module in `stackunderflow/adapters/` auto-registers it. Add the adapter's fidelity row to `stackunderflow/adapters/capabilities.json`.
-- [ ] Ship a matching `Normalizer` in `stackunderflow/etl/normalize/<name>.py` and register it in `stackunderflow/etl/normalize/__init__.py`. Pick a `cost_source` that honestly describes how cost is derived — see [session-schema-v1.md § cost_source enum](session-schema-v1.md#cost_source-enum).
+- [ ] Ship a matching `Normalizer` in `stackunderflow/etl/normalize/<name>.py` and register it in `python-legacy: etl/normalize/__init__.py`. Pick a `cost_source` that honestly describes how cost is derived — see [session-schema-v1.md § cost_source enum](session-schema-v1.md#cost_source-enum).
 - [ ] Update the per-provider table in [session-schema-v1.md](session-schema-v1.md#per-provider-normalizer-contracts) and the README provider count.
 - [ ] Add fixtures + tests under `tests/stackunderflow/adapters/` and `tests/stackunderflow/etl/normalize/`.
 - [ ] Document the source path in `docs/multi-provider.md`. (There is no env-var block to update — registration is automatic.)
@@ -179,5 +179,5 @@ The thirteen most recently added adapters are useful as case studies for unusual
 - [session-schema-v1.md](session-schema-v1.md) — the on-disk schema your records land in.
 - [etl-architecture.md](etl-architecture.md) — the three-layer pipeline.
 - [multi-provider/spec.md](multi-provider/spec.md) — the original multi-provider design that the Protocol grew out of.
-- `stackunderflow/adapters/base.py` — the Protocol + dataclasses (the source of truth).
-- `stackunderflow/etl/normalize/base.py` — the matching `Normalizer` ABC.
+- `python-legacy: adapters/base.py` — the Protocol + dataclasses (the source of truth).
+- `python-legacy: etl/normalize/base.py` — the matching `Normalizer` ABC.

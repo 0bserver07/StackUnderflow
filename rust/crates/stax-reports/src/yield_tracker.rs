@@ -8,7 +8,7 @@
 //! | `YieldEntry` (dataclass) | ↑ | [`YieldEntry`] |
 //!
 //! Consumed by `routes/yield_route.rs` (`GET /api/yield`) and, in wave 8, by the
-//! `stackunderflow yield` CLI verb — which is why the logic lives here and not
+//! `stax yield` CLI verb — which is why the logic lives here and not
 //! in the route module.
 //!
 //! # What the service actually does

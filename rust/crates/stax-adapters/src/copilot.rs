@@ -1,4 +1,4 @@
-//! GitHub Copilot — the port of `stackunderflow/adapters/copilot.py`.
+//! GitHub Copilot — the port of `python-legacy: adapters/copilot.py`.
 //!
 //! Two on-disk formats, one `read()`, because they share a per-line event shape:
 //!

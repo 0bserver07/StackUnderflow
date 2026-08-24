@@ -1,4 +1,4 @@
-//! Cursor IDE — the port of `stackunderflow/adapters/cursor.py`.
+//! Cursor IDE — the port of `python-legacy: adapters/cursor.py`.
 //!
 //! The **first database-kind adapter**: Cursor keeps everything in one SQLite
 //! key/value table, `cursorDiskKV` inside `state.vscdb`, and two key prefixes

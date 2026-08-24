@@ -1,6 +1,6 @@
 ---
 name: find-related-sessions
-description: Use when the user references a SPECIFIC FILE in a coding task — "fix the bug in routes/cost.py", "what was that change to api.ts about", "refactor stackunderflow/store/queries.py", or any request that names a path. Surfaces past sessions that read or wrote that file so the work is grounded in prior context (recent edits, why the file is shaped that way, half-finished refactors).
+description: Use when the user references a SPECIFIC FILE in a coding task — "fix the bug in routes/cost.py", "what was that change to api.ts about", "refactor python-legacy: store/queries.py", or any request that names a path. Surfaces past sessions that read or wrote that file so the work is grounded in prior context (recent edits, why the file is shaped that way, half-finished refactors).
 ---
 
 # Find sessions related to a specific file
@@ -15,7 +15,7 @@ Trigger when the user's request includes a concrete file path (with extension or
 
 - "Fix the bug in `routes/cost.py`"
 - "What was that change to `api.ts` about?"
-- "Why is `stackunderflow/store/queries.py` so long?"
+- "Why is `python-legacy: store/queries.py` so long?"
 - "Refactor `src/components/Dashboard.tsx`"
 - "Can you look at `tests/test_aggregator.py`?"
 

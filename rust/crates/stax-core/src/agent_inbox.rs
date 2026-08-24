@@ -456,7 +456,7 @@ pub fn render_for_injection(root: Option<&Path>) -> String {
     }
     if unseen.len() > batch.len() {
         lines.push(format!(
-            "  … {} more: run `stackunderflow msg inbox`",
+            "  … {} more: run `stax msg inbox`",
             unseen.len() - batch.len()
         ));
     }
@@ -703,7 +703,7 @@ mod tests {
             rendered,
             "[staxtrace inbox] 3 message(s):\n  \
              • from mac (T): m0\n  • from mac (T): m1\n  \
-             … 1 more: run `stackunderflow msg inbox`"
+             … 1 more: run `stax msg inbox`"
         );
         // Two marked, one still unseen — and a second fire shows only the tail.
         assert_eq!(list_messages(false, Some(&root)).len(), 1);

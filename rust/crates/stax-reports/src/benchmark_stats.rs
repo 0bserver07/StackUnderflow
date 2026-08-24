@@ -1001,7 +1001,7 @@ mod tests {
     use super::*;
 
     /// Every expected value below was produced by running the *Python* routine
-    /// in CPython 3.12.13 against `stackunderflow/services/benchmark_stats.py`,
+    /// in CPython 3.12.13 against `python-legacy: services/benchmark_stats.py`,
     /// and is pinned as the exact `f64` bit pattern — a decimal literal can hide
     /// an ULP and this whole module exists because ULPs matter here.
     fn bits(x: f64) -> String {

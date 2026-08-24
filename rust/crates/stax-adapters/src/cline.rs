@@ -1,4 +1,4 @@
-//! The Cline family — the port of `stackunderflow/adapters/cline.py`.
+//! The Cline family — the port of `python-legacy: adapters/cline.py`.
 //!
 //! **One module, three providers.** Cline, KiloCode and Roo Code are the same
 //! VS Code extension surface under three extension ids, and Python models that
@@ -55,7 +55,7 @@ const TOKEN_KEYS: [&str; 4] = ["tokensIn", "tokensOut", "cacheWrites", "cacheRea
 ///
 /// A parameter rather than a compile-time `cfg!` at the call site so all three
 /// layouts are testable from one host — the same reason
-/// `tests/stackunderflow/adapters/test_platform_paths.py` monkeypatches
+/// `tests/python-legacy: adapters/test_platform_paths.py` monkeypatches
 /// `sys.platform`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {

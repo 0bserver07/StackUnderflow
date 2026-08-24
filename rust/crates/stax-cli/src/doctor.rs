@@ -187,7 +187,7 @@ pub fn run_store_health_checks(store_path: &Path) -> Health {
         push(
             &mut findings,
             "store",
-            format!("store not found at {rendered} — run `stackunderflow start` to create it"),
+            format!("store not found at {rendered} — run `stax start` to create it"),
         );
         return Health {
             ok: false,
@@ -926,8 +926,7 @@ mod tests {
             store_path: "/h/store.db".into(),
             findings: vec![Finding {
                 check: "store".into(),
-                message: "store not found at /h/store.db — run `stackunderflow start` to create it"
-                    .into(),
+                message: "store not found at /h/store.db — run `stax start` to create it".into(),
             }],
         };
         let delivery = Delivery {
@@ -1042,7 +1041,7 @@ mod tests {
         assert!(
             health.findings[0]
                 .message
-                .ends_with("— run `stackunderflow start` to create it")
+                .ends_with("— run `stax start` to create it")
         );
         assert!(
             !store.exists(),

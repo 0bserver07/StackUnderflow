@@ -2,11 +2,11 @@
 
 **Goal:** answer "where did my tokens go?" and "where was time/money wasted?" by extending the existing stats pipeline and dashboard.
 
-All new computation lives in `stackunderflow/stats/aggregator.py`. All new UI lives as a new **Cost** tab plus targeted upgrades to `OverviewTab` and `SessionsTab`. No new data extraction from log files is required for Phases 1–3 — everything derives from the existing `Record` / `Interaction` objects in `EnrichedDataset`.
+All new computation lives in `python-legacy: stats/aggregator.py`. All new UI lives as a new **Cost** tab plus targeted upgrades to `OverviewTab` and `SessionsTab`. No new data extraction from log files is required for Phases 1–3 — everything derives from the existing `Record` / `Interaction` objects in `EnrichedDataset`.
 
 ## 1. API contract
 
-These fields are appended to the dict returned by `summarise()` in `stackunderflow/stats/aggregator.py`, alongside the existing keys (`overview`, `tools`, `sessions`, `daily_stats`, `hourly_pattern`, `errors`, `models`, `user_interactions`, `cache`). The v1 build shipped them inside `GET /api/dashboard-data`; the analytics-polish wave later split them into a dedicated `GET /api/cost-data` endpoint to keep the dashboard payload small (see analytics-polish.md §A3).
+These fields are appended to the dict returned by `summarise()` in `python-legacy: stats/aggregator.py`, alongside the existing keys (`overview`, `tools`, `sessions`, `daily_stats`, `hourly_pattern`, `errors`, `models`, `user_interactions`, `cache`). The v1 build shipped them inside `GET /api/dashboard-data`; the analytics-polish wave later split them into a dedicated `GET /api/cost-data` endpoint to keep the dashboard payload small (see analytics-polish.md §A3).
 
 ### 1.1 `session_costs: list[SessionCost]` — ranked desc by cost
 
@@ -172,7 +172,7 @@ Response:
 }
 ```
 
-Lives in `stackunderflow/routes/sessions.py`.
+Lives in `python-legacy: routes/sessions.py`.
 
 ## 2. Frontend — new files
 
@@ -238,8 +238,8 @@ Three agents, worktree-isolated:
 
 ### 3.1 `backend` — all Python
 Files owned:
-- `stackunderflow/stats/aggregator.py` — add 7 new collector classes + 1 trends function, wire into `summarise()`
-- `stackunderflow/routes/sessions.py` — add `/api/sessions/compare` endpoint
+- `python-legacy: stats/aggregator.py` — add 7 new collector classes + 1 trends function, wire into `summarise()`
+- `python-legacy: routes/sessions.py` — add `/api/sessions/compare` endpoint
 - `tests/stackunderflow/stats/` — add unit tests for each new collector against mock data
 - Ensure existing 138 tests still pass
 

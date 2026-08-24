@@ -62,7 +62,7 @@ function project(name: string): Project {
 
 /**
  * A stub server holding `total` projects and honouring `limit`/`offset` the
- * way stackunderflow/routes/projects.py does — including the clamp of `limit`
+ * way python-legacy: routes/projects.py does — including the clamp of `limit`
  * to `PROJECTS_MAX_LIMIT`, which is what makes a single unbounded request an
  * unsafe way to "get everything".
  */

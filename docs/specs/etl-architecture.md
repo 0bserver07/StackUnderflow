@@ -203,7 +203,7 @@ All three follow the same `MartBuilder` contract — watermarked, idempotent, in
 
 ## Code shape
 
-### Normalizer ABC — `stackunderflow/etl/normalize/base.py`
+### Normalizer ABC — `python-legacy: etl/normalize/base.py`
 
 ```python
 class Normalizer(ABC):
@@ -224,7 +224,7 @@ class Normalizer(ABC):
         """
 ```
 
-### MartBuilder ABC — `stackunderflow/etl/marts/base.py`
+### MartBuilder ABC — `python-legacy: etl/marts/base.py`
 
 ```python
 class MartBuilder(ABC):
@@ -253,7 +253,7 @@ class MartBuilder(ABC):
         """
 ```
 
-### Watermark helpers — `stackunderflow/etl/watermark.py`
+### Watermark helpers — `python-legacy: etl/watermark.py`
 
 ```python
 def get_watermark(conn, mart_name: str) -> int: ...
@@ -263,7 +263,7 @@ def refresh_all_marts(conn) -> dict[str, int]:
     persist new watermark. Returns {mart_name: events_processed}."""
 ```
 
-### Watcher — `stackunderflow/etl/watcher.py`
+### Watcher — `python-legacy: etl/watcher.py`
 
 ```python
 def start_watcher(conn_factory, *, debounce_ms: int = 200,
@@ -284,7 +284,7 @@ def start_watcher(conn_factory, *, debounce_ms: int = 200,
 
 Library: `watchfiles` (Rust-backed, sub-100ms latency, async-friendly). Already-tested replacement for `watchdog`.
 
-### Backfill orchestrator — `stackunderflow/etl/backfill.py`
+### Backfill orchestrator — `python-legacy: etl/backfill.py`
 
 ```python
 def backfill(conn, *, force: bool = False,

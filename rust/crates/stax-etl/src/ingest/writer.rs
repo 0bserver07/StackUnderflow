@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/ingest/writer.py` — one file → one transaction →
+//! Port of `python-legacy: ingest/writer.py` — one file → one transaction →
 //! one `ingest_log` row.
 //!
 //! # Rows follow records, not refs (commit 232ac37 — CURRENT contract)
@@ -308,7 +308,7 @@ fn ingest_body(
             Ok(()) => {}
             Err(err) => report.notes.push(format!(
                 "ingest.writer: normalize failed for {} ({}): {err} — messages still \
-                 committed; run `stackunderflow etl backfill` to recover",
+                 committed; run `stax etl backfill` to recover",
                 session.provider,
                 session.file_path.display()
             )),
@@ -825,7 +825,7 @@ fn normalize_new_messages(
     let Some(normalizer) = normalize::get(provider) else {
         report.notes.push(format!(
             "ingest.writer: no normalizer registered for provider {provider:?} — skipping \
-             (run `stackunderflow etl backfill` to materialise events later if a \
+             (run `stax etl backfill` to materialise events later if a \
              normalizer is added)"
         ));
         return Ok(());

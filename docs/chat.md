@@ -25,7 +25,7 @@ If Ollama isn't running, the model dropdown stays empty and sending a message su
 
 ## The Ollama proxy route
 
-`stackunderflow/routes/misc.py` exposes `/ollama-api/{path:path}` as a thin httpx-backed pass-through to the local Ollama daemon. A request to `/ollama-api/tags` is forwarded to `http://localhost:11434/api/tags`, and so on for any path.
+`python-legacy: routes/misc.py` exposes `/ollama-api/{path:path}` as a thin httpx-backed pass-through to the local Ollama daemon. A request to `/ollama-api/tags` is forwarded to `http://localhost:11434/api/tags`, and so on for any path.
 
 - The HTTP method (`GET` / `POST` / `PUT` / `DELETE`) is forwarded as-is.
 - The request body is forwarded verbatim.

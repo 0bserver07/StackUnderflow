@@ -1,5 +1,5 @@
-// Meta-agent wire types — mirror stackunderflow/services/meta_agent.py
-// and stackunderflow/routes/meta_agent.py.
+// Meta-agent wire types — mirror python-legacy: services/meta_agent.py
+// and python-legacy: routes/meta_agent.py.
 //
 // The route streams one JSON object per line ("application/x-ndjson")
 // where each line carries a ``type`` discriminator. Keep these shapes

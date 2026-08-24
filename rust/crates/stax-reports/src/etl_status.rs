@@ -13,7 +13,7 @@
 //! | [`compute_health`] | `_compute_health` | four states, worst-first |
 //!
 //! The route is four lines; everything below is why this file exists. Python
-//! keeps the SQL in the assembler so `stackunderflow etl status` and the HTTP
+//! keeps the SQL in the assembler so `stax etl status` and the HTTP
 //! surface cannot disagree, and the same split is reproduced here so wave 8's
 //! CLI verb has one home to call.
 //!
@@ -128,7 +128,7 @@ fn mart_table(name: &str) -> &'static str {
 ///
 /// Python's `assemble_status` calls `backfill_jobs.get_current_job()` /
 /// `get_last_job()`, which read a `threading.Lock` and two **process-local**
-/// module slots. `stackunderflow etl status` is a fresh interpreter that has
+/// module slots. `stax etl status` is a fresh interpreter that has
 /// never scheduled anything, so it reads `None` from both on every invocation,
 /// by construction. The port makes that explicit rather than reproducing a
 /// global: the route passes what the server's job module holds, the CLI verb

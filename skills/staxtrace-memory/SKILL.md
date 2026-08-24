@@ -1,11 +1,11 @@
 ---
-name: stackunderflow-memory
-description: Search local coding-agent session history before acting. Use BEFORE an Edit or Write to a file, BEFORE a non-trivial Bash command (a build, migration, or destructive/long-running command), and whenever the user references a past decision ("what did we decide about X", "why is this done this way", "didn't we agree to Y"), a specific file, or "what worked last time" — cases where a prior session on this machine may already hold the decision, the failure mode, or the exact working command. Queries the local `stax memory` CLI (StackUnderflow) across every past Claude Code / Codex / Cursor session so you do not re-derive an answer, contradict an earlier choice, or repeat a known failure. Local and read-only; nothing leaves the machine.
+name: staxtrace-memory
+description: Search local coding-agent session history before acting. Use BEFORE an Edit or Write to a file, BEFORE a non-trivial Bash command (a build, migration, or destructive/long-running command), and whenever the user references a past decision ("what did we decide about X", "why is this done this way", "didn't we agree to Y"), a specific file, or "what worked last time" — cases where a prior session on this machine may already hold the decision, the failure mode, or the exact working command. Queries the local `stax memory` CLI (staxtrace) across every past Claude Code / Codex / Cursor session so you do not re-derive an answer, contradict an earlier choice, or repeat a known failure. Local and read-only; nothing leaves the machine.
 ---
 
-# StackUnderflow — query your past coding sessions before acting
+# staxtrace — query your past coding sessions before acting
 
-This machine indexes every past coding-agent session locally with StackUnderflow.
+This machine indexes every past coding-agent session locally with staxtrace.
 The sessions are stateless; the history is not. A decision, a failure mode, or the
 exact command you need may already be recorded. Before re-deriving something,
 check whether the answer is already there.
@@ -46,7 +46,7 @@ Narrowing flags on every command: `--since 30d` (tighten the window), `--limit N
 (cap results), `--project <slug>` (scope). `--project` defaults to the current
 directory's project, so inside a repo these Just Work.
 
-`stax` is the short command. The long form `stackunderflow memory …` is identical
+`stax` is the short command. The long form `stax memory …` is identical
 and works anywhere `stax` is not on PATH.
 
 ## Prefer text output; `--json` is for scripts only

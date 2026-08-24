@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/watermark.py`.
+//! Port of `python-legacy: etl/watermark.py`.
 //!
 //! Each mart keeps an independent `last_event_id` so incremental refresh
 //! resumes where the last run stopped, and a partial failure of one mart cannot

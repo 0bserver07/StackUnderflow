@@ -35,7 +35,7 @@ finding 1 a real divergence rather than a shared failure path.
 
 ## 1. `_fetch_from_litellm` is HTTPS, and this workspace has no TLS — the port is pinned to the failure leg
 
-*Python:* `stackunderflow/services/pricing_service.py:301` —
+*Python:* `python-legacy: services/pricing_service.py:301` —
 `urllib.request.urlopen(self.litellm_url, timeout=10)` where `litellm_url` is
 `https://raw.githubusercontent.com/…` (line 29).
 

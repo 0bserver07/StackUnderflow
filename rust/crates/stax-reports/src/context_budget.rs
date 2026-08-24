@@ -46,7 +46,7 @@
 //! environment: `home` is a parameter, and `routes/context_budget.rs` resolves
 //! it once from `std::env::home_dir()` — the same helper `routes/projects.rs`
 //! already uses for `~/.claude/projects`. Tests inject a temp dir, which is
-//! exactly what `tests/stackunderflow/services/test_context_budget.py` does
+//! exactly what `tests/python-legacy: services/test_context_budget.py` does
 //! with `home_dir=`.
 //!
 //! # Three things a careless port gets wrong, all in `len(text)`

@@ -1,6 +1,6 @@
 //! Python static analyzer — complexity / lint count / type completeness.
 //!
-//! Port of `stackunderflow/services/static_analysis/python_analyzer.py` (303
+//! Port of `python-legacy: services/static_analysis/python_analyzer.py` (303
 //! lines). Each metric is independently optional: a missing tool, empty file,
 //! or parse failure means the metric is *absent* from `metrics` and the reason
 //! lives in `warnings` — never a panic, never an `Err`.

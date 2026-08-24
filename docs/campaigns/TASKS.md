@@ -31,7 +31,7 @@ evidence. Do not bulk-close.
 |---|---|---|---|
 | **#100** | Spec 28: multi-device sync | `CHANGELOG [Unreleased]` credits it explicitly: *"Multi-device sync (issue #100, opt-in)"*, `v028`/`v029` migrations | **close with evidence** |
 | **#97** | Spec 27: active-surfacing / proactive nudges | `CHANGELOG` credits it: *"Proactive nudges (issue #97, opt-in, default-off)"* | **close with evidence** |
-| **#98** | Spec 25: fork mode | `stackunderflow/routes/forks.py` exists; `/api/forks` referenced in changelog | verify → likely close |
+| **#98** | Spec 25: fork mode | `python-legacy: routes/forks.py` exists; `/api/forks` referenced in changelog | verify → likely close |
 | **#99** | Spec 26: comparative benchmark engine | `routes/benchmark.py`, `services/benchmark_stats.py`, `tests/…/test_benchmark_route.py`, `docs/specs/benchmark-engine.md` | verify → likely close |
 | **#95** | Spec 23: LLM-graded session quality | rubric in `cli.py`, `services/benchmark_stats.py`, `reports/benchmark.py`, `docs/specs/benchmark-rubric-v1.md` | verify → likely close |
 | **#102** | Spec 30: beta-normalizer fixtures | `tests/fixtures/beta_normalizers/` has per-provider packs; changelog: *"loads every provider's fixture from checked-in data packs"* | verify → likely close |

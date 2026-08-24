@@ -28,7 +28,7 @@ Subcommands
                         other than the ETL path.
 ``fixture PROVIDER``    fixture pack -> adapter -> normalizer -> events, in the
                         ``dump`` line format. Mirrors
-                        ``tests/stackunderflow/etl/normalize/test_beta_normalizers.py``.
+                        ``tests/python-legacy: etl/normalize/test_beta_normalizers.py``.
 """
 
 from __future__ import annotations

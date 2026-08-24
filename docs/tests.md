@@ -75,7 +75,7 @@ python -m pytest tests/ -q                              # default run (slow test
 python -m pytest tests/ -v                              # verbose
 python -m pytest -m slow                                # only the slow suite
 python -m pytest tests/stackunderflow/store/            # one subtree
-python -m pytest tests/stackunderflow/stats/test_aggregator.py
+python -m pytest tests/python-legacy: stats/test_aggregator.py
 python -m pytest -k "classifier and error"              # select by name
 python -m pytest --cov=stackunderflow --cov-report=html # coverage
 ```

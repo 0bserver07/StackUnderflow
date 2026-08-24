@@ -1,4 +1,4 @@
-//! `stax guide` — `cli.py:5317`–`:5392` over `stackunderflow/agentsmd.py`.
+//! `stax guide` — `cli.py:5317`–`:5392` over `python-legacy: agentsmd.py`.
 //!
 //! Writes a marked block into `CLAUDE.md` / `AGENTS.md` teaching an agent that
 //! the `memory` commands exist. Three properties are the whole contract, and
@@ -521,7 +521,7 @@ pub fn status(scope: Option<&str>, fmt: &str, env: &Env) -> Output {
             } else if entry.up_to_date {
                 "installed"
             } else {
-                "STALE — run `stackunderflow guide install`"
+                "STALE — run `stax guide install`"
             };
             out.push_str(&format!("  {}  —  {state}\n", path.display()));
         }

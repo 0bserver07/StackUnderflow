@@ -327,7 +327,7 @@ function MergedView({ merged, status }: { merged: SyncOverviewMerged; status: Sy
         </div>
         {status.peer_count === 0 && (
           <div className="text-[11px] text-gray-400 dark:text-gray-500 px-1">
-            No peers pulled yet — run <code className="font-mono">stackunderflow sync pull</code> on
+            No peers pulled yet — run <code className="font-mono">stax sync pull</code> on
             this device after another machine has pushed.
           </div>
         )}
@@ -395,7 +395,7 @@ export default function DevicesTab({ projectName }: DevicesTabProps) {
         />
         <div className="flex justify-center">
           <code className="font-mono text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded px-2.5 py-1.5 border border-gray-200 dark:border-gray-700">
-            stackunderflow sync init
+            stax sync init
           </code>
         </div>
       </div>
@@ -457,7 +457,7 @@ export default function DevicesTab({ projectName }: DevicesTabProps) {
               : 'other machines'}{' '}
             into one cross-device view.
             {!status.all_devices_available &&
-              ' No peer data has been pulled yet — run `stackunderflow sync pull` first.'}
+              ' No peer data has been pulled yet — run `stax sync pull` first.'}
           </p>
         </div>
       ) : overviewQuery.isLoading ? (
@@ -473,7 +473,7 @@ export default function DevicesTab({ projectName }: DevicesTabProps) {
         <EmptyState
           icon={<IconUsers size={28} />}
           title="No merged data"
-          description="Sync is configured but nothing has been merged yet. Push from another device, then run stackunderflow sync pull here."
+          description="Sync is configured but nothing has been merged yet. Push from another device, then run stax sync pull here."
         />
       )}
     </div>

@@ -101,11 +101,11 @@ The user gets free continuity: prior frontend work surfaces, the agent uses the 
 ### `find-related-sessions` in action
 
 ```
-User: Why is stackunderflow/store/queries.py so long? Can we split it up?
+User: Why is python-legacy: store/queries.py so long? Can we split it up?
 
 [Claude Code recognizes a specific file reference, fires find-related-sessions]
 
-[Claude Code runs: stax find-sessions-touching-file stackunderflow/store/queries.py --format json --limit 5 --mode any]
+[Claude Code runs: stax find-sessions-touching-file python-legacy: store/queries.py --format json --limit 5 --mode any]
 
 Claude Code: I checked the recent sessions on queries.py. The last write was
 on 2026-04-30 (session abc123…) — the "Wave 4 mart migration" PR added
@@ -197,7 +197,7 @@ What gets mined (pattern kinds): `canonical-test-command`, `always-runs-X-after-
 - **Idempotent + non-destructive.** Re-running overwrites in place (the previous `SKILL.md` is backed up to `SKILL.md.bak` first) and never touches a hand-authored skill — writing skips any target directory whose `SKILL.md` isn't marked `auto_generated: true`. The directory name is derived deterministically from the pattern; the rare slug collision gets a `-<hash>` suffix so it's explicit, not silent.
 - **Pure-regex synthesis, no network.** No LLM call — patterns come from parsing `messages` in the local SQLite store. (An opt-in `--use-llm` refinement pass is a possible future addition.)
 
-The synthesis lives in `stackunderflow/services/skill_synth.py`; the bulk-load helper it uses is `stackunderflow.services.discovery.load_messages_for_project`.
+The synthesis lives in `python-legacy: services/skill_synth.py`; the bulk-load helper it uses is `stackunderflow.services.discovery.load_messages_for_project`.
 
 ## Proactive recommendations
 
@@ -219,10 +219,10 @@ It filters out patterns you already have a skill for. Each row carries an `accep
 
 ## Validation
 
-The repo has a smoke test (`tests/stackunderflow/test_skills.py`) covering the shipped skills. It checks each `SKILL.md` for the `<name>/SKILL.md` directory layout, valid `---`-delimited frontmatter, a `name` matching the directory, a non-empty `description` of at least 40 characters, a non-empty body, and a `stackunderflow` CLI command somewhere in that body. It also fails if a skill directory appears that isn't one of the three expected. Run it after editing skill files:
+The repo has a smoke test (`tests/python-legacy: test_skills.py`) covering the shipped skills. It checks each `SKILL.md` for the `<name>/SKILL.md` directory layout, valid `---`-delimited frontmatter, a `name` matching the directory, a non-empty `description` of at least 40 characters, a non-empty body, and a `stackunderflow` CLI command somewhere in that body. It also fails if a skill directory appears that isn't one of the three expected. Run it after editing skill files:
 
 ```bash
-pytest tests/stackunderflow/test_skills.py -q
+pytest tests/python-legacy: test_skills.py -q
 ```
 
 ## Troubleshooting

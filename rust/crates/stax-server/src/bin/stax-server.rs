@@ -1,4 +1,4 @@
-//! The dashboard binary — `stackunderflow start`'s uvicorn call, in Rust.
+//! The dashboard binary — `stax start`'s uvicorn call, in Rust.
 //!
 //! Everything the app needs is resolved here and injected; nothing below this
 //! file reads the environment. The default port is **8096**, not 8081 and never

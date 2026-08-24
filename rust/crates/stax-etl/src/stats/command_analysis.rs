@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/stats/aggregator.py::_command_analysis` — the three
+//! Port of `python-legacy: stats/aggregator.py::_command_analysis` — the three
 //! numerators `project_mart` materialises.
 //!
 //! The Python function returns a 21-key dict, of which `_count_interaction_dims`

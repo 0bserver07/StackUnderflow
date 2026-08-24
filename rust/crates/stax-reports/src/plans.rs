@@ -53,7 +53,7 @@
 //!
 //! Both are settings *writers* (`Settings.persist` / `Settings.remove`) with no
 //! HTTP caller anywhere — `/api/plan` is read-only and there is no
-//! `PUT /api/plan`. Their only consumer is `stackunderflow plan set|reset`,
+//! `PUT /api/plan`. Their only consumer is `stax plan set|reset`,
 //! which wave 8 owns. Porting them here would put an untested `config.json`
 //! writer in a request path that can never reach it. Recorded as DIV-094 rather
 //! than written blind.

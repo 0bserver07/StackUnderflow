@@ -1,4 +1,4 @@
-//! Claude Code — the port of `stackunderflow/adapters/claude.py`.
+//! Claude Code — the port of `python-legacy: adapters/claude.py`.
 //!
 //! Two on-disk formats, both handled here:
 //!
@@ -490,7 +490,7 @@ fn role_from(obj: &serde_json::Map<String, Value>, msg: Option<&Value>) -> Optio
 /// Claude Code stamps `message.model = "<synthetic>"` on locally generated
 /// placeholders — API errors, invalid-request stubs, "No response requested."
 /// Those rows carry zero tokens and zero cost, so propagating the literal only
-/// pollutes user-facing surfaces (`stackunderflow compare` showed it as its own
+/// pollutes user-facing surfaces (`stax compare` showed it as its own
 /// model row). `None` makes every cost/compare path skip it the way it skips any
 /// other model-less record.
 fn model_from(msg: Option<&Value>) -> Option<String> {

@@ -16,7 +16,7 @@ Acceptance for **every** owner: type-check passes, build passes, no new lint war
 ## Wave A — backend + primitives (8 owners, parallel)
 
 ### A1 `backend-retry` — Fix `_RetryCollector`
-**Files:** `stackunderflow/stats/aggregator.py`, `tests/stackunderflow/stats/` (add tests).
+**Files:** `python-legacy: stats/aggregator.py`, `tests/stackunderflow/stats/` (add tests).
 **Problem:** chimera has 222 errors but `retry_signals: []`. The detection rule ("same tool ≥2× with is_error between") is too strict — most retries don't flag `is_error` on the tool record itself; the error lives in the assistant's follow-up or tool_result.
 **Scope:**
 - Debug against chimera: load one Interaction with a known error and inspect whether `is_error` appears on the tool record, the assistant record, or the tool_result.
@@ -26,7 +26,7 @@ Acceptance for **every** owner: type-check passes, build passes, no new lint war
 **Done when:** chimera surfaces ≥ 1 retry_signal.
 
 ### A2 `backend-errcost` — Fix `_ErrorCostCollector`
-**Files:** `stackunderflow/stats/aggregator.py`, tests.
+**Files:** `python-legacy: stats/aggregator.py`, tests.
 **Problem:** `estimated_retry_cost: 0.0` despite 222 errors. Collector likely zeroes everything when retry_signals is empty — wrong linkage.
 **Scope:**
 - Decouple from retry_signals. Estimate cost as: for each error record, sum the output_tokens of the next assistant message (or the current record's own output_tokens if it's the assistant) and apply `compute_cost` using the record's model.
@@ -36,18 +36,18 @@ Acceptance for **every** owner: type-check passes, build passes, no new lint war
 **Done when:** chimera shows non-zero `estimated_retry_cost` and a populated `top_error_commands`.
 
 ### A3 `backend-splitapi` — Lazy endpoints
-**Files:** `stackunderflow/routes/data.py` (split), new `stackunderflow/routes/cost.py`.
+**Files:** `python-legacy: routes/data.py` (split), new `python-legacy: routes/cost.py`.
 **Problem:** `/api/dashboard-data` ships 2.6 MB because analytics is bundled.
 **Scope:**
 - Move the 9 new analytics keys (`session_costs`, `command_costs`, `tool_costs`, `token_composition`, `outliers`, `retry_signals`, `session_efficiency`, `error_cost`, `trends`) out of `/api/dashboard-data` and into a new `GET /api/cost-data?log_path=`.
 - Existing `/api/dashboard-data` keeps only: `overview`, `tools`, `sessions`, `daily_stats`, `hourly_pattern`, `errors`, `models`, `user_interactions`, `cache`. Target: <1 MB for chimera.
 - Add `GET /api/interaction/{interaction_id}?log_path=` returning one enriched Interaction (command + responses + tool_results).
-- Register the new router in `stackunderflow/server.py` or wherever `routes/` is wired.
+- Register the new router in `python-legacy: server.py` or wherever `routes/` is wired.
 - Add tests.
 **Done when:** `/api/dashboard-data` size drops below 1 MB on chimera; new endpoints respond 200 with the expected shapes.
 
 ### A4 `backend-perf` — Optimize summarise()
-**Files:** `stackunderflow/stats/aggregator.py`.
+**Files:** `python-legacy: stats/aggregator.py`.
 **Problem:** chimera full dashboard cold: 1.76s, warm: 1.55s. Target: warm < 500ms.
 **Scope:**
 - Profile `summarise()` against chimera (cProfile or timing prints per collector). Identify top 2 hot spots.

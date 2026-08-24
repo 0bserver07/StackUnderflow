@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-06
 **Source of truth:** `docs/specs/multi-provider/codeburn-catalog.md`
-**Coverage:** end-to-end via `tests/stackunderflow/etl/normalize/test_beta_normalizers.py`
+**Coverage:** end-to-end via `tests/python-legacy: etl/normalize/test_beta_normalizers.py`
 
 This report walks each beta-flag-gated provider (12 normalizers + 1
 discovery-only stub) through real-shape fixtures and grades each against
@@ -42,7 +42,7 @@ fixture mirrors the on-disk layout documented in the catalog spec.
 
 ### What was diverging
 
-`stackunderflow/adapters/copilot.py::CopilotAdapter.read()` resolved the
+`python-legacy: adapters/copilot.py::CopilotAdapter.read()` resolved the
 model for each `assistant.message` event with this priority:
 
 ```
@@ -86,7 +86,7 @@ model = (
 
 Plus a regression test
 (`test_read_session_model_change_beats_tool_call_id_inference` in
-`tests/stackunderflow/adapters/test_copilot.py`) that locks in the new
+`tests/python-legacy: adapters/test_copilot.py`) that locks in the new
 priority order:
 
 > A `session.model_change` of `claude-sonnet-4-5-20250929` followed by
@@ -123,13 +123,13 @@ gemini:  cost=0.00832 USD, cost_source=rate_card  (gemini-1.5-pro  → GeminiPri
 ```
 
 The fix also corrects the normalizer-side provider→pricer routing in
-`stackunderflow/etl/normalize/base.py::_PROVIDER_TO_PRICER` so that
+`python-legacy: etl/normalize/base.py::_PROVIDER_TO_PRICER` so that
 beta-normalizer rows price against their own provider's rate table
 instead of falling through to Anthropic's (which would have invented
 roughly 3-4× the correct dollar figure even after RATE_CARD membership
 was satisfied).
 
-Regression tests in `tests/stackunderflow/etl/normalize/test_beta_normalizers.py`:
+Regression tests in `tests/python-legacy: etl/normalize/test_beta_normalizers.py`:
 
 - `test_beta_normalizer_fixture_emits_rate_card_cost_source` — every
   fixture-backed beta normalizer (opencode, qwen, gemini, copilot,
@@ -145,7 +145,7 @@ Regression tests in `tests/stackunderflow/etl/normalize/test_beta_normalizers.py
 ## Methodology
 
 The validation was driven by
-`tests/stackunderflow/etl/normalize/test_beta_normalizers.py`. For each
+`tests/python-legacy: etl/normalize/test_beta_normalizers.py`. For each
 provider it runs six parametrized assertions:
 
 1. **`test_beta_normalizer_registered`** — provider key resolves through
@@ -187,7 +187,7 @@ the SQLite read path end-to-end.
 - **Cursor Agent legacy `.txt` transcripts.** Only the Composer 2
   JSONL format is in the fixture; the legacy `.txt` reader has its own
   path with separate marker-line parsing. Existing
-  `tests/stackunderflow/adapters/test_cursor_agent.py` covers both
+  `tests/python-legacy: adapters/test_cursor_agent.py` covers both
   formats, but the beta-normalizer end-to-end test only exercises one.
 - **Live (non-rate-card) cost overlay.** `infra/costs.py` supports a
   LiteLLM-style overlay; the test runs against the static RATE_CARD

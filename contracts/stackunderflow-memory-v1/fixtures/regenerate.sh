@@ -21,7 +21,7 @@
 set -u
 
 SLUG="${SU_SLUG:--Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow}"
-FILE="${SU_FILE:-/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py}"
+FILE="${SU_FILE:-/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py}"
 EMPTY_PATH="${SU_EMPTY_PATH:-/opt/stackunderflow-contract-empty-zzz}"
 NOMATCH="zqxjklmnopurpleelephantxyzzy"  # a query no real session contains
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

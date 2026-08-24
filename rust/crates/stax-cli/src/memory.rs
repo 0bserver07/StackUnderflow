@@ -11,7 +11,7 @@
 //!
 //! * **Text output is byte-identical.** Every literal, every double space,
 //!   every `…` (U+2026) is the reference's. `stax memory sessions` diffs
-//!   clean against `stackunderflow memory sessions` on the same store and cwd.
+//!   clean against `stax memory sessions` on the same store and cwd.
 //! * **JSON goes through the shared contract.** The envelope is
 //!   [`stax_memory`]'s `stackunderflow.memory/1` — same builder, same
 //!   CPython-compatible writer, so `--json` output is byte-identical too and

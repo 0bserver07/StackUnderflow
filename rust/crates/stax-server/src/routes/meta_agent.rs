@@ -462,7 +462,7 @@ const TOOL_CATALOG_JSON: &str = r#"
             "type": "function",
             "function": {
                 "name": "get_session_quality",
-                "description": "Return the persisted static-analysis findings for one session (cyclomatic complexity, lint count, type completeness — pre/post deltas per touched file). Use this to answer 'did the agent improve or regress code quality in session X?' / 'how complex was the change?'. Returns an empty findings list when the session hasn't been analyzed yet (suggest the user run ``stackunderflow analyze session <id>``).",
+                "description": "Return the persisted static-analysis findings for one session (cyclomatic complexity, lint count, type completeness — pre/post deltas per touched file). Use this to answer 'did the agent improve or regress code quality in session X?' / 'how complex was the change?'. Returns an empty findings list when the session hasn't been analyzed yet (suggest the user run ``stax analyze session <id>``).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -532,7 +532,7 @@ mod tests {
     /// here as well as in the differ.
     fn declared_names() -> Vec<String> {
         let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow/services/meta_agent.py");
+            .join("../../../python-legacy: services/meta_agent.py");
         // The Python reference lives on the python-legacy branch since the
         // split (2026-08-06); this cross-check runs where a reference checkout
         // exists and skips (empty) elsewhere.

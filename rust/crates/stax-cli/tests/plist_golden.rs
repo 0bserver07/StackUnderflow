@@ -58,7 +58,7 @@ fn the_plist_names_the_label_the_program_and_the_log_twice() {
 fn the_cron_line_carries_the_same_schedule_and_retention() {
     assert_eq!(
         cron_line("/usr/local/bin/stackunderflow"),
-        "0 3 * * * /usr/local/bin/stackunderflow backup create --label auto --keep 10"
+        "0 3 * * * /usr/local/bin/stax backup create --label auto --keep 10"
     );
 }
 

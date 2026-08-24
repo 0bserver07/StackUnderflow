@@ -108,7 +108,7 @@ After Tier 1–2, re-measure. Likely bound the window default tighter or reuse t
 file-touch half instead of re-parsing `tools_json`.
 
 ## Invariants to preserve
-- Cost totals: `tests/stackunderflow/infra/test_pricing_invariants.py` must stay
+- Cost totals: `tests/python-legacy: infra/test_pricing_invariants.py` must stay
   green (marts==events, nothing silently unpriced).
 - Mart fast-path <100ms perf tests must stay green.
 - Any new cache keys on an **event-id signature**, never wall-clock — the

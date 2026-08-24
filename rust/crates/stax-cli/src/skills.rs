@@ -271,7 +271,7 @@ pub fn open_store(env: &SkillsEnv) -> Result<Connection> {
     if !env.store.exists() {
         anyhow::bail!(
             "no store at {} — the port does not create one (Python's `_open_store` would \
-             `db.connect` + `schema.apply` here). Run `stackunderflow start` first, or point \
+             `db.connect` + `schema.apply` here). Run `stax start` first, or point \
              $STACKUNDERFLOW_HOME at an existing store.",
             env.store.display()
         );
@@ -318,7 +318,7 @@ fn run_generate(args: &GenerateArgs, env: &SkillsEnv) -> Result<Output> {
                 PATH,
                 SPEC,
                 "could not infer a project for the current directory — pass --project \
-                 SLUG (see `stackunderflow find-sessions-in-path .`).",
+                 SLUG (see `stax find-sessions-in-path .`).",
             ));
         }
     }

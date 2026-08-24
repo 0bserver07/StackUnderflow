@@ -43,7 +43,7 @@ which lights up all three Cline-family extensions at once.
 
 ## How it's verified
 
-1. **Branch logic** — `tests/stackunderflow/adapters/test_platform_paths.py`
+1. **Branch logic** — `tests/python-legacy: adapters/test_platform_paths.py`
    monkeypatches `sys.platform`/`APPDATA` and asserts the resolved path. Runs on
    Linux CI, so the per-OS branches are locked in without a Windows box.
 2. **End-to-end discovery** — `scripts/smoke_discovery.py` (run by the `build`

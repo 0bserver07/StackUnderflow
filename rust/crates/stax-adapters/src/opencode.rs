@@ -1,4 +1,4 @@
-//! OpenCode — the port of `stackunderflow/adapters/opencode.py`.
+//! OpenCode — the port of `python-legacy: adapters/opencode.py`.
 //!
 //! Sessions live in one or more SQLite databases under the XDG data directory
 //! (`$XDG_DATA_HOME/opencode/`, else `~/.local/share/opencode/`), matched as

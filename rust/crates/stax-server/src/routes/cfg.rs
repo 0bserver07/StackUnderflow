@@ -602,7 +602,7 @@ mod tests {
     /// The class body of `settings.Settings`, read from the source of truth.
     fn declared_keys() -> Vec<String> {
         let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../stackunderflow/settings.py");
+            .join("../../../python-legacy: settings.py");
         // The Python reference lives on the python-legacy branch since the
         // split (2026-08-06); this cross-check runs where a reference checkout
         // exists and skips (empty) elsewhere.

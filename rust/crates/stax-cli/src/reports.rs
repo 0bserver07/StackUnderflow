@@ -40,7 +40,7 @@ use crate::status::{engine_for_cli, ensure_fresh_decision, package_dir};
 #[derive(Debug, Args, Clone)]
 pub struct IngestFlags {
     /// Force a fresh ingest+backfill pass before running the command. Useful
-    /// when 'stackunderflow start' is not active.
+    /// when 'stax start' is not active.
     #[arg(long = "ingest", action = clap::ArgAction::SetTrue)]
     pub do_ingest: bool,
     /// Refresh the store automatically when its newest event is older than the

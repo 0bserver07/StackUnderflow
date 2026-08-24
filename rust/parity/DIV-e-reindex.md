@@ -21,7 +21,7 @@ numbers below are `E-R-n` and are not DIV numbers.
 
 ## E-R-1 — `GET /api/qa/reindex` is a 404 on the reference and would have been a 405 here
 
-`stackunderflow/routes/qa.py:70` declares `GET /api/qa/{qa_id}` and
+`python-legacy: routes/qa.py:70` declares `GET /api/qa/{qa_id}` and
 `qa.py:89` declares `POST /api/qa/reindex` **after** it. Starlette matches in
 declaration order, so on the reference `GET /api/qa/reindex` reaches the detail
 handler with `qa_id="reindex"`, finds nothing, and answers `404

@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/ingest/enumerate.py` — twelve lines, one job.
+//! Port of `python-legacy: ingest/enumerate.py` — twelve lines, one job.
 //!
 //! Fans every registered adapter's `SessionRef`s into one sequence, in adapter
 //! registration order. Python's is a generator (`yield from adapter.enumerate()`)

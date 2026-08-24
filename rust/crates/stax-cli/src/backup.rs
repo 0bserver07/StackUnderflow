@@ -122,7 +122,7 @@ pub enum BackupVerb {
         keep: u64,
         /// Also replicate the finished backup to ssh://[user@]host[:port]/abs/path.
         /// One-way whole-artifact copy — for peer sync of aggregates use
-        /// `stackunderflow sync` instead.
+        /// `stax sync` instead.
         #[arg(long = "to", value_name = "TO")]
         to_url: Option<String>,
     },
@@ -428,7 +428,7 @@ impl Confirm for StdinConfirm {
 
 // ── backup list ──────────────────────────────────────────────────────────────
 
-const NO_BACKUPS: &str = "  No backups yet. Run: stackunderflow backup create\n";
+const NO_BACKUPS: &str = "  No backups yet. Run: stax backup create\n";
 
 /// `backup_list`.
 #[must_use]
@@ -546,7 +546,7 @@ pub fn verify(root: &Path, name: Option<&str>) -> Output {
             }
             if !target.is_dir() {
                 return Output::exit1(format!(
-                    "  Backup '{name}' not found. Run: stackunderflow backup list\n"
+                    "  Backup '{name}' not found. Run: stax backup list\n"
                 ));
             }
             target
@@ -554,9 +554,7 @@ pub fn verify(root: &Path, name: Option<&str>) -> Output {
         None => match latest_backup(root) {
             Some(target) => target,
             None => {
-                return Output::exit1(
-                    "  No backups to verify. Run: stackunderflow backup create\n",
-                );
+                return Output::exit1("  No backups to verify. Run: stax backup create\n");
             }
         },
     };
@@ -1195,7 +1193,7 @@ pub fn restore<R: Runner + ?Sized, C: Confirm + ?Sized>(
     }
     if !source.exists() {
         out.stdout.push_str(&format!(
-            "  Backup '{name}' not found. Run: stackunderflow backup list\n"
+            "  Backup '{name}' not found. Run: stax backup list\n"
         ));
         return out;
     }
@@ -1470,7 +1468,7 @@ mod tests {
         assert_eq!(out.code, 1);
         assert_eq!(
             out.stdout,
-            "  No backups to verify. Run: stackunderflow backup create\n"
+            "  No backups to verify. Run: stax backup create\n"
         );
     }
 
@@ -1493,7 +1491,7 @@ mod tests {
         assert_eq!(out.code, 1);
         assert_eq!(
             out.stdout,
-            "  Backup 'nope' not found. Run: stackunderflow backup list\n"
+            "  Backup 'nope' not found. Run: stax backup list\n"
         );
     }
 

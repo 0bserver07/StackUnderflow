@@ -246,7 +246,7 @@ Appears as both error AND user message:
 ~/.claude/projects/<slug>/*.jsonl
     |
     v
-ClaudeAdapter          (stackunderflow/adapters/claude.py)
+ClaudeAdapter          (python-legacy: adapters/claude.py)
     enumerate() -> SessionRef[]
     read(ref)   -> Record[]
     |
@@ -261,7 +261,7 @@ SQLite store           (~/.stackunderflow/store.db)
     messages -- a view over monthly messages_YYYYMM partitions (since v008)
     |
     v
-store/queries          (stackunderflow/store/queries.py)
+store/queries          (python-legacy: store/queries.py)
     get_project_stats() -- rebuilds RawEntry objects from raw_json,
                            then runs the stats chain below
     |
@@ -276,7 +276,7 @@ API routes             (stackunderflow/routes/)
 
 ### Incremental Ingest
 
-`run_ingest()` (in `stackunderflow/ingest/__init__.py`) compares each `SessionRef`'s `(mtime, size)` against the matching `ingest_log` row before reading anything:
+`run_ingest()` (in `python-legacy: ingest/__init__.py`) compares each `SessionRef`'s `(mtime, size)` against the matching `ingest_log` row before reading anything:
 
 - **Unchanged** (mtime and size both match the stored row): skip entirely — no read, no transaction.
 - **Truncated or rotated** (file smaller than the stored size): delete the `ingest_log` row and reparse from byte 0.
@@ -371,7 +371,7 @@ Selected `messages` columns:
 
 Ingest also feeds an ETL layer: once a per-file transaction commits, `ingest_file()` normalises the new messages into `usage_events` rows and refreshes the mart tables — the SQL-driven cost path, separate from the query-time stats chain above. That layer was introduced by `v006_etl_layer.sql`.
 
-All typed query helpers that read from the store live in `stackunderflow/store/queries.py`. Application code imports helpers from there rather than writing raw SQL.
+All typed query helpers that read from the store live in `python-legacy: store/queries.py`. Application code imports helpers from there rather than writing raw SQL.
 
 ## Legacy Format
 

@@ -8,8 +8,8 @@
 //! one-to-one. The seven modules batch C inherited are the opposite shape —
 //! each is a thin HTTP wrapper (55–405 lines) over a large unported service
 //! (262–871 lines) that the CLI calls through the *same* function. `/api/compare`
-//! and `stackunderflow compare` share `services/compare.py`; `/api/export` and
-//! `stackunderflow export` share `reports/export.py::run_export`.
+//! and `stax compare` share `services/compare.py`; `/api/export` and
+//! `stax export` share `reports/export.py::run_export`.
 //!
 //! Transliterating that logic into the route module would fork it: wave 8 ports
 //! the CLI verbs, finds no shared home, and writes a second copy that drifts.

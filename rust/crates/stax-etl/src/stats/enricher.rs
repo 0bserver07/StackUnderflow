@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/stats/enricher.py`.
+//! Port of `python-legacy: stats/enricher.py`.
 //!
 //! Two consumers with very different appetites share this builder:
 //!

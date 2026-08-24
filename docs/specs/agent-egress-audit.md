@@ -47,7 +47,7 @@ The three are independent and independently shippable. D2 is the one that catche
 
 ## 2. Grounding — the reuse surface (what already exists)
 
-- **`stackunderflow/infra/egress.py`** — `guard_json_body(...)`, `OLLAMA_EMBED_KEYS`, `OLLAMA_CHAT_KEYS`. The outbound allowlist chokepoint for *our own* calls. This spec is its mirror image: detecting *other* agents' egress. Same mental model (an explicit boundary), inverted direction.
+- **`python-legacy: infra/egress.py`** — `guard_json_body(...)`, `OLLAMA_EMBED_KEYS`, `OLLAMA_CHAT_KEYS`. The outbound allowlist chokepoint for *our own* calls. This spec is its mirror image: detecting *other* agents' egress. Same mental model (an explicit boundary), inverted direction.
 - **`adapters/base.py`** — the `SourceAdapter` Protocol (`enumerate` / `read` / `watch_paths`) and `WatchableAdapter` (`:125`). The `EgressDetector` interface (§6) parallels it deliberately, and the Grok adapter already implements `watch_paths()` (`grok.py:143`) — a detector can ride the same watch root for near-real-time firing.
 - **`adapters/capabilities.json`** — the existing declarative, per-adapter capability catalog. The egress-signature catalog (§6) follows this exact pattern, so it stays data, not code, and ports cleanly to the revamp.
 - **`etl/watcher.py`** — the live-ingest watcher. D2 hooks here: the moment Grok appends `repo_state.upload.start`, the watcher can raise a finding.

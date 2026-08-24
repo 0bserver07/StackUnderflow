@@ -1,5 +1,5 @@
 //! The reusable adapter conformance harness — the port of
-//! `tests/stackunderflow/adapters/contract.py`.
+//! `tests/python-legacy: adapters/contract.py`.
 //!
 //! Python ships `AdapterContract` as a mixin every provider's test module
 //! subclasses, so a new adapter inherits the invariants instead of restating

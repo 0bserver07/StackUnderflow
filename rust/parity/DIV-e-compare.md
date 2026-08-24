@@ -1,6 +1,6 @@
 # Batch E / member `compare` — findings for `GET /api/sessions/compare`
 
-Item **RS-5-105**, the last unported handler in `stackunderflow/routes/sessions.py`
+Item **RS-5-105**, the last unported handler in `python-legacy: routes/sessions.py`
 (516 lines; the other two endpoints landed in batch B). Closes **DIV-070**.
 
 Divergence ids are **not self-assigned** — the integrator numbers these from 153
@@ -52,7 +52,7 @@ lines 28–37, and the `register` doc comment that explained why the route was
 deliberately *unmounted*) are rewritten in the same pass, so no file in the tree
 still claims the function is missing.
 
-**The port.** Python source: `stackunderflow/stats/aggregator.py:102-117`
+**The port.** Python source: `python-legacy: stats/aggregator.py:102-117`
 (16 lines including the docstring), driving `_SessionCostCollector`
 (`:277-356`), which `stax_etl::stats::aggregator::SessionCostCollector` already
 carried because `summarise` needs it. The Rust function is therefore the same

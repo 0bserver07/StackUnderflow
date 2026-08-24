@@ -7,7 +7,7 @@
 //! Every string below is a byte contract. `sync-parity.sh`'s `cli/*` rows run
 //! both binaries on the same store copy and `cmp` their stdout, so the two
 //! leading spaces, the column alignment of `device:` / `key fingerprint:` and
-//! the literal program name inside `"Run: stackunderflow sync init …"` are all
+//! the literal program name inside `"Run: stax sync init …"` are all
 //! compared rather than approximated. That last one is a *literal* in `cli.py`,
 //! not `sys.argv[0]`, so the port prints `stackunderflow` too — bug-for-bug,
 //! and it will keep saying so until the maintainer renames the string.
@@ -164,7 +164,7 @@ fn run_status(store_path: &std::path::Path, as_json: bool) -> Result<()> {
 
     if !state.enabled {
         println!("  Sync: off (no key on this device).");
-        println!("  Enable with: stackunderflow sync init --bucket s3://your-bucket");
+        println!("  Enable with: stax sync init --bucket s3://your-bucket");
         return Ok(());
     }
 
@@ -206,7 +206,7 @@ fn show(value: Option<&str>) -> &str {
 }
 
 const NOT_CONFIGURED: &str =
-    "  Sync is not configured. Run: stackunderflow sync init --bucket s3://your-bucket";
+    "  Sync is not configured. Run: stax sync init --bucket s3://your-bucket";
 
 fn run_push(store_path: &std::path::Path, state_dir: &std::path::Path) -> Result<()> {
     let conn = runner::open_store(store_path)?;

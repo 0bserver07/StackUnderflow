@@ -7,7 +7,7 @@
 // backend's Ollama stream is closed too because httpx's connection
 // pool ties the upstream lifetime to the response context.
 //
-// The matching backend module is ``stackunderflow/routes/meta_agent.py``.
+// The matching backend module is ``python-legacy: routes/meta_agent.py``.
 
 import type {
   MetaAgentEvent,

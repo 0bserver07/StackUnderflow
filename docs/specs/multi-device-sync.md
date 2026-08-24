@@ -31,7 +31,7 @@ Three framings of the same problem exist in-repo. This spec reconciles them and 
 
 ### Sync WHAT
 
-**In scope — the aggregate (mart) tables**, the storage unit the dashboard already reads (`stackunderflow/store/mart_queries.py`, `stackunderflow/etl/marts/`):
+**In scope — the aggregate (mart) tables**, the storage unit the dashboard already reads (`python-legacy: store/mart_queries.py`, `stackunderflow/etl/marts/`):
 
 | Mart | Grain | Migration |
 |---|---|---|
@@ -49,7 +49,7 @@ MVP syncs the **Overview/Cost core** — `daily_mart`, `project_mart`, `provider
 
 **Explicitly NOT synced, ever:**
 - **Raw transcripts** — `messages` (`content_text`, `raw_json`, `tools_json`), the source JSONL, and the per-message `usage_events` **fact** rows. Only the derived marts move.
-- **`price_book`** (v024). Pricing is *not* per-device data; it is a shared rate card exercised by `tests/stackunderflow/infra/test_pricing_invariants.py`. Keeping it off the wire is what keeps those invariants untouched (§10).
+- **`price_book`** (v024). Pricing is *not* per-device data; it is a shared rate card exercised by `tests/python-legacy: infra/test_pricing_invariants.py`. Keeping it off the wire is what keeps those invariants untouched (§10).
 - **Search / Q&A / tags** (`search_index.db`, `qa_pairs.db`, `tags.json` — the `_CRITICAL_ARTIFACTS` sidecars in `cli.py`). These are transcript-derived and machine-local. `backup create` already covers them; sync does not.
 - **`mart_watermark`** and other bookkeeping — internal, per-machine, meaningless cross-device.
 - **Config** — `settings.json`, `config.json`, `skills/`, `commands/`. Machine-local by design.

@@ -6,7 +6,7 @@
 //! param_hint=…)`, which Click renders through `UsageError.show()` as
 //!
 //! ```text
-//! Usage: stackunderflow cfg set [OPTIONS] KEY VALUE
+//! Usage: stax cfg set [OPTIONS] KEY VALUE
 //! Try 'stackunderflow cfg set --help' for help.
 //!
 //! Error: Invalid value for KEY: <message>
@@ -20,7 +20,7 @@
 //! The program name is `stax` here and `stackunderflow` there; `parity-cli.sh`
 //! normalises exactly the `Usage:` and `Try '…'` lines, scoped, and counts each
 //! time it fires. Message *bodies* are never normalised — a literal
-//! `stackunderflow` inside a hint (`cfg set`'s "use ``stackunderflow plan set``")
+//! `stackunderflow` inside a hint (`cfg set`'s "use ``stax plan set``")
 //! is Python's string and is emitted verbatim (DIV-237).
 
 use std::process::ExitCode;

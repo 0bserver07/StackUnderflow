@@ -1,4 +1,4 @@
-//! The public cost API — port of `stackunderflow/infra/costs.py`.
+//! The public cost API — port of `python-legacy: infra/costs.py`.
 //!
 //! `compute_cost` is the whole surface every other module calls. Its precedence
 //! chain, in order, is:

@@ -11,7 +11,7 @@ Why these exist, and why they are NOT in ``contracts/``:
   Findings-ledger #3 of the Rust campaign — *phrase queries silently zero on the
   LIKE path* — says multi-word asks must be pinned by wave-1 fixtures, and they
   were not. ``stackunderflow.resume/1`` had no golden pack at all, only inline
-  assertions in ``tests/stackunderflow/cli/test_resume_cmd.py``.
+  assertions in ``tests/python-legacy: cli/test_resume_cmd.py``.
 * They stay out of ``contracts/`` because the Python suite asserts that pack is
   exactly 15 files, one per command x {success, empty, error}
   (``test_one_fixture_per_command_and_case``). Adding files there would fail
@@ -25,7 +25,7 @@ Every byte is produced by the PYTHON implementation:
   / ``build_error_envelope`` + ``render`` — the exact functions the CLI uses, so
   ``result_count``/``token_estimate``/key order/escaping are Python's answers,
   not a transcription;
-* the ``resume/1`` pack runs the real ``stackunderflow resume --json`` CLI over
+* the ``resume/1`` pack runs the real ``stax resume --json`` CLI over
   the seed from ``test_resume_cmd.py``, capturing stdout verbatim.
 
 The trailing newline in each file is ``click.echo``'s, so the files are literal
@@ -272,7 +272,7 @@ def build_memory_goldens() -> None:
     ))
 
     # 9. The sixth `command` value. `context-replay` is in the schema's enum and
-    #    reuses this envelope (tests/stackunderflow/cli/test_context_replay_cli.py
+    #    reuses this envelope (tests/python-legacy: cli/test_context_replay_cli.py
     #    asserts the tag) but the shipped pack has no golden for it at all.
     _write(MEMORY_DIR, "context-replay.success", ao.build_envelope(
         command="context-replay",
@@ -324,7 +324,7 @@ def build_memory_goldens() -> None:
 
 # ── stackunderflow.resume/1 — a pack where none existed ─────────────────────
 
-# The seed from tests/stackunderflow/cli/test_resume_cmd.py, verbatim: it is the
+# The seed from tests/python-legacy: cli/test_resume_cmd.py, verbatim: it is the
 # only fixture in the tree that exercises session-scope, latest-scope and
 # no-known-resume providers at once.
 _WS = [

@@ -1,4 +1,4 @@
-//! xAI's `grok` CLI — the port of `stackunderflow/adapters/grok.py`.
+//! xAI's `grok` CLI — the port of `python-legacy: adapters/grok.py`.
 //!
 //! Transcripts live at
 //! `~/.grok/sessions/<url-encoded-cwd>/<session-uuid>/chat_history.jsonl`. The

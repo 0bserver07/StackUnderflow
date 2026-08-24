@@ -176,7 +176,7 @@ startup.
 
 ## Settings
 
-`stackunderflow/settings.py` uses a descriptor (`_Opt`) that resolves on
+`python-legacy: settings.py` uses a descriptor (`_Opt`) that resolves on
 every read:
 
 1. Environment variable (e.g. `PORT`).
@@ -217,7 +217,7 @@ The hidden `config` group stays wired as an alias
 
 ## CLI reference
 
-Defined in `stackunderflow/cli.py`, run via the `stackunderflow` entry
+Defined in `python-legacy: cli.py`, run via the `stackunderflow` entry
 point.
 
 | Command | Purpose |
@@ -352,7 +352,7 @@ The backend serves the built React app from
 The Vite config also proxies `/ollama-api/*` to
 `http://localhost:11434/api/*` so the UI can talk to a local Ollama
 instance during development, mirroring the backend's own
-`/ollama-api/{path}` proxy in `stackunderflow/routes/misc.py`. Ollama
+`/ollama-api/{path}` proxy in `python-legacy: routes/misc.py`. Ollama
 is optional, and both proxies return 502 when it is not reachable.
 
 ## Nix
@@ -385,7 +385,7 @@ and `docs.yml` (also `workflow_dispatch`).
 
 ## Release
 
-1. Bump `stackunderflow/__version__.py` (semver: MAJOR.MINOR.PATCH).
+1. Bump `python-legacy: __version__.py` (semver: MAJOR.MINOR.PATCH).
 2. Update `CHANGELOG.md`.
 3. Run locally:
    ```bash

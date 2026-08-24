@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/stats/classifier.py` — the mart-path subset.
+//! Port of `python-legacy: stats/classifier.py` — the mart-path subset.
 //!
 //! `project_mart`'s second pass runs the real classifier, so this is a
 //! transcription rather than a re-derivation. Ported: [`RawEntry`],

@@ -422,7 +422,7 @@ export default function CodingHealthTab({ projectName }: CodingHealthTabProps) {
           <IconAlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
           <span>
             File-touch history is unavailable (the per-tool mart is empty), so failure rates
-            cannot be computed. Run <code className="font-mono">stackunderflow etl backfill</code>{' '}
+            cannot be computed. Run <code className="font-mono">stax etl backfill</code>{' '}
             to materialize it.
           </span>
         </div>

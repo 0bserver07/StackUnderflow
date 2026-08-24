@@ -88,7 +88,7 @@ export interface ProjectsPageQuery {
   offset?: number
 }
 
-// Mirrors `PROJECTS_MAX_LIMIT` in stackunderflow/routes/projects.py — the
+// Mirrors `PROJECTS_MAX_LIMIT` in python-legacy: routes/projects.py — the
 // server silently clamps any larger `limit` to this, so asking for more would
 // hand back a truncated list that still looks complete. `getAllProjects`
 // pages at this size instead of pretending one request always suffices.
@@ -639,7 +639,7 @@ export async function triggerEtlBackfill(force = false): Promise<EtlBackfillResp
   })
   if (res.status === 404) {
     throw new EtlPipelineNotReadyError(
-      'Backfill route not available — run `stackunderflow etl backfill` from the CLI instead.',
+      'Backfill route not available — run `stax etl backfill` from the CLI instead.',
     )
   }
   if (res.status === 409) {
@@ -881,7 +881,7 @@ export async function getProjectTimeline(
 //
 // `include_content=false` returns metadata only (byte counts + operation
 // labels) without the file bodies, which is useful when scrubbing rapidly.
-// See stackunderflow/services/playback_fs.py.
+// See python-legacy: services/playback_fs.py.
 // ---------------------------------------------------------------------------
 
 export interface PlaybackFsQuery {
@@ -938,7 +938,7 @@ export async function getPlaybackFsSnapshot(
 // once (omit `at`) and slices client-side as the user scrubs, using each
 // event's `cumulative_tokens`. `project` fences to a project slug the same way
 // the /api/forks route does; omit to use the server's active project.
-// See stackunderflow/services/context_replay.py.
+// See python-legacy: services/context_replay.py.
 // ---------------------------------------------------------------------------
 
 export async function getContextReplay(

@@ -1,4 +1,4 @@
-//! Hermes — the port of `stackunderflow/adapters/hermes.py`.
+//! Hermes — the port of `python-legacy: adapters/hermes.py`.
 //!
 //! Conversation logs are JSONL under `~/.hermes/sessions/`, either flat or in
 //! nested per-project subdirectories:

@@ -1,4 +1,4 @@
-//! Injected application state — the Rust half of `stackunderflow/deps.py`.
+//! Injected application state — the Rust half of `python-legacy: deps.py`.
 //!
 //! `deps.py` is a module of globals: `store_path`, `config`, `BASE_DIR`, the
 //! five lazily-built services, and two mutable strings (`current_project_path`,

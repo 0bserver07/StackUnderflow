@@ -1,6 +1,6 @@
 //! Go static analyzer — vet errors / cyclomatic complexity.
 //!
-//! Port of `stackunderflow/services/static_analysis/go_analyzer.py`. Shells
+//! Port of `python-legacy: services/static_analysis/go_analyzer.py`. Shells
 //! out to `go vet` and `gocyclo` (both must be on `PATH` — when absent the
 //! analyzer skips cleanly with a recorded warning, same contract as the TS
 //! analyzer).

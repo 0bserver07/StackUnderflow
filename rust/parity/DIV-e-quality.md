@@ -98,7 +98,7 @@ STACKUNDERFLOW_HOME=rust/.parity-state/fresh   PY_ROOT=../StackUnderflow
 ```
 
 Tree-skew checked first, per `endpoint-parity.sh`'s own warning:
-`diff -u {../StackUnderflow,.}/stackunderflow/routes/quality.py`,
+`diff -u {../StackUnderflow,.}/python-legacy: routes/quality.py`,
 `…/services/grading.py` and `…/services/static_analysis/runner.py` are all
 **identical**, so the reference is not skewed for this module.
 

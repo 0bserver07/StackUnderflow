@@ -1,6 +1,6 @@
 //! TypeScript static analyzer — type errors / lint count.
 //!
-//! Port of `stackunderflow/services/static_analysis/typescript_analyzer.py`
+//! Port of `python-legacy: services/static_analysis/typescript_analyzer.py`
 //! (196 lines). The reference shells out to `tsc` (TypeScript compiler) and
 //! `eslint`; both are expected to arrive with the user's project toolchain —
 //! there is no library to depend on, in Python or here. When neither is

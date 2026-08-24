@@ -56,7 +56,7 @@ use stax_memory::{ProviderBlock, ResumeEnvelope, ResumeSession, ResumeTemplate};
 /// `stax resume [PATH]` — session/resume ids for every coding agent under
 /// `PATH` (default: the current directory).
 ///
-/// Every `help` string here is Click's, verbatim (`stackunderflow resume
+/// Every `help` string here is Click's, verbatim (`stax resume
 /// --help`), so the two help texts say the same words even though clap and
 /// Click lay them out differently — the `--help`-tree diff is wave 8's item.
 /// Explicit `help =` rather than the doc comment, so the rustdoc can carry
@@ -656,7 +656,7 @@ pub fn run(args: &ResumeArgs, env: &ResumeEnv) -> Result<Output> {
 
     if !env.store.exists() {
         return Ok(Output::click_error(format!(
-            "store not found at {} — run `stackunderflow start` first",
+            "store not found at {} — run `stax start` first",
             env.store.display()
         )));
     }
@@ -748,7 +748,7 @@ mod tests {
     /// One seeded project: `(provider, slug, sessions)`.
     type SeedProject = (&'static str, &'static str, &'static [SeedSession]);
 
-    /// The seed from `tests/stackunderflow/cli/test_resume_cmd.py`, verbatim —
+    /// The seed from `tests/python-legacy: cli/test_resume_cmd.py`, verbatim —
     /// the same rows the golden pack was generated from.
     const SEED: &[SeedProject] = &[
         (
@@ -1049,8 +1049,7 @@ mod tests {
             "{out:?}"
         );
         assert!(
-            out.stderr
-                .ends_with(" — run `stackunderflow start` first\n"),
+            out.stderr.ends_with(" — run `stax start` first\n"),
             "{out:?}"
         );
     }

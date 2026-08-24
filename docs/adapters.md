@@ -6,7 +6,7 @@ A source adapter turns one tool's on-disk session format into a stream of normal
 
 ## The adapter contract
 
-The contract is a `typing.Protocol` declared in `stackunderflow/adapters/base.py`:
+The contract is a `typing.Protocol` declared in `python-legacy: adapters/base.py`:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -60,18 +60,18 @@ class SourceAdapter(Protocol):
 
 ## Choosing source_kind
 
-`"file"` fits one-session-per-file formats with byte-resumable reads. The Claude adapter (`stackunderflow/adapters/claude.py`) streams each JSONL file through the shared `_streaming.iter_jsonl_lines` helper, which opens the file in binary mode, seeks to `since_offset`, and yields `(line_offset, raw_line)` pairs; the byte offset of the line start becomes the record's `seq`.
+`"file"` fits one-session-per-file formats with byte-resumable reads. The Claude adapter (`python-legacy: adapters/claude.py`) streams each JSONL file through the shared `_streaming.iter_jsonl_lines` helper, which opens the file in binary mode, seeks to `since_offset`, and yields `(line_offset, raw_line)` pairs; the byte offset of the line start becomes the record's `seq`.
 
-`"database"` fits row-shaped sources where many sessions share one storage file. The Cursor adapter (`stackunderflow/adapters/cursor.py`) opens `state.vscdb` in read-only mode and selects rows from `cursorDiskKV` with `rowid > since_offset`; the rowid is the record's `seq`.
+`"database"` fits row-shaped sources where many sessions share one storage file. The Cursor adapter (`python-legacy: adapters/cursor.py`) opens `state.vscdb` in read-only mode and selects rows from `cursorDiskKV` with `rowid > since_offset`; the rowid is the record's `seq`.
 
-Hybrid case: Cline reads files but uses event indexes instead of byte offsets (see the module docstring in `stackunderflow/adapters/cline.py`). It declares `source_kind="file"` and treats `since_offset` as "skip first N events." The contract test (below) only requires monotonic `seq` and that resume yields strictly fewer records, so the hybrid is fine.
+Hybrid case: Cline reads files but uses event indexes instead of byte offsets (see the module docstring in `python-legacy: adapters/cline.py`). It declares `source_kind="file"` and treats `since_offset` as "skip first N events." The contract test (below) only requires monotonic `seq` and that resume yields strictly fewer records, so the hybrid is fine.
 
 ## Implementing enumerate()
 
 The discovery path lives at the top of the adapter. Two real patterns:
 
 ```python
-# stackunderflow/adapters/claude.py:62-73 — directory walk
+# python-legacy: adapters/claude.py:62-73 — directory walk
 def enumerate(self) -> Iterable[SessionRef]:
     root = Path.home() / ".claude" / "projects"
     if not root.is_dir():
@@ -85,7 +85,7 @@ def enumerate(self) -> Iterable[SessionRef]:
 ```
 
 ```python
-# stackunderflow/adapters/cursor.py:119-176 — SQL group-by-conversation
+# python-legacy: adapters/cursor.py:119-176 — SQL group-by-conversation
 def enumerate(self) -> Iterator[SessionRef]:
     path = self._db_path
     if not path.is_file():
@@ -111,7 +111,7 @@ The body of `read` is where you parse. Two contracts the writer relies on:
 For file mode, stream lines through the shared helper. `_streaming.iter_jsonl_lines` opens the file in binary mode, applies the 128 MB size cap, seeks to `since_offset`, and yields `(line_offset, raw_line)` pairs:
 
 ```python
-# stackunderflow/adapters/claude.py:142-159 — _read_jsonl
+# python-legacy: adapters/claude.py:142-159 — _read_jsonl
 for line_offset, raw_line in iter_jsonl_lines(
     ref.file_path, since_offset=since_offset,
 ):
@@ -123,7 +123,7 @@ for line_offset, raw_line in iter_jsonl_lines(
 For database mode, push the floor into SQL:
 
 ```python
-# stackunderflow/adapters/cursor.py:227-232
+# python-legacy: adapters/cursor.py:227-232
 cur = conn.execute(
     "SELECT rowid, key, value FROM cursorDiskKV "
     "WHERE (key LIKE 'bubbleId:%' OR key LIKE 'agentKv:blob:%') "
@@ -134,9 +134,9 @@ cur = conn.execute(
 
 ## Adding a ProviderPricer
 
-If your provider needs distinct cost calculation, subclass `ProviderPricer` from `stackunderflow/infra/providers/base.py`. The four required methods are `canonicalize(model_id)`, `normalize_tokens(raw)`, `rates_for(canonical)`, and `supports_per_message_tokens()`.
+If your provider needs distinct cost calculation, subclass `ProviderPricer` from `python-legacy: infra/providers/base.py`. The four required methods are `canonicalize(model_id)`, `normalize_tokens(raw)`, `rates_for(canonical)`, and `supports_per_message_tokens()`.
 
-When a provider runs other vendors' models behind the scenes, wrap an existing pricer instead of copying its rate table. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) is the reference: its `rates_for` checks a small Cursor-specific override table first, then delegates by id prefix — `claude-*` to `AnthropicPricer`, `gpt-*` / `codex*` to `OpenAIPricer`, `gemini-*` to `GeminiPricer`. For an id no delegate recognizes it returns a Sonnet-tier estimate rather than `None`, so a Cursor record with real token counts never prices at $0.
+When a provider runs other vendors' models behind the scenes, wrap an existing pricer instead of copying its rate table. `CursorPricer` (`python-legacy: infra/providers/cursor.py`) is the reference: its `rates_for` checks a small Cursor-specific override table first, then delegates by id prefix — `claude-*` to `AnthropicPricer`, `gpt-*` / `codex*` to `OpenAIPricer`, `gemini-*` to `GeminiPricer`. For an id no delegate recognizes it returns a Sonnet-tier estimate rather than `None`, so a Cursor record with real token counts never prices at $0.
 
 A pricer with no internal fallback may return `None` from `rates_for` for an unknown id. `ProviderPricer._apply_overlay_rates` then produces an all-zero cost breakdown — surfacing a missing rate as $0 rather than mispricing the record.
 
@@ -146,17 +146,17 @@ When you do own a rate table outright, follow `AnthropicPricer` or `OpenAIPricer
 
 ## Registration (self-discovering)
 
-You don't wire anything by hand. `stackunderflow/adapters/__init__.py` walks the package at import time and registers every public class that satisfies the adapter shape — a non-empty `name` plus callable `enumerate` / `read`. Dropping `stackunderflow/adapters/<name>.py` into the package is the whole registration step:
+You don't wire anything by hand. `python-legacy: adapters/__init__.py` walks the package at import time and registers every public class that satisfies the adapter shape — a non-empty `name` plus callable `enumerate` / `read`. Dropping `stackunderflow/adapters/<name>.py` into the package is the whole registration step:
 
 - No `register()` call in the adapter file, and no import list in `__init__.py` to extend.
 - No opt-in flag — every adapter is always on. One whose source directory is absent just yields nothing from `enumerate()`.
 - A module that fails to import raises immediately; a broken adapter is loud, never silently absent.
 
-Curated per-adapter fidelity (status, whether the source can emit billable events, per-field detail) lives next to the code in `stackunderflow/adapters/capabilities.json`, loaded by `stackunderflow/services/support_matrix.py`. A `beta` status there means *pending broad validation*, not opt-in. The matching normalizer (`stackunderflow/etl/normalize/`) and pricer (`stackunderflow/infra/providers/`) are discovered the same way — keyed on the class `provider_name` (plus `provider_aliases`) — so agent names are data, not code.
+Curated per-adapter fidelity (status, whether the source can emit billable events, per-field detail) lives next to the code in `stackunderflow/adapters/capabilities.json`, loaded by `python-legacy: services/support_matrix.py`. A `beta` status there means *pending broad validation*, not opt-in. The matching normalizer (`stackunderflow/etl/normalize/`) and pricer (`stackunderflow/infra/providers/`) are discovered the same way — keyed on the class `provider_name` (plus `provider_aliases`) — so agent names are data, not code.
 
 ## Tests
 
-Inherit `AdapterContract` from `tests/stackunderflow/adapters/contract.py` for the resume-aware contract tests. The mixin runs:
+Inherit `AdapterContract` from `tests/python-legacy: adapters/contract.py` for the resume-aware contract tests. The mixin runs:
 
 - `test_has_name` — `adapter.name` is a non-empty string.
 - `test_enumerate_yields_session_refs` — every yielded value is a `SessionRef` with `provider == adapter.name`.
@@ -173,7 +173,7 @@ class TestMyAdapter(unittest.TestCase, AdapterContract):
         self.adapter = MyAdapter(root=self._fixture_dir)
 ```
 
-Beyond the contract, write at minimum one fixture-based test for `enumerate()` (it returns the right number of refs against a known-shape fixture) and one for `read()` round-trip + resume (full read followed by a partial read past `seq[len/2]` returns strictly fewer records). `tests/stackunderflow/adapters/test_cursor.py` builds a synthetic SQLite vscdb in `tmp_path`; `tests/stackunderflow/adapters/test_cline.py` builds a synthetic task tree. Both are good templates.
+Beyond the contract, write at minimum one fixture-based test for `enumerate()` (it returns the right number of refs against a known-shape fixture) and one for `read()` round-trip + resume (full read followed by a partial read past `seq[len/2]` returns strictly fewer records). `tests/python-legacy: adapters/test_cursor.py` builds a synthetic SQLite vscdb in `tmp_path`; `tests/python-legacy: adapters/test_cline.py` builds a synthetic task tree. Both are good templates.
 
 ## Call order
 

@@ -10,7 +10,7 @@
 // panes — this covers both an explicit `false` and the `"unknown"` state
 // (e.g. `--no-watcher`, or the lifespan never ran the watcher handle). It
 // explains that the live stream depends on the filesystem watcher and
-// points at `stackunderflow start` (without `--no-watcher`) as the fix.
+// points at `stax start` (without `--no-watcher`) as the fix.
 // The SSE stream still opens — the stats route surfaces historical burn /
 // latency from the existing store, so the panes remain useful even on a
 // static dashboard.

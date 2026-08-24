@@ -1,4 +1,4 @@
-//! Continue IDE — the port of `stackunderflow/adapters/continue_adapter.py`.
+//! Continue IDE — the port of `python-legacy: adapters/continue_adapter.py`.
 //!
 //! The module is `continue_ext` because `continue` is a Rust keyword; the
 //! provider key on the wire is still `"continue"`, and nothing outside this file

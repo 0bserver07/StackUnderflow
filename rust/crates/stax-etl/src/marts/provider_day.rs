@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/provider_day.py` — the `(day, provider)`
+//! Port of `python-legacy: etl/marts/provider_day.py` — the `(day, provider)`
 //! rollup behind the by-provider chart.
 //!
 //! Additive over cost + `message_count`, with the same non-additive-DISTINCT

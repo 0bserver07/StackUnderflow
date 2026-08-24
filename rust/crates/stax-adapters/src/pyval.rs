@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn epoch_ms_to_iso_matches_the_python_fixture_values() {
-        // tests/stackunderflow/adapters/test_claude.py asserts this prefix.
+        // tests/python-legacy: adapters/test_claude.py asserts this prefix.
         assert_eq!(
             epoch_ms_to_iso(1_704_067_200_000),
             "2024-01-01T00:00:00+00:00"

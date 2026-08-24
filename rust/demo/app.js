@@ -16,7 +16,7 @@ let verb = 'decisions';
 
 const PLACEHOLDERS = {
   decisions: 'a topic, e.g. caching',
-  file:      'a path, e.g. stackunderflow/cli.py',
+  file:      'a path, e.g. python-legacy: cli.py',
   worked:    'an action, e.g. pytest',
   sessions:  'a directory or file (blank = every project)',
   store:     '(no argument)',

@@ -98,6 +98,6 @@ A new tool needs three additions:
 
 1. **Catalogue entry** in `stackunderflow/services/meta_agent.TOOL_CATALOG` — the JSON schema for its params.
 2. **Executor function** in the same module, registered in the `_EXECUTORS` dispatcher table.
-3. **Test** in `tests/stackunderflow/routes/test_meta_agent_route.py` that seeds the store, calls `meta_agent.execute_tool(...)`, and asserts the result shape.
+3. **Test** in `tests/python-legacy: routes/test_meta_agent_route.py` that seeds the store, calls `meta_agent.execute_tool(...)`, and asserts the result shape.
 
 The dispatcher always returns a `ToolResult` — it never raises — so a buggy executor at worst produces an `ok=False, data={"error": "..."}` payload, which the model can see and react to.

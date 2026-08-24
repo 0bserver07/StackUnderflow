@@ -1,4 +1,4 @@
-//! `stackunderflow/store/schema.py` — the migration runner.
+//! `python-legacy: store/schema.py` — the migration runner.
 //!
 //! Twenty-seven `.sql` files and two `.py` data migrations reach schema **v30**.
 //! [`apply`] reproduces `schema.apply(conn)` statement for statement, because the

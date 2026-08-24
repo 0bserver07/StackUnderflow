@@ -21,7 +21,7 @@ What is reported, not asserted
 ------------------------------
 
 The number of DISTINCT `last_refresh_ts` values each side wrote.
-`stackunderflow/etl/marts/watermark.py`'s `set_watermark` calls
+`python-legacy: etl/marts/watermark.py`'s `set_watermark` calls
 `datetime.now(UTC)` itself, once per mart, so the reference stamps eight
 different instants; `stax_etl::marts::watermark::refresh_all_marts` takes one
 injected `now` and stamps all eight with it. That is the second finding in

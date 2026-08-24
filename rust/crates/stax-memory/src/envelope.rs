@@ -1,6 +1,6 @@
 //! The `stackunderflow.memory/1` agent-output envelope.
 //!
-//! A port of `stackunderflow/cli_helpers/agent_output.py` — same field names,
+//! A port of `python-legacy: cli_helpers/agent_output.py` — same field names,
 //! same insertion order, same `chars/4 + 1` token estimate, same rule that a
 //! command's documented extras (`memory file` adds `risk`; `memory ask` adds
 //! `note` and `vector_used`) may never shadow a core field. The contract's own

@@ -28,18 +28,18 @@
 | Action | Path | Responsibility |
 |---|---|---|
 | Modify | `pyproject.toml` | Add `rich>=13.0.0` to core deps |
-| Create | `stackunderflow/reports/__init__.py` | Package marker; re-export `build_report`, `Scope` |
-| Create | `stackunderflow/reports/scope.py` | `Scope` dataclass, `parse_period()`, date-range filter |
-| Create | `stackunderflow/reports/aggregate.py` | `build_report(projects, scope, filters)` → dict |
-| Create | `stackunderflow/reports/render.py` | `render_text()`, `render_json()`, `render_status_line()`, `render_csv()` |
-| Create | `stackunderflow/reports/optimize.py` | `find_waste(projects, scope)` → ranked list |
-| Modify | `stackunderflow/cli.py` | Add `report`/`today`/`month`/`status`/`export`/`optimize` commands |
-| Create | `tests/stackunderflow/reports/__init__.py` | Test package marker |
-| Create | `tests/stackunderflow/reports/test_scope.py` | Period parsing + date filtering |
-| Create | `tests/stackunderflow/reports/test_aggregate.py` | Cross-project aggregation correctness |
-| Create | `tests/stackunderflow/reports/test_render.py` | Rich/JSON/CSV output shape |
-| Create | `tests/stackunderflow/reports/test_optimize.py` | Waste heuristic against seeded Q&A |
-| Create | `tests/stackunderflow/test_cli_data_commands.py` | End-to-end CLI tests via `CliRunner` |
+| Create | `python-legacy: reports/__init__.py` | Package marker; re-export `build_report`, `Scope` |
+| Create | `python-legacy: reports/scope.py` | `Scope` dataclass, `parse_period()`, date-range filter |
+| Create | `python-legacy: reports/aggregate.py` | `build_report(projects, scope, filters)` → dict |
+| Create | `python-legacy: reports/render.py` | `render_text()`, `render_json()`, `render_status_line()`, `render_csv()` |
+| Create | `python-legacy: reports/optimize.py` | `find_waste(projects, scope)` → ranked list |
+| Modify | `python-legacy: cli.py` | Add `report`/`today`/`month`/`status`/`export`/`optimize` commands |
+| Create | `tests/python-legacy: reports/__init__.py` | Test package marker |
+| Create | `tests/python-legacy: reports/test_scope.py` | Period parsing + date filtering |
+| Create | `tests/python-legacy: reports/test_aggregate.py` | Cross-project aggregation correctness |
+| Create | `tests/python-legacy: reports/test_render.py` | Rich/JSON/CSV output shape |
+| Create | `tests/python-legacy: reports/test_optimize.py` | Waste heuristic against seeded Q&A |
+| Create | `tests/python-legacy: test_cli_data_commands.py` | End-to-end CLI tests via `CliRunner` |
 
 **Total new code:** ~700-900 LOC + ~400-500 LOC of tests. `cli.py` grows by ~60 lines.
 
@@ -97,14 +97,14 @@ git commit -m "feat(cli): add rich dependency for terminal table rendering"
 ## Task 2: `reports/scope.py` — period parsing
 
 **Files:**
-- Create: `stackunderflow/reports/__init__.py`
-- Create: `stackunderflow/reports/scope.py`
-- Create: `tests/stackunderflow/reports/__init__.py`
-- Create: `tests/stackunderflow/reports/test_scope.py`
+- Create: `python-legacy: reports/__init__.py`
+- Create: `python-legacy: reports/scope.py`
+- Create: `tests/python-legacy: reports/__init__.py`
+- Create: `tests/python-legacy: reports/test_scope.py`
 
 - [ ] **Step 1: Create empty package markers**
 
-Create `stackunderflow/reports/__init__.py` with exactly:
+Create `python-legacy: reports/__init__.py` with exactly:
 
 ```python
 """Terminal-facing reporting layer — consumed by the CLI."""
@@ -114,11 +114,11 @@ from stackunderflow.reports.scope import Scope, parse_period
 __all__ = ["Scope", "parse_period"]
 ```
 
-Create `tests/stackunderflow/reports/__init__.py` as an empty file.
+Create `tests/python-legacy: reports/__init__.py` as an empty file.
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `tests/stackunderflow/reports/test_scope.py`:
+Create `tests/python-legacy: reports/test_scope.py`:
 
 ```python
 """Tests for report scope / period parsing."""
@@ -205,12 +205,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 3: Run the tests — expect ImportError**
 
-Run: `pytest tests/stackunderflow/reports/test_scope.py -v`
+Run: `pytest tests/python-legacy: reports/test_scope.py -v`
 Expected: FAIL — `ModuleNotFoundError: stackunderflow.reports.scope`.
 
 - [ ] **Step 4: Implement `scope.py`**
 
-Create `stackunderflow/reports/scope.py`:
+Create `python-legacy: reports/scope.py`:
 
 ```python
 """Date-range scoping for CLI reports.
@@ -295,14 +295,14 @@ def parse_period(spec: str, *, now: datetime | None = None) -> Scope:
 
 - [ ] **Step 5: Run the tests — expect pass**
 
-Run: `pytest tests/stackunderflow/reports/test_scope.py -v`
+Run: `pytest tests/python-legacy: reports/test_scope.py -v`
 Expected: all tests PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stackunderflow/reports/__init__.py stackunderflow/reports/scope.py \
-        tests/stackunderflow/reports/__init__.py tests/stackunderflow/reports/test_scope.py
+git add python-legacy: reports/__init__.py python-legacy: reports/scope.py \
+        tests/python-legacy: reports/__init__.py tests/python-legacy: reports/test_scope.py
 git commit -m "feat(reports): add Scope + parse_period for CLI date-range filtering"
 ```
 
@@ -311,14 +311,14 @@ git commit -m "feat(reports): add Scope + parse_period for CLI date-range filter
 ## Task 3: `reports/aggregate.py` — cross-project summary
 
 **Files:**
-- Create: `stackunderflow/reports/aggregate.py`
-- Create: `tests/stackunderflow/reports/test_aggregate.py`
+- Create: `python-legacy: reports/aggregate.py`
+- Create: `tests/python-legacy: reports/test_aggregate.py`
 
 `build_report()` walks each project, runs `pipeline.process()` per project, filters per-day stats by scope, sums tokens/costs/sessions across all (non-excluded) projects, and attaches intent-tag counts from `tag_service` if available. Output is a plain dict — rendered by `render.py`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/stackunderflow/reports/test_aggregate.py`:
+Create `tests/python-legacy: reports/test_aggregate.py`:
 
 ```python
 """Tests for cross-project aggregation."""
@@ -438,12 +438,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run the tests — expect ImportError**
 
-Run: `pytest tests/stackunderflow/reports/test_aggregate.py -v`
+Run: `pytest tests/python-legacy: reports/test_aggregate.py -v`
 Expected: FAIL — `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement `aggregate.py`**
 
-Create `stackunderflow/reports/aggregate.py`:
+Create `python-legacy: reports/aggregate.py`:
 
 ```python
 """Cross-project aggregation driven by Scope + include/exclude filters.
@@ -548,13 +548,13 @@ def _day_in_scope(day_key: str, scope: Scope) -> bool:
 
 - [ ] **Step 4: Run the tests — expect pass**
 
-Run: `pytest tests/stackunderflow/reports/test_aggregate.py -v`
+Run: `pytest tests/python-legacy: reports/test_aggregate.py -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/reports/aggregate.py tests/stackunderflow/reports/test_aggregate.py
+git add python-legacy: reports/aggregate.py tests/python-legacy: reports/test_aggregate.py
 git commit -m "feat(reports): add build_report for cross-project scoped aggregation"
 ```
 
@@ -563,12 +563,12 @@ git commit -m "feat(reports): add build_report for cross-project scoped aggregat
 ## Task 4: `reports/render.py` — Rich tables + JSON + status line + CSV
 
 **Files:**
-- Create: `stackunderflow/reports/render.py`
-- Create: `tests/stackunderflow/reports/test_render.py`
+- Create: `python-legacy: reports/render.py`
+- Create: `tests/python-legacy: reports/test_render.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/stackunderflow/reports/test_render.py`:
+Create `tests/python-legacy: reports/test_render.py`:
 
 ```python
 """Tests for report renderers."""
@@ -664,12 +664,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run — expect ImportError**
 
-Run: `pytest tests/stackunderflow/reports/test_render.py -v`
+Run: `pytest tests/python-legacy: reports/test_render.py -v`
 Expected: FAIL — `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement `render.py`**
 
-Create `stackunderflow/reports/render.py`:
+Create `python-legacy: reports/render.py`:
 
 ```python
 """Output formatters for report dicts.
@@ -760,13 +760,13 @@ def render_csv(report: dict) -> str:
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/reports/test_render.py -v`
+Run: `pytest tests/python-legacy: reports/test_render.py -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/reports/render.py tests/stackunderflow/reports/test_render.py
+git add python-legacy: reports/render.py tests/python-legacy: reports/test_render.py
 git commit -m "feat(reports): add text/JSON/CSV/status-line renderers"
 ```
 
@@ -775,14 +775,14 @@ git commit -m "feat(reports): add text/JSON/CSV/status-line renderers"
 ## Task 5: `reports/optimize.py` — waste heuristic via resolution_status
 
 **Files:**
-- Create: `stackunderflow/reports/optimize.py`
-- Create: `tests/stackunderflow/reports/test_optimize.py`
+- Create: `python-legacy: reports/optimize.py`
+- Create: `tests/python-legacy: reports/test_optimize.py`
 
 Uses Plan B's `resolution_status='looped'` Q&A pairs. For each project, count looped pairs and multiply by the project's total cost (proxy — in practice you'd want per-session cost, but we don't have session↔cost mapping in the aggregator's output shape). Return a ranked list.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/stackunderflow/reports/test_optimize.py`:
+Create `tests/python-legacy: reports/test_optimize.py`:
 
 ```python
 """Tests for the waste-finding heuristic."""
@@ -878,12 +878,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run — expect ImportError**
 
-Run: `pytest tests/stackunderflow/reports/test_optimize.py -v`
+Run: `pytest tests/python-legacy: reports/test_optimize.py -v`
 Expected: FAIL — `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement `optimize.py`**
 
-Create `stackunderflow/reports/optimize.py`:
+Create `python-legacy: reports/optimize.py`:
 
 ```python
 """Waste-finding heuristic for the CLI `optimize` command.
@@ -952,13 +952,13 @@ def find_waste(
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/reports/test_optimize.py -v`
+Run: `pytest tests/python-legacy: reports/test_optimize.py -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/reports/optimize.py tests/stackunderflow/reports/test_optimize.py
+git add python-legacy: reports/optimize.py tests/python-legacy: reports/test_optimize.py
 git commit -m "feat(reports): add find_waste using resolution_status='looped'"
 ```
 
@@ -967,12 +967,12 @@ git commit -m "feat(reports): add find_waste using resolution_status='looped'"
 ## Task 6: Wire `report` / `today` / `month` commands
 
 **Files:**
-- Modify: `stackunderflow/cli.py`
-- Create: `tests/stackunderflow/test_cli_data_commands.py`
+- Modify: `python-legacy: cli.py`
+- Create: `tests/python-legacy: test_cli_data_commands.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/stackunderflow/test_cli_data_commands.py`:
+Create `tests/python-legacy: test_cli_data_commands.py`:
 
 ```python
 """End-to-end CLI tests for data-facing commands."""
@@ -1071,12 +1071,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run — expect failures**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py -v`
 Expected: FAIL — commands don't exist.
 
 - [ ] **Step 3: Add the commands to `cli.py`**
 
-In `stackunderflow/cli.py`, add these imports near the top (after existing imports, around line 22):
+In `python-legacy: cli.py`, add these imports near the top (after existing imports, around line 22):
 
 ```python
 from stackunderflow.infra.discovery import project_metadata as list_projects
@@ -1160,13 +1160,13 @@ def month_cmd(fmt: str, include: tuple[str, ...], exclude: tuple[str, ...]):
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestReportCommand -v tests/stackunderflow/test_cli_data_commands.py::TestTodayMonthCommands -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestReportCommand -v tests/python-legacy: test_cli_data_commands.py::TestTodayMonthCommands -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/cli.py tests/stackunderflow/test_cli_data_commands.py
+git add python-legacy: cli.py tests/python-legacy: test_cli_data_commands.py
 git commit -m "feat(cli): add report/today/month commands with period + format + filter flags"
 ```
 
@@ -1175,12 +1175,12 @@ git commit -m "feat(cli): add report/today/month commands with period + format +
 ## Task 7: Wire `status` command
 
 **Files:**
-- Modify: `stackunderflow/cli.py`
-- Modify: `tests/stackunderflow/test_cli_data_commands.py`
+- Modify: `python-legacy: cli.py`
+- Modify: `tests/python-legacy: test_cli_data_commands.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/stackunderflow/test_cli_data_commands.py`:
+Append to `tests/python-legacy: test_cli_data_commands.py`:
 
 ```python
 class TestStatusCommand(unittest.TestCase):
@@ -1226,12 +1226,12 @@ class TestStatusCommand(unittest.TestCase):
 
 - [ ] **Step 2: Run — expect failure**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestStatusCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestStatusCommand -v`
 Expected: FAIL — no `status` command.
 
 - [ ] **Step 3: Add the `status` command**
 
-In `stackunderflow/cli.py`, add after `month_cmd`:
+In `python-legacy: cli.py`, add after `month_cmd`:
 
 ```python
 @cli.command("status")
@@ -1249,13 +1249,13 @@ def status_cmd(fmt: str):
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestStatusCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestStatusCommand -v`
 Expected: 2 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/cli.py tests/stackunderflow/test_cli_data_commands.py
+git add python-legacy: cli.py tests/python-legacy: test_cli_data_commands.py
 git commit -m "feat(cli): add status command for compact today+month one-liner"
 ```
 
@@ -1264,12 +1264,12 @@ git commit -m "feat(cli): add status command for compact today+month one-liner"
 ## Task 8: Wire `export` command (CSV + JSON)
 
 **Files:**
-- Modify: `stackunderflow/cli.py`
-- Modify: `tests/stackunderflow/test_cli_data_commands.py`
+- Modify: `python-legacy: cli.py`
+- Modify: `tests/python-legacy: test_cli_data_commands.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/stackunderflow/test_cli_data_commands.py`:
+Append to `tests/python-legacy: test_cli_data_commands.py`:
 
 ```python
 class TestExportCommand(unittest.TestCase):
@@ -1295,12 +1295,12 @@ class TestExportCommand(unittest.TestCase):
 
 - [ ] **Step 2: Run — expect failure**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestExportCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestExportCommand -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Add the `export` command**
 
-In `stackunderflow/cli.py`, add after `status_cmd`:
+In `python-legacy: cli.py`, add after `status_cmd`:
 
 ```python
 _EXPORT_FORMATS = ("csv", "json")
@@ -1332,13 +1332,13 @@ def export_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple[s
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestExportCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestExportCommand -v`
 Expected: 2 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/cli.py tests/stackunderflow/test_cli_data_commands.py
+git add python-legacy: cli.py tests/python-legacy: test_cli_data_commands.py
 git commit -m "feat(cli): add export command for CSV/JSON output"
 ```
 
@@ -1347,12 +1347,12 @@ git commit -m "feat(cli): add export command for CSV/JSON output"
 ## Task 9: Wire `optimize` command
 
 **Files:**
-- Modify: `stackunderflow/cli.py`
-- Modify: `tests/stackunderflow/test_cli_data_commands.py`
+- Modify: `python-legacy: cli.py`
+- Modify: `tests/python-legacy: test_cli_data_commands.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/stackunderflow/test_cli_data_commands.py`:
+Append to `tests/python-legacy: test_cli_data_commands.py`:
 
 ```python
 class TestOptimizeCommand(unittest.TestCase):
@@ -1392,12 +1392,12 @@ class TestOptimizeCommand(unittest.TestCase):
 
 - [ ] **Step 2: Run — expect failure**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestOptimizeCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestOptimizeCommand -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Add the `optimize` command**
 
-In `stackunderflow/cli.py`, add after `export_cmd`:
+In `python-legacy: cli.py`, add after `export_cmd`:
 
 ```python
 @cli.command("optimize")
@@ -1437,13 +1437,13 @@ def optimize_cmd(period: str, fmt: str, include: tuple[str, ...], exclude: tuple
 
 - [ ] **Step 4: Run — expect pass**
 
-Run: `pytest tests/stackunderflow/test_cli_data_commands.py::TestOptimizeCommand -v`
+Run: `pytest tests/python-legacy: test_cli_data_commands.py::TestOptimizeCommand -v`
 Expected: 3 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/cli.py tests/stackunderflow/test_cli_data_commands.py
+git add python-legacy: cli.py tests/python-legacy: test_cli_data_commands.py
 git commit -m "feat(cli): add optimize command surfacing looped Q&A pairs"
 ```
 
@@ -1475,7 +1475,7 @@ If any command crashes, STOP and investigate — don't proceed to lint.
 
 - [ ] **Step 3: Lint**
 
-Run: `ruff check stackunderflow/reports/ stackunderflow/cli.py tests/stackunderflow/reports/ tests/stackunderflow/test_cli_data_commands.py`
+Run: `ruff check stackunderflow/reports/ python-legacy: cli.py tests/stackunderflow/reports/ tests/python-legacy: test_cli_data_commands.py`
 Expected: clean. If ruff is not installed, skip.
 
 - [ ] **Step 4: Commit fixes only if needed**
@@ -1509,7 +1509,7 @@ git commit -m "style: ruff cleanup in new reports/ and cli data commands"
 - Render functions return types: `render_text` returns `None` (writes stream); `render_json`/`render_csv`/`render_status_line` return `str`. Usage in `cli.py` matches (`click.echo` wraps the str returns).
 
 **Import hygiene:**
-- `stackunderflow/reports/__init__.py` exports `Scope`, `parse_period` (top-level) — the rest lives in submodules.
+- `python-legacy: reports/__init__.py` exports `Scope`, `parse_period` (top-level) — the rest lives in submodules.
 - `cli.py` imports the specific helpers it wires. Circular risk is zero because `reports/` only imports from `pipeline`, `infra`, `services` — never from `cli`.
 
 **Known soft spots the implementer should flag if they blow up:**

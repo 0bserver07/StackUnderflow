@@ -1,5 +1,5 @@
 //! The Codex adapter's behaviour, ported from
-//! `tests/stackunderflow/adapters/test_codex.py`.
+//! `tests/python-legacy: adapters/test_codex.py`.
 //!
 //! The model-attribution block at the end is the important half: a `None` model
 //! makes the codex normalizer drop the turn as unpriceable, which is how 1,486

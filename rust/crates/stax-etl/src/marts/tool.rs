@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/tool.py` — the
+//! Port of `python-legacy: etl/marts/tool.py` — the
 //! `(day, project_id, provider, tool_name)` rollup with 1/N attribution.
 //!
 //! One billable event is one assistant `messages` row; that row's `tools_json`

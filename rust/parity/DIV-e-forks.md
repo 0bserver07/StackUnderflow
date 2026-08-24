@@ -1,8 +1,8 @@
 # DIV-e-forks — divergence ledger for `routes/forks.py` (batch E, member `forks`)
 
 Endpoint: **RS-5-074 `GET /api/forks`**. Case-row prefix: `F-`.
-Sources: `stackunderflow/routes/forks.py` (201 ln) over
-`stackunderflow/reports/forks.py` (534 ln).
+Sources: `python-legacy: routes/forks.py` (201 ln) over
+`python-legacy: reports/forks.py` (534 ln).
 Port: `crates/stax-server/src/routes/forks.rs` (**807 ln**; 394 of port + 413 of
 tests — was a 37-line deferred stub) + `crates/stax-server/src/services/forks.rs`
 (**1 451 ln**; 993 + 458 — was a 1-line placeholder). **34 tests**, all green;

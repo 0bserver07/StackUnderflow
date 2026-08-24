@@ -248,7 +248,7 @@ fn installed_pattern_ids(project_path: Option<&str>, home: Option<&Path>) -> Has
 /// `_accept_command`.
 fn accept_command(candidate: &SkillCandidate, project: Option<&str>) -> String {
     let mut parts = vec![
-        "stackunderflow".to_string(),
+        "stax".to_string(),
         "skills".to_string(),
         "generate".to_string(),
     ];
@@ -589,8 +589,7 @@ mod tests {
                 last_seen_ts: "2026-07-01T00:00:00Z".to_string(),
                 project_slug: Some("alpha".to_string()),
                 suggested_skill_template: "---\n".to_string(),
-                accept_command: "stackunderflow skills generate --project alpha --pattern abc123"
-                    .to_string(),
+                accept_command: "stax skills generate --project alpha --pattern abc123".to_string(),
                 normalized_command: Some("pkill".to_string()),
             }],
             project: Some("alpha".to_string()),
@@ -675,11 +674,11 @@ mod tests {
         };
         assert_eq!(
             accept_command(&candidate, Some("alpha")),
-            "stackunderflow skills generate --project alpha --pattern deadbeefdeadbeef"
+            "stax skills generate --project alpha --pattern deadbeefdeadbeef"
         );
         assert_eq!(
             accept_command(&candidate, None),
-            "stackunderflow skills generate --pattern deadbeefdeadbeef"
+            "stax skills generate --pattern deadbeefdeadbeef"
         );
     }
 }

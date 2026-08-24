@@ -19,7 +19,7 @@
 
 **Ollama config (all consumers):** cloud-first via `active_endpoint()` in `services/embeddings.py`. Set `STACKUNDERFLOW_OLLAMA_URL` (+ `STACKUNDERFLOW_OLLAMA_API_KEY` bearer for hosted) → cloud, else `localhost:11434`; probes cloud→local. Embed model = `STACKUNDERFLOW_EMBED_MODEL` (default `nomic-embed-text`). To activate semantic recall on existing data: set the env, pull the model, run `stackunderflow memory embed`.
 
-**Design invariants to preserve:** cost totals are locked by `tests/stackunderflow/infra/test_pricing_invariants.py` (mart==events, nothing silently unpriced, no unknown+nonzero) — any cost-touching change must keep them green. Mart fast-path has hard <100ms perf tests. MCP was retired for the `memory` CLI (`548d33f`) — **do not re-introduce an MCP server**; the CLI + hooks are the interface.
+**Design invariants to preserve:** cost totals are locked by `tests/python-legacy: infra/test_pricing_invariants.py` (mart==events, nothing silently unpriced, no unknown+nonzero) — any cost-touching change must keep them green. Mart fast-path has hard <100ms perf tests. MCP was retired for the `memory` CLI (`548d33f`) — **do not re-introduce an MCP server**; the CLI + hooks are the interface.
 
 ---
 
@@ -185,7 +185,7 @@ the existing Python tests at the fixtures. The `/1` integer is a **maintainer-on
 bump (project version rule) — never an agent's.
 **Scope (own).** `cli_helpers/agent_output.py`, new `contracts/stackunderflow-memory-v1/`
 (`schema.json` + `fixtures/*.json`), new `scripts/check_memory_contract.py`, CI yaml,
-`tests/stackunderflow/cli/test_agent_output.py` (repoint at fixtures). Envelope only —
+`tests/python-legacy: cli/test_agent_output.py` (repoint at fixtures). Envelope only —
 row internals belong to #9.
 **Verify.** Validator passes on all fixtures; a mutated fixture (drop a required
 field / wrong `const`) fails it. Forward-compat: an unknown extra field is
@@ -210,8 +210,8 @@ the boundary — and where text legitimately must be sent (embeddings), assert t
 structured metadata/telemetry payload must match an allowlist of permitted keys, not a
 denylist. Route outbound bodies through a single `infra/egress.py` chokepoint so the
 allowlist has one home.
-**Scope (own).** New `stackunderflow/infra/egress.py`, new
-`tests/stackunderflow/infra/test_egress_leak.py` + `tests/fixtures/egress-corpus/`,
+**Scope (own).** New `python-legacy: infra/egress.py`, new
+`tests/python-legacy: infra/test_egress_leak.py` + `tests/fixtures/egress-corpus/`,
 interface-only touch on `services/embeddings.py` / `services/meta_agent*.py` to route
 bodies through the chokepoint. Disjoint from #9/#10.
 **Verify.** Corpus drives each path; leak-scan holds the boundary; allowlist rejects an

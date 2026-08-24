@@ -1,6 +1,6 @@
 # Multi-provider support
 
-staxtrace ingests session data from more than one coding agent. Twenty adapters are registered and every one is on by default. The registry in `stackunderflow/adapters/__init__.py` is **self-discovering**: it walks the package at import time and registers every adapter module, so there is no opt-in flag and no import list to maintain — an adapter whose source directory is absent on a machine simply yields nothing. Curated per-adapter fidelity (the Status column below) lives in `stackunderflow/adapters/capabilities.json`; a `beta` status means *pending broad validation*, not opt-in.
+staxtrace ingests session data from more than one coding agent. Twenty adapters are registered and every one is on by default. The registry in `python-legacy: adapters/__init__.py` is **self-discovering**: it walks the package at import time and registers every adapter module, so there is no opt-in flag and no import list to maintain — an adapter whose source directory is absent on a machine simply yields nothing. Curated per-adapter fidelity (the Status column below) lives in `stackunderflow/adapters/capabilities.json`; a `beta` status means *pending broad validation*, not opt-in.
 
 ## Supported providers
 
@@ -29,23 +29,23 @@ staxtrace ingests session data from more than one coding agent. Twenty adapters 
 
 ### Cursor + Cline coverage
 
-Cursor and Cline have the deepest coverage of the non-Claude adapters: both carry test coverage, fingerprint-based caching for the Cursor vscdb (`stackunderflow/infra/cursor_cache.py`), and have run against real local user data across several releases.
+Cursor and Cline have the deepest coverage of the non-Claude adapters: both carry test coverage, fingerprint-based caching for the Cursor vscdb (`python-legacy: infra/cursor_cache.py`), and have run against real local user data across several releases.
 
 ## Always-on registration and fidelity
 
-Every adapter is registered automatically — there is nothing to enable. `stackunderflow/adapters/__init__.py` walks the package at import time and registers every module that satisfies the `SourceAdapter` shape (a non-empty `name` plus callable `enumerate` / `read`), so adding a new agent means adding one module file: no opt-in flag, no import list to extend, no way to ship an adapter that silently never registers. An adapter whose source directory is absent on a given machine simply yields nothing from `enumerate()`, so shipping the full set is safe and cheap everywhere; a module that fails to import raises loudly rather than disappearing.
+Every adapter is registered automatically — there is nothing to enable. `python-legacy: adapters/__init__.py` walks the package at import time and registers every module that satisfies the `SourceAdapter` shape (a non-empty `name` plus callable `enumerate` / `read`), so adding a new agent means adding one module file: no opt-in flag, no import list to extend, no way to ship an adapter that silently never registers. An adapter whose source directory is absent on a given machine simply yields nothing from `enumerate()`, so shipping the full set is safe and cheap everywhere; a module that fails to import raises loudly rather than disappearing.
 
-Curated per-adapter fidelity lives in `stackunderflow/adapters/capabilities.json` (loaded and validated by `stackunderflow/services/support_matrix.py`). Each entry records a `status` (`supported` / `beta` / `partial`), whether the source can emit billable usage events, and per-field fidelity (`content_text`, `tokens`, `cost`, `tool_calls`, `tool_output`, `reasoning`, `file_touches`). A `beta` status means *pending broad validation* — the adapter is on like every other; the label only flags that its output hasn't been checked against as much real-world data yet.
+Curated per-adapter fidelity lives in `stackunderflow/adapters/capabilities.json` (loaded and validated by `python-legacy: services/support_matrix.py`). Each entry records a `status` (`supported` / `beta` / `partial`), whether the source can emit billable usage events, and per-field fidelity (`content_text`, `tokens`, `cost`, `tool_calls`, `tool_output`, `reasoning`, `file_touches`). A `beta` status means *pending broad validation* — the adapter is on like every other; the label only flags that its output hasn't been checked against as much real-world data yet.
 
 To see what a given machine actually ingests per provider, run `stax doctor` (alias `stax doctor`). Its delivery scoreboard walks disk sessions → base messages → usage_events → marts and flags any provider that has sessions on disk but nothing loaded; `stax doctor --fail-on-gap` turns such a gap into a non-zero exit for CI.
 
 ## What Cursor and Cline read
 
-**Cursor.** Reads the `cursorDiskKV` table in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (opened via SQLite read-only URI). Two key prefixes are walked: `bubbleId:%` for chat bubbles (with `text`, `modelInfo.modelName`, `tokenCount`, `createdAt`) and `agentKv:blob:%` for agent KV blobs (with `content`, `providerOptions.cursor.modelName`). One `SessionRef` is yielded per `conversationId`; `source_kind="database"` and `seq` is the SQLite `rowid` so resumable reads use the rowid as a high-water mark. macOS only in v1 — Linux and Windows path constants are present in `stackunderflow/adapters/cursor.py` but untested.
+**Cursor.** Reads the `cursorDiskKV` table in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (opened via SQLite read-only URI). Two key prefixes are walked: `bubbleId:%` for chat bubbles (with `text`, `modelInfo.modelName`, `tokenCount`, `createdAt`) and `agentKv:blob:%` for agent KV blobs (with `content`, `providerOptions.cursor.modelName`). One `SessionRef` is yielded per `conversationId`; `source_kind="database"` and `seq` is the SQLite `rowid` so resumable reads use the rowid as a high-water mark. macOS only in v1 — Linux and Windows path constants are present in `python-legacy: adapters/cursor.py` but untested.
 
 **Cline.** Reads each task directory `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/{taskId}/`. Two files per task: `ui_messages.json` (a flat array of UI events — `api_req_started` events become assistant records and carry `tokensIn / tokensOut / cacheWrites / cacheReads`) and `api_conversation_history.json` (Anthropic-shape messages whose first user message embeds `<model>...</model>`). One `SessionRef` per task; `seq` is the event index in `ui_messages.json` rather than a byte offset, so resume means "skip first N events." macOS only in v1.
 
-Adapter source: `stackunderflow/adapters/cursor.py`, `stackunderflow/adapters/cline.py`. See `docs/adapters.md` for the contract these adapters implement.
+Adapter source: `python-legacy: adapters/cursor.py`, `python-legacy: adapters/cline.py`. See `docs/adapters.md` for the contract these adapters implement.
 
 ## Provider chips in the UI
 
@@ -53,7 +53,7 @@ Provider chips render on the session table and project cards, color-coded per pr
 
 ## Model manifest (Anthropic & GLM pricing)
 
-Anthropic and GLM model identity and rates are **data, not code**: they live in `stackunderflow/data/models.toml` and load via `stackunderflow/infra/model_manifest.py`. `AnthropicPricer` delegates to the manifest — there is no hardcoded rate dict or token-matching ladder in `infra/providers/anthropic.py` anymore.
+Anthropic and GLM model identity and rates are **data, not code**: they live in `stackunderflow/data/models.toml` and load via `python-legacy: infra/model_manifest.py`. `AnthropicPricer` delegates to the manifest — there is no hardcoded rate dict or token-matching ladder in `infra/providers/anthropic.py` anymore.
 
 Each `[[model]]` entry has:
 
@@ -71,7 +71,7 @@ Rates are grounded in published sources: the cached LiteLLM feed (`~/.stackunder
 
 ## Cursor pricing
 
-Cursor publishes no general per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`stackunderflow/infra/providers/cursor.py`) prices each cursor model id one of four ways:
+Cursor publishes no general per-token rate card — users pay a flat subscription and the IDE multiplexes Anthropic / OpenAI / Google / Cursor-trained models behind the scenes. `CursorPricer` (`python-legacy: infra/providers/cursor.py`) prices each cursor model id one of four ways:
 
 | Class | Examples | Rate source |
 |-------|----------|-------------|
@@ -84,7 +84,7 @@ An id no delegate recognizes falls back to the same Sonnet-tier estimate rather 
 
 ## The estimated-cost marker
 
-When a record's `record.raw["cost_source"] == "estimated"`, the UI prefixes its cost with `≈` and exposes a tooltip ("estimated cost — provider does not surface per-message tokens"). The Cursor adapter sets this flag whenever it falls back to the `len(text) // 4` heuristic because the bubble has zero `tokenCount.{inputTokens, outputTokens}` (Cursor v3 returns zero counts on every bubble; see `stackunderflow/adapters/cursor.py`).
+When a record's `record.raw["cost_source"] == "estimated"`, the UI prefixes its cost with `≈` and exposes a tooltip ("estimated cost — provider does not surface per-message tokens"). The Cursor adapter sets this flag whenever it falls back to the `len(text) // 4` heuristic because the bubble has zero `tokenCount.{inputTokens, outputTokens}` (Cursor v3 returns zero counts on every bubble; see `python-legacy: adapters/cursor.py`).
 
 The flag is set on the adapter `Record` and persists in `messages.raw_json`. The ETL `usage_events` pipeline carries `cost_source` as a first-class column: the normalizer layer (`stackunderflow/etl/normalize/`) stamps every event with one of `live`, `rate_card`, `estimated`, or `unknown` (the `COST_SOURCE_*` constants in `etl/normalize/base.py`). The `≈` marker on the Sessions table reads the `messages`-level flag.
 

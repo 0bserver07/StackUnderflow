@@ -539,8 +539,8 @@ fn home_path(options: &Options) -> Option<std::path::PathBuf> {
 /// Every file-scoped query calls `paths::resolve_input_path` on its argument,
 /// and that function asks the OS for the current directory. On wasm32 there is
 /// no current directory, `std::env::current_dir()` fails, and the fallback is
-/// `/` — so `memory file stackunderflow/cli.py` looked at
-/// `/stackunderflow/cli.py` and found nothing while the CLI looked under its
+/// `/` — so `memory file python-legacy: cli.py` looked at
+/// `/python-legacy: cli.py` and found nothing while the CLI looked under its
 /// cwd and found five sessions. That was five of the first differ run's 32
 /// cases, and it is the class of divergence worth catching: not a crash, a
 /// *changed answer*.

@@ -1,4 +1,4 @@
-//! Kiro (kiroagent) — the port of `stackunderflow/adapters/kiro.py`.
+//! Kiro (kiroagent) — the port of `python-legacy: adapters/kiro.py`.
 //!
 //! Chat files live under a VS Code-style `globalStorage` root:
 //!

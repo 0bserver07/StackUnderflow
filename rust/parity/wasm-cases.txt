@@ -34,12 +34,12 @@ W-dec-budget0	memory decisions "cache" --project "" --context-budget 0 --json	{"
 W-dec-budget50	memory decisions "cache" --project "" --context-budget 50 --json	{"verb":"decisions","query":"cache","options":{"now_epoch":@NOW@,"cwd":"@CWD@","project":"","context_budget":50}}
 
 # ── memory file ──────────────────────────────────────────────────────────────
-W-file-cli	memory file "stackunderflow/cli.py" --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
-W-file-queries	memory file "stackunderflow/store/queries.py" --json	{"verb":"file","path":"stackunderflow/store/queries.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-file-cli	memory file "python-legacy: cli.py" --json	{"verb":"file","path":"python-legacy: cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
+W-file-queries	memory file "python-legacy: store/queries.py" --json	{"verb":"file","path":"python-legacy: store/queries.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
 W-file-miss	memory file "no/such/file/anywhere.rs" --json	{"verb":"file","path":"no/such/file/anywhere.rs","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}
-W-file-limit3	memory file "stackunderflow/cli.py" --limit 3 --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","limit":3}}
-W-file-since	memory file "stackunderflow/cli.py" --since 30d --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"30d"}}
-W-file-badsince	memory file "stackunderflow/cli.py" --since "@@@" --json	{"verb":"file","path":"stackunderflow/cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"@@@"}}
+W-file-limit3	memory file "python-legacy: cli.py" --limit 3 --json	{"verb":"file","path":"python-legacy: cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","limit":3}}
+W-file-since	memory file "python-legacy: cli.py" --since 30d --json	{"verb":"file","path":"python-legacy: cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"30d"}}
+W-file-badsince	memory file "python-legacy: cli.py" --since "@@@" --json	{"verb":"file","path":"python-legacy: cli.py","options":{"now_epoch":@NOW@,"cwd":"@CWD@","since":"@@@"}}
 
 # ── memory worked ────────────────────────────────────────────────────────────
 W-worked-pytest	memory worked "pytest" --json	{"verb":"worked","action":"pytest","options":{"now_epoch":@NOW@,"cwd":"@CWD@"}}

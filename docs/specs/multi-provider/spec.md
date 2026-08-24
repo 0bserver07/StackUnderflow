@@ -99,7 +99,7 @@ ingest_file(conn, adapter, ref, since_offset=since)
 
 ### 1.4 Test contract
 
-`tests/stackunderflow/adapters/contract.py` gets one new test:
+`tests/python-legacy: adapters/contract.py` gets one new test:
 
 ```python
 def test_read_since_offset_is_storage_aware(self):
@@ -250,7 +250,7 @@ We are **not porting**. We adopt patterns. Attribution rules:
 ```
 Step 1  PR: SessionRef + ingest_log migration + AdapterContract test
         Files: adapters/base.py, ingest/__init__.py, store/schema.py,
-               tests/stackunderflow/adapters/contract.py
+               tests/python-legacy: adapters/contract.py
         No new provider yet. Existing tests must still pass.
 
 Step 2  PR: infra/providers/ scaffold + AnthropicPricer + OpenAIPricer
@@ -263,12 +263,12 @@ Step 2  PR: infra/providers/ scaffold + AnthropicPricer + OpenAIPricer
 
 Step 3  PR: Cursor adapter
         Files: adapters/cursor.py, infra/providers/cursor.py,
-               tests/stackunderflow/adapters/test_cursor.py
+               tests/python-legacy: adapters/test_cursor.py
         Beta-flagged in /settings, off by default.
 
 Step 4  PR: Cline adapter
         Files: adapters/cline.py, infra/providers/cline.py,
-               tests/stackunderflow/adapters/test_cline.py
+               tests/python-legacy: adapters/test_cline.py
         Beta-flagged.
 
 Step 5  PR: dashboard polish — surface provider in project list,

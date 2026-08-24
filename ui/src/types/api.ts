@@ -1224,7 +1224,7 @@ export interface ContextReplayResponse {
 // Playback v2 — virtual-filesystem reconstruction at a point in time.
 // ``GET /api/playback/{session_id}/fs?at=<iso>&paths=<csv>&include_content=…``
 // replays Read/Write/Edit/MultiEdit/NotebookEdit calls up to ``at`` and
-// returns the per-file state. See stackunderflow/services/playback_fs.py.
+// returns the per-file state. See python-legacy: services/playback_fs.py.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1272,8 +1272,8 @@ export interface PlaybackFsSnapshotResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Live observability — Spec 13. Mirrors stackunderflow/services/live.py and
-// the SSE wire format in stackunderflow/routes/live.py.
+// Live observability — Spec 13. Mirrors python-legacy: services/live.py and
+// the SSE wire format in python-legacy: routes/live.py.
 // ---------------------------------------------------------------------------
 
 export interface LiveBurnSnapshot {
@@ -1616,7 +1616,7 @@ export interface WorktreeAttributeResponse {
 }
 
 // ── Multi-device sync (#100 Phase 2 — the union read overlay) ───────────────
-// Shapes mirror `stackunderflow/routes/sync.py` exactly. Both endpoints are
+// Shapes mirror `python-legacy: routes/sync.py` exactly. Both endpoints are
 // read-only and safe on a core install: `/api/sync/status` is a pure local
 // read, and `/api/sync/overview` only runs the cross-device union on the opt-in
 // `?scope=all-devices` path (the default returns a tiny not-merged stub).

@@ -105,7 +105,7 @@ Because there is no clamp, a caller can push the local wall clock outside
 `datetime`'s `[year 1, year 9999]`:
 
 ```
-  File ".../stackunderflow/services/live.py", line 203, in _burn_cutoffs
+  File ".../python-legacy: services/live.py", line 203, in _burn_cutoffs
     local_now = now_dt + timedelta(minutes=tz_offset)
 OverflowError: date value out of range
 ```

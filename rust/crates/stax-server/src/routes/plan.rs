@@ -4,7 +4,7 @@
 //! |---|---|---|---|---|
 //! | `RS-5-090` | `GET` | `/api/plan` | `/api/plan` | **ported** |
 //!
-//! The HTTP mirror of `stackunderflow plan show`: the active plan, how much of
+//! The HTTP mirror of `stax plan show`: the active plan, how much of
 //! it has been spent this billing period, and a forecast for where the period
 //! ends up. No query parameters at all — the response is a pure function of the
 //! settings file, the store, and the clock.

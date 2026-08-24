@@ -74,7 +74,7 @@ worth stating because a red row here may not be a port defect.**
 The task brief states "every `sum(...)` in the summary is LAW 3 (int `0` on
 empty; Neumaier on floats). The five `_SUMMARY_COST_FIELDS` are the ones that
 show it." That premise does not hold for this file: **`yield_tracker.py`
-contains no `sum()` call at all.** `grep -n 'sum(' stackunderflow/services/yield_tracker.py`
+contains no `sum()` call at all.** `grep -n 'sum(' python-legacy: services/yield_tracker.py`
 is empty; the two accumulation sites are
 
 * `yield_summary` — `out[key] += e.cost_usd`, seeded with the literal `0.0`;

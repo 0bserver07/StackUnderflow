@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/project.py` — one row per project.
+//! Port of `python-legacy: etl/marts/project.py` — one row per project.
 //!
 //! Three passes, in this order, and the order is the design:
 //!

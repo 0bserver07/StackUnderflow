@@ -1472,7 +1472,7 @@ envelope's extra `risk` block carries `total_sessions`, `reverted`, `failed`,
 portions — the touching-sessions query has no time bound.
 
 ```
-$ stax memory file stackunderflow/routes/cost.py --json
+$ stax memory file python-legacy: routes/cost.py --json
 ```
 
 ### `stax memory worked`
@@ -1629,8 +1629,8 @@ Usage: stax find-sessions-touching-file [OPTIONS] FILE
 **Example:**
 
 ```
-$ stax find-sessions-touching-file stackunderflow/store/queries.py --mode write
-Sessions touching stackunderflow/store/queries.py  (mode=write)  (2 session(s))
+$ stax find-sessions-touching-file python-legacy: store/queries.py --mode write
+Sessions touching python-legacy: store/queries.py  (mode=write)  (2 session(s))
   ...
 
 $ stax find-sessions-touching-file ~/code/app/main.py --format json --limit 5
@@ -1728,7 +1728,7 @@ shows the confidence score.
 **Example:**
 
 ```
-$ stax find-sessions-where-action-worked "add caching" --file stackunderflow/infra/cache.py
+$ stax find-sessions-where-action-worked "add caching" --file python-legacy: infra/cache.py
 Sessions where 'add caching' worked  (1 session(s))
 
   [claude] aaa111bbb222…  2026-05-08T16:40:02  msgs=92  $1.1000
@@ -1762,12 +1762,12 @@ Each result carries `outcome` (`"failed"` or `"reverted"`), `outcome_evidence`,
 **Example:**
 
 ```
-$ stax find-failure-modes-for-file stackunderflow/routes/cost.py --since 90d
-Failure modes for stackunderflow/routes/cost.py  (1 session(s))
+$ stax find-failure-modes-for-file python-legacy: routes/cost.py --since 90d
+Failure modes for python-legacy: routes/cost.py  (1 session(s))
 
   [claude] ccc333ddd444…  2026-04-29T11:02:55  msgs=140  $2.0100
       -Users-you-dev-app  /Users/you/dev/app
-      → reverted: agent ran `git checkout -- stackunderflow/routes/cost.py` after the test broke
+      → reverted: agent ran `git checkout -- python-legacy: routes/cost.py` after the test broke
 ```
 
 ---
@@ -1804,8 +1804,8 @@ sessions (`reverted` ∪ `failed`) for the file — read them with
 **Example:**
 
 ```
-$ stax risk file stackunderflow/routes/cost.py --since 90d
-File risk for /Users/you/dev/app/stackunderflow/routes/cost.py
+$ stax risk file python-legacy: routes/cost.py --since 90d
+File risk for /Users/you/dev/app/python-legacy: routes/cost.py
   since: 90d
 
   total sessions touching the file: 14
@@ -2364,7 +2364,7 @@ $ stax cfg rm port
 ## Environment Variables
 
 Every config key can be overridden by an environment variable. The variable name is the
-second argument to the `_Opt` descriptor in `stackunderflow/settings.py` (shown below).
+second argument to the `_Opt` descriptor in `python-legacy: settings.py` (shown below).
 Environment variables take precedence over the config file.
 
 | Config key | Env var | Example |

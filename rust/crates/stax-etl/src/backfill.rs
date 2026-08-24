@@ -44,7 +44,7 @@
 //!
 //! # The price book seam runs through the CALLER's `NormalizeContext`
 //!
-//! `stackunderflow etl backfill` (the CLI) runs unprimed — `use_price_book_store`
+//! `stax etl backfill` (the CLI) runs unprimed — `use_price_book_store`
 //! is only ever called by `server.py`'s lifespan — so the CLI verb builds its
 //! context from the manifest and the route builds one from `crate::pricing::
 //! engine`. Both are correct and they differ; that is DIV-016 / RS-3-082, and

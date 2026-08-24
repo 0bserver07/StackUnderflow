@@ -4,7 +4,7 @@
  * Lives separately from the component so the test suite (no DOM runner) can
  * unit-test the formatting + tree-building logic without rendering React.
  *
- * Spec: stackunderflow/services/playback_fs.py (backend contract).
+ * Spec: python-legacy: services/playback_fs.py (backend contract).
  */
 
 import type { PlaybackFsFileEntry } from '../../types/api'

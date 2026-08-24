@@ -118,7 +118,7 @@ either).
 
 ## Writer routing
 
-`stackunderflow/ingest/writer.py` is the only writer in the codebase.
+`python-legacy: ingest/writer.py` is the only writer in the codebase.
 Its `_insert_message` helper now does:
 
 1. `_partition_for(record.timestamp)` → `"messages_YYYYMM"` or
@@ -465,7 +465,7 @@ Any future migration that adds a column to `messages` must:
 1. ALTER each `messages_YYYYMM` partition (or rebuild it).
 2. Update `_PARTITION_COLUMNS` in both
    `stackunderflow/store/migrations/v008_messages_partitioning.py`
-   AND `stackunderflow/ingest/writer.py` (kept in sync — there is no
+   AND `python-legacy: ingest/writer.py` (kept in sync — there is no
    shared module because the migration is loaded by pathname).
 3. Rebuild the `messages` view (`_rebuild_messages_view`) and the
    INSTEAD OF trigger (`_rebuild_messages_insert_trigger`).

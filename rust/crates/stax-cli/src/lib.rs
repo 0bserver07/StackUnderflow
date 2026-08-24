@@ -311,7 +311,7 @@ pub enum Command {
     /// Proactive recommendations mined from your local session store.
     ///
     /// Recommendations are read-only — accepting one is always a separate
-    /// explicit step (e.g. ``stackunderflow skills generate --pattern <id>``).
+    /// explicit step (e.g. ``stax skills generate --pattern <id>``).
     Recommend(RecommendArgs),
     /// Dashboard-style summary over a date range.
     Report(ReportArgs),

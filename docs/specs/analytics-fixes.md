@@ -11,7 +11,7 @@ Base: `feat/analytics-expansion`. Every agent branches from the current HEAD of 
 ## Wave D — fixes (7 owners, parallel)
 
 ### D1 `backend-paginate` — paginate user_interactions
-**Files:** `stackunderflow/routes/data.py`, maybe `stackunderflow/stats/aggregator.py`, test files.
+**Files:** `python-legacy: routes/data.py`, maybe `python-legacy: stats/aggregator.py`, test files.
 **Problem:** `/api/dashboard-data` payload is 2.37 MB on chimera; 1.81 MB is `user_interactions` (the `_command_analysis` output). Dashboard load is slow because the React app has to parse that whole blob even when the Commands tab isn't open.
 **Scope:**
 - Split `user_interactions` out of `/api/dashboard-data`. Leave only a small summary (counts, averages) behind — enough for Overview stat cards.

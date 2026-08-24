@@ -1542,7 +1542,7 @@ return files, not JSON, and are not part of the data API.
 ### Global Stats shape (`GET /api/global-stats`)
 
 This endpoint is the primary data source for the Overview page. The authoritative implementation is in
-`stackunderflow/store/queries.py:get_global_stats()`. The `config` key is appended by the route handler.
+`python-legacy: store/queries.py:get_global_stats()`. The `config` key is appended by the route handler.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -2023,7 +2023,7 @@ Same surface as `stax optimize`.
   `{project, looped_pairs, sample_questions}` with at most 3 sample
   question strings each. Empty when no looped pairs are present.
 - `patterns` — list of `Finding` dicts emitted by the structural
-  detectors in `stackunderflow/reports/optimize.py`. Each finding has:
+  detectors in `python-legacy: reports/optimize.py`. Each finding has:
   `pattern_id` (one of `bloated_claude_md`, `unused_mcp_servers`,
   `ghost_agents`, `low_read_edit_ratio`, `junk_reads`, `cache_overhead`,
   `bash_output_limits`), `severity` (`high` | `medium` | `low`),

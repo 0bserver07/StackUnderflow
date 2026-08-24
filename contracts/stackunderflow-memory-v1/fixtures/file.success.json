@@ -2,7 +2,7 @@
   "schema": "stackunderflow.memory/1",
   "command": "file",
   "query": {
-    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py",
+    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py",
     "project": null,
     "since": null,
     "limit": 2
@@ -38,7 +38,7 @@
   "budget": 2000,
   "truncated": false,
   "risk": {
-    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py",
+    "path": "/Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py",
     "since": null,
     "total_sessions": 4,
     "reverted": 0,

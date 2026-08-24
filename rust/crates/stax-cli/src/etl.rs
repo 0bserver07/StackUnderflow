@@ -14,7 +14,7 @@
 //! `assemble_status` reads `backfill_jobs.get_current_job()` /
 //! `get_last_job()`, a `threading.Lock` and two **module-level** slots. A CLI
 //! process has never scheduled a backfill, so both are `None` on the reference
-//! too — every `stackunderflow etl status` invocation, by construction, not by
+//! too — every `stax etl status` invocation, by construction, not by
 //! coincidence. The port passes `None, None` explicitly instead of reaching
 //! for a global that would then be shared with an in-process server.
 //!

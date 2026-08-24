@@ -158,7 +158,7 @@ pub(crate) mod test_support {
     use super::base::NormalizeContext;
     use super::row::MsgRow;
 
-    /// The context `stackunderflow etl backfill` runs in — real
+    /// The context `stax etl backfill` runs in — real
     /// `data/models.toml`, no price book (DIV-016).
     pub fn ctx() -> NormalizeContext {
         NormalizeContext::unprimed(&crate::pricing::test_support::manifest_path())

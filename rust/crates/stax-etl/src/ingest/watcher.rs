@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/watcher.py` — the live-tail path.
+//! Port of `python-legacy: etl/watcher.py` — the live-tail path.
 //!
 //! On any change under a registered adapter's roots:
 //!

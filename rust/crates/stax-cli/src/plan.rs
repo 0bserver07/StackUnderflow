@@ -162,9 +162,7 @@ fn run_show(format: &str) -> Result<Output> {
                 render::render_json(&Value::Object(body))
             )));
         }
-        return Ok(Output::ok(
-            "No plan set. Run: stackunderflow plan set claude-pro\n",
-        ));
+        return Ok(Output::ok("No plan set. Run: stax plan set claude-pro\n"));
     };
 
     let today = Date::today_local();

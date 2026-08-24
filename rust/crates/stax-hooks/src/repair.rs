@@ -360,7 +360,7 @@ mod tests {
     }
 
     const STALE: &str = r#"{"hooks": {"Stop": [{"hooks": [
-        {"type": "command", "command": "/old/venv/bin/stackunderflow hooks run stackunderflow-stop"},
+        {"type": "command", "command": "/old/venv/bin/stax hooks run stackunderflow-stop"},
         {"type": "command", "command": "someone-elses-tool"}
     ]}]}}"#;
 
@@ -409,7 +409,7 @@ mod tests {
         let scratch = Scratch::new("python-form");
         scratch.write(
             ".claude/settings.json",
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stackunderflow hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "stax hooks run stackunderflow-stop"}]}]}}"#,
         );
         let report = repair("project", false, &scratch.env()).unwrap();
         assert_eq!(report.repaired.len(), 1);

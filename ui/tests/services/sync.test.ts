@@ -45,7 +45,7 @@ function withFetch(impl: (input: string, init?: RequestInit) => Promise<MockResp
 }
 
 // ---------------------------------------------------------------------------
-// Sample payloads mirroring stackunderflow/routes/sync.py.
+// Sample payloads mirroring python-legacy: routes/sync.py.
 // ---------------------------------------------------------------------------
 
 const configuredStatus: SyncStatus = {

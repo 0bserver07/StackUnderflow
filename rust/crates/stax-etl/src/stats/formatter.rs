@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/stats/formatter.py` (RS-3-065) — enriched records
+//! Port of `python-legacy: stats/formatter.py` (RS-3-065) — enriched records
 //! back to the dict shape the REST API serves.
 //!
 //! Fifteen keys per message, in `_record_to_dict`'s literal order, plus three

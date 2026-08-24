@@ -1,5 +1,5 @@
 //! The `stackunderflow-history-jsonl-v1` stream contract + plugin manifest —
-//! the port of `stackunderflow/adapters/custom_jsonl.py` (RS-2-006).
+//! the port of `python-legacy: adapters/custom_jsonl.py` (RS-2-006).
 //!
 //! Some session sources we do not want to own forever: they are cloud-gated
 //! (no local transcript on disk), or niche enough that a bespoke adapter is not

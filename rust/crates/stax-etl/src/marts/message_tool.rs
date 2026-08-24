@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/message_tool.py` — one row per
+//! Port of `python-legacy: etl/marts/message_tool.py` — one row per
 //! `(message, tool_name, call_index)`.
 //!
 //! The first per-message-grain mart: it keeps the row-per-tool-call detail

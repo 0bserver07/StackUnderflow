@@ -869,7 +869,7 @@ pub fn resolve(
 ) -> Result<(Identity, String, Transport), SyncError> {
     let Some(identity) = load_identity(conn)? else {
         return Err(SyncError::NotConfigured(
-            "sync is not configured — run `stackunderflow sync init` first".to_owned(),
+            "sync is not configured — run `stax sync init` first".to_owned(),
         ));
     };
     let Some(secret) = crate::keys::resolve_secret(state_dir, sources) else {

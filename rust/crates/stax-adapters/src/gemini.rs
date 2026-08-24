@@ -1,4 +1,4 @@
-//! Gemini CLI — the port of `stackunderflow/adapters/gemini.py`.
+//! Gemini CLI — the port of `python-legacy: adapters/gemini.py`.
 //!
 //! Chats live at `~/.gemini/tmp/<project>/chats/session-*.json{,l}`, and two
 //! on-disk formats coexist in the same directory:

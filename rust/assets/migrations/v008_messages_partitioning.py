@@ -20,7 +20,7 @@ Tradeoff: writes can no longer go through the ``messages`` name (SQLite
 does not support inserting into a UNION-ALL view without INSTEAD OF
 triggers, and we'd rather route at the writer level than hide partition
 selection behind triggers). The single writer in
-``stackunderflow/ingest/writer.py`` is updated to route inserts to the
+``python-legacy: ingest/writer.py`` is updated to route inserts to the
 partition for ``record.timestamp``.
 
 What this migration does

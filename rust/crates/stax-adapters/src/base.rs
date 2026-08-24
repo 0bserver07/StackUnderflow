@@ -1,4 +1,4 @@
-//! The adapter contract — the port of `stackunderflow/adapters/base.py`.
+//! The adapter contract — the port of `python-legacy: adapters/base.py`.
 //!
 //! Two record shapes and one trait. Everything above this crate (ingest,
 //! normalizers, marts, the dashboard) sees only [`SessionRef`] and [`Record`],
@@ -55,7 +55,7 @@ use serde_json::{Map, Value};
 /// The hash is `hashlib.blake2b(digest_size=32)` — BLAKE2b with a 256-bit
 /// output, *not* BLAKE2s — and this port is byte-for-byte identical to
 /// CPython's, pinned by the tests below and by
-/// `tests/stackunderflow/adapters/test_content_hash_id.py` on the other side.
+/// `tests/python-legacy: adapters/test_content_hash_id.py` on the other side.
 #[must_use]
 pub fn content_hash_id(parts: &[Option<String>], prefix: &str, length: usize) -> String {
     let mut state = blake2b_simd::Params::new().hash_length(32).to_state();

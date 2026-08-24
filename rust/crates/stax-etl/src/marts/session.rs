@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/session.py` — one row per session.
+//! Port of `python-legacy: etl/marts/session.py` — one row per session.
 //!
 //! Replace-from-scratch-for-affected-keys: new events for an existing session
 //! invalidate the prior aggregate, so the row is recomputed from *all* of that

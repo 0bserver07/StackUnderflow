@@ -15,7 +15,7 @@
 //! | `_compare_models_from_messages` | the raw-`messages` fallback | `compare_models_from_messages` |
 //! | `build_compare_payload` | the HTTP/CLI dict | [`build_compare_payload`] |
 //!
-//! `routes/compare.py` and the `stackunderflow compare` CLI verb both call
+//! `routes/compare.py` and the `stax compare` CLI verb both call
 //! `build_compare_payload`, which is why this lives in `services/` rather than in
 //! the route module: wave 8 ports the verb and must find the logic already here.
 //!

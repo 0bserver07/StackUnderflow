@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn an_empty_report_prints_three_lines_and_no_table() {
-        // Recorded from `stackunderflow today` on the parity `fresh` state.
+        // Recorded from `stax today` on the parity `fresh` state.
         assert_eq!(
             render_text(&report("today", Vec::new()), 80),
             "staxtrace — today\nNo activity in this period.\nTotal: $0.00  0 messages  0 sessions\n"

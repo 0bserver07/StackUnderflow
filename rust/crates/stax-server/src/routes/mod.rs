@@ -1,6 +1,6 @@
 //! The 34 route-module slots, in `server.py`'s `include_router` order.
 //!
-//! `stackunderflow/server.py` composes its app with 34 consecutive
+//! `python-legacy: server.py` composes its app with 34 consecutive
 //! `app.include_router(...)` calls (the spec said 12; DRIFT-1 in
 //! `rust/TASKS-RS.md` measured 34). That order is reproduced here literally,
 //! module for module, because it is the *only* thing that disambiguates two

@@ -8,7 +8,7 @@
 
 This doc gets a fresh agent oriented in 10 minutes. Read it before reading code. For the *active campaign*, the durable spec is `docs/campaigns/intelligence-layer.md` — read that second.
 
-> **VERSIONS ARE MAINTAINER-ONLY (standing rule, 2026-07-01 — full text in `AGENTS.md`).** Agents never change a version anywhere — `__version__.py`, `pyproject.toml`, `package.json`/lock, `flake.nix`, CHANGELOG `## [N.N.N]` headings, tags, GitHub/PyPI releases, `release:` commits — and never **suggest** a version number. What the number is and when it moves is the maintainer's decision alone; this rule constrains agents, not him. Notes accumulate under `## [Unreleased]` only. History, for the record: the 0.8 → 0.9 jump was agent inflation (`bed5923`, 2026-05-15, twelve hours after 0.8.0), and the v0.9.2 release commit (`59eb59a`, 2026-05-28) was also agent-executed — after the no-bumps directive was already on record. All of it is on PyPI and unrecallable. Enforced mechanically: `tests/stackunderflow/test_version_guard.py` pins the exact version strings — any change fails CI unless the maintainer updates the pin in the same deliberate release commit.
+> **VERSIONS ARE MAINTAINER-ONLY (standing rule, 2026-07-01 — full text in `AGENTS.md`).** Agents never change a version anywhere — `__version__.py`, `pyproject.toml`, `package.json`/lock, `flake.nix`, CHANGELOG `## [N.N.N]` headings, tags, GitHub/PyPI releases, `release:` commits — and never **suggest** a version number. What the number is and when it moves is the maintainer's decision alone; this rule constrains agents, not him. Notes accumulate under `## [Unreleased]` only. History, for the record: the 0.8 → 0.9 jump was agent inflation (`bed5923`, 2026-05-15, twelve hours after 0.8.0), and the v0.9.2 release commit (`59eb59a`, 2026-05-28) was also agent-executed — after the no-bumps directive was already on record. All of it is on PyPI and unrecallable. Enforced mechanically: `tests/python-legacy: test_version_guard.py` pins the exact version strings — any change fails CI unless the maintainer updates the pin in the same deliberate release commit.
 
 ## What changed since the last handoff (2026-05-19 → 2026-07-01)
 
@@ -76,14 +76,14 @@ Side stores OUTSIDE store.db (backup must capture all of them): `search_index.db
 
 ## Hard rules (NON-NEGOTIABLE)
 
-1. **Versions are maintainer-only — agents never touch them, period.** `__version__.py`, `pyproject.toml`, `stackunderflow-ui/package.json`/`package-lock.json`, `flake.nix`, CHANGELOG `## [N.N.N]` headings, tags, releases, `release:` commits — and never *suggest* a version number. Accumulate under `## [Unreleased]`. Enforced by `tests/stackunderflow/test_version_guard.py` (exact-pin; the maintainer updates the pin when he releases). Full rule: `AGENTS.md`.
+1. **Versions are maintainer-only — agents never touch them, period.** `__version__.py`, `pyproject.toml`, `stackunderflow-ui/package.json`/`package-lock.json`, `flake.nix`, CHANGELOG `## [N.N.N]` headings, tags, releases, `release:` commits — and never *suggest* a version number. Accumulate under `## [Unreleased]`. Enforced by `tests/python-legacy: test_version_guard.py` (exact-pin; the maintainer updates the pin when he releases). Full rule: `AGENTS.md`.
 2. **NO PRs opened by agents** — push the branch; the maintainer merges.
 3. **NO touching `~/.stackunderflow/store.db`** from tests or scripts. `tmp_path` / `:memory:` only. Real-data spot-checks: read-only URI (`file:...?mode=ro`) or a `.backup` copy under `/tmp`.
 4. **NO `.notes/` commits** (gitignored). The untracked `docs/campaigns/{cost-audit,ui-perf-audit}.md` are working docs — **never `git add -A`**; stage files explicitly.
 5. **NO `--no-verify`.** Fix the underlying issue.
 6. **NO external-library name references** in shipped code/docs.
 7. **NO re-introducing an MCP server.** Retired 2026-05-20 for the `memory` CLI + hooks. Don't re-pitch it.
-8. **Cost invariants must stay green.** `tests/stackunderflow/infra/test_pricing_invariants.py` locks `sum(marts)==sum(events)`, nothing silently unpriced, no unknown-with-nonzero-cost. Any cost-touching change keeps them green. Mart fast-path has hard <100ms perf tests.
+8. **Cost invariants must stay green.** `tests/python-legacy: infra/test_pricing_invariants.py` locks `sum(marts)==sum(events)`, nothing silently unpriced, no unknown-with-nonzero-cost. Any cost-touching change keeps them green. Mart fast-path has hard <100ms perf tests.
 9. **Pre-assigned schema slots are sacred.** v015 stays skipped; next free is v027.
 10. **Tests pass ≠ feature works.** Before claiming "fixed," open the real dashboard tab and click through. The v0.9.1 agents-tab bug returned 200 OK with 10 rows of garbage; the June audits found 63 more like it.
 
@@ -244,7 +244,7 @@ stax etl status [--format json]
 stax etl backfill [--force]     # --force re-derives costs from the manifest
 
 # Memory (the agent interface — docs/cli-reference.md, AGENTS.md)
-stax memory file stackunderflow/routes/cost.py --json
+stax memory file python-legacy: routes/cost.py --json
 stax memory decisions "pricing" --json
 stax memory worked "add caching"
 stax memory sessions
@@ -290,12 +290,12 @@ node --test tests/services/*.test.ts      # 168 tests
 
 1. `docs/campaigns/intelligence-layer.md` — the active campaign: foundation status + specs #5–#7
 2. `docs/cli-reference.md` + `AGENTS.md` — every command, and the agent-facing memory surface
-3. `stackunderflow/services/embeddings.py` — Ollama endpoint probe, vector store, hybrid recall (new center of gravity)
-4. `stackunderflow/data/models.toml` + `infra/model_manifest.py` + `tests/stackunderflow/infra/test_pricing_invariants.py` — the pricing contract and its gates
-5. `stackunderflow/reports/forks.py` + `reports/anomaly.py` — fork economics; the pattern for campaign #6
-6. `stackunderflow/hooks/inject.py` + `_install.py` — the base campaign #5 builds on
+3. `python-legacy: services/embeddings.py` — Ollama endpoint probe, vector store, hybrid recall (new center of gravity)
+4. `stackunderflow/data/models.toml` + `infra/model_manifest.py` + `tests/python-legacy: infra/test_pricing_invariants.py` — the pricing contract and its gates
+5. `python-legacy: reports/forks.py` + `reports/anomaly.py` — fork economics; the pattern for campaign #6
+6. `python-legacy: hooks/inject.py` + `_install.py` — the base campaign #5 builds on
 7. `docs/specs/etl-architecture.md` + `docs/specs/session-schema-v1.md` — pipeline + schema contracts
-8. `stackunderflow/etl/backfill.py` + `watcher.py` + `lock.py` — the ingest spine
+8. `python-legacy: etl/backfill.py` + `watcher.py` + `lock.py` — the ingest spine
 9. `stackunderflow/store/migrations/` — v018 → v026 headers document each feature's rationale
 10. `docs/campaigns/{cost-audit,ui-perf-audit}.md` — what the June audits found and what remains
 11. `tests/stackunderflow/integration/` — the fastest way to understand the whole pipeline

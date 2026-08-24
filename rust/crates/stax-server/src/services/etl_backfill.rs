@@ -22,7 +22,7 @@
 //!
 //! # The price book is PRIMED on the HTTP path (DIV-016, read the other way)
 //!
-//! `stackunderflow etl backfill` (the CLI) runs unprimed — `use_price_book_store`
+//! `stax etl backfill` (the CLI) runs unprimed — `use_price_book_store`
 //! is only ever called by `server.py`'s lifespan. But this code path *is* the
 //! server, and Python's seam is module-global, so a backfill triggered over HTTP
 //! prices from the `price_book` table. The route therefore builds its context

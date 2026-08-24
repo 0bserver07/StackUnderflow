@@ -239,7 +239,7 @@ fn cfg_set(key: &str, value: &str, env: &dyn Env) -> Result<Output> {
                 "KEY",
                 format!(
                     "'{key}' is a structured setting; use a dedicated subcommand \
-                     (e.g. ``stackunderflow cfg model-alias set FROM TO``)."
+                     (e.g. ``stax cfg model-alias set FROM TO``)."
                 ),
             ),
             PROGRAM,
@@ -247,9 +247,9 @@ fn cfg_set(key: &str, value: &str, env: &dyn Env) -> Result<Output> {
     }
     if key.starts_with("plan_") {
         let hint = if key == "plan_alert_thresholds" {
-            "stackunderflow plan thresholds set 50 75 90"
+            "stax plan thresholds set 50 75 90"
         } else {
-            "stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]"
+            "stax plan set NAME [--monthly-usd N] [--reset-day D]"
         };
         return Ok(Output::usage(
             &UsageError::bad_parameter(
@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(output.code, 2);
         assert!(output.stderr.contains(
             "'model_aliases' is a structured setting; use a dedicated subcommand \
-             (e.g. ``stackunderflow cfg model-alias set FROM TO``)."
+             (e.g. ``stax cfg model-alias set FROM TO``)."
         ));
     }
 
@@ -470,15 +470,16 @@ mod tests {
         assert!(
             thresholds
                 .stderr
-                .contains("use ``stackunderflow plan thresholds set 50 75 90`` instead.")
+                .contains("use ``stax plan thresholds set 50 75 90`` instead.")
         );
         let name = cfg_set("plan_name", "x", &env()).expect("no io");
-        assert!(name.stderr.contains(
-            "use ``stackunderflow plan set NAME [--monthly-usd N] [--reset-day D]`` instead."
-        ));
+        assert!(
+            name.stderr
+                .contains("use ``stax plan set NAME [--monthly-usd N] [--reset-day D]`` instead.")
+        );
         // …and the *reset-day* key takes the second hint too, not the first.
         let day = cfg_set("plan_reset_day", "3", &env()).expect("no io");
-        assert!(day.stderr.contains("stackunderflow plan set NAME"));
+        assert!(day.stderr.contains("stax plan set NAME"));
     }
 
     #[test]

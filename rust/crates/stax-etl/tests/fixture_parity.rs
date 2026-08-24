@@ -1,7 +1,7 @@
 //! Fixture pack → adapter → normalizer → events, diffed against the reference.
 //!
 //! The same fourteen packs under `tests/fixtures/beta_normalizers/` that
-//! `tests/stackunderflow/etl/normalize/test_beta_normalizers.py` uses, run
+//! `tests/python-legacy: etl/normalize/test_beta_normalizers.py` uses, run
 //! through the identical pipeline on both sides. Two properties make this a
 //! statement about the code rather than about two copies of a fixture:
 //!

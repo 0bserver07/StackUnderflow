@@ -1,4 +1,4 @@
-//! Cursor Agent — the port of `stackunderflow/adapters/cursor_agent.py`.
+//! Cursor Agent — the port of `python-legacy: adapters/cursor_agent.py`.
 //!
 //! The CLI writes transcripts under
 //! `~/.cursor/projects/{project}/agent-transcripts/`, in **two formats that

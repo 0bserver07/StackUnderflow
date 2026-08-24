@@ -2,7 +2,7 @@
 
 > **Status: historical.** This is the original design sketch for Codex
 > ingestion. The adapter shipped, but on a different design than the one
-> below: `stackunderflow/adapters/codex.py` reads
+> below: `python-legacy: adapters/codex.py` reads
 > `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` rollout files, not the
 > `state_5.sqlite` schema in §1.1. The document is kept for design
 > context.
@@ -94,7 +94,7 @@ The current pipeline is Claude-specific at the reader and discovery layers. A Co
 
 ### 3.1 Discovery: `CodexDiscovery`
 
-Equivalent of `stackunderflow/infra/discovery.py`. That module:
+Equivalent of `python-legacy: infra/discovery.py`. That module:
 - Resolves a project path to its Claude log directory via `locate_logs(project_dir) -> str | None`
 - Enumerates all known projects via `enumerate_projects() -> list[tuple[str, str]]`
 - Provides project metadata via `project_metadata() -> list[dict]`
@@ -123,7 +123,7 @@ Key difference: Claude discovery scans the filesystem for directories containing
 
 ### 3.2 Reader: `CodexReader`
 
-Equivalent of `stackunderflow/pipeline/reader.py`. That module:
+Equivalent of `python-legacy: pipeline/reader.py`. That module:
 - Reads `*.jsonl` files from a log directory via `scan(log_dir) -> list[RawEntry]`
 - Returns `RawEntry(payload=dict, session_id=str, origin=str)` named tuples
 - Detects continuation files and merges session IDs
@@ -173,7 +173,7 @@ class Source(Protocol):
 
 ## 4. Pipeline Integration
 
-The current pipeline (`stackunderflow/pipeline/__init__.py`):
+The current pipeline (`python-legacy: pipeline/__init__.py`):
 
 ```
 reader.scan(log_dir) -> raw entries
@@ -251,17 +251,17 @@ Codex's `threads` table is a session-level summary. Claude's JSONL logs are mess
 
 ### Phase 1: Read-only SQLite adapter (MVP)
 
-1. **`stackunderflow/adapters/codex_discovery.py`** -- Implement `enumerate_codex_projects()`, `locate_codex_threads()`, `codex_project_metadata()` against `state_5.sqlite`. Use `sqlite3` from stdlib, read-only mode (`?mode=ro` URI), WAL-safe.
+1. **`python-legacy: adapters/codex_discovery.py`** -- Implement `enumerate_codex_projects()`, `locate_codex_threads()`, `codex_project_metadata()` against `state_5.sqlite`. Use `sqlite3` from stdlib, read-only mode (`?mode=ro` URI), WAL-safe.
 
-2. **`stackunderflow/adapters/codex_reader.py`** -- Implement `scan_codex(project_cwd)` returning `list[RawEntry]` with Claude-compatible synthetic payloads. Include `codex_meta` namespace for Codex-specific fields.
+2. **`python-legacy: adapters/codex_reader.py`** -- Implement `scan_codex(project_cwd)` returning `list[RawEntry]` with Claude-compatible synthetic payloads. Include `codex_meta` namespace for Codex-specific fields.
 
-3. **`stackunderflow/infra/costs.py`** -- Add OpenAI model pricing. Start with `gpt-5.2-codex` and the GPT-4.1 family. The `_identify()` function needs a new branch for non-Anthropic model IDs.
+3. **`python-legacy: infra/costs.py`** -- Add OpenAI model pricing. Start with `gpt-5.2-codex` and the GPT-4.1 family. The `_identify()` function needs a new branch for non-Anthropic model IDs.
 
 4. **Integration tests** -- Test with a fixture `state_5.sqlite` containing known data. Verify that `scan_codex` output passes through `dedup -> classifier -> enricher -> aggregator -> formatter` without errors and produces structurally valid output.
 
 ### Phase 2: Source abstraction
 
-5. **`stackunderflow/adapters/source.py`** -- Define the `Source` protocol. Implement `ClaudeSource` (wrapping existing `discovery` + `reader`) and `CodexSource` (wrapping phase 1 modules).
+5. **`python-legacy: adapters/source.py`** -- Define the `Source` protocol. Implement `ClaudeSource` (wrapping existing `discovery` + `reader`) and `CodexSource` (wrapping phase 1 modules).
 
 6. **Refactor `pipeline/__init__.py`** -- Change `process()` to accept a `Source` parameter. Default to `ClaudeSource` for backward compatibility.
 

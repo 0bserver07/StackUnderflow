@@ -139,7 +139,7 @@ fn run_mode(args: &ModeArgs, env: &SkillsEnv) -> Result<Output> {
     if !env.store.exists() {
         anyhow::bail!(
             "no store at {} — the port does not create one (Python's `_open_store` would \
-             `db.connect` + `schema.apply` here). Run `stackunderflow start` first, or point \
+             `db.connect` + `schema.apply` here). Run `stax start` first, or point \
              $STACKUNDERFLOW_HOME at an existing store.",
             env.store.display()
         );
@@ -223,7 +223,7 @@ fn run_skills(
             PATH,
             SPEC,
             "could not infer a project for the current directory — pass --project \
-             SLUG (see `stackunderflow find-sessions-in-path .`).",
+             SLUG (see `stax find-sessions-in-path .`).",
         ));
     };
 
@@ -332,7 +332,7 @@ mod tests {
             last_seen_ts: String::new(),
             project_slug: None,
             suggested_skill_template: String::new(),
-            accept_command: "stackunderflow skills generate --pattern abc".to_string(),
+            accept_command: "stax skills generate --pattern abc".to_string(),
             normalized_command: None,
         };
         let rendered = format!(
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(
             rendered,
             "  • auto-avoid-pkill  [avoids-X]  occurrences=6\n      \
-             Triggers when about to run `pkill`.\n      accept: stackunderflow skills \
+             Triggers when about to run `pkill`.\n      accept: stax skills \
              generate --pattern abc\n"
         );
     }

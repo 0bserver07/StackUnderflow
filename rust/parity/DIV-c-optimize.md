@@ -205,7 +205,7 @@ Verified against the source rather than the docstring, because LAW 7 turns on it
 * `reports/optimize.py` — the only filesystem calls are `Path.is_file`,
   `Path.is_dir`, `Path.iterdir`, `Path.read_text`, `Path.home`, `Path.cwd`.
 * `reports/prescribe.py` — **no** `pathlib`/`os`/`open` import at all (locked by
-  a source-scan test in `tests/stackunderflow/reports/test_prescribe.py`).
+  a source-scan test in `tests/python-legacy: reports/test_prescribe.py`).
 * `routes/optimize.py` — `_read_text_defensive` is `Path(path).read_text(...)`.
 * `stax_etl::pricing` reads `models.toml`; no write.
 * The in-process cache (DIV-111) is per-process memory, not a file, and it is

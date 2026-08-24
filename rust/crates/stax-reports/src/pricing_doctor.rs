@@ -1,5 +1,5 @@
 //! `routes/pricing.py::assemble_pricing_health` — the pricing-health report,
-//! shared by `GET /api/pricing/doctor` and `stackunderflow pricing doctor`.
+//! shared by `GET /api/pricing/doctor` and `stax pricing doctor`.
 //!
 //! # Why it lives here and not in the route module
 //!

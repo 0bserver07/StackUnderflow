@@ -82,7 +82,7 @@ pub fn run_memory_embed(args: &EmbedArgs) -> Result<Output> {
             stdout: String::new(),
             stderr: "No Ollama reachable. Point it at your cloud with \
                      STACKUNDERFLOW_OLLAMA_URL (+ STACKUNDERFLOW_OLLAMA_API_KEY), or start \
-                     a local Ollama, then re-run `stackunderflow memory embed`.\n"
+                     a local Ollama, then re-run `stax memory embed`.\n"
                 .to_owned(),
             code: 1,
         });
@@ -93,7 +93,7 @@ pub fn run_memory_embed(args: &EmbedArgs) -> Result<Output> {
         return Ok(Output {
             stdout: String::new(),
             stderr: format!(
-                "No search index at {}. Run `stackunderflow start` to index first.\n",
+                "No search index at {}. Run `stax start` to index first.\n",
                 index_path.display()
             ),
             code: 1,

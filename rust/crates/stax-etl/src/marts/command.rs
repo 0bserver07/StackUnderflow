@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/command.py` — the
+//! Port of `python-legacy: etl/marts/command.py` — the
 //! `(day, project_id, command_name)` rollup **and** `command_day_mart`.
 //!
 //! A "command" is a slash command (`/init`, `/review`, …) plus a synthetic

@@ -9,7 +9,7 @@
 //! were about *where the work lives*, not about whether it could be ported.
 //!
 //! **`GET /api/etl/status` is four lines over a 566-line assembler.** That
-//! assembler is [`crate::services::etl_status`], because `stackunderflow etl
+//! assembler is [`crate::services::etl_status`], because `stax etl
 //! status` (the CLI verb, wave 8) calls the same function and a transliteration
 //! into this file would fork it — the batch-C ruling for every thin-wrapper
 //! route. The route itself opens a connection, applies the schema, and returns
@@ -100,7 +100,7 @@ async fn get_etl_status(State(state): State<AppState>) -> HandlerResult {
             .to_path_buf();
         // The two job slots are the server's, and only the server has any:
         // `assemble_status` takes them as parameters now (it moved to
-        // `stax-reports` so `stackunderflow etl status` could call it, and a
+        // `stax-reports` so `stax etl status` could call it, and a
         // CLI process passes `None, None`). `get_last_job`'s lazy, DESTRUCTIVE
         // TTL expiry therefore fires HERE, on this read, exactly as it fired
         // inside the assembler before — same clock, same call, same side

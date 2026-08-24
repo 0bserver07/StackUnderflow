@@ -20,7 +20,7 @@
  * we issue a follow-up fetch scoped to that one path with
  * `include_content=true`.
  *
- * Spec: stackunderflow/services/playback_fs.py.
+ * Spec: python-legacy: services/playback_fs.py.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'

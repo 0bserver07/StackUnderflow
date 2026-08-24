@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/lock.py` — the single-watcher invariant.
+//! Port of `python-legacy: etl/lock.py` — the single-watcher invariant.
 //!
 //! Two `stax start` invocations against one store would run two watchers,
 //! racing on ingest and mart refresh. The fence is the reference's: an

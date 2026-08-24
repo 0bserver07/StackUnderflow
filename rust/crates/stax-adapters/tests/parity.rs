@@ -181,7 +181,7 @@ fn claude_legacy_history_pseudo_session_parses_identically() {
     // There is no checked-in pack for the legacy layout (it predates the
     // per-project format), so the harness writes one *once* and points both
     // implementations at the same bytes. The shapes are the ones
-    // `tests/stackunderflow/adapters/test_claude.py` uses, including the
+    // `tests/python-legacy: adapters/test_claude.py` uses, including the
     // malformed entries its defensive test asserts on.
     let home = TempDir::new("claude-legacy");
     home.mkdir("projects/-Users-me-legacy");
@@ -930,7 +930,7 @@ fn an_absent_source_root_yields_nothing_for_every_batch_2_provider() {
 
 /// Build the synthetic `state.vscdb` both implementations read.
 ///
-/// The shape mirrors `tests/stackunderflow/adapters/test_cursor.py`'s fixture
+/// The shape mirrors `tests/python-legacy: adapters/test_cursor.py`'s fixture
 /// and extends it with the rows that fixture does not have: v3 positional keys,
 /// the workspace-path evidence, a bubble `type` outside `{1, 2}`, an agent blob
 /// with an empty role, a non-JSON value, and a key neither prefix selects.

@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Analytics expansion types — mirror Python TypedDicts in
-// stackunderflow/stats/aggregator.py. See docs/specs/analytics-expansion.md §1.
+// python-legacy: stats/aggregator.py. See docs/specs/analytics-expansion.md §1.
 // All ISO-8601 timestamps are typed as `string`.
 // ---------------------------------------------------------------------------
 

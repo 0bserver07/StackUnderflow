@@ -1,4 +1,4 @@
-//! OpenAI Codex CLI — the port of `stackunderflow/adapters/codex.py`.
+//! OpenAI Codex CLI — the port of `python-legacy: adapters/codex.py`.
 //!
 //! Rollouts live at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`.
 //! Line 1 is a `session_meta` event carrying `id`, `cwd`, `originator` (must

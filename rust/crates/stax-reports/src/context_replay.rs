@@ -880,7 +880,7 @@ pub fn slice_context_timeline(full: &Value, at_seq: Option<i64>) -> Value {
 /// `reconstruct_context` — build, then slice.
 ///
 /// The composed entry point direct callers (the CLI, wave 8's
-/// `stackunderflow context-replay`) use. The route splits the two so it can
+/// `stax context-replay`) use. The route splits the two so it can
 /// cache the build and re-slice per scrub tick.
 #[must_use]
 pub fn reconstruct_context(conn: &Connection, session_id: &str, at_seq: Option<i64>) -> Value {

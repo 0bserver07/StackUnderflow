@@ -1,5 +1,5 @@
 //! The `Normalizer` contract and the event builder every provider shares —
-//! port of `stackunderflow/etl/normalize/base.py`.
+//! port of `python-legacy: etl/normalize/base.py`.
 //!
 //! Cost is computed **once**, here, so the marts read a single number that is
 //! never recomputed. The three seams the Python base class reaches through
@@ -11,7 +11,7 @@
 //!
 //! `compute_cost` consults the store-backed price book only when
 //! `model_manifest.use_price_book_store()` has wired one, and the ONLY caller
-//! that wires it is `server.py:154` at startup. `stackunderflow etl backfill`
+//! that wires it is `server.py:154` at startup. `stax etl backfill`
 //! never does, so on the normalize path `_price_book_rates` returns `None` for
 //! every row and the in-code manifest prices everything. That is the seam
 //! DIV-016 names, and [`NormalizeContext::unprimed`] is its Rust spelling: an
@@ -127,7 +127,7 @@ impl NormalizeContext {
         Self { engine, rate_card }
     }
 
-    /// The state `stackunderflow etl backfill` actually runs in: manifest only,
+    /// The state `stax etl backfill` actually runs in: manifest only,
     /// no alias map, no overlay, **no price book** (DIV-016).
     ///
     /// # Errors

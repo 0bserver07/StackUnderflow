@@ -396,7 +396,7 @@ function EtlPipelineSection() {
         setFeedback({
           kind: 'warn',
           message:
-            'Backfill API not available on this build. Run `stackunderflow etl backfill` from the CLI to refresh manually.',
+            'Backfill API not available on this build. Run `stax etl backfill` from the CLI to refresh manually.',
         })
         return
       }
@@ -494,7 +494,7 @@ function EtlPipelineSection() {
           The <span className="font-mono">/api/etl/status</span> route is not available on this build.
           Run the CLI to manage the ETL pipeline:
           <pre className="mt-1.5 px-2 py-1.5 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 font-mono text-[11px] text-gray-800 dark:text-gray-200">
-            stackunderflow etl backfill
+            stax etl backfill
           </pre>
         </div>
       )}

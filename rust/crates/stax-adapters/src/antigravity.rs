@@ -1,4 +1,4 @@
-//! Google Antigravity — the port of `stackunderflow/adapters/antigravity.py`.
+//! Google Antigravity — the port of `python-legacy: adapters/antigravity.py`.
 //!
 //! Antigravity encrypts its per-turn transcripts at rest (`conversations/*.pb`,
 //! `implicit/*.pb`, `brain/<uuid>/`) with a key held in the macOS Keychain, and

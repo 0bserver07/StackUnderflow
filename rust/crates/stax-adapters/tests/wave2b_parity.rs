@@ -10,7 +10,7 @@
 //!
 //! `tests/fixtures/beta_normalizers/<provider>/` holds the *content*; the
 //! *layout* each adapter expects is what
-//! `tests/stackunderflow/etl/normalize/test_beta_normalizers.py` builds at test
+//! `tests/python-legacy: etl/normalize/test_beta_normalizers.py` builds at test
 //! time, and this file builds the identical layout. The checked-in bytes are
 //! never copied into the repo tree, never modified, and both implementations
 //! are pointed at the same temporary directory — so a passing diff is a

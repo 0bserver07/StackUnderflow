@@ -143,7 +143,7 @@ fn pricing_parity_sweep_over_the_real_store_and_the_whole_manifest() {
     // python-legacy branch); the oracle only runs where a reference
     // implementation sits IN this repo, so an interpreter resolving the
     // package from a sibling checkout can never masquerade as it.
-    let reference_tree = paths.repo.join("stackunderflow/infra/costs.py");
+    let reference_tree = paths.repo.join("python-legacy: infra/costs.py");
     if !paths.python.exists()
         || !paths.store.exists()
         || !manifest_path.exists()

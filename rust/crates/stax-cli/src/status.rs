@@ -12,7 +12,7 @@
 //!
 //! Wave 5 batch C deliberately put the `reports/*.py` + `services/*.py` layer in
 //! one place, and its module doc said why in as many words: "`/api/compare` and
-//! `stackunderflow compare` share `services/compare.py` … Transliterating that
+//! `stax compare` share `services/compare.py` … Transliterating that
 //! logic into the route module would fork it: wave 8 ports the CLI verbs, finds
 //! no shared home, and writes a second copy that drifts." This is that wave, and
 //! this is the seam being used as designed. The alternative — a second
@@ -74,7 +74,7 @@ pub struct StatusArgs {
           value_parser = ["text", "json"])]
     pub format: String,
     /// Force a fresh ingest+backfill pass before running the command. Useful
-    /// when 'stackunderflow start' is not active.
+    /// when 'stax start' is not active.
     #[arg(long = "ingest", action = clap::ArgAction::SetTrue)]
     pub do_ingest: bool,
     /// Refresh the store automatically when its newest event is older than the

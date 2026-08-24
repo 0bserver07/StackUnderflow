@@ -18,51 +18,51 @@
 
 | Path | Responsibility |
 |------|----------------|
-| `stackunderflow/store/__init__.py` | Public re-exports |
-| `stackunderflow/store/db.py` | `connect()`, PRAGMA setup, per-thread connection cache |
-| `stackunderflow/store/schema.py` | Schema v1 SQL as a module constant + `apply_schema()` |
-| `stackunderflow/store/migrations/__init__.py` | Migration runner: read `PRAGMA user_version`, apply missing scripts in order |
+| `python-legacy: store/__init__.py` | Public re-exports |
+| `python-legacy: store/db.py` | `connect()`, PRAGMA setup, per-thread connection cache |
+| `python-legacy: store/schema.py` | Schema v1 SQL as a module constant + `apply_schema()` |
+| `python-legacy: store/migrations/__init__.py` | Migration runner: read `PRAGMA user_version`, apply missing scripts in order |
 | `stackunderflow/store/migrations/v001_initial.sql` | Full v1 schema (matches `schema.py`) |
-| `stackunderflow/store/queries.py` | Typed query helpers — `list_projects()`, `get_messages()`, etc. |
-| `stackunderflow/store/types.py` | `ProjectRow`, `SessionRow`, `MessageRow`, `DayTotals` frozen dataclasses |
-| `stackunderflow/adapters/__init__.py` | Registry: list of adapter instances + `register()` helper |
-| `stackunderflow/adapters/base.py` | `SourceAdapter` Protocol, `SessionRef`, `Record` dataclasses |
-| `stackunderflow/adapters/claude.py` | `ClaudeAdapter` — ports current `pipeline/reader.py` + `pipeline/history_reader.py` + classifier/enricher logic |
-| `stackunderflow/ingest/__init__.py` | `run_ingest()` entry point |
-| `stackunderflow/ingest/enumerate.py` | `iter_refs()` — walks registered adapters |
-| `stackunderflow/ingest/writer.py` | `ingest_file(ref, adapter, conn)` — transaction + `ingest_log` update |
-| `tests/stackunderflow/store/test_schema.py` | Schema + PRAGMA tests |
-| `tests/stackunderflow/store/test_queries.py` | Query helper tests against an in-memory DB |
-| `tests/stackunderflow/adapters/contract.py` | Reusable `AdapterContract` mixin any adapter test can inherit |
-| `tests/stackunderflow/adapters/test_base.py` | `SessionRef`/`Record` dataclass tests |
-| `tests/stackunderflow/adapters/test_claude.py` | Claude adapter against mock-data fixtures |
-| `tests/stackunderflow/ingest/test_enumerate.py` | Enumeration across fake adapters |
-| `tests/stackunderflow/ingest/test_writer.py` | Single-file transactional write |
-| `tests/stackunderflow/ingest/test_incremental.py` | Initial/append/unchanged/truncated scenarios |
+| `python-legacy: store/queries.py` | Typed query helpers — `list_projects()`, `get_messages()`, etc. |
+| `python-legacy: store/types.py` | `ProjectRow`, `SessionRow`, `MessageRow`, `DayTotals` frozen dataclasses |
+| `python-legacy: adapters/__init__.py` | Registry: list of adapter instances + `register()` helper |
+| `python-legacy: adapters/base.py` | `SourceAdapter` Protocol, `SessionRef`, `Record` dataclasses |
+| `python-legacy: adapters/claude.py` | `ClaudeAdapter` — ports current `pipeline/reader.py` + `pipeline/history_reader.py` + classifier/enricher logic |
+| `python-legacy: ingest/__init__.py` | `run_ingest()` entry point |
+| `python-legacy: ingest/enumerate.py` | `iter_refs()` — walks registered adapters |
+| `python-legacy: ingest/writer.py` | `ingest_file(ref, adapter, conn)` — transaction + `ingest_log` update |
+| `tests/python-legacy: store/test_schema.py` | Schema + PRAGMA tests |
+| `tests/python-legacy: store/test_queries.py` | Query helper tests against an in-memory DB |
+| `tests/python-legacy: adapters/contract.py` | Reusable `AdapterContract` mixin any adapter test can inherit |
+| `tests/python-legacy: adapters/test_base.py` | `SessionRef`/`Record` dataclass tests |
+| `tests/python-legacy: adapters/test_claude.py` | Claude adapter against mock-data fixtures |
+| `tests/python-legacy: ingest/test_enumerate.py` | Enumeration across fake adapters |
+| `tests/python-legacy: ingest/test_writer.py` | Single-file transactional write |
+| `tests/python-legacy: ingest/test_incremental.py` | Initial/append/unchanged/truncated scenarios |
 
 **Modified files:**
 
 | Path | Change |
 |------|--------|
-| `stackunderflow/server.py` | Add store init + ingest trigger in lifespan; remove `TieredCache` warm-up at end |
-| `stackunderflow/deps.py` | Add `store_path` + `get_conn()` helper; remove `cache` at end |
-| `stackunderflow/cli.py` | Add `stackunderflow reindex` command |
-| `stackunderflow/routes/projects.py` | Query store instead of iterating `project_metadata()` |
-| `stackunderflow/routes/data.py` | Replace `run_pipeline` calls with store queries |
-| `stackunderflow/routes/sessions.py` | Query store for JSONL file list + content |
-| `stackunderflow/routes/search.py` | Pull project list from store; FTS stays in `search_service` |
-| `stackunderflow/routes/qa.py` | Join to `store.sessions` / `store.messages` for session metadata |
-| `stackunderflow/routes/tags.py` | Same |
-| `stackunderflow/routes/bookmarks.py` | Same |
-| `stackunderflow/reports/aggregate.py` | Replace `pipeline.process` loop with single SQL `GROUP BY` |
-| `stackunderflow/reports/optimize.py` | Update session join to new tables |
+| `python-legacy: server.py` | Add store init + ingest trigger in lifespan; remove `TieredCache` warm-up at end |
+| `python-legacy: deps.py` | Add `store_path` + `get_conn()` helper; remove `cache` at end |
+| `python-legacy: cli.py` | Add `stackunderflow reindex` command |
+| `python-legacy: routes/projects.py` | Query store instead of iterating `project_metadata()` |
+| `python-legacy: routes/data.py` | Replace `run_pipeline` calls with store queries |
+| `python-legacy: routes/sessions.py` | Query store for JSONL file list + content |
+| `python-legacy: routes/search.py` | Pull project list from store; FTS stays in `search_service` |
+| `python-legacy: routes/qa.py` | Join to `store.sessions` / `store.messages` for session metadata |
+| `python-legacy: routes/tags.py` | Same |
+| `python-legacy: routes/bookmarks.py` | Same |
+| `python-legacy: reports/aggregate.py` | Replace `pipeline.process` loop with single SQL `GROUP BY` |
+| `python-legacy: reports/optimize.py` | Update session join to new tables |
 
 **Deleted at end (Phase 7):**
 
-- `stackunderflow/infra/cache.py`
-- `stackunderflow/infra/preloader.py`
+- `python-legacy: infra/cache.py`
+- `python-legacy: infra/preloader.py`
 - `stackunderflow/pipeline/*.py` (all 8 files)
-- `stackunderflow/pipeline/history_reader.py` (absorbed into `adapters/claude.py`)
+- `python-legacy: pipeline/history_reader.py` (absorbed into `adapters/claude.py`)
 - `tests/stackunderflow/core/` (pipeline tests superseded by adapter tests)
 - `~/.stackunderflow/cache/` at runtime after a successful store build
 
@@ -75,14 +75,14 @@ Stand up the SQLite schema, migrations, connection helper, and typed query stubs
 ### Task 1.1: Schema v1 SQL file
 
 **Files:**
-- Create: `stackunderflow/store/__init__.py`
-- Create: `stackunderflow/store/migrations/__init__.py` (empty)
+- Create: `python-legacy: store/__init__.py`
+- Create: `python-legacy: store/migrations/__init__.py` (empty)
 - Create: `stackunderflow/store/migrations/v001_initial.sql`
 
 - [ ] **Step 1: Create empty package files**
 
 ```python
-# stackunderflow/store/__init__.py
+# python-legacy: store/__init__.py
 """SQLite-backed session store.
 
 Exposes a thin connection helper and typed query helpers. Route handlers
@@ -92,7 +92,7 @@ the raw `sqlite3` API.
 ```
 
 ```python
-# stackunderflow/store/migrations/__init__.py
+# python-legacy: store/migrations/__init__.py
 ```
 
 - [ ] **Step 2: Write the schema migration**
@@ -167,21 +167,21 @@ COMMIT;
 - [ ] **Step 3: Commit**
 
 ```bash
-git add stackunderflow/store/__init__.py stackunderflow/store/migrations/
+git add python-legacy: store/__init__.py stackunderflow/store/migrations/
 git commit -m "store: add v001 initial schema migration"
 ```
 
 ### Task 1.2: Connection helper + PRAGMAs
 
 **Files:**
-- Create: `stackunderflow/store/db.py`
-- Test: `tests/stackunderflow/store/__init__.py` (empty)
-- Test: `tests/stackunderflow/store/test_db.py`
+- Create: `python-legacy: store/db.py`
+- Test: `tests/python-legacy: store/__init__.py` (empty)
+- Test: `tests/python-legacy: store/test_db.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/store/test_db.py
+# tests/python-legacy: store/test_db.py
 import sqlite3
 from pathlib import Path
 
@@ -232,7 +232,7 @@ def test_connect_row_factory_returns_dicts(tmp_path: Path) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_db.py -v
+python -m pytest tests/python-legacy: store/test_db.py -v
 ```
 
 Expected: `ModuleNotFoundError: stackunderflow.store.db`.
@@ -240,7 +240,7 @@ Expected: `ModuleNotFoundError: stackunderflow.store.db`.
 - [ ] **Step 3: Write the connection helper**
 
 ```python
-# stackunderflow/store/db.py
+# python-legacy: store/db.py
 """SQLite connection helper.
 
 One function, one job: return a sqlite3.Connection with the project's
@@ -267,7 +267,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_db.py -v
+python -m pytest tests/python-legacy: store/test_db.py -v
 ```
 
 Expected: 4 passed.
@@ -275,20 +275,20 @@ Expected: 4 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/store/db.py tests/stackunderflow/store/
+git add python-legacy: store/db.py tests/stackunderflow/store/
 git commit -m "store: add connect() with WAL + FK PRAGMAs"
 ```
 
 ### Task 1.3: Migration runner
 
 **Files:**
-- Create: `stackunderflow/store/schema.py`
-- Test: `tests/stackunderflow/store/test_schema.py`
+- Create: `python-legacy: store/schema.py`
+- Test: `tests/python-legacy: store/test_schema.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/store/test_schema.py
+# tests/python-legacy: store/test_schema.py
 from pathlib import Path
 
 from stackunderflow.store import db, schema
@@ -335,7 +335,7 @@ def test_current_version_constant() -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_schema.py -v
+python -m pytest tests/python-legacy: store/test_schema.py -v
 ```
 
 Expected: `ModuleNotFoundError: stackunderflow.store.schema`.
@@ -343,7 +343,7 @@ Expected: `ModuleNotFoundError: stackunderflow.store.schema`.
 - [ ] **Step 3: Write the migration runner**
 
 ```python
-# stackunderflow/store/schema.py
+# python-legacy: store/schema.py
 """Schema migrations.
 
 Migrations are `.sql` files under `migrations/` named `vNNN_*.sql`. Each
@@ -386,7 +386,7 @@ def _discover() -> list[tuple[int, Path]]:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_schema.py -v
+python -m pytest tests/python-legacy: store/test_schema.py -v
 ```
 
 Expected: 4 passed.
@@ -394,20 +394,20 @@ Expected: 4 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/store/schema.py tests/stackunderflow/store/test_schema.py
+git add python-legacy: store/schema.py tests/python-legacy: store/test_schema.py
 git commit -m "store: add schema.apply() migration runner"
 ```
 
 ### Task 1.4: Typed row dataclasses
 
 **Files:**
-- Create: `stackunderflow/store/types.py`
-- Test: `tests/stackunderflow/store/test_types.py`
+- Create: `python-legacy: store/types.py`
+- Test: `tests/python-legacy: store/test_types.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/store/test_types.py
+# tests/python-legacy: store/test_types.py
 from stackunderflow.store.types import DayTotals, MessageRow, ProjectRow, SessionRow
 
 
@@ -453,7 +453,7 @@ def test_day_totals_fields() -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_types.py -v
+python -m pytest tests/python-legacy: store/test_types.py -v
 ```
 
 Expected: `ModuleNotFoundError`.
@@ -461,7 +461,7 @@ Expected: `ModuleNotFoundError`.
 - [ ] **Step 3: Write the dataclasses**
 
 ```python
-# stackunderflow/store/types.py
+# python-legacy: store/types.py
 """Typed row dataclasses returned by store.queries helpers.
 
 Route handlers and CLI reports consume these; they never see sqlite3.Row.
@@ -528,7 +528,7 @@ class DayTotals:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_types.py -v
+python -m pytest tests/python-legacy: store/test_types.py -v
 ```
 
 Expected: 4 passed.
@@ -536,20 +536,20 @@ Expected: 4 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/store/types.py tests/stackunderflow/store/test_types.py
+git add python-legacy: store/types.py tests/python-legacy: store/test_types.py
 git commit -m "store: add ProjectRow/SessionRow/MessageRow/DayTotals dataclasses"
 ```
 
 ### Task 1.5: Query helpers
 
 **Files:**
-- Create: `stackunderflow/store/queries.py`
-- Test: `tests/stackunderflow/store/test_queries.py`
+- Create: `python-legacy: store/queries.py`
+- Test: `tests/python-legacy: store/test_queries.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/store/test_queries.py
+# tests/python-legacy: store/test_queries.py
 import sqlite3
 from pathlib import Path
 
@@ -629,7 +629,7 @@ def test_get_messages_paginates(conn) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_queries.py -v
+python -m pytest tests/python-legacy: store/test_queries.py -v
 ```
 
 Expected: `ModuleNotFoundError`.
@@ -637,7 +637,7 @@ Expected: `ModuleNotFoundError`.
 - [ ] **Step 3: Write the helpers**
 
 ```python
-# stackunderflow/store/queries.py
+# python-legacy: store/queries.py
 """Typed query helpers.
 
 All SQL the app runs against the store lives here. Callers import
@@ -702,7 +702,7 @@ def get_messages(
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/store/test_queries.py -v
+python -m pytest tests/python-legacy: store/test_queries.py -v
 ```
 
 Expected: 6 passed.
@@ -710,7 +710,7 @@ Expected: 6 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/store/queries.py tests/stackunderflow/store/test_queries.py
+git add python-legacy: store/queries.py tests/python-legacy: store/test_queries.py
 git commit -m "store: add list_projects/get_project/list_sessions/get_messages helpers"
 ```
 
@@ -723,15 +723,15 @@ Define the pluggable source-adapter Protocol, the `SessionRef`/`Record` dataclas
 ### Task 2.1: Adapter dataclasses + Protocol
 
 **Files:**
-- Create: `stackunderflow/adapters/__init__.py`
-- Create: `stackunderflow/adapters/base.py`
-- Test: `tests/stackunderflow/adapters/__init__.py` (empty)
-- Test: `tests/stackunderflow/adapters/test_base.py`
+- Create: `python-legacy: adapters/__init__.py`
+- Create: `python-legacy: adapters/base.py`
+- Test: `tests/python-legacy: adapters/__init__.py` (empty)
+- Test: `tests/python-legacy: adapters/test_base.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/adapters/test_base.py
+# tests/python-legacy: adapters/test_base.py
 from pathlib import Path
 
 from stackunderflow.adapters.base import Record, SessionRef
@@ -793,7 +793,7 @@ def test_record_is_frozen() -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_base.py -v
+python -m pytest tests/python-legacy: adapters/test_base.py -v
 ```
 
 Expected: `ModuleNotFoundError`.
@@ -801,7 +801,7 @@ Expected: `ModuleNotFoundError`.
 - [ ] **Step 3: Write base module**
 
 ```python
-# stackunderflow/adapters/__init__.py
+# python-legacy: adapters/__init__.py
 """Source adapters for session data.
 
 Each adapter turns a specific tool's on-disk session format (Claude Code's
@@ -828,7 +828,7 @@ def registered() -> list[SourceAdapter]:
 ```
 
 ```python
-# stackunderflow/adapters/base.py
+# python-legacy: adapters/base.py
 """Adapter Protocol + shared dataclasses."""
 
 from __future__ import annotations
@@ -888,7 +888,7 @@ class SourceAdapter(Protocol):
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_base.py -v
+python -m pytest tests/python-legacy: adapters/test_base.py -v
 ```
 
 Expected: 3 passed.
@@ -903,12 +903,12 @@ git commit -m "adapters: add SourceAdapter Protocol + SessionRef/Record dataclas
 ### Task 2.2: Adapter registry tests
 
 **Files:**
-- Test: `tests/stackunderflow/adapters/test_registry.py`
+- Test: `tests/python-legacy: adapters/test_registry.py`
 
 - [ ] **Step 1: Write the registry tests**
 
 ```python
-# tests/stackunderflow/adapters/test_registry.py
+# tests/python-legacy: adapters/test_registry.py
 from pathlib import Path
 
 from stackunderflow import adapters
@@ -942,7 +942,7 @@ def test_registered_returns_copy():
 - [ ] **Step 2: Run tests — they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_registry.py -v
+python -m pytest tests/python-legacy: adapters/test_registry.py -v
 ```
 
 Expected: 2 passed (the registry was shipped in Task 2.1).
@@ -950,19 +950,19 @@ Expected: 2 passed (the registry was shipped in Task 2.1).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/stackunderflow/adapters/test_registry.py
+git add tests/python-legacy: adapters/test_registry.py
 git commit -m "adapters: test register() and registered()"
 ```
 
 ### Task 2.3: Contract mixin
 
 **Files:**
-- Create: `tests/stackunderflow/adapters/contract.py`
+- Create: `tests/python-legacy: adapters/contract.py`
 
 - [ ] **Step 1: Write the contract mixin**
 
 ```python
-# tests/stackunderflow/adapters/contract.py
+# tests/python-legacy: adapters/contract.py
 """Reusable contract any adapter implementation must satisfy.
 
 Subclass `AdapterContract` in a concrete test module, set `adapter` to
@@ -1023,7 +1023,7 @@ class AdapterContract:
 - [ ] **Step 2: Commit**
 
 ```bash
-git add tests/stackunderflow/adapters/contract.py
+git add tests/python-legacy: adapters/contract.py
 git commit -m "adapters: add AdapterContract mixin for reusable adapter tests"
 ```
 
@@ -1036,13 +1036,13 @@ Port the existing Claude Code JSONL + history.jsonl parsing logic behind the `So
 ### Task 3.1: Adapter skeleton with enumerate()
 
 **Files:**
-- Create: `stackunderflow/adapters/claude.py`
-- Test: `tests/stackunderflow/adapters/test_claude.py`
+- Create: `python-legacy: adapters/claude.py`
+- Test: `tests/python-legacy: adapters/test_claude.py`
 
 - [ ] **Step 1: Write failing enumerate tests**
 
 ```python
-# tests/stackunderflow/adapters/test_claude.py
+# tests/python-legacy: adapters/test_claude.py
 from pathlib import Path
 
 import pytest
@@ -1090,7 +1090,7 @@ def test_enumerate_legacy_project_from_history(fake_home: Path, monkeypatch) -> 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py -v
+python -m pytest tests/python-legacy: adapters/test_claude.py -v
 ```
 
 Expected: `ImportError` / enumerate returns nothing.
@@ -1098,7 +1098,7 @@ Expected: `ImportError` / enumerate returns nothing.
 - [ ] **Step 3: Write the adapter skeleton with enumerate()**
 
 ```python
-# stackunderflow/adapters/claude.py
+# python-legacy: adapters/claude.py
 """Claude Code session adapter.
 
 Handles two on-disk formats:
@@ -1177,7 +1177,7 @@ class ClaudeAdapter:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py::test_enumerate_empty_claude_dir tests/stackunderflow/adapters/test_claude.py::test_enumerate_finds_jsonl_files tests/stackunderflow/adapters/test_claude.py::test_enumerate_legacy_project_from_history -v
+python -m pytest tests/python-legacy: adapters/test_claude.py::test_enumerate_empty_claude_dir tests/python-legacy: adapters/test_claude.py::test_enumerate_finds_jsonl_files tests/python-legacy: adapters/test_claude.py::test_enumerate_legacy_project_from_history -v
 ```
 
 Expected: 3 passed.
@@ -1185,19 +1185,19 @@ Expected: 3 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/adapters/claude.py tests/stackunderflow/adapters/test_claude.py
+git add python-legacy: adapters/claude.py tests/python-legacy: adapters/test_claude.py
 git commit -m "adapters/claude: implement enumerate() for JSONL + legacy projects"
 ```
 
 ### Task 3.2: Read() for modern JSONL
 
 **Files:**
-- Modify: `stackunderflow/adapters/claude.py`
-- Modify: `tests/stackunderflow/adapters/test_claude.py`
+- Modify: `python-legacy: adapters/claude.py`
+- Modify: `tests/python-legacy: adapters/test_claude.py`
 
 - [ ] **Step 1: Add failing read() tests**
 
-Append to `tests/stackunderflow/adapters/test_claude.py`:
+Append to `tests/python-legacy: adapters/test_claude.py`:
 
 ```python
 def test_read_modern_jsonl_yields_records(fake_home: Path) -> None:
@@ -1258,7 +1258,7 @@ def test_read_skips_malformed_lines(fake_home: Path) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py::test_read_modern_jsonl_yields_records -v
+python -m pytest tests/python-legacy: adapters/test_claude.py::test_read_modern_jsonl_yields_records -v
 ```
 
 Expected: NotImplementedError.
@@ -1268,7 +1268,7 @@ Expected: NotImplementedError.
 Replace the NotImplementedError read() and add helpers:
 
 ```python
-# in stackunderflow/adapters/claude.py — replace read() and add helpers below
+# in python-legacy: adapters/claude.py — replace read() and add helpers below
     def read(self, ref: SessionRef, *, since_offset: int = 0) -> Iterable[Record]:
         if ref.session_id.startswith("legacy-"):
             yield from self._read_history(ref)
@@ -1380,7 +1380,7 @@ def _tools_from(msg: dict) -> tuple[str, ...]:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py -v
+python -m pytest tests/python-legacy: adapters/test_claude.py -v
 ```
 
 Expected: all tests (except the legacy-history read test) pass.
@@ -1388,15 +1388,15 @@ Expected: all tests (except the legacy-history read test) pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/adapters/claude.py tests/stackunderflow/adapters/test_claude.py
+git add python-legacy: adapters/claude.py tests/python-legacy: adapters/test_claude.py
 git commit -m "adapters/claude: implement read() for modern JSONL with since_offset"
 ```
 
 ### Task 3.3: Read() for legacy history.jsonl
 
 **Files:**
-- Modify: `stackunderflow/adapters/claude.py`
-- Modify: `tests/stackunderflow/adapters/test_claude.py`
+- Modify: `python-legacy: adapters/claude.py`
+- Modify: `tests/python-legacy: adapters/test_claude.py`
 
 - [ ] **Step 1: Add failing test**
 
@@ -1426,7 +1426,7 @@ def test_read_legacy_history_yields_records(fake_home: Path) -> None:
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py::test_read_legacy_history_yields_records -v
+python -m pytest tests/python-legacy: adapters/test_claude.py::test_read_legacy_history_yields_records -v
 ```
 
 Expected: NotImplementedError.
@@ -1504,7 +1504,7 @@ def _epoch_ms_to_iso(ts_ms: int) -> str:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/adapters/test_claude.py -v
+python -m pytest tests/python-legacy: adapters/test_claude.py -v
 ```
 
 Expected: all tests pass.
@@ -1512,15 +1512,15 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/adapters/claude.py tests/stackunderflow/adapters/test_claude.py
+git add python-legacy: adapters/claude.py tests/python-legacy: adapters/test_claude.py
 git commit -m "adapters/claude: implement legacy history.jsonl read path"
 ```
 
 ### Task 3.4: Contract test instance + registration
 
 **Files:**
-- Modify: `tests/stackunderflow/adapters/test_claude.py`
-- Modify: `stackunderflow/adapters/__init__.py`
+- Modify: `tests/python-legacy: adapters/test_claude.py`
+- Modify: `python-legacy: adapters/__init__.py`
 
 - [ ] **Step 1: Add contract test class**
 
@@ -1557,7 +1557,7 @@ import os  # add to existing imports at top if not present
 
 - [ ] **Step 2: Register the adapter**
 
-Modify `stackunderflow/adapters/__init__.py` — append:
+Modify `python-legacy: adapters/__init__.py` — append:
 
 ```python
 from .claude import ClaudeAdapter as _ClaudeAdapter
@@ -1576,7 +1576,7 @@ Expected: all pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add stackunderflow/adapters/__init__.py tests/stackunderflow/adapters/test_claude.py
+git add python-legacy: adapters/__init__.py tests/python-legacy: adapters/test_claude.py
 git commit -m "adapters: register ClaudeAdapter and run it through AdapterContract"
 ```
 
@@ -1589,15 +1589,15 @@ Wire adapters → store. Track per-file mtime/size/offset in `ingest_log`. Make 
 ### Task 4.1: Enumeration
 
 **Files:**
-- Create: `stackunderflow/ingest/__init__.py`
-- Create: `stackunderflow/ingest/enumerate.py`
-- Test: `tests/stackunderflow/ingest/__init__.py` (empty)
-- Test: `tests/stackunderflow/ingest/test_enumerate.py`
+- Create: `python-legacy: ingest/__init__.py`
+- Create: `python-legacy: ingest/enumerate.py`
+- Test: `tests/python-legacy: ingest/__init__.py` (empty)
+- Test: `tests/python-legacy: ingest/test_enumerate.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/ingest/test_enumerate.py
+# tests/python-legacy: ingest/test_enumerate.py
 from pathlib import Path
 
 from stackunderflow.adapters.base import Record, SessionRef
@@ -1637,7 +1637,7 @@ def test_iter_refs_empty_list():
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/ingest/test_enumerate.py -v
+python -m pytest tests/python-legacy: ingest/test_enumerate.py -v
 ```
 
 Expected: `ModuleNotFoundError`.
@@ -1645,7 +1645,7 @@ Expected: `ModuleNotFoundError`.
 - [ ] **Step 3: Implement**
 
 ```python
-# stackunderflow/ingest/__init__.py
+# python-legacy: ingest/__init__.py
 """Ingest engine: drives adapters into the store."""
 
 from .enumerate import iter_refs
@@ -1654,7 +1654,7 @@ __all__ = ["iter_refs"]
 ```
 
 ```python
-# stackunderflow/ingest/enumerate.py
+# python-legacy: ingest/enumerate.py
 """Fans every registered adapter's SessionRefs into one iterable."""
 
 from __future__ import annotations
@@ -1672,7 +1672,7 @@ def iter_refs(adapters: list[SourceAdapter]) -> Iterable[SessionRef]:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/ingest/test_enumerate.py -v
+python -m pytest tests/python-legacy: ingest/test_enumerate.py -v
 ```
 
 Expected: 2 passed.
@@ -1687,13 +1687,13 @@ git commit -m "ingest: add iter_refs() to fan adapters into one stream"
 ### Task 4.2: Writer — single file transaction
 
 **Files:**
-- Create: `stackunderflow/ingest/writer.py`
-- Test: `tests/stackunderflow/ingest/test_writer.py`
+- Create: `python-legacy: ingest/writer.py`
+- Test: `tests/python-legacy: ingest/test_writer.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/ingest/test_writer.py
+# tests/python-legacy: ingest/test_writer.py
 import sqlite3
 from pathlib import Path
 
@@ -1801,7 +1801,7 @@ def test_ingest_file_rollback_on_failure(conn, tmp_path: Path) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/ingest/test_writer.py -v
+python -m pytest tests/python-legacy: ingest/test_writer.py -v
 ```
 
 Expected: `ModuleNotFoundError`.
@@ -1809,7 +1809,7 @@ Expected: `ModuleNotFoundError`.
 - [ ] **Step 3: Implement**
 
 ```python
-# stackunderflow/ingest/writer.py
+# python-legacy: ingest/writer.py
 """Transactional writer: one file → one transaction → one ingest_log row."""
 
 from __future__ import annotations
@@ -1950,7 +1950,7 @@ def _insert_message(conn: sqlite3.Connection, session_fk: int, rec: Record) -> i
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-python -m pytest tests/stackunderflow/ingest/test_writer.py -v
+python -m pytest tests/python-legacy: ingest/test_writer.py -v
 ```
 
 Expected: 5 passed.
@@ -1958,20 +1958,20 @@ Expected: 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/ingest/writer.py tests/stackunderflow/ingest/test_writer.py
+git add python-legacy: ingest/writer.py tests/python-legacy: ingest/test_writer.py
 git commit -m "ingest: add transactional ingest_file() with INSERT OR IGNORE"
 ```
 
 ### Task 4.3: Incremental driver
 
 **Files:**
-- Modify: `stackunderflow/ingest/__init__.py`
-- Test: `tests/stackunderflow/ingest/test_incremental.py`
+- Modify: `python-legacy: ingest/__init__.py`
+- Test: `tests/python-legacy: ingest/test_incremental.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/stackunderflow/ingest/test_incremental.py
+# tests/python-legacy: ingest/test_incremental.py
 import sqlite3
 from pathlib import Path
 
@@ -2086,17 +2086,17 @@ def test_truncated_file_full_reparse(conn, tmp_path: Path) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-python -m pytest tests/stackunderflow/ingest/test_incremental.py -v
+python -m pytest tests/python-legacy: ingest/test_incremental.py -v
 ```
 
 Expected: `ImportError: cannot import name 'run_ingest'`.
 
 - [ ] **Step 3: Implement run_ingest()**
 
-Modify `stackunderflow/ingest/__init__.py`:
+Modify `python-legacy: ingest/__init__.py`:
 
 ```python
-# stackunderflow/ingest/__init__.py
+# python-legacy: ingest/__init__.py
 """Ingest engine: drives adapters into the store."""
 
 from __future__ import annotations
@@ -2163,7 +2163,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/ingest/__init__.py tests/stackunderflow/ingest/test_incremental.py
+git add python-legacy: ingest/__init__.py tests/python-legacy: ingest/test_incremental.py
 git commit -m "ingest: add run_ingest() with unchanged-skip / tail / full-reparse logic"
 ```
 
@@ -2176,13 +2176,13 @@ Make `run_ingest` actually run when the server starts. Add a CLI `reindex` comma
 ### Task 5.1: Store connection in deps
 
 **Files:**
-- Modify: `stackunderflow/deps.py`
-- Modify: `stackunderflow/server.py`
-- Test: `tests/stackunderflow/test_server.py` (assertion only)
+- Modify: `python-legacy: deps.py`
+- Modify: `python-legacy: server.py`
+- Test: `tests/python-legacy: test_server.py` (assertion only)
 
 - [ ] **Step 1: Add failing assertion**
 
-In `tests/stackunderflow/test_server.py`, add to `TestServerEndpointStructure`:
+In `tests/python-legacy: test_server.py`, add to `TestServerEndpointStructure`:
 
 ```python
     def test_shared_deps_has_store_path(self):
@@ -2193,14 +2193,14 @@ In `tests/stackunderflow/test_server.py`, add to `TestServerEndpointStructure`:
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-python -m pytest tests/stackunderflow/test_server.py::TestServerEndpointStructure::test_shared_deps_has_store_path -v
+python -m pytest tests/python-legacy: test_server.py::TestServerEndpointStructure::test_shared_deps_has_store_path -v
 ```
 
 Expected: AssertionError.
 
 - [ ] **Step 3: Add store wiring**
 
-In `stackunderflow/deps.py` after `BASE_DIR`:
+In `python-legacy: deps.py` after `BASE_DIR`:
 
 ```python
 # Path to the unified session store (created on first use).
@@ -2209,7 +2209,7 @@ store_path = Path.home() / ".stackunderflow" / "store.db"
 
 (Ensure `from pathlib import Path` is imported.)
 
-In `stackunderflow/server.py`, inside the lifespan context, after the existing service init loop and before `warm_cache_background`:
+In `python-legacy: server.py`, inside the lifespan context, after the existing service init loop and before `warm_cache_background`:
 
 ```python
     # Initialise the session store and run one ingest pass.
@@ -2230,7 +2230,7 @@ In `stackunderflow/server.py`, inside the lifespan context, after the existing s
 - [ ] **Step 4: Run tests**
 
 ```bash
-python -m pytest tests/stackunderflow/test_server.py -v
+python -m pytest tests/python-legacy: test_server.py -v
 ```
 
 Expected: all pass.
@@ -2238,19 +2238,19 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/deps.py stackunderflow/server.py tests/stackunderflow/test_server.py
+git add python-legacy: deps.py python-legacy: server.py tests/python-legacy: test_server.py
 git commit -m "server: wire session store and ingest pass into startup lifespan"
 ```
 
 ### Task 5.2: `stackunderflow reindex` command
 
 **Files:**
-- Modify: `stackunderflow/cli.py`
-- Test: `tests/stackunderflow/test_cli.py`
+- Modify: `python-legacy: cli.py`
+- Test: `tests/python-legacy: test_cli.py`
 
 - [ ] **Step 1: Write failing test**
 
-Add to `tests/stackunderflow/test_cli.py` inside the existing CLI test class:
+Add to `tests/python-legacy: test_cli.py` inside the existing CLI test class:
 
 ```python
     def test_reindex_command(self, tmp_path, monkeypatch):
@@ -2270,14 +2270,14 @@ Add to `tests/stackunderflow/test_cli.py` inside the existing CLI test class:
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-python -m pytest tests/stackunderflow/test_cli.py::TestCLICommands::test_reindex_command -v
+python -m pytest tests/python-legacy: test_cli.py::TestCLICommands::test_reindex_command -v
 ```
 
 Expected: `UsageError: No such command 'reindex'`.
 
 - [ ] **Step 3: Add the command**
 
-In `stackunderflow/cli.py`, after existing commands, add:
+In `python-legacy: cli.py`, after existing commands, add:
 
 ```python
 @cli.command()
@@ -2301,7 +2301,7 @@ def reindex():
 - [ ] **Step 4: Run tests**
 
 ```bash
-python -m pytest tests/stackunderflow/test_cli.py -v
+python -m pytest tests/python-legacy: test_cli.py -v
 ```
 
 Expected: all pass.
@@ -2309,7 +2309,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/cli.py tests/stackunderflow/test_cli.py
+git add python-legacy: cli.py tests/python-legacy: test_cli.py
 git commit -m "cli: add reindex command"
 ```
 
@@ -2329,18 +2329,18 @@ One file per commit. Every commit keeps the full suite green and the API payload
 ### Task 6.1: Migrate `routes/projects.py`
 
 **Files:**
-- Modify: `stackunderflow/store/queries.py` (add helpers as needed)
-- Modify: `stackunderflow/routes/projects.py`
+- Modify: `python-legacy: store/queries.py` (add helpers as needed)
+- Modify: `python-legacy: routes/projects.py`
 
 - [ ] **Step 1: Identify call sites**
 
 ```bash
-grep -n "project_metadata\|deps.cache\|run_pipeline" stackunderflow/routes/projects.py
+grep -n "project_metadata\|deps.cache\|run_pipeline" python-legacy: routes/projects.py
 ```
 
 - [ ] **Step 2: Add any missing query helpers**
 
-If `list_projects()` isn't sufficient, add helpers such as `list_projects_with_stats()` in `store/queries.py`. For each new helper, write a test first in `tests/stackunderflow/store/test_queries.py` (format matching Task 1.5), run it red, implement, run green, commit as `store: add <helper> helper`.
+If `list_projects()` isn't sufficient, add helpers such as `list_projects_with_stats()` in `store/queries.py`. For each new helper, write a test first in `tests/python-legacy: store/test_queries.py` (format matching Task 1.5), run it red, implement, run green, commit as `store: add <helper> helper`.
 
 - [ ] **Step 3: Rewrite the route handlers**
 
@@ -2349,7 +2349,7 @@ Replace each `project_metadata()` / `run_pipeline()` call with `queries.list_pro
 - [ ] **Step 4: Run the project route tests**
 
 ```bash
-python -m pytest tests/stackunderflow/test_server.py -v -k project
+python -m pytest tests/python-legacy: test_server.py -v -k project
 ```
 
 Expected: all pass.
@@ -2357,13 +2357,13 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/routes/projects.py stackunderflow/store/queries.py tests/
+git add python-legacy: routes/projects.py python-legacy: store/queries.py tests/
 git commit -m "routes/projects: query session store"
 ```
 
 ### Task 6.2: Migrate `routes/data.py`
 
-Follow the same five steps as 6.1, for `stackunderflow/routes/data.py`. Call sites are the `/api/dashboard-data`, `/api/messages`, `/api/refresh`, `/api/stats` handlers. Likely new helpers:
+Follow the same five steps as 6.1, for `python-legacy: routes/data.py`. Call sites are the `/api/dashboard-data`, `/api/messages`, `/api/refresh`, `/api/stats` handlers. Likely new helpers:
 
 - `queries.get_dashboard_stats(conn, *, project_id, tz_offset)` — returns daily/hourly rollups
 - `queries.get_messages_for_project(conn, *, project_id, limit)` — list of messages across sessions
@@ -2402,19 +2402,19 @@ Same pattern. Commit: `routes/bookmarks: join to session store for session metad
 ### Task 6.8: Migrate `reports/aggregate.py`
 
 **Files:**
-- Modify: `stackunderflow/reports/aggregate.py`
-- Modify: `tests/stackunderflow/reports/test_aggregate.py` (adapt mocks to query fakes)
+- Modify: `python-legacy: reports/aggregate.py`
+- Modify: `tests/python-legacy: reports/test_aggregate.py` (adapt mocks to query fakes)
 
 - [ ] **Step 1: Identify call sites**
 
 ```bash
-grep -n "pipeline\|process\|_run_pipeline" stackunderflow/reports/aggregate.py
+grep -n "pipeline\|process\|_run_pipeline" python-legacy: reports/aggregate.py
 ```
 
 - [ ] **Step 2: Add `queries.cross_project_daily_totals()` helper**
 
 ```python
-# in stackunderflow/store/queries.py — add after existing helpers
+# in python-legacy: store/queries.py — add after existing helpers
 def cross_project_daily_totals(
     conn: sqlite3.Connection,
     *,
@@ -2466,20 +2466,20 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stackunderflow/store/queries.py stackunderflow/reports/aggregate.py tests/stackunderflow/
+git add python-legacy: store/queries.py python-legacy: reports/aggregate.py tests/stackunderflow/
 git commit -m "reports/aggregate: replace per-project pipeline loop with single GROUP BY"
 ```
 
 ### Task 6.9: Migrate `reports/optimize.py`
 
 **Files:**
-- Modify: `stackunderflow/reports/optimize.py`
-- Modify: `tests/stackunderflow/reports/test_optimize.py`
+- Modify: `python-legacy: reports/optimize.py`
+- Modify: `tests/python-legacy: reports/test_optimize.py`
 
 - [ ] **Step 1: Identify call sites**
 
 ```bash
-grep -n "pipeline\|process\|_run_pipeline\|qa_service\|deps.cache" stackunderflow/reports/optimize.py
+grep -n "pipeline\|process\|_run_pipeline\|qa_service\|deps.cache" python-legacy: reports/optimize.py
 ```
 
 - [ ] **Step 2: Add `queries.looped_qa_with_session_context()` helper if needed**
@@ -2507,7 +2507,7 @@ Existing tests stub the pipeline output. Replace those stubs with seeded-SQLite 
 - [ ] **Step 5: Run**
 
 ```bash
-python -m pytest tests/stackunderflow/reports/test_optimize.py -v
+python -m pytest tests/python-legacy: reports/test_optimize.py -v
 ```
 
 Expected: all pass.
@@ -2515,7 +2515,7 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stackunderflow/reports/optimize.py stackunderflow/store/queries.py tests/stackunderflow/
+git add python-legacy: reports/optimize.py python-legacy: store/queries.py tests/stackunderflow/
 git commit -m "reports/optimize: join to session store for project/session metadata"
 ```
 
@@ -2529,11 +2529,11 @@ The old pipeline + cache is dead code. Delete it. Add the first-run detection + 
 
 **Files:**
 - Delete: `stackunderflow/pipeline/` (entire directory)
-- Delete: `stackunderflow/infra/cache.py`
-- Delete: `stackunderflow/infra/preloader.py`
+- Delete: `python-legacy: infra/cache.py`
+- Delete: `python-legacy: infra/preloader.py`
 - Delete: `tests/stackunderflow/core/` (pipeline tests superseded by adapter tests)
-- Modify: `stackunderflow/deps.py` (remove `cache` singleton)
-- Modify: `stackunderflow/server.py` (remove `TieredCache` init + warm-up)
+- Modify: `python-legacy: deps.py` (remove `cache` singleton)
+- Modify: `python-legacy: server.py` (remove `TieredCache` init + warm-up)
 
 - [ ] **Step 1: Grep for remaining references**
 
@@ -2546,14 +2546,14 @@ Each hit is a migration bug — fix before deleting.
 - [ ] **Step 2: Delete the files**
 
 ```bash
-rm -r stackunderflow/pipeline stackunderflow/infra/cache.py stackunderflow/infra/preloader.py tests/stackunderflow/core
+rm -r stackunderflow/pipeline python-legacy: infra/cache.py python-legacy: infra/preloader.py tests/stackunderflow/core
 ```
 
 - [ ] **Step 3: Remove `cache` from deps and `TieredCache` imports from server**
 
-Edit `stackunderflow/deps.py` — delete the `cache` line + `TieredCache` import.
+Edit `python-legacy: deps.py` — delete the `cache` line + `TieredCache` import.
 
-Edit `stackunderflow/server.py` — delete `_warm_projects` import, the cache warming block, and `background_stats_processor` (the latter used `deps.cache`).
+Edit `python-legacy: server.py` — delete `_warm_projects` import, the cache warming block, and `background_stats_processor` (the latter used `deps.cache`).
 
 - [ ] **Step 4: Run full suite**
 
@@ -2574,12 +2574,12 @@ git commit -m "cleanup: delete pipeline/ and TieredCache — session store is th
 ### Task 7.2: Cold-cache cleanup on first run
 
 **Files:**
-- Modify: `stackunderflow/server.py`
-- Modify: `stackunderflow/cli.py`
+- Modify: `python-legacy: server.py`
+- Modify: `python-legacy: cli.py`
 
 - [ ] **Step 1: Add failing test**
 
-In `tests/stackunderflow/test_server.py`:
+In `tests/python-legacy: test_server.py`:
 
 ```python
     def test_cold_cache_removed_after_successful_ingest(self, tmp_path, monkeypatch):
@@ -2608,14 +2608,14 @@ In `tests/stackunderflow/test_server.py`:
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-python -m pytest tests/stackunderflow/test_server.py::TestServerEndpointStructure::test_cold_cache_removed_after_successful_ingest -v
+python -m pytest tests/python-legacy: test_server.py::TestServerEndpointStructure::test_cold_cache_removed_after_successful_ingest -v
 ```
 
 Expected: ImportError.
 
 - [ ] **Step 3: Add `_maybe_clean_cold_cache` + wire into lifespan**
 
-In `stackunderflow/server.py`:
+In `python-legacy: server.py`:
 
 ```python
 def _maybe_clean_cold_cache() -> None:
@@ -2633,7 +2633,7 @@ Call `_maybe_clean_cold_cache()` inside the lifespan after the ingest-complete l
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-python -m pytest tests/stackunderflow/test_server.py -v
+python -m pytest tests/python-legacy: test_server.py -v
 ```
 
 Expected: all pass.
@@ -2641,7 +2641,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add stackunderflow/server.py tests/stackunderflow/test_server.py
+git add python-legacy: server.py tests/python-legacy: test_server.py
 git commit -m "server: remove old JSON cache after first successful ingest"
 ```
 
@@ -2708,4 +2708,4 @@ git push origin main
 - `ls ~/.stackunderflow/cache/` — should report "No such file or directory"
 - `time stackunderflow reindex` on a warm cache — second run should complete in < 2 seconds
 - Append one line to a project's JSONL, reload dashboard — refresh should feel instant (< 100 ms steady state)
-- Create a stub new adapter at `stackunderflow/adapters/stub.py` → it should work without touching `store/`, `ingest/`, or any route
+- Create a stub new adapter at `python-legacy: adapters/stub.py` → it should work without touching `store/`, `ingest/`, or any route

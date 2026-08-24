@@ -1,4 +1,4 @@
-//! Pi and OMP — the port of `stackunderflow/adapters/pi.py`.
+//! Pi and OMP — the port of `python-legacy: adapters/pi.py`.
 //!
 //! Two sibling CLIs with one on-disk format and two roots:
 //!

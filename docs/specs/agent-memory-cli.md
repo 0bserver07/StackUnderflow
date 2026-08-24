@@ -99,7 +99,7 @@ running `stackunderflow memory file src/foo.py` inside a repo Just Works.
 
 `--format json` and `--context-budget` already exist on one command. Move 2
 makes them **consistent across every `memory` subcommand** and **documented as
-a stable contract**. A new helper module `stackunderflow/cli_helpers/agent_output.py`
+a stable contract**. A new helper module `python-legacy: cli_helpers/agent_output.py`
 owns the envelope; every `memory` command emits through it.
 
 The JSON envelope:
@@ -213,7 +213,7 @@ stackunderflow guide status    [--scope project|user]
 - Content: ~15 lines naming the `memory` commands, the `--json` contract, and
   *when* to reach for each — the discoverability MCP gave for free.
 
-The installer's logic lives in a module (`stackunderflow/agentsmd.py`); the CLI
+The installer's logic lives in a module (`python-legacy: agentsmd.py`); the CLI
 command is a thin wrapper.
 
 ---
@@ -233,10 +233,10 @@ Removal checklist:
 2. Remove the `mcp` command from `cli.py` (`cli.py:355-361`).
 3. `pyproject.toml`: drop `mcp>=1.2.0` from `dependencies`, drop the
    `stackunderflow-mcp` script entry.
-4. Delete `tests/stackunderflow/mcp/` and `tests/stackunderflow/test_mcp.py`.
+4. Delete `tests/stackunderflow/mcp/` and `tests/python-legacy: test_mcp.py`.
 5. Repoint two tests that reach into the MCP server for convenience —
-   `tests/stackunderflow/services/test_mode_recommender.py` (`recommend_mode_impl`)
-   and `tests/stackunderflow/services/test_discovery_telemetry.py` (`mcp.server`)
+   `tests/python-legacy: services/test_mode_recommender.py` (`recommend_mode_impl`)
+   and `tests/python-legacy: services/test_discovery_telemetry.py` (`mcp.server`)
    — at their `services/` equivalents.
 6. Delete `docs/mcp.md`; update MCP mentions in user-facing docs
    (`README.md`, `docs/api-reference.md`, `docs/README-DEV.md`, `docs/skills.md`,
@@ -244,7 +244,7 @@ Removal checklist:
    are point-in-time records; flag their mentions for the maintainer instead of
    rewriting them.
 
-> Do **not** touch `tests/stackunderflow/reports/test_optimize_unused_mcp_uses_mart.py`.
+> Do **not** touch `tests/python-legacy: reports/test_optimize_unused_mcp_uses_mart.py`.
 > Its "unused MCP" is the optimize report's detector for MCP servers *the user*
 > configured and never uses — analytics about the user's setup, unrelated to
 > StackUnderflow's own retired MCP server.
@@ -287,7 +287,7 @@ command and the JSON envelope.
 
 **Workstream B — injection hooks + discovery snippet (Moves 3 & 4).**
 Owns `stackunderflow/hooks/` (handlers, templates, `_install.py`), the new
-`stackunderflow/agentsmd.py`, the small `guide` command, and `docs/hooks.md`.
+`python-legacy: agentsmd.py`, the small `guide` command, and `docs/hooks.md`.
 Handlers call `services/discovery.py` in-process. Verifies the Claude Code
 injection output format before wiring it. Adds tests.
 

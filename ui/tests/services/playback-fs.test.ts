@@ -7,7 +7,7 @@
 // behavioural seams (file selection driving the content pane) via the
 // helper module rather than a DOM runner — this project doesn't ship one.
 //
-// Spec: stackunderflow/services/playback_fs.py.
+// Spec: python-legacy: services/playback_fs.py.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

@@ -8,8 +8,8 @@
 //   * sidebar initial-state resolver picks the right state per viewport
 //   * tool-call surface summary line surfaces the right field per tool
 //
-// Spec: stackunderflow/services/meta_agent.py + the route
-// stackunderflow/routes/meta_agent.py.
+// Spec: python-legacy: services/meta_agent.py + the route
+// python-legacy: routes/meta_agent.py.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

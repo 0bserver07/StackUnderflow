@@ -68,14 +68,14 @@ B-wrk-empty-json    | repo | memory worked '   ' --json
 B-wrk-cwd-py        | py   | memory worked pytest --json
 
 # ── memory file ──────────────────────────────────────────────────────────────
-F-file-cli          | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
-F-file-cli-json     | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --json
-F-file-server       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py
-F-file-server-json  | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --json
-F-file-discovery    | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --json
-B-file-limit5       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --limit 5 --json
-B-file-since        | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --since 30d --json
-B-file-budget       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --context-budget 250 --json
+F-file-cli          | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py
+F-file-cli-json     | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --json
+F-file-server       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: server.py
+F-file-server-json  | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: server.py --json
+F-file-discovery    | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: services/discovery.py --json
+B-file-limit5       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --limit 5 --json
+B-file-since        | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --since 30d --json
+B-file-budget       | repo | memory file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --context-budget 250 --json
 B-file-missing      | repo | memory file /no/such/file/anywhere.py
 B-file-missing-json | repo | memory file /no/such/file/anywhere.py --json
 B-file-relative     | repo | memory file rust/ci.sh --json
@@ -87,8 +87,8 @@ B-ses-cwd           | repo | memory sessions
 B-ses-cwd-json      | repo | memory sessions --json
 B-ses-dir           | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow
 B-ses-dir-json      | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow --json
-F-ses-file          | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
-F-ses-file-json     | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --json
+F-ses-file          | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py
+F-ses-file-json     | repo | memory sessions /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --json
 F-ses-file-local    | repo | memory sessions rust/ci.sh --json
 B-ses-proj          | repo | memory sessions --project -Users-yadkonrad-dev-dev-year26-jan26-StackUnderflow --json
 B-ses-proj-empty    | repo | memory sessions --project '' --json
@@ -141,13 +141,13 @@ A-inp-since-bad     | repo | find-sessions-in-path /Users/yadkonrad/dev_dev/year
 A-inp-cwd-tmp       | tmp  | find-sessions-in-path . --format json
 
 # ── find-sessions-touching-file (alias, RS-1-012) ────────────────────────────
-A-tch-text          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
-A-tch-json          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
-A-tch-mode-read     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --mode read
-A-tch-mode-write    | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --mode write --format json
-A-tch-mode-any2     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --mode any --limit 2
-A-tch-budget250     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/services/discovery.py --context-budget 250 --format json
-A-tch-limit3        | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --limit 3
+A-tch-text          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py
+A-tch-json          | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --format json
+A-tch-mode-read     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: services/discovery.py --mode read
+A-tch-mode-write    | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --mode write --format json
+A-tch-mode-any2     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: services/discovery.py --mode any --limit 2
+A-tch-budget250     | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: services/discovery.py --context-budget 250 --format json
+A-tch-limit3        | repo | find-sessions-touching-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: server.py --limit 3
 A-tch-tilde         | repo | find-sessions-touching-file '~/.claude/settings.json' --format json
 A-tch-relative      | repo | find-sessions-touching-file rust/ci.sh --format json
 
@@ -171,20 +171,20 @@ A-dec-cwd-py        | py   | search-past-decisions pytest --format json
 A-wrk-text          | repo | find-sessions-where-action-worked pytest
 A-wrk-json          | repo | find-sessions-where-action-worked pytest --format json
 A-wrk-verbose       | repo | find-sessions-where-action-worked pytest -v
-A-wrk-file          | repo | find-sessions-where-action-worked pytest --file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
+A-wrk-file          | repo | find-sessions-where-action-worked pytest --file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --format json
 A-wrk-minconf0      | repo | find-sessions-where-action-worked Edit --min-confidence 0.0 --format json
 A-wrk-minconf9      | repo | find-sessions-where-action-worked pytest --min-confidence 0.9 --format json
 A-wrk-phrase        | repo | find-sessions-where-action-worked 'add caching' --format json
 A-wrk-since-bad     | repo | find-sessions-where-action-worked pytest --since notadate
 
 # ── find-failure-modes-for-file (alias, RS-1-010) ────────────────────────────
-A-fail-text         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
-A-fail-json         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --min-confidence 0.0 --format json
-A-fail-verbose      | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py -v
-A-fail-since        | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --since 30d --format json
+A-fail-text         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py
+A-fail-json         | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --min-confidence 0.0 --format json
+A-fail-verbose      | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py -v
+A-fail-since        | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: server.py --since 30d --format json
 A-fail-relative     | repo | find-failure-modes-for-file rust/ci.sh
-A-fail-conf-space   | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --min-confidence ' 0.0 ' --format json
-A-fail-since-bad    | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --since notadate
+A-fail-conf-space   | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --min-confidence ' 0.0 ' --format json
+A-fail-since-bad    | repo | find-failure-modes-for-file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --since notadate
 
 # ── Rust-only commands (round-trip, no Python counterpart) ───────────────────
 rust:anchor-roundtrip  | repo | anchor
@@ -820,9 +820,9 @@ T6-risk-missing-json  | home@home:risk-corpus | risk file /no/such/file/anywhere
 T6-risk-dir-json      | home@home:risk-corpus | risk file /tmp --format json
 T6-risk-tilde-json    | home@home:risk-corpus | risk file '~/store.db' --format json
 T6-risk-rel-json      | home@home:risk-corpus | risk file store.db --format json
-T6-risk-live          | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py
-T6-risk-live-json     | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/cli.py --format json
-T6-risk-live-server   | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/stackunderflow/server.py --format json
+T6-risk-live          | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py
+T6-risk-live-json     | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: cli.py --format json
+T6-risk-live-server   | repo | risk file /Users/yadkonrad/dev_dev/year26/jan26/StackUnderflow/python-legacy: server.py --format json
 T6-risk-live-cwd-tmp  | tmp  | risk file cli.py --format json
 
 # ── etl status (read-only; the WRITER `etl backfill` is a procedure, below) ──

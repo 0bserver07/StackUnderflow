@@ -117,7 +117,7 @@ python scripts/sync_plugin_skills.py --check
 python scripts/sync_plugin_skills.py --write
 ```
 
-Edit the **canonical** file, then run `--write`. `tests/stackunderflow/test_plugin_skill_sync.py`
+Edit the **canonical** file, then run `--write`. `tests/python-legacy: test_plugin_skill_sync.py`
 runs `--check` in CI, so an edit to one copy but not the other fails the build.
 
 ## Design rules baked into the skill
@@ -137,7 +137,7 @@ runs `--check` in CI, so an edit to one copy but not the other fails the build.
 ## Validation
 
 ```bash
-pytest tests/stackunderflow/test_plugin_skill_sync.py -q
+pytest tests/python-legacy: test_plugin_skill_sync.py -q
 ```
 
 Checks the sync guard (mirror byte-identical to canonical, and that the guard

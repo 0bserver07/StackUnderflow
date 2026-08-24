@@ -1,7 +1,7 @@
 # Batch E / member `patterns` — findings
 
-Scope: `stackunderflow/routes/patterns.py` (217 ln) over
-`stackunderflow/reports/patterns.py` (1,097 ln), plus the `hooks/proactive.py`
+Scope: `python-legacy: routes/patterns.py` (217 ln) over
+`python-legacy: reports/patterns.py` (1,097 ln), plus the `hooks/proactive.py`
 governance-write contract `POST /api/patterns/dismiss` depends on.
 
 | Ported to | Lines | Tests |

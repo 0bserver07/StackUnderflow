@@ -29,7 +29,7 @@
 //! check is mechanical rather than a reading**: the cached value is
 //! `queries.get_project_stats(conn, project_id=…, tz_offset=…)`, whose whole
 //! body is `build_enriched_dataset` → `formatter.to_dicts` → `aggregator.summarise`.
-//! `grep -n 'now(\|today()\|utcnow' stackunderflow/stats/aggregator.py` is
+//! `grep -n 'now(\|today()\|utcnow' python-legacy: stats/aggregator.py` is
 //! **empty**: the aggregation is a pure function of (the stored rows, the
 //! tz offset), both of which *are* in the key or the signature. Every rolling
 //! window in the response — `days`, the `?range=` presets, the daily-stats cap —

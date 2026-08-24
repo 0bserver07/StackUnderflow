@@ -1,4 +1,4 @@
-//! Codeium — the port of `stackunderflow/adapters/codeium.py`.
+//! Codeium — the port of `python-legacy: adapters/codeium.py`.
 //!
 //! A **discovery-only stub**, and deliberately so. The Codeium plugin keeps its
 //! chat state under `~/.codeium/` as protobuf-encoded binary blobs with no

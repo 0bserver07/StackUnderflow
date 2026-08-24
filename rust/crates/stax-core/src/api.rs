@@ -1,4 +1,4 @@
-//! `stackunderflow/api/__init__.py` — the public, store-backed library API.
+//! `python-legacy: api/__init__.py` — the public, store-backed library API.
 //!
 //! Python's package entry point re-exports three names so `import
 //! stackunderflow; stackunderflow.list_projects()` works: [`list_projects`],

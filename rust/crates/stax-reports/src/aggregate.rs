@@ -1,5 +1,5 @@
 //! `reports/aggregate.py` — the cross-project rollup behind `/api/plan`,
-//! `/api/export` and `stackunderflow month`.
+//! `/api/export` and `stax month`.
 //!
 //! | Item | Python | Rust |
 //! |---|---|---|

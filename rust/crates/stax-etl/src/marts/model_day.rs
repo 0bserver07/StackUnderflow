@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/model_day.py` — the `(day, model, speed)`
+//! Port of `python-legacy: etl/marts/model_day.py` — the `(day, model, speed)`
 //! rollup for the compare-across-agents view.
 //!
 //! Additive over the SUM/COUNT(*) columns; `session_count` is recomputed for

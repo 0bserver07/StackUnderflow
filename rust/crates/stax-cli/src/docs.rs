@@ -1,4 +1,4 @@
-//! `stax docs` — `cli.py:6431`–`:6484` over `stackunderflow/embedded_docs.py`.
+//! `stax docs` — `cli.py:6431`–`:6484` over `python-legacy: embedded_docs.py`.
 //!
 //! Six offline pages, five of them string constants and one — `support-matrix`
 //! — rendered live from the adapter capability table. Three properties carry
@@ -389,9 +389,9 @@ Everything runs on your machine. The store is a single SQLite database at
 
 - **Adapters** read each source tool's transcripts (see the `adapters` topic and
   the live `support-matrix`).
-- **The dashboard** (`stackunderflow start`) is a local web UI for cost,
+- **The dashboard** (`stax start`) is a local web UI for cost,
   sessions, projects, forks, and more.
-- **The memory CLI** (`stackunderflow memory ...`, see the `memory` topic) is the
+- **The memory CLI** (`stax memory ...`, see the `memory` topic) is the
   agent-facing surface: ask the store questions from inside a coding session.
 - **doctor** (see the `doctor` topic) is a read-only health check for the store.
 
@@ -410,26 +410,26 @@ const QUICKSTART: &str = r#"
 
 Once installed, launch the dashboard:
 
-    stackunderflow start
+    stax start
 
 It serves a local web UI (default `http://127.0.0.1:8081`) and opens your
 browser. Add `--headless` to skip the browser, `--port` / `--host` to change the
 bind address, and `--fresh` to clear the disk cache first. Run
-`stackunderflow start --help` for the full list.
+`stax start --help` for the full list.
 
 On first launch StackUnderflow discovers the transcripts your enabled adapters
 can see and builds the store at `~/.stackunderflow/store.db`.
 
 ## Everyday commands
 
-- `stackunderflow start` — the dashboard.
-- `stackunderflow memory ...` — ask the store questions from the terminal (see
+- `stax start` — the dashboard.
+- `stax memory ...` — ask the store questions from the terminal (see
   the `memory` topic).
-- `stackunderflow doctor` — read-only store health check (see the `doctor`
+- `stax doctor` — read-only store health check (see the `doctor`
   topic).
-- `stackunderflow backup create` / `list` / `restore` — snapshot the store.
-- `stackunderflow cfg ls` / `set` / `rm` — inspect and change configuration.
-- `stackunderflow resume [PATH]` — session/resume ids for every coding agent
+- `stax backup create` / `list` / `restore` — snapshot the store.
+- `stax cfg ls` / `set` / `rm` — inspect and change configuration.
+- `stax resume [PATH]` — session/resume ids for every coding agent
   under a path (default cwd), with each agent's real resume command rendered
   (e.g. `claude --resume <id>`, `codex resume <id>`). `--json` for agents.
 
@@ -447,21 +447,21 @@ fidelity of what it captures.
 const MEMORY: &str = r#"
 # Memory CLI — query your past coding sessions
 
-`stackunderflow memory` is the agent-facing namespace. Before re-deriving
+`stax memory` is the agent-facing namespace. Before re-deriving
 something, ask whether the answer is already recorded. Every query is local and
 read-only — nothing leaves the machine.
 
 ## Commands
 
-- `stackunderflow memory file <path>` — a file's history: past edits, failure
+- `stax memory file <path>` — a file's history: past edits, failure
   modes, and the sessions that touched it. Worth a look before a non-trivial
   edit.
-- `stackunderflow memory decisions "<topic>"` — past decisions on a topic.
-- `stackunderflow memory worked "<action>"` — past sessions where an action
+- `stax memory decisions "<topic>"` — past decisions on a topic.
+- `stax memory worked "<action>"` — past sessions where an action
   succeeded, with evidence.
-- `stackunderflow memory sessions` — recent sessions in this project.
-- `stackunderflow memory ask "<question>"` — natural-language query over history.
-- `stackunderflow resume [PATH] --json` (`-p <agent>` to narrow) — session/
+- `stax memory sessions` — recent sessions in this project.
+- `stax memory ask "<question>"` — natural-language query over history.
+- `stax resume [PATH] --json` (`-p <agent>` to narrow) — session/
   resume ids for EVERY coding
   agent under a path (claude, codex, grok, …), each with its real resume
   invocation rendered (`claude --resume <id>`, `codex resume <id>`). Use it
@@ -487,7 +487,7 @@ happened, not a guarantee about what will.
 const DOCTOR: &str = r#"
 # doctor — read-only store health check
 
-`stackunderflow doctor` (short: `stax doctor`) checks the integrity of your
+`stax doctor` (short: `stax doctor`) checks the integrity of your
 store without changing anything. It opens `~/.stackunderflow/store.db`
 **read-only**: it never migrates, never writes, and never repairs.
 
@@ -519,12 +519,12 @@ StackUnderflow is built to keep your data on your machine.
 
 - **The store is local.** Everything lives in one SQLite file at
   `~/.stackunderflow/store.db`, built from transcripts already on disk.
-- **The memory CLI is read-only and offline.** `stackunderflow memory ...` and
-  `stackunderflow doctor` open the store locally and send nothing over the
+- **The memory CLI is read-only and offline.** `stax memory ...` and
+  `stax doctor` open the store locally and send nothing over the
   network.
 - **doctor never writes.** It opens the store read-only; it can report a problem
   but it will not migrate, repair, or otherwise change your data.
-- **Backups stay local.** `stackunderflow backup` snapshots the store under
+- **Backups stay local.** `stax backup` snapshots the store under
   `~/.stackunderflow/backups/`.
 
 Some features can be pointed at a network endpoint that you configure (for

@@ -4,7 +4,7 @@
 **Audience:** anyone writing a tool that wants to read from, or write to, the StackUnderflow store without reverse-engineering the SQL.
 **Scope:** the local SQLite schema at `~/.stackunderflow/store.db`. This document is the source of truth for the on-disk shape; the migrations under `stackunderflow/store/migrations/` (`.sql` DDL and `.py` data migrations) are the reference implementation.
 
-The schema described here is **additive-only**. Any future column requires a new migration and bumps `PRAGMA user_version` per the existing pattern in `stackunderflow/store/schema.py`. A reader that targets v1 will keep working against future versions; a writer should refuse to write rows that omit columns added after the version it was built against.
+The schema described here is **additive-only**. Any future column requires a new migration and bumps `PRAGMA user_version` per the existing pattern in `python-legacy: store/schema.py`. A reader that targets v1 will keep working against future versions; a writer should refuse to write rows that omit columns added after the version it was built against.
 
 ---
 
@@ -56,7 +56,7 @@ Pin to `schema_version = 30`. The current migration set is:
 
 Version 15 was reserved during planning and never created — the sequence skips from 14 to 16 by design. The migration runner keys on the leading `vNNN`, so the gap is harmless.
 
-A reader checks the version with `PRAGMA user_version`. A writer should refuse to apply its own migrations against a store on an unknown version — the runner in `stackunderflow/store/schema.py` is the only sanctioned writer of `PRAGMA user_version`.
+A reader checks the version with `PRAGMA user_version`. A writer should refuse to apply its own migrations against a store on an unknown version — the runner in `python-legacy: store/schema.py` is the only sanctioned writer of `PRAGMA user_version`.
 
 ---
 
@@ -104,7 +104,7 @@ CREATE TABLE sessions (
 
 ### `messages` (view as of v008)
 
-Post-v008, `messages` is a UNION-ALL view over `messages_YYYYMM` partition tables plus `messages_unknown` for malformed timestamps. The column shape is stable — readers target the view and never touch the partitions directly. The writer (`stackunderflow/ingest/writer.py`) routes inserts to the partition matching `substr(timestamp, 1, 7)`.
+Post-v008, `messages` is a UNION-ALL view over `messages_YYYYMM` partition tables plus `messages_unknown` for malformed timestamps. The column shape is stable — readers target the view and never touch the partitions directly. The writer (`python-legacy: ingest/writer.py`) routes inserts to the partition matching `substr(timestamp, 1, 7)`.
 
 ```sql
 -- Each partition shares this shape.
@@ -183,7 +183,7 @@ Four invariants the writer must hold:
 
 ### `cost_source` enum
 
-Four string literals, declared in `stackunderflow/etl/normalize/base.py` as `COST_SOURCE_*` constants:
+Four string literals, declared in `python-legacy: etl/normalize/base.py` as `COST_SOURCE_*` constants:
 
 | value | meaning |
 |---|---|
@@ -262,7 +262,7 @@ Refer to the corresponding migration file headers for column details and rationa
 
 ## Per-provider normalizer contracts
 
-The registry in `stackunderflow/etl/normalize/__init__.py` holds 18 entries — each maps one `messages` row to 0..N `usage_events` rows. The table below has 17 rows: `pi` and `omp` are separate registry keys that both point at `PiNormalizer`, so they share a row. `KiloCodeNormalizer` and `RooCodeNormalizer` are thin subclasses of `ClineNormalizer` that override only `provider_name`.
+The registry in `python-legacy: etl/normalize/__init__.py` holds 18 entries — each maps one `messages` row to 0..N `usage_events` rows. The table below has 17 rows: `pi` and `omp` are separate registry keys that both point at `PiNormalizer`, so they share a row. `KiloCodeNormalizer` and `RooCodeNormalizer` are thin subclasses of `ClineNormalizer` that override only `provider_name`.
 
 | provider key | class | source | cost_source |
 |---|---|---|---|
@@ -286,9 +286,9 @@ The registry in `stackunderflow/etl/normalize/__init__.py` holds 18 entries — 
 
 **Contract for a new normalizer:**
 
-1. Subclass `Normalizer` in `stackunderflow/etl/normalize/base.py` and set `provider_name`.
+1. Subclass `Normalizer` in `python-legacy: etl/normalize/base.py` and set `provider_name`.
 2. Implement `normalize(self, msg_row: dict) -> Iterable[dict]`. Skip non-billable rows (user / system / tool-result-only / zero-token assistant). For billable rows, call `self._build_event(...)` with the canonical 4-token shape and a valid `cost_source`.
-3. Register in `stackunderflow/etl/normalize/__init__.py` via `register("yourprovider", YourNormalizer)`.
+3. Register in `python-legacy: etl/normalize/__init__.py` via `register("yourprovider", YourNormalizer)`.
 4. The base class computes `cost_usd` once via `infra.costs.compute_cost`, derives `day` from `ts`, and stamps `raw_extras` from the dict you pass.
 
 The `cost_source` value is the contract you owe downstream consumers — pick the one that honestly describes how `cost_usd` was derived. `rate_card` is the default; reach for `estimated` when the source format omits tokens; reach for `unknown` when you have tokens but no rate-card entry; reserve `live` for an actual billing-API integration.
@@ -305,7 +305,7 @@ A tool that writes to a StackUnderflow store should validate its writes round-tr
 4. Run `stackunderflow etl backfill` (or call `stackunderflow.etl.watermark.refresh_all_marts(conn)`) and check that the mart row counts increased by the expected amount.
 5. Re-run the backfill — counts must not increase (idempotency).
 
-A more rigorous check parses this document for the column lists in each `CREATE TABLE` block and asserts via `PRAGMA table_info(<table>)` that every column is present with the declared type. The `tests/stackunderflow/store/test_schema.py` module is a good starting point for that style of test.
+A more rigorous check parses this document for the column lists in each `CREATE TABLE` block and asserts via `PRAGMA table_info(<table>)` that every column is present with the declared type. The `tests/python-legacy: store/test_schema.py` module is a good starting point for that style of test.
 
 ---
 

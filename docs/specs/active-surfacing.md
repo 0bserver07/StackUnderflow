@@ -4,7 +4,7 @@
 
 > **Status:** Phase 0 (governance retrofit), Phase 1 (command-cluster nudge), and
 > **Phase 2 (error-signature foresight + "What almost bit me" dashboard panel)**
-> have shipped (`stackunderflow/hooks/proactive.py`, `hooks/handlers.py`+`templates.py`,
+> have shipped (`python-legacy: hooks/proactive.py`, `hooks/handlers.py`+`templates.py`,
 > `routes/patterns.py`, `stackunderflow-ui/.../CodingHealthTab.tsx`). Phase 3
 > (prompt-similarity) remains speculative / embeddings-gated. See §9 for the
 > per-phase "as built" notes.
@@ -288,8 +288,8 @@ All tests seed a synthetic store / governance file and assert exact behavior —
 6. **Adaptive quieting granularity:** suppress by type, by fingerprint, or both, after N dismissals?
 
 ## See also
-- `stackunderflow/hooks/recall.py`, `hooks/inject.py`, `hooks/templates.py` — the shipped hook surface to extend.
-- `stackunderflow/reports/patterns.py` — `file_risk`, `command_clusters`, `error_signatures`, `resolution_hints`, `_normalise_command`.
-- `stackunderflow/services/meta_agent.py` — `TOOL_CATALOG`, `execute_tool`, `build_chat_request` (Tier-2 phrasing only).
-- `stackunderflow/routes/patterns.py` + `stackunderflow-ui/.../CodingHealthTab.tsx` — the Tier-2 dashboard surface.
+- `python-legacy: hooks/recall.py`, `hooks/inject.py`, `hooks/templates.py` — the shipped hook surface to extend.
+- `python-legacy: reports/patterns.py` — `file_risk`, `command_clusters`, `error_signatures`, `resolution_hints`, `_normalise_command`.
+- `python-legacy: services/meta_agent.py` — `TOOL_CATALOG`, `execute_tool`, `build_chat_request` (Tier-2 phrasing only).
+- `python-legacy: routes/patterns.py` + `stackunderflow-ui/.../CodingHealthTab.tsx` — the Tier-2 dashboard surface.
 - `docs/campaigns/intelligence-layer.md` #5/#6 — shipped active-recall hooks + failure mining (the foundation #97 builds on).

@@ -1,4 +1,4 @@
-//! Droid (Factory) — the port of `stackunderflow/adapters/droid.py`.
+//! Droid (Factory) — the port of `python-legacy: adapters/droid.py`.
 //!
 //! ```text
 //! {factoryDir}/sessions/{projectHash}/{sessionId}.jsonl

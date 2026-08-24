@@ -875,7 +875,7 @@ mod tests {
     }
 
     /// The reference CLI's own answer, captured from
-    /// `stackunderflow recommend mode --prompt 'fix the failing test' --format json`.
+    /// `stax recommend mode --prompt 'fix the failing test' --format json`.
     #[test]
     fn the_reference_digest_matches() {
         let features = extract_features("fix the failing test");

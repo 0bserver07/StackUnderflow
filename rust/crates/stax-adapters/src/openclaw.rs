@@ -1,5 +1,5 @@
 //! OpenClaw and its rebrand-cousins — the port of
-//! `stackunderflow/adapters/openclaw.py`.
+//! `python-legacy: adapters/openclaw.py`.
 //!
 //! One tool, four names. The adapter probes each candidate base in a fixed
 //! order and reads from whichever exist:

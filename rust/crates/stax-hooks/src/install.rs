@@ -800,7 +800,7 @@ mod tests {
         assert!(text.contains("stax-hooks run stackunderflow-stop"));
         // Never the Python entry point — the program a post-split install
         // does not have.
-        assert!(!text.contains("stackunderflow hooks run"), "{text}");
+        assert!(!text.contains("stax hooks run"), "{text}");
     }
 
     #[test]
@@ -818,7 +818,7 @@ mod tests {
     fn install_is_convergent_over_a_stale_absolute_path() {
         let scratch = Scratch::new("stale");
         scratch.write_settings(
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/venv/bin/stackunderflow hooks run stackunderflow-stop"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/venv/bin/stax hooks run stackunderflow-stop"}]}]}}"#,
         );
         let report = install("project", false, false, false, &scratch.env()).unwrap();
         assert!(report.changed);
@@ -930,7 +930,7 @@ mod tests {
     fn status_marks_a_stale_entry_and_a_capture_choice() {
         let scratch = Scratch::new("status");
         scratch.write_settings(
-            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stackunderflow hooks run stackunderflow-stop --capture-content"}]}]}}"#,
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/old/bin/stax hooks run stackunderflow-stop --capture-content"}]}]}}"#,
         );
         let entries = status(Some("project"), &scratch.env()).unwrap();
         let (_, entry) = &entries[0];

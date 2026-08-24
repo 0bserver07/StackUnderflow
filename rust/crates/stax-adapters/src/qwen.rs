@@ -1,4 +1,4 @@
-//! Qwen Code — the port of `stackunderflow/adapters/qwen.py`.
+//! Qwen Code — the port of `python-legacy: adapters/qwen.py`.
 //!
 //! Chats live at `$QWEN_DATA_DIR/projects/<project>/chats/*.jsonl`, defaulting
 //! to `~/.qwen/projects`. One JSON object per line; `seq` is the byte offset of

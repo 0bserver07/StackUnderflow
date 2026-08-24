@@ -1,6 +1,6 @@
 """The Python side of the wave-2 adapter parity proof.
 
-Drives the *reference* implementation — `stackunderflow/adapters/claude.py` and
+Drives the *reference* implementation — `python-legacy: adapters/claude.py` and
 `codex.py` — over the same roots and the same fixture bytes as the Rust
 `stax-adapter-parity` binary, and prints byte-identical output. A parity run is
 therefore a `diff` of two commands rather than an argument about semantics.

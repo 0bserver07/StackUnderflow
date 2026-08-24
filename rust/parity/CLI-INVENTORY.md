@@ -9,7 +9,7 @@ PYTHONPATH=$PWD ../StackUnderflow/.venv/bin/python \
     rust/parity/tools/cli_inventory.py rust/parity/CLI-INVENTORY.md
 ```
 
-Reference: Click **8.4.2**, CPython **3.12.13**, `stackunderflow/cli.py` at **6484** lines.
+Reference: Click **8.4.2**, CPython **3.12.13**, `python-legacy: cli.py` at **6484** lines.
 
 ## 1. Counts
 

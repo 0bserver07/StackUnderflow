@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/stats/aggregator.py` — the whole eighteen-section
+//! Port of `python-legacy: stats/aggregator.py` — the whole eighteen-section
 //! statistics payload (RS-3-062).
 //!
 //! [`summarise`] is a transcription, section by section, in Python's order. The

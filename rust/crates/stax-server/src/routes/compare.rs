@@ -8,7 +8,7 @@
 //! window, with the metrics the side-by-side card renders (sessions, calls,
 //! one-shot %, retry rate, cache hit rate, $/call, $/session, total cost, total
 //! tokens). Every line of that lives in [`crate::services::compare`], because
-//! the `stackunderflow compare` CLI verb calls the *same* function — this module
+//! the `stax compare` CLI verb calls the *same* function — this module
 //! is the twenty lines of parameter handling around it, exactly as Python's is.
 //!
 //! # What this thin module still has to get exactly right

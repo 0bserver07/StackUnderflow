@@ -1,6 +1,6 @@
 //! `memory ask` — hybrid retrieval, ported from `cli._run_ask_query`.
 //!
-//! A port of the engine behind `stackunderflow memory ask` (`cli.py:1993`) and
+//! A port of the engine behind `stax memory ask` (`cli.py:1993`) and
 //! everything it reaches: `_hybrid_session_order`, `_hydrate_sessions`,
 //! `_fuse_session_ids`, `services/search_service.py`'s `hybrid_search` +
 //! `_fts_ranked_ids` + `_rows_for_ids` + `_sanitize_fts_query` +

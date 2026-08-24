@@ -10,7 +10,7 @@
 
 ### BaseAdapter Interface (Protocol)
 
-The current `SourceAdapter` protocol in `stackunderflow/adapters/base.py` defines:
+The current `SourceAdapter` protocol in `python-legacy: adapters/base.py` defines:
 
 ```python
 class SourceAdapter(Protocol):
@@ -83,7 +83,7 @@ All fields are immutable (frozen). The `seq` field is the primary ordering token
 
 ### The Ingest Loop
 
-The ingest flow (in `stackunderflow/ingest/__init__.py` and `stackunderflow/ingest/writer.py`) works as follows:
+The ingest flow (in `python-legacy: ingest/__init__.py` and `python-legacy: ingest/writer.py`) works as follows:
 
 1. **Discovery phase** (`enumerate.py:iter_refs()`):
    - Call `adapter.enumerate()` for every registered adapter
@@ -461,7 +461,7 @@ def run_ingest(conn: sqlite3.Connection, adapters: list[SourceAdapter]) -> dict[
 
 ## Section 4: Test Contract Changes
 
-### Current Test Contract (`tests/stackunderflow/adapters/contract.py`)
+### Current Test Contract (`tests/python-legacy: adapters/contract.py`)
 
 The `AdapterContract` mixin enforces:
 

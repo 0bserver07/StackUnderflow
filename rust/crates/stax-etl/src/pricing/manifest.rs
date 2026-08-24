@@ -1,4 +1,4 @@
-//! The data-driven model manifest — port of `stackunderflow/infra/model_manifest.py`.
+//! The data-driven model manifest — port of `python-legacy: infra/model_manifest.py`.
 //!
 //! Reads the *same* `stackunderflow/data/models.toml` the Python implementation
 //! reads (§2.4: identity and pricing are data, not code — zero transcription).

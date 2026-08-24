@@ -1,5 +1,5 @@
 //! The Claude adapter's behaviour, ported from
-//! `tests/stackunderflow/adapters/test_claude.py`.
+//! `tests/python-legacy: adapters/test_claude.py`.
 //!
 //! One test per Python test, same name where the name still reads well. These
 //! run without the Python interpreter — `tests/parity.rs` proves the two
@@ -240,7 +240,7 @@ fn service_tier_maps_only_priority_to_fast() {
 fn read_drops_synthetic_model_sentinel() {
     // Claude Code stamps `model = "<synthetic>"` on locally generated
     // placeholders (API errors, "No response requested."). The literal used to
-    // reach the store and show up as its own row in `stackunderflow compare`.
+    // reach the store and show up as its own row in `stax compare`.
     let home = TempDir::new("claude-synthetic");
     home.write(
         ".claude/projects/-a/abc.jsonl",

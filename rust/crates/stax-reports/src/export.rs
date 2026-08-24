@@ -13,7 +13,7 @@
 //! | `render_export_csv` | `render.py:94` | [`render_export_csv`] |
 //! | `render_export_json` | `render.py:146` | [`render_export_json`] |
 //!
-//! `stackunderflow export` (the CLI verb) and `GET /api/export` both call
+//! `stax export` (the CLI verb) and `GET /api/export` both call
 //! `run_export`, which is why the whole thing lives here rather than inside
 //! `routes/export.rs`: wave 8 ports the CLI verb and must find this, not fork it.
 //!

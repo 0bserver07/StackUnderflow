@@ -130,7 +130,7 @@ fn matcher_for(table: &[(&'static str, &'static str)], event: &str) -> Option<&'
 ///
 /// The program is the standalone **`stax-hooks` binary**, not a CLI entry
 /// point: since the split, `main` carries no Python, so the reference's
-/// `stackunderflow hooks run <id>` names a program a Rust-only install does
+/// `stax hooks run <id>` names a program a Rust-only install does
 /// not have. The bare name (never an absolute path) resolves through `$PATH`,
 /// exactly as the Python form did; `stax-hooks` accepts `run <id>` directly
 /// (see `main.rs::parse_argv` — the `hooks` prefix is optional there for
@@ -359,11 +359,11 @@ mod tests {
     #[test]
     fn parse_recognises_stale_paths_and_the_legacy_spelling() {
         assert_eq!(
-            parse_hook_command("stackunderflow hooks run stackunderflow-stop"),
+            parse_hook_command("stax hooks run stackunderflow-stop"),
             Some(("stackunderflow-stop".into(), false))
         );
         assert_eq!(
-            parse_hook_command("/old/venv/bin/stackunderflow hooks run stackunderflow-stop"),
+            parse_hook_command("/old/venv/bin/stax hooks run stackunderflow-stop"),
             Some(("stackunderflow-stop".into(), false))
         );
         // The legacy singular `hook run`.
@@ -375,7 +375,7 @@ mod tests {
         );
         // An id we do not own is NOT ours — the conservative branch.
         assert_eq!(
-            parse_hook_command("stackunderflow hooks run stackunderflow-not-a-hook"),
+            parse_hook_command("stax hooks run stackunderflow-not-a-hook"),
             None
         );
         assert_eq!(parse_hook_command("some-other-tool --do-a-thing"), None);
@@ -417,10 +417,9 @@ mod tests {
     #[test]
     fn the_pipeline_guard_stops_at_the_separator() {
         // `[^|&;]*` must not run past the `|` into the next command.
-        let (id, flag) = parse_hook_command(
-            "stackunderflow hooks run stackunderflow-stop | tee --capture-content",
-        )
-        .expect("ours");
+        let (id, flag) =
+            parse_hook_command("stax hooks run stackunderflow-stop | tee --capture-content")
+                .expect("ours");
         assert_eq!(id, "stackunderflow-stop");
         assert!(!flag, "the flag lives in the NEXT pipeline stage");
     }
@@ -435,10 +434,7 @@ mod tests {
         assert!(!is_canonical("stax-hooks run stackunderflow-stop", true));
         // The pre-cutover Python form is ours (parseable) but stale, which is
         // exactly what makes a re-`install` rewrite it in place.
-        assert!(!is_canonical(
-            "stackunderflow hooks run stackunderflow-stop",
-            false
-        ));
+        assert!(!is_canonical("stax hooks run stackunderflow-stop", false));
     }
 
     #[test]

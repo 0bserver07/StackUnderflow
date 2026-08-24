@@ -1,4 +1,4 @@
-//! Port of `stackunderflow/etl/marts/daily.py` — the
+//! Port of `python-legacy: etl/marts/daily.py` — the
 //! `(day, project_id, provider, model, speed)` rollup.
 //!
 //! Additive: tokens, `message_count` and cost are summed into the existing row

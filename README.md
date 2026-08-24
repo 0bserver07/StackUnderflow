@@ -83,7 +83,7 @@ It is idempotent, backs the file up first, and touches only its own entries.
 Check any time with `stax hooks status`.
 
 > **Upgrading from a pre-split install:** older installs wrote hook commands
-> that invoked the Python entry point (`stackunderflow hooks run …`) — a
+> that invoked the Python entry point (`stax hooks run …`) — a
 > program a Rust-only install no longer has. Re-running `stax hooks install`
 > (or `stax hooks repair`) rewrites those entries in place to the native form,
 > `stax-hooks run …`; the hook ids and every other tool's entries are
@@ -357,41 +357,56 @@ flowchart TD
 Most dashboard routes read from the marts when populated, falling back to a live aggregation pass otherwise. On a 247K-message store the cold-load went from 2.5s to <50ms warm. A new install starts on the empty-mart fallback path (still functional, just slower); the first watcher cycle or `stax etl backfill` populates the marts.
 
 ```
-stackunderflow/
-  adapters/         # 20 source-file parsers (all always-on; self-registering)
-  etl/              # ETL pipeline (v0.7+)
-    normalize/      #   Normalizer ABC + per-provider transforms (self-discovering; 20 registry keys — pi/omp share one class via provider_aliases; antigravity has none by design: encrypted source)
-    marts/          #   MartBuilder ABC + 8 mart builders
-    backfill.py     #   streams messages → events → marts
-    watcher.py      #   watchfiles daemon, debounced 200ms
-    watermark.py    #   per-mart last_event_id tracking
-    status.py       #   shared assembler for /api/etl/status + CLI
-  api/              # public Python API (list_projects/process/list_sessions)
-  ingest/           # writer + per-record normalize hook
-  store/            # SQLite at ~/.stackunderflow/store.db
-    migrations/     #   v001 → v026 (additive; v015 intentionally skipped)
-    queries.py      #   typed read helpers (raw layer)
-    mart_queries.py #   typed read helpers (marts)
-  infra/
-    costs.py        # compute_cost(tokens, model, provider, *, speed)
-    currency.py     # Frankfurter + 24h cache + ECB snapshot fallback
-    cursor_cache.py # fingerprint cache for vscdb (3-8x cold-start speedup)
-    providers/      # per-provider Pricers (one file per provider)
-  reports/          # CLI report renderers + 8 optimize patterns
-  routes/           # FastAPI route modules — 29, one per concern
-  services/         # compare, plans, yield_tracker, search, qa, tags, ...
-  cli.py            # click CLI — dashboard, ETL ops, exports, plan budgets, discovery
-  server.py         # thin shell — app + lifespan + watcher + bg ingest
-  settings.py       # env → file → default resolution (descriptor pattern)
+rust/crates/
+  stax-core/        # store, schema + migrations, settings, agent inbox — the bedrock
+  stax-adapters/    # 20 source-file parsers (all always-on; self-registering)
+  stax-etl/         # ingest → normalize → 8 marts; watcher, backfill, watermarks, pricing
+  stax-memory/      # the versioned memory/resume envelopes other harnesses parse
+  stax-reports/     # report renderers, aggregation, optimize patterns — no HTTP
+  stax-server/      # axum routes (one per concern) + the embedded React bundle
+  stax-cli/         # every `stax` verb
+  stax-hooks/       # the standalone hook binary Claude Code spawns
+  stax-sync/        # ssh transport (backup, msg, --at)
+  stax-wasm/        # wasm surface
 
-stackunderflow-ui/  # React + TypeScript + Tailwind + Recharts
+ui/                 # React + TypeScript + Tailwind + Recharts (builds into stax-server)
 ```
+
+The Python implementation this was ported from — `stackunderflow/` with its
+`adapters/`, `etl/`, `routes/`, `services/`, `cli.py` and `server.py` — lives on
+the [`python-legacy`](../../tree/python-legacy) branch. Comments throughout the
+Rust tree cite those files by path; they are provenance, and that is where to
+find them.
 
 For the deeper design rationale see `docs/specs/etl-architecture.md`. For the on-disk schema as a versioned spec other tools can target: [docs/specs/session-schema-v1.md](docs/specs/session-schema-v1.md) (+ [adapter-contract.md](docs/specs/adapter-contract.md) for the source-adapter Protocol). For the state-of-the-codebase walkthrough (recent history, gotchas, real-data state, what's left) see [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ---
 
 ## Library API
+
+The engine is a binary, not a library: any harness integrates through the
+**versioned JSON envelopes**, which is the contract this project actually
+freezes and gates in CI.
+
+```bash
+stax memory decisions "cache invalidation" --json   # stackunderflow.memory/1
+stax resume --json                                  # stackunderflow.resume/1
+stax store tail --json                              # stackunderflow.observe/1
+```
+
+Every envelope carries `schema`, is token-bounded, and has golden fixtures per
+subcommand. Parse it from any language; nothing here needs a Python import.
+
+Inside the workspace, the crates are the seams — `stax-core` (store, schema),
+`stax-memory` (the envelope types), `stax-reports` (aggregation, no HTTP),
+`stax-adapters` (the 20 parsers). See [`rust/README.md`](rust/README.md).
+
+<details>
+<summary><b>The Python library API (python-legacy branch)</b></summary>
+
+The pre-split Python package exposed an importable API. It is unchanged on the
+[`python-legacy`](../../tree/python-legacy) branch and documented here for
+anyone still running it — it is **not** installable from `main`.
 
 ```python
 import stackunderflow
@@ -424,6 +439,8 @@ from stackunderflow.etl import backfill, watermark
 from stackunderflow.etl.normalize import get as get_normalizer
 from stackunderflow.infra.discovery import locate_logs
 ```
+
+</details>
 
 ---
 

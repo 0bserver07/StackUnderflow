@@ -65,7 +65,7 @@ pub fn render(cleared: bool) -> Output {
         out.push_str("  cursor parse cache cleared.\n");
     }
     out.push_str("  in-memory cache is cleared on restart.\n");
-    out.push_str("  use `stackunderflow start --fresh` to also wipe the disk cache.\n");
+    out.push_str("  use `stax start --fresh` to also wipe the disk cache.\n");
     Output::ok(out)
 }
 
@@ -79,7 +79,7 @@ mod tests {
             render(false).stdout,
             concat!(
                 "  in-memory cache is cleared on restart.\n",
-                "  use `stackunderflow start --fresh` to also wipe the disk cache.\n",
+                "  use `stax start --fresh` to also wipe the disk cache.\n",
             )
         );
     }
@@ -91,7 +91,7 @@ mod tests {
             concat!(
                 "  cursor parse cache cleared.\n",
                 "  in-memory cache is cleared on restart.\n",
-                "  use `stackunderflow start --fresh` to also wipe the disk cache.\n",
+                "  use `stax start --fresh` to also wipe the disk cache.\n",
             )
         );
     }
@@ -101,11 +101,7 @@ mod tests {
         // DIV-237: this is a message body, not a `Usage:` line, so the harness
         // does not (and must not) normalise it. If the port ever prints `stax`
         // here it diverges on every invocation.
-        assert!(
-            render(false)
-                .stdout
-                .contains("`stackunderflow start --fresh`")
-        );
+        assert!(render(false).stdout.contains("`stax start --fresh`"));
     }
 
     #[test]

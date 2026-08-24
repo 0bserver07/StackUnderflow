@@ -1,5 +1,5 @@
 //! The `custom` history-source importer — the port of
-//! `stackunderflow/adapters/custom_import.py`.
+//! `python-legacy: adapters/custom_import.py`.
 //!
 //! This is the **store half** of the `stackunderflow-history-jsonl-v1` contract.
 //! An external tool exports its history as a validated JSONL stream; this module

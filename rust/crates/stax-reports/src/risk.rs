@@ -4,7 +4,7 @@
 //!
 //! `file_risk_summary` was already ported, in full, as
 //! [`stax_core::queries::file_risk_summary`] — because the CLI reaches it too
-//! (`stackunderflow memory file <path>` renders the same four counts through
+//! (`stax memory file <path>` renders the same four counts through
 //! `stax-cli`'s `memory.rs`). The four heuristic pieces it stands on —
 //! `discovery.parse_since`, `_resolve_input_path`, `find_failure_modes_for_file`
 //! and `_outcome_matches_for`, roughly 400 lines of the 2,482-line

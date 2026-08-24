@@ -7,7 +7,7 @@
 //! Thin, exactly as Python's is: validate two query parameters against their
 //! allow-lists, call [`crate::services::export::run_export`], wrap the returned
 //! text in a download response. Everything else — the SQL, the pricing, the CSV
-//! and JSON writers — is in the service, because `stackunderflow export` calls
+//! and JSON writers — is in the service, because `stax export` calls
 //! the same function and wave 8 must find it there rather than fork it.
 //!
 //! # The one response in the wave that is not `JSONResponse`

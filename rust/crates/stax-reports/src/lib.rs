@@ -4,7 +4,7 @@
 //! # Why this crate exists
 //!
 //! Wave 5 batch C put this layer inside `stax-server`, and its module doc said
-//! why in as many words: `/api/compare` and `stackunderflow compare` share
+//! why in as many words: `/api/compare` and `stax compare` share
 //! `services/compare.py`, so transliterating that logic into a route module
 //! would fork it — "wave 8 ports the CLI verbs, finds no shared home, and writes
 //! a second copy that drifts". That reasoning was right and it still holds. The

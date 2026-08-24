@@ -7,9 +7,9 @@ service uses the indexed one when the metadata is present and the
 heuristic as a fallback.
 **Owner:** agent-teams-feature subagent (Round 2 followups team); the
 materialised path landed with v013.
-**Surfaces:** `stackunderflow/services/agent_teams.py`,
-`stackunderflow/routes/agent_teams.py`,
-`stackunderflow/adapters/claude_teams.py`,
+**Surfaces:** `python-legacy: services/agent_teams.py`,
+`python-legacy: routes/agent_teams.py`,
+`python-legacy: adapters/claude_teams.py`,
 `stackunderflow/store/migrations/v013_multi_agent_session_metadata.sql`,
 dashboard tab `Agents`
 (`stackunderflow-ui/src/components/dashboard/AgentsTab.tsx`).
@@ -131,7 +131,7 @@ indexed one is faster and additionally surfaces `spawn_prompt`.
 ## Public API
 
 All routes live under `/api/agent-teams`, mounted by
-`stackunderflow/routes/agent_teams.py`. An empty store returns
+`python-legacy: routes/agent_teams.py`. An empty store returns
 `{"teams": []}` cleanly — no 500 on a fresh install.
 
 ### `GET /api/agent-teams`

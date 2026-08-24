@@ -1,4 +1,4 @@
-//! `stackunderflow/settings.py` — the descriptor-based settings model.
+//! `python-legacy: settings.py` — the descriptor-based settings model.
 //!
 //! Python declares each setting as a `_Opt(default, env, validator)` class
 //! variable and resolves **env → file → default** on *every* attribute read.

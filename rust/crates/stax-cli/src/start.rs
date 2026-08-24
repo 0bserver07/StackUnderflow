@@ -220,7 +220,7 @@ fn exec_self(resolved: &Path) -> Result<Output> {
     Err(anyhow::anyhow!(
         "could not re-exec to apply --data-dir ({error}). \
          Run with the environment variable instead: \
-         {APP_DIR_ENV}={} stackunderflow start",
+         {APP_DIR_ENV}={} stax start",
         resolved.display()
     ))
 }
@@ -230,7 +230,7 @@ fn exec_self(resolved: &Path) -> Result<Output> {
     anyhow::bail!(
         "could not re-exec to apply --data-dir (no exec on this platform). \
          Run with the environment variable instead: \
-         {APP_DIR_ENV}={} stackunderflow start",
+         {APP_DIR_ENV}={} stax start",
         resolved.display()
     )
 }

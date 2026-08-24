@@ -22,7 +22,7 @@
 //!
 //! `tests/fixtures/beta_normalizers/cursor_agent/transcript.jsonl` is the
 //! checked-in Composer 2 pack, laid out here in the same shape
-//! `tests/stackunderflow/etl/normalize/test_beta_normalizers.py:_build_cursor_agent`
+//! `tests/python-legacy: etl/normalize/test_beta_normalizers.py:_build_cursor_agent`
 //! builds. The legacy *text* transcript has no pack (the pack table lists only
 //! the JSONL format), and `hermes` has none at all, so both use an inline corpus
 //! — the precedent set by `grok` in `tests/parity.rs`. The `codeium` pack is the

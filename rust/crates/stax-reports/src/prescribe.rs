@@ -9,7 +9,7 @@
 //! Both generators are advisory and read-only, and the CLAUDE.md one is a
 //! **pure function**: text in, dict out. There is no path parameter, no
 //! `open()`, and no filesystem import anywhere in the Python module — a
-//! source-scan test in `tests/stackunderflow/reports/test_prescribe.py` locks
+//! source-scan test in `tests/python-legacy: reports/test_prescribe.py` locks
 //! that down. The port keeps the property: nothing in this file touches
 //! `std::fs` except the model-catalog read, which is package DATA and is
 //! injected as a path.

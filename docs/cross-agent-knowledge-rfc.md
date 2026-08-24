@@ -72,7 +72,7 @@ the adapter layer, and dedup folded into `stats/enricher.py`.
 **What's done since this RFC was drafted:**
 - Multi-provider ingest — adapters for Claude Code, Codex, Cursor, Gemini,
   and others (see [`docs/multi-provider.md`](multi-provider.md)).
-- The shared `SourceAdapter` protocol (`stackunderflow/adapters/base.py`).
+- The shared `SourceAdapter` protocol (`python-legacy: adapters/base.py`).
 - A read-only agent query surface — the `stackunderflow memory` CLI
   (originally an MCP server, since retired) — so agents *can* query session
   history mid-session.
@@ -174,7 +174,7 @@ Each provider needs:
 2. **Reader** — parse logs into `RawEntry`
 3. **Extraction** — derive knowledge artifacts from raw messages
 
-The shipped `SourceAdapter` protocol (`stackunderflow/adapters/base.py`)
+The shipped `SourceAdapter` protocol (`python-legacy: adapters/base.py`)
 already covers discovery and reading. The knowledge layer would add a third
 step, `extract_knowledge`:
 
