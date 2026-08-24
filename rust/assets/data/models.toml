@@ -60,6 +60,44 @@ display_name = "GLM-5"
   cache_read = 0.10
 
 # ── Anthropic Claude ────────────────────────────────────────────────────────
+# OPUS_5 / SONNET_5 use exact `ids` rather than token matching: splitting
+# "claude-opus-5" gives {claude,opus,5}, which is a SUBSET of "claude-opus-4-5"
+# ({claude,opus,4,5}) — a token rule would price 4.5 events as 5. Exact ids are
+# checked before token matching, so these entries are safe anywhere in the file.
+[[model]]
+family = "OPUS_5"
+provider = "anthropic"
+ids = ["claude-opus-5", "opus-5"]
+match = ["opus", "5", "0"]
+fast_multiplier = 2.0
+display_name = "Claude Opus 5"
+  [[model.price]]
+  input = 5.0
+  output = 25.0
+  cache_write = 6.25
+  cache_read = 0.50
+
+[[model]]
+family = "SONNET_5"
+provider = "anthropic"
+ids = ["claude-sonnet-5", "sonnet-5"]
+match = ["sonnet", "5", "0"]
+display_name = "Claude Sonnet 5"
+  # Introductory rate, published as running through 2026-08-31.
+  [[model.price]]
+  input = 2.0
+  output = 10.0
+  cache_write = 2.50
+  cache_read = 0.20
+  effective_until = "2026-08-31"
+  # Standard rate from 2026-09-01.
+  [[model.price]]
+  input = 3.0
+  output = 15.0
+  cache_write = 3.75
+  cache_read = 0.30
+  effective_from = "2026-09-01"
+
 [[model]]
 family = "FABLE_5"
 provider = "anthropic"
@@ -303,6 +341,7 @@ display_name = "GPT-5.5"
 # (``costs._provider_for_model`` builds its exact-id map from these groups).
 [canonical_ids]
 anthropic = [
+  "claude-opus-5", "claude-sonnet-5",
   "claude-fable-5",
   "claude-opus-4-8", "claude-opus-4-7",
   "claude-opus-4-6", "claude-sonnet-4-6",
