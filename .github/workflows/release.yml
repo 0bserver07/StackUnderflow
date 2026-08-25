@@ -1,0 +1,107 @@
+name: Release
+
+# Cross-compiles the three binaries and attaches them to the GitHub release.
+#
+# Why all three, always: `stax` locates `stax-server` and `stax-hooks` NEXT TO
+# ITS OWN EXECUTABLE. An archive carrying only `stax` reproduces the install bug
+# this repo spent a week fixing — `stax start` failing with "No such file or
+# directory" while looking for a sibling that was never shipped. The archive is
+# the unit of installation, and it holds the whole product.
+#
+# Trigger: pushing a `v*` tag. Also runnable by hand (workflow_dispatch) so the
+# artifacts for an ALREADY-published release can be built without re-tagging.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and upload assets for (e.g. v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+
+      # The React bundle is embedded into stax-server at compile time by its
+      # build.rs. A checkout builds from the committed dist under
+      # rust/assets/static, so no Node step is needed here — but if that ever
+      # stops being committed, this is where `npm ci && npm run build` goes.
+      - name: build
+        run: |
+          cd rust
+          cargo build --release --locked --target ${{ matrix.target }} \
+            --bin stax --bin stax-server --bin stax-hooks
+
+      - name: package
+        id: package
+        shell: bash
+        run: |
+          cd rust
+          TAG="${{ inputs.tag || github.ref_name }}"
+          NAME="staxtrace-${TAG}-${{ matrix.target }}"
+          STAGE="$(mktemp -d)/${NAME}"
+          mkdir -p "$STAGE"
+          cp target/${{ matrix.target }}/release/stax \
+             target/${{ matrix.target }}/release/stax-server \
+             target/${{ matrix.target }}/release/stax-hooks "$STAGE/"
+          cp ../LICENSE ../README.md "$STAGE/" 2>/dev/null || true
+          tar -czf "${NAME}.tar.gz" -C "$(dirname "$STAGE")" "$NAME"
+          # Checksums are generated next to the archive, one line per file, so
+          # `shasum -c` works against the downloaded pair without editing.
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          else
+            sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          fi
+          echo "archive=rust/${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=rust/${NAME}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      # Smoke-test only what this runner can execute. A cross-built arm64 Linux
+      # binary cannot run on an x86 runner, so the check is conditional rather
+      # than skipped everywhere — proving the archive is not empty or unlinkable
+      # on the three natively-built triples.
+      - name: smoke
+        if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
+        run: |
+          cd rust
+          ./target/${{ matrix.target }}/release/stax --version
+          ./target/${{ matrix.target }}/release/stax-hooks 2>&1 | grep -q usage
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}

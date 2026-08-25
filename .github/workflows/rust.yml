@@ -21,4 +21,4 @@ jobs:
       - name: clippy
         run: cd rust && cargo clippy --workspace --all-targets -- -D warnings
       - name: test
-        run: cd rust && cargo test --workspace
+        run: cd rust && cargo test --workspace --no-fail-fast
