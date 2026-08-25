@@ -2,7 +2,7 @@
 
 **Offline, local-first observability and memory toolkit for AI coding agents.**
 
-staxtrace ingests session logs from 20 coding-agent providers into one local SQLite store, then builds four pillars on top: cost analytics, time-travel playback with step-by-step filesystem reconstruction, a local agent-memory layer your coding agents query mid-task, and an offline chat sidebar over your own history. Local-first from the first commit (2026-03-31): everything runs on your machine — no account, no telemetry, nothing leaves `~/.stackunderflow/`.
+staxtrace ingests session logs from 20 coding-agent providers into one local SQLite store, then builds four pillars on top: cost analytics, time-travel playback with step-by-step filesystem reconstruction, a local agent-memory layer your coding agents query mid-task, and an offline chat sidebar over your own history. Local-first from the first commit (2026-03-31): everything runs on your machine — no account, no telemetry, nothing leaves `~/.staxtrace/`.
 
 <p align="center">
   <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> &nbsp;
@@ -23,10 +23,10 @@ staxtrace ingests session logs from 20 coding-agent providers into one local SQL
 ### The Four Pillars
 *   **Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
 *   **Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
-*   **Local Agent Memory**: A retrieval layer your coding agents query mid-task — `stax memory decisions/file/worked/ask` — to reuse what worked and stop repeating past failures. Candidates rank by FTS5 + bm25, with an optional hybrid semantic (vector) pass, and come back through a formal, versioned `stackunderflow.memory/1` contract: a JSON-Schema, golden fixtures for every subcommand, and a stdlib validator that runs in CI. It ships as native Claude Code skills and a harness-agnostic CLI any agent can shell out to.
+*   **Local Agent Memory**: A retrieval layer your coding agents query mid-task — `stax memory decisions/file/worked/ask` — to reuse what worked and stop repeating past failures. Candidates rank by FTS5 + bm25, with an optional hybrid semantic (vector) pass, and come back through a formal, versioned `staxtrace.memory/1` contract: a JSON-Schema, golden fixtures for every subcommand, and a stdlib validator that runs in CI. It ships as native Claude Code skills and a harness-agnostic CLI any agent can shell out to.
 *   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
 
-20 providers supported — every adapter enabled by default, no opt-in flags. Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.stackunderflow/`.
+20 providers supported — every adapter enabled by default, no opt-in flags. Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.staxtrace/`.
 
 [Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
@@ -45,14 +45,39 @@ staxtrace ingests session logs from 20 coding-agent providers into one local SQL
 
 The first run picks up whatever local sessions you already have under `~/.claude/`, `~/.codex/`, etc.
 
-**Rust (the engine)** — Rust 1.89+; prebuilt binaries are coming to [Releases](../../releases):
+**Homebrew** (macOS and Linux):
+
+```bash
+brew install 0bserver07/tap/staxtrace
+stax init
+```
+
+**Prebuilt binaries** — every [release](../../releases) carries a tarball and a
+`.sha256` per platform (darwin arm64/x86_64, linux x86_64/arm64):
+
+```bash
+TAG=v1.0.0; TRIPLE=aarch64-apple-darwin       # or your platform
+curl -LO https://github.com/0bserver07/staxtrace/releases/download/$TAG/staxtrace-$TAG-$TRIPLE.tar.gz
+curl -LO https://github.com/0bserver07/staxtrace/releases/download/$TAG/staxtrace-$TAG-$TRIPLE.tar.gz.sha256
+shasum -a 256 -c staxtrace-$TAG-$TRIPLE.tar.gz.sha256
+tar -xzf staxtrace-$TAG-$TRIPLE.tar.gz
+sudo mv staxtrace-$TAG-$TRIPLE/{stax,stax-server,stax-hooks} /usr/local/bin/
+```
+
+**From source** — Rust 1.89+:
 
 ```bash
 git clone https://github.com/0bserver07/staxtrace
 cd staxtrace/rust && cargo build --release
 cargo install --path crates/stax-cli --path crates/stax-server --path crates/stax-hooks
-stax hooks install     # opt-in: surfaces past context (and agent messages) into live sessions
-stax init
+```
+
+Then, whichever route you took:
+
+```bash
+stax init                                  # dashboard at localhost:8081
+stax hooks install --scope user --inject   # opt-in: past context into live agent turns
+stax guide install                         # opt-in: teach your agents the commands exist
 ```
 
 **The build produces three binaries, and you need all three.** `stax` is the
@@ -83,7 +108,7 @@ It is idempotent, backs the file up first, and touches only its own entries.
 Check any time with `stax hooks status`.
 
 > **Upgrading from a pre-split install:** older installs wrote hook commands
-> that invoked the Python entry point (`stax hooks run …`) — a
+> that invoked the Python entry point (`stackunderflow hooks run …`) — a
 > program a Rust-only install no longer has. Re-running `stax hooks install`
 > (or `stax hooks repair`) rewrites those entries in place to the native form,
 > `stax-hooks run …`; the hook ids and every other tool's entries are
@@ -182,7 +207,7 @@ Structural patterns:
 ```
 
 ### 4. Query the memory layer (`stax memory decisions "<term>"`)
-Active agents (or developers) query the local store straight from the CLI — `stax memory decisions/file/worked/sessions/ask` — to reuse past decisions and avoid redoing work. Add `--json` to any subcommand for the stable, token-bounded `stackunderflow.memory/1` envelope:
+Active agents (or developers) query the local store straight from the CLI — `stax memory decisions/file/worked/sessions/ask` — to reuse past decisions and avoid redoing work. Add `--json` to any subcommand for the stable, token-bounded `staxtrace.memory/1` envelope:
 ```ansi
 $ stax memory decisions "cache"
 Past decisions matching 'cache' (14 session(s))
@@ -196,6 +221,85 @@ Past decisions matching 'cache' (14 session(s))
 ```
 
 ---
+
+## Every command
+
+The full surface, grouped by the question it answers. `stax <verb> --help` for
+flags; every read verb takes `--json`.
+
+**What did this cost?**
+
+| | |
+|---|---|
+| `status` | today + this month, one line |
+| `today` · `month` · `report` | usage by project over a window |
+| `compare` | per-model metrics side by side |
+| `export` | aggregates out to CSV/JSON |
+| `plan` | track against a monthly budget (Claude Pro, Cursor Pro, custom) |
+| `pricing doctor` | rate-card health: unpriced models, stale rates, dollar exposure |
+
+**What is being wasted?**
+
+| | |
+|---|---|
+| `optimize` | looped Q&A pairs plus seven structural waste patterns, in dollars |
+| `yield` | productive vs reverted vs abandoned sessions, correlated against `git log` |
+| `benchmark` | which model wins for the kind of work *you* actually do — a natural experiment over runs you already paid for, with n, coverage and confidence |
+| `context-budget` | the per-session context tax: system prompt + MCP + skills + memory |
+| `worktrees` | per-worktree cost and prune safety (read-only) |
+| `recommend` | proactive recommendations mined from your own history |
+
+**What do I already know?**
+
+| | |
+|---|---|
+| `memory decisions` | what did I decide about this before |
+| `memory file` | this file's history: past edits, failure modes |
+| `memory worked` | where did this action actually succeed, with evidence |
+| `memory sessions` · `memory ask` | recent work · natural language over your history |
+| `risk` | "this file has caused N reverts in M days" — before you edit it |
+| `search-past-decisions` | substring search across past message content |
+| `find-sessions-in-path` · `find-sessions-touching-file` | by project root · by file mentioned in tool calls or prose |
+| `find-sessions-where-action-worked` · `find-failure-modes-for-file` | where an action was confirmed to work · where editing a file led to a correction |
+| `resume` | session + resume ids for every agent under a path |
+
+**What actually happened?**
+
+| | |
+|---|---|
+| `context-replay` | reconstruct what the model *saw* at step N |
+| `analyze` | per-session static-analysis pass: complexity / lint / type deltas |
+| `store` · `store tail` | schema + row counts · new messages for a session |
+| `doctor` | read-only health and delivery check across every provider |
+
+**Make it proactive**
+
+| | |
+|---|---|
+| `hooks install --inject` | surface past context into a live agent turn |
+| `guide install` | teach agents the commands exist, via CLAUDE.md / AGENTS.md |
+| `skills` | generate project-specific Claude Code skills from your own patterns |
+| `start` / `init` | dashboard + resident watcher |
+
+**Across machines**
+
+| | |
+|---|---|
+| `remote add/ls/rm` | the address book: `NAME -> ssh://host/data-dir` |
+| `memory … --at NAME` · `resume --at NAME` | run a read-only query where the data lives |
+| `observe NAME` | tail another machine's newest session, live |
+| `msg send` · `msg inbox` | the agent telephone: store-and-forward over ssh |
+
+**Data plumbing**
+
+| | |
+|---|---|
+| `etl` | ingest → events → marts, and `etl backfill` |
+| `reindex` | rebuild the store from source files |
+| `import` | external agent history via a user-supplied export command |
+| `ingest` | PR / CI data (REST backfill + webhook receiver) |
+| `backup` · `sync` | local snapshots · encrypted bring-your-own-bucket |
+| `cfg` · `clear-cache` · `docs` · `anchor` · `discovery` | settings · cache · offline docs · durable campaign state · citation telemetry |
 
 ## What it does
 
@@ -254,7 +358,7 @@ A coding agent — Claude Code, Cursor, Codex, or anything that can run a shell 
 
 - **`stax memory decisions "<text>"`** — past decisions on a topic. **`stax memory file <path>`** — a file's history: prior edits, failure modes, and a risk summary. **`stax memory worked "<action>"`** — outcome-aware recall that returns sessions whose *later turns confirmed or contradicted* the action, with a confidence score so silence isn't mistaken for success. **`stax memory sessions [path]`** — sessions that touched a path. **`stax memory ask "<question>"`** — a natural-language query over the whole store.
 - **Lexical + semantic ranking.** Candidates rank by FTS5 + bm25; `stax memory ask` fuses that keyword search with a local semantic vector search (reciprocal-rank fusion) over Ollama-served embeddings (default `nomic-embed-text`), and degrades cleanly to keyword-only when Ollama isn't running — so it always answers, and gets sharper when a local model is available.
-- **A formal, versioned contract.** Add `--json` to any subcommand for the `stackunderflow.memory/1` envelope — a stable, token-bounded shape (`schema`, `command`, `results[]`, `token_estimate`, `budget`, `truncated`) frozen by a JSON-Schema, with golden fixtures for every subcommand × {success, empty, error} and a stdlib validator (`scripts/check_memory_contract.py`) enforced in CI. Any harness, not just Python, can parse it. (The older `find-sessions-*` / `search-past-decisions` names remain as aliases, with an opt-in `--use-embeddings`.)
+- **A formal, versioned contract.** Add `--json` to any subcommand for the `staxtrace.memory/1` envelope — a stable, token-bounded shape (`schema`, `command`, `results[]`, `token_estimate`, `budget`, `truncated`) frozen by a JSON-Schema, with golden fixtures for every subcommand × {success, empty, error} and a stdlib validator (`scripts/check_memory_contract.py`) enforced in CI. Any harness, not just Python, can parse it. (The older `find-sessions-*` / `search-past-decisions` names remain as aliases, with an opt-in `--use-embeddings`.)
 - **`stax skills generate`** — mines this store for project-specific workflow patterns and emits Claude Code `SKILL.md` files; the shipped skills auto-surface prior context when you open a project or name a file. Project-scoped by default.
 - **Bookmarks** — pin conversations you want to find later.
 
@@ -389,9 +493,9 @@ The engine is a binary, not a library: any harness integrates through the
 freezes and gates in CI.
 
 ```bash
-stax memory decisions "cache invalidation" --json   # stackunderflow.memory/1
-stax resume --json                                  # stackunderflow.resume/1
-stax store tail --json                              # stackunderflow.observe/1
+stax memory decisions "cache invalidation" --json   # staxtrace.memory/1
+stax resume --json                                  # staxtrace.resume/1
+stax store tail --json                              # staxtrace.observe/1
 ```
 
 Every envelope carries `schema`, is token-bounded, and has golden fixtures per
