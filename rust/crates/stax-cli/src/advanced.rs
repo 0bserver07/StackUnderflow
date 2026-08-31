@@ -14,13 +14,16 @@ use std::process::ExitCode;
 #[command(disable_help_flag = true)]
 pub struct AdvancedArgs {
     /// The verb to run, with its arguments (everything after `advanced`).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "VERB [ARGS]...")]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "VERB [ARGS]..."
+    )]
     pub rest: Vec<OsString>,
 }
 
 pub fn run_advanced(args: &AdvancedArgs) -> Result<ExitCode> {
-    let wants_directory =
-        args.rest.is_empty() || args.rest[0] == "-h" || args.rest[0] == "--help";
+    let wants_directory = args.rest.is_empty() || args.rest[0] == "-h" || args.rest[0] == "--help";
     if wants_directory {
         print_directory();
         return Ok(ExitCode::SUCCESS);

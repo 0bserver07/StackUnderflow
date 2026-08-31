@@ -42,10 +42,17 @@ pub fn run_install_checks() -> Result<Output> {
     }
 
     let data_dir = stax_core::settings::app_dir();
-    let state = if probe_writable(&data_dir) { "writable" } else { "NOT WRITABLE" };
+    let state = if probe_writable(&data_dir) {
+        "writable"
+    } else {
+        "NOT WRITABLE"
+    };
     writeln!(out, "  data dir     {} ({state})", data_dir.display())?;
 
-    writeln!(out, "\n  next: `stax audit` · `stax start` · `stax hooks status`")?;
+    writeln!(
+        out,
+        "\n  next: `stax audit` · `stax start` · `stax hooks status`"
+    )?;
     Ok(Output::ok(out))
 }
 

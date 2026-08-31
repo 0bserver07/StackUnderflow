@@ -36,11 +36,13 @@ fn help_shows_exactly_the_public_surface() {
         .skip_while(|l| !l.starts_with("Commands:"))
         .skip(1)
         .take_while(|l| l.starts_with("  "))
-        .filter_map(|l| l.trim_start().split_whitespace().next())
+        .filter_map(|l| l.split_whitespace().next())
         .collect();
     assert_eq!(
         visible,
-        ["audit", "cost", "replay", "doctor", "start", "advanced", "help"],
+        [
+            "audit", "cost", "replay", "doctor", "start", "advanced", "help"
+        ],
         "the public surface drifted:\n{stdout}"
     );
 }
@@ -51,14 +53,22 @@ fn advanced_lists_everything_including_hidden_verbs() {
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
     for verb in ["memory", "ingest", "report", "context-replay", "etl"] {
-        assert!(stdout.contains(verb), "{verb} missing from the directory:\n{stdout}");
+        assert!(
+            stdout.contains(verb),
+            "{verb} missing from the directory:\n{stdout}"
+        );
     }
 }
 
 #[test]
 fn advanced_executes_a_demoted_verb() {
     let out = stax(&["advanced", "report", "--help"]);
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("date range"), "got:\n{stdout}");
 }

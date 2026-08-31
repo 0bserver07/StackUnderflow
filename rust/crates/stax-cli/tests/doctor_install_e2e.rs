@@ -21,7 +21,13 @@ fn doctor_install_reports_the_environment() {
         "doctor reports, it does not fail; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    for needle in ["INSTALL CHECK", "stax-server", "stax-hooks", "signatures", "data dir"] {
+    for needle in [
+        "INSTALL CHECK",
+        "stax-server",
+        "stax-hooks",
+        "signatures",
+        "data dir",
+    ] {
         assert!(stdout.contains(needle), "missing {needle}:\n{stdout}");
     }
     let _ = std::fs::remove_dir_all(&home);
