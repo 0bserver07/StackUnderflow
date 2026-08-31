@@ -16,8 +16,10 @@ use std::path::Path;
 
 mod d1;
 mod parse;
+mod render;
 
 pub use d1::{AgentCoverage, AuditReport, ScanContext, run_d1};
+pub use render::render_table;
 
 /// Finding severity, ordered — render sorts descending on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
