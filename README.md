@@ -1,8 +1,59 @@
 # staxtrace
 
-**Offline, local-first observability and memory toolkit for AI coding agents.**
+**Staxtrace watches the coding agents on your machine and tells you what they're reading, spending, and uploading — before it ends up on someone's server.**
 
-staxtrace ingests session logs from 20 coding-agent providers into one local SQLite store, then builds four pillars on top: cost analytics, time-travel playback with step-by-step filesystem reconstruction, a local agent-memory layer your coding agents query mid-task, and an offline chat sidebar over your own history. Local-first from the first commit (2026-03-31): everything runs on your machine — no account, no telemetry, nothing leaves `~/.staxtrace/`.
+Local-first from the first commit (2026-03-31): no account, no telemetry, nothing leaves `~/.staxtrace/`. Auditing your agents by uploading your data somewhere would be a joke we're not telling.
+
+## Install
+
+```bash
+brew install 0bserver07/tap/staxtrace        # macOS (Apple Silicon) + Linux
+# or:
+curl -fsSL https://raw.githubusercontent.com/0bserver07/staxtrace/main/install.sh | sh
+
+stax audit
+```
+
+## The audit
+
+In mid-2026, Grok Build CLI v0.2.93 tarballed users' repositories and uploaded them to
+xAI's trace bucket — on one of our machines that was 14 codebases and 99 upload events over
+two weeks, and the obvious opt-out toggle didn't govern it. That incident is why this exists.
+
+`stax audit` reads the configs of every coding agent it detects and reports which are
+configured to send your code or telemetry off-box — with the exact line that stops each one:
+
+```
+EGRESS AUDIT — 1 of your 3 coding agents can upload your data
+
+  AGENT   FINDING                              SEVERITY  VETO
+  gemini  Gemini CLI usage-statistics collec…  medium    set "usageStatisticsEnabled": false in ~/.…
+  cursor  cursor detected, no verified signa…  info      —
+
+  2 findings · unknown ≠ safe (1 unknown, 0 artifacts not read) · vetoes are suggestions — staxtrace never edits your configs
+```
+
+<!-- launch assets: replace the block above with docs/assets/audit.png + GIF from the Mac run -->
+
+Signatures are [declarative JSON](signatures/), one file per agent — **verified or
+explicitly pending, never guessed**. An agent we can't verify audits as *unknown, not
+safe*. Every check ships a positive and a negative fixture in CI, and every finding
+carries its veto. `--json` for machines; `--strict` exits 2 for CI. Detection is honest
+about its limits: configs and transcripts are self-reported sources — see
+[Spec 28](docs/specs/agent-egress-audit.md) for the full threat model.
+
+## Five verbs
+
+| verb | what it does |
+|---|---|
+| `stax audit` | which agents can upload your data, and the line that stops each |
+| `stax cost` | what your agents cost you — spend, tokens, yield, by project |
+| `stax replay` | reconstruct what the model saw in a session, step by step |
+| `stax start` | the local dashboard (server + hooks ship in the same install) |
+| `stax doctor` | store health; `--install` verifies the installation itself |
+
+Everything else — 40+ verbs: memory, ingest, benchmarks, sync, skills — still works and
+lives under [`stax advanced`](docs/cli-reference.md).
 
 <p align="center">
   <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> &nbsp;
@@ -20,15 +71,11 @@ staxtrace ingests session logs from 20 coding-agent providers into one local SQL
   <kbd><img src="https://www.google.com/s2/favicons?domain=pi.ai&sz=64" width="16" valign="middle" /> Pi</kbd>
 </p>
 
-### The Four Pillars
-*   **Cost Analytics & Yield Attribution**: Parses raw session files into SQLite reporting marts to track spending/token mix, and correlates sessions with `git log` to classify runs (productive vs. abandoned).
-*   **Time-Travel & Playback**: Reconstructs the precise state of the filesystem at any step of an AI session, letting you scrub through tool-call event streams and visualize how files evolved.
-*   **Local Agent Memory**: A retrieval layer your coding agents query mid-task — `stax memory decisions/file/worked/ask` — to reuse what worked and stop repeating past failures. Candidates rank by FTS5 + bm25, with an optional hybrid semantic (vector) pass, and come back through a formal, versioned `staxtrace.memory/1` contract: a JSON-Schema, golden fixtures for every subcommand, and a stdlib validator that runs in CI. It ships as native Claude Code skills and a harness-agnostic CLI any agent can shell out to.
-*   **Offline Chat Sidebar**: Connects to a local Ollama instance (e.g., `qwen2.5-coder`) to discuss project history, query past decisions, and replay filesystem mutations without data leaving the machine.
+The audit is the front door; underneath is the observability engine it rides on: 20
+provider adapters into one local SQLite store, cost marts, time-travel playback, an
+agent-memory layer with a versioned contract, and an offline chat sidebar — all local.
 
-20 providers supported — every adapter enabled by default, no opt-in flags. Sub-second sync (~400ms) from source-file write to dashboard data fresh. Everything stays private in `~/.staxtrace/`.
-
-[Quickstart](#quickstart) · [What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
+[What it does](#what-it-does) · [Architecture](#architecture) · [Library API](#library-api) · [Configuration](#configuration) · [Privacy](#privacy)
 
 ![staxtrace — the projects overview across every coding agent the local store has indexed](assets/overview.png)
 
@@ -36,24 +83,18 @@ staxtrace ingests session logs from 20 coding-agent providers into one local SQL
 
 ---
 
-> **Formerly published as StackUnderflow.** The engine is now the Rust
-> workspace under [`rust/`](rust/) — same store, same schema, no migration.
-> The Python implementation lives on the [`python-legacy`](../../tree/python-legacy)
+> **Formerly published as StackUnderflow.** The engine is the Rust workspace
+> under [`rust/`](rust/) — same store, same schema, no migration. The Python
+> implementation lives on the [`python-legacy`](../../tree/python-legacy)
 > branch in maintenance mode.
 
 ## Quickstart
 
 The first run picks up whatever local sessions you already have under `~/.claude/`, `~/.codex/`, etc.
 
-**Homebrew** (macOS and Linux):
-
-```bash
-brew install 0bserver07/tap/staxtrace
-stax init
-```
-
 **Prebuilt binaries** — every [release](../../releases) carries a tarball and a
-`.sha256` per platform (darwin arm64/x86_64, linux x86_64/arm64):
+`.sha256` per platform (darwin arm64, linux x86_64/arm64 — glibc ≥ 2.39 until the
+static musl builds land; Intel macOS pending):
 
 ```bash
 TAG=v1.0.0; TRIPLE=aarch64-apple-darwin       # or your platform
