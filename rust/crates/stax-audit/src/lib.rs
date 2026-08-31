@@ -14,6 +14,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod d1;
+mod parse;
+
+pub use d1::{AgentCoverage, AuditReport, ScanContext, run_d1};
+
 /// Finding severity, ordered — render sorts descending on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
