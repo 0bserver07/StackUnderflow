@@ -1,0 +1,6 @@
+{
+  "agent": "copilot",
+  "version": 1,
+  "detect_dirs": ["~/.copilot", "~/.config/github-copilot"],
+  "pending": "telemetry config surface not yet verified against current Copilot CLI — audits as unknown, not safe"
+}

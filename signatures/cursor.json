@@ -1,0 +1,6 @@
+{
+  "agent": "cursor",
+  "version": 1,
+  "detect_dirs": ["~/.cursor", "~/.config/Cursor", "~/Library/Application Support/Cursor"],
+  "pending": "privacy-mode key location varies by Cursor version and is GUI-managed — audits as unknown until verified"
+}

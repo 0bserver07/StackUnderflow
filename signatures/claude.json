@@ -1,0 +1,19 @@
+{
+  "agent": "claude",
+  "version": 1,
+  "detect_dirs": ["~/.claude"],
+  "checks": [
+    {
+      "id": "claude.otel_telemetry",
+      "file": "~/.claude/settings.json",
+      "format": "json",
+      "key": "env.CLAUDE_CODE_ENABLE_TELEMETRY",
+      "uploading_when": [true, 1, "1", "true"],
+      "safe_when": [false, 0, "0", "false"],
+      "at_risk_when_unset": false,
+      "title": "Claude Code OTLP telemetry export is enabled",
+      "veto": "remove CLAUDE_CODE_ENABLE_TELEMETRY from the env block in ~/.claude/settings.json",
+      "severity": "medium"
+    }
+  ]
+}

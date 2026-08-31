@@ -1,0 +1,19 @@
+{
+  "agent": "gemini",
+  "version": 1,
+  "detect_dirs": ["~/.gemini"],
+  "checks": [
+    {
+      "id": "gemini.usage_statistics",
+      "file": "~/.gemini/settings.json",
+      "format": "json",
+      "key": "usageStatisticsEnabled",
+      "uploading_when": [true],
+      "safe_when": [false],
+      "at_risk_when_unset": true,
+      "title": "Gemini CLI usage-statistics collection is on (the default)",
+      "veto": "set \"usageStatisticsEnabled\": false in ~/.gemini/settings.json",
+      "severity": "medium"
+    }
+  ]
+}

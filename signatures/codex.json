@@ -1,0 +1,6 @@
+{
+  "agent": "codex",
+  "version": 1,
+  "detect_dirs": ["~/.codex"],
+  "pending": "signature not yet verified against Codex CLI's current config.toml keys — audits as unknown, not safe"
+}
