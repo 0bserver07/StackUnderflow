@@ -3,13 +3,12 @@
 //! review the diff like any other code change.
 
 use stax_audit::{
-    AgentCoverage, AuditReport, Detector, Evidence, EgressFinding, Posture, Severity,
-    render_table,
+    AgentCoverage, AuditReport, Detector, EgressFinding, Evidence, Posture, Severity, render_table,
 };
 
 fn fixed_report() -> AuditReport {
-    let f = |provider: &str, id: &str, sev, posture, title: &str, veto: Option<&str>| {
-        EgressFinding {
+    let f =
+        |provider: &str, id: &str, sev, posture, title: &str, veto: Option<&str>| EgressFinding {
             provider: provider.into(),
             detector: Detector::Config,
             signature_id: id.into(),
@@ -23,8 +22,7 @@ fn fixed_report() -> AuditReport {
             }),
             remediation: veto.map(Into::into),
             session_id: None,
-        }
-    };
+        };
     let cov = |agent: &str, detected: bool, at_risk, protected, unknown| AgentCoverage {
         agent: agent.into(),
         detected,
@@ -108,7 +106,10 @@ fn three_findings_at_80_columns() {
 
 #[test]
 fn three_findings_at_200_columns() {
-    check_golden("three_findings_200.txt", &render_table(&fixed_report(), 200));
+    check_golden(
+        "three_findings_200.txt",
+        &render_table(&fixed_report(), 200),
+    );
 }
 
 #[test]

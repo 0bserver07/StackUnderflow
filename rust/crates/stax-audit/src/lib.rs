@@ -139,8 +139,8 @@ pub struct AgentSignature {
 
 /// Parse and validate one signature file (fail-closed: invalid = error).
 pub fn catalog_from_str(s: &str) -> Result<AgentSignature> {
-    let sig: AgentSignature = serde_json::from_str(s)
-        .map_err(|e| anyhow::anyhow!("signature does not parse: {e}"))?;
+    let sig: AgentSignature =
+        serde_json::from_str(s).map_err(|e| anyhow::anyhow!("signature does not parse: {e}"))?;
     validate(&sig)?;
     Ok(sig)
 }
@@ -150,7 +150,10 @@ fn validate(sig: &AgentSignature) -> Result<()> {
         bail!("signature has an empty agent name");
     }
     if sig.detect_dirs.is_empty() {
-        bail!("{}: detect_dirs is empty — the audit header needs a denominator", sig.agent);
+        bail!(
+            "{}: detect_dirs is empty — the audit header needs a denominator",
+            sig.agent
+        );
     }
     if sig.checks.is_empty() && sig.pending.is_none() {
         bail!(
@@ -165,7 +168,11 @@ fn validate(sig: &AgentSignature) -> Result<()> {
         }
         let prefix = format!("{}.", sig.agent);
         if !check.id.starts_with(&prefix) {
-            bail!("{}: check id {} must start with {prefix}", sig.agent, check.id);
+            bail!(
+                "{}: check id {} must start with {prefix}",
+                sig.agent,
+                check.id
+            );
         }
         if check.file.trim().is_empty() {
             bail!("{}: check {} names no file artifact", sig.agent, check.id);
@@ -220,7 +227,10 @@ pub fn catalog_from_dir(dir: &Path) -> Result<Vec<AgentSignature>> {
 const EMBEDDED: &[(&str, &str)] = &[
     ("claude", include_str!("../../../../signatures/claude.json")),
     ("codex", include_str!("../../../../signatures/codex.json")),
-    ("copilot", include_str!("../../../../signatures/copilot.json")),
+    (
+        "copilot",
+        include_str!("../../../../signatures/copilot.json"),
+    ),
     ("cursor", include_str!("../../../../signatures/cursor.json")),
     ("gemini", include_str!("../../../../signatures/gemini.json")),
     ("grok", include_str!("../../../../signatures/grok.json")),

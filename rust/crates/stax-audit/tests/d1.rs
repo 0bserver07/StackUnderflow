@@ -35,24 +35,41 @@ const JSON_AGENT: &str = r#"{
 #[test]
 fn fires_on_uploading_value() {
     let home = TempHome::new();
-    home.write(".testagent/settings.json", r#"{"telemetry": {"enabled": true}}"#);
+    home.write(
+        ".testagent/settings.json",
+        r#"{"telemetry": {"enabled": true}}"#,
+    );
     let report = run_d1(&sig(JSON_AGENT), &ScanContext { home: home.path() });
     assert_eq!(report.findings.len(), 1);
     let f = &report.findings[0];
     assert_eq!(f.severity, Severity::High);
     assert_eq!(f.posture, Posture::AtRisk);
-    assert_eq!(f.remediation.as_deref(), Some("set telemetry.enabled=false"));
+    assert_eq!(
+        f.remediation.as_deref(),
+        Some("set telemetry.enabled=false")
+    );
     let ev = f.evidence.as_ref().expect("at_risk carries evidence");
-    assert!(ev.path.starts_with("~/"), "home is printed as ~: {}", ev.path);
+    assert!(
+        ev.path.starts_with("~/"),
+        "home is printed as ~: {}",
+        ev.path
+    );
     assert!(ev.snippet.contains("true"));
 }
 
 #[test]
 fn silent_on_safe_value() {
     let home = TempHome::new();
-    home.write(".testagent/settings.json", r#"{"telemetry": {"enabled": false}}"#);
+    home.write(
+        ".testagent/settings.json",
+        r#"{"telemetry": {"enabled": false}}"#,
+    );
     let report = run_d1(&sig(JSON_AGENT), &ScanContext { home: home.path() });
-    assert!(report.findings.is_empty(), "the negative pass: {:?}", report.findings);
+    assert!(
+        report.findings.is_empty(),
+        "the negative pass: {:?}",
+        report.findings
+    );
     let cov = &report.coverage[0];
     assert!(cov.detected);
     assert_eq!(cov.protected, 1);
@@ -78,13 +95,23 @@ fn missing_veto_file_fires_when_unset_means_at_risk() {
     let report = run_d1(&sig(&grok_like), &ScanContext { home: home.path() });
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].posture, Posture::AtRisk);
-    assert!(report.findings[0].evidence.as_ref().unwrap().snippet.contains("unset"));
+    assert!(
+        report.findings[0]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .snippet
+            .contains("unset")
+    );
 }
 
 #[test]
 fn out_of_range_value_reports_unknown_never_safe() {
     let home = TempHome::new();
-    home.write(".testagent/settings.json", r#"{"telemetry": {"enabled": "sometimes"}}"#);
+    home.write(
+        ".testagent/settings.json",
+        r#"{"telemetry": {"enabled": "sometimes"}}"#,
+    );
     let report = run_d1(&sig(JSON_AGENT), &ScanContext { home: home.path() });
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].posture, Posture::Unknown);
@@ -165,13 +192,22 @@ fn toml_lite_reads_the_grok_shape() {
 #[test]
 fn env_format_reads_dotenv_style_files() {
     let envsig = JSON_AGENT
-        .replace(r#""file": "~/.testagent/settings.json""#, r#""file": "~/.testagent/config.env""#)
+        .replace(
+            r#""file": "~/.testagent/settings.json""#,
+            r#""file": "~/.testagent/config.env""#,
+        )
         .replace(r#""format": "json""#, r#""format": "env""#)
         .replace(r#""key": "telemetry.enabled""#, r#""key": "UPLOAD_TRACES""#)
-        .replace(r#""uploading_when": [true]"#, r#""uploading_when": ["1", "true"]"#)
+        .replace(
+            r#""uploading_when": [true]"#,
+            r#""uploading_when": ["1", "true"]"#,
+        )
         .replace(r#""safe_when": [false]"#, r#""safe_when": ["0", "false"]"#);
     let home = TempHome::new();
-    home.write(".testagent/config.env", "# comment\nexport UPLOAD_TRACES=1\nOTHER=x\n");
+    home.write(
+        ".testagent/config.env",
+        "# comment\nexport UPLOAD_TRACES=1\nOTHER=x\n",
+    );
     let report = run_d1(&sig(&envsig), &ScanContext { home: home.path() });
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].posture, Posture::AtRisk);

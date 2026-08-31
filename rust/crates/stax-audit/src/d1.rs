@@ -1,7 +1,7 @@
 //! D1 — the config detector: evaluate every signature against a home
 //! directory, emit findings + coverage. Preventive: needs no session (§4.1).
 
-use crate::{AgentSignature, Detector, Evidence, EgressFinding, Posture, Severity};
+use crate::{AgentSignature, Detector, EgressFinding, Evidence, Posture, Severity};
 use std::path::PathBuf;
 
 /// All `~/` in signatures resolve against this home. Tests hand a synthetic
@@ -146,7 +146,11 @@ pub fn run_d1(catalog: &[AgentSignature], ctx: &ScanContext) -> AuditReport {
                             Posture::AtRisk,
                             check.severity,
                             check.title.clone(),
-                            Some(Evidence { path: check.file.clone(), line: None, snippet }),
+                            Some(Evidence {
+                                path: check.file.clone(),
+                                line: None,
+                                snippet,
+                            }),
                         ));
                     } else if check.safe_when.iter().any(|s| s == value) {
                         cov.protected += 1;
@@ -158,7 +162,11 @@ pub fn run_d1(catalog: &[AgentSignature], ctx: &ScanContext) -> AuditReport {
                             Posture::Unknown,
                             Severity::Info,
                             format!("{} — unrecognized value", check.title),
-                            Some(Evidence { path: check.file.clone(), line: None, snippet }),
+                            Some(Evidence {
+                                path: check.file.clone(),
+                                line: None,
+                                snippet,
+                            }),
                         ));
                     }
                 }

@@ -14,6 +14,7 @@
 mod analyze;
 mod anchor;
 mod ask;
+mod audit;
 mod backup;
 mod benchmark;
 mod cache;
@@ -183,6 +184,9 @@ pub struct Cli {
 pub enum Command {
     /// Keyed, append-only campaign state that survives a context rotation.
     Anchor(AnchorArgs),
+    /// Which coding agents can send your code or telemetry off-box — and the
+    /// exact line that stops each one (Spec 28, config audit).
+    Audit(crate::audit::AuditArgs),
     /// Back up and restore session data from every registered coding agent.
     Backup(BackupArgs),
     /// Which model wins for the kind of work you actually do.
@@ -459,6 +463,7 @@ pub fn run() -> Result<ExitCode> {
 pub fn dispatch(cli: &Cli) -> Result<ExitCode> {
     let code = match &cli.command {
         Command::Anchor(args) => run_anchor(args).map(|()| ExitCode::SUCCESS)?,
+        Command::Audit(args) => crate::audit::run_audit(args)?.emit(),
         Command::Backup(args) => run_backup(args)?.emit(),
         Command::Benchmark(args) => run_benchmark(args)?.emit(),
         Command::Cfg(args) => run_cfg(args)?.emit(),

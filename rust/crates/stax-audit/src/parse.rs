@@ -39,7 +39,11 @@ fn toml_lite(text: &str) -> Result<Value> {
             if name.starts_with('[') {
                 bail!("line {}: array-of-tables is beyond toml-lite", idx + 1);
             }
-            section = name.trim().split('.').map(|s| s.trim().to_string()).collect();
+            section = name
+                .trim()
+                .split('.')
+                .map(|s| s.trim().to_string())
+                .collect();
             ensure_path(&mut root, &section)?;
             continue;
         }
@@ -136,8 +140,8 @@ mod tests {
 
     #[test]
     fn toml_lite_sections_scalars_comments() {
-        let v = toml_lite("# c\n[features]\ntelemetry = true # on\n[a.b]\nn = 3\ns = \"x\"\n")
-            .unwrap();
+        let v =
+            toml_lite("# c\n[features]\ntelemetry = true # on\n[a.b]\nn = 3\ns = \"x\"\n").unwrap();
         assert_eq!(lookup(&v, "features.telemetry"), Some(&Value::Bool(true)));
         assert_eq!(lookup(&v, "a.b.n"), Some(&Value::from(3)));
         assert_eq!(lookup(&v, "a.b.s"), Some(&Value::String("x".into())));
@@ -159,6 +163,9 @@ mod tests {
     #[test]
     fn hash_inside_quotes_is_not_a_comment() {
         let v = toml_lite("[s]\nurl = \"http://x/#y\"\n").unwrap();
-        assert_eq!(lookup(&v, "s.url"), Some(&Value::String("http://x/#y".into())));
+        assert_eq!(
+            lookup(&v, "s.url"),
+            Some(&Value::String("http://x/#y".into()))
+        );
     }
 }

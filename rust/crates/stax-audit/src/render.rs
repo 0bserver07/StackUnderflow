@@ -34,7 +34,7 @@ pub fn render_table(report: &AuditReport, width: usize) -> String {
         let agent_w = rows
             .iter()
             .map(|f| f.provider.len())
-            .chain(["AGENT".len()].into_iter())
+            .chain(std::iter::once("AGENT".len()))
             .max()
             .unwrap_or(5);
         let sev_w = "SEVERITY".len();

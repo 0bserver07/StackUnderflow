@@ -71,10 +71,7 @@ fn unknown_severity_is_a_load_error() {
 
 #[test]
 fn a_check_needs_file_or_env_and_a_key_for_files() {
-    let neither = TESTAGENT.replace(
-        r#""file": "~/.testagent/settings.json","#,
-        "",
-    );
+    let neither = TESTAGENT.replace(r#""file": "~/.testagent/settings.json","#, "");
     let err = catalog_from_str(&neither).unwrap_err().to_string();
     assert!(err.contains("file") || err.contains("env"), "got: {err}");
 }
@@ -87,6 +84,10 @@ fn embedded_catalog_loads_and_every_agent_validates() {
         "the incident-verified grok signature must ship"
     );
     for sig in &catalog {
-        assert!(!sig.detect_dirs.is_empty(), "{}: needs detect_dirs", sig.agent);
+        assert!(
+            !sig.detect_dirs.is_empty(),
+            "{}: needs detect_dirs",
+            sig.agent
+        );
     }
 }
