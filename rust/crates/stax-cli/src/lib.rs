@@ -72,6 +72,8 @@ mod import_history;
 // ── agent-remotes Phases 1+2 — appended at the tail, per the lib.rs law ──────
 mod observe;
 mod remote;
+// ── track1-reposition — appended at the tail, per the lib.rs law ─────────────
+mod doctor_install;
 
 use std::process::ExitCode;
 
