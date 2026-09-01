@@ -15,10 +15,12 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod d1;
+mod d3;
 mod parse;
 mod render;
 
 pub use d1::{AgentCoverage, AuditReport, ScanContext, run_d1};
+pub use d3::{Invocation, RuleFamily, RuleKind, TranscriptRules, run_d3, transcript_rules};
 pub use render::render_table;
 
 /// Finding severity, ordered — render sorts descending on it.
