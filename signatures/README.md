@@ -23,12 +23,16 @@ the `stax` binary; a checkout or `stax audit --signatures <dir>` overrides them.
 
 | Agent | Status | Verified against |
 |---|---|---|
-| grok | 3 checks | Spec 28 §0/§3 — the 2026 upload incident, verified on the maintainer's machine (config precedence: local `[telemetry]` vetoes outrank the remote flag) |
-| claude | 1 check | Claude Code monitoring docs (`CLAUDE_CODE_ENABLE_TELEMETRY` env block, opt-in default-off) |
-| gemini | 1 check | Gemini CLI configuration docs (`usageStatisticsEnabled`, default-on ⇒ `at_risk_when_unset`) |
-| codex | pending | config.toml keys not yet verified against the current release |
-| cursor | pending | privacy-mode key is GUI-managed and moves between versions |
-| copilot | pending | telemetry surface not yet verified for the current CLI |
+| grok | 3 checks | Spec 28 §0/§3 — the 2026 upload incident, verified on the maintainer's machine (local `[telemetry]` vetoes outrank the remote flag) |
+| claude | 1 check | Claude Code monitoring docs (`CLAUDE_CODE_ENABLE_TELEMETRY`, opt-in, default-off) |
+| gemini | 1 check | Gemini CLI config docs (`usageStatisticsEnabled`, **default-on** ⇒ `at_risk_when_unset`) |
+| codex | 3 checks | OpenAI Codex config reference + source (`[analytics] enabled` **default-on**; `[otel] log_user_prompt`; startup update check). Note `disable_response_storage` was REMOVED in Sep 2025 — `store:false` is now unconditional, so there is no key to audit |
+| copilot | 3 checks | GitHub Copilot CLI docs: `remoteExport` (**default true** — prompts, responses and changed-file details sync to your GitHub account) and `remote` (**default "on"**), plus the deprecated gh-copilot `optional_analytics` that survives uninstall |
+| cursor | **pending, permanently** | Verified conclusion, not a gap: Privacy Mode is account-side and server-enforced ("tied to your account, not to a specific app"), so no local file answers the question. `telemetry.telemetryLevel` exists via the VS Code lineage but Cursor documents no commitment to honor it — claiming it as a veto would be a lie |
+
+**Locally auditable ≠ everything.** Training opt-outs and public-code-match
+policies for Copilot, and Privacy Mode for Cursor, live in web dashboards. D1
+reports what a local file can prove and says `unknown` for the rest.
 
 ## Check fields
 
