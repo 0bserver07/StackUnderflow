@@ -20,6 +20,14 @@ pub struct AuditArgs {
     /// Exit 2 when any finding is at risk (CI gate).
     #[arg(long)]
     pub strict: bool,
+
+    /// Skip the transcript scan (D3) and audit configs only.
+    #[arg(long)]
+    pub configs_only: bool,
+
+    /// How many recent tool-carrying messages D3 reads.
+    #[arg(long, value_name = "N")]
+    pub window: Option<i64>,
 }
 
 pub fn run_audit(args: &AuditArgs) -> Result<Output> {
@@ -30,12 +38,37 @@ pub fn run_audit(args: &AuditArgs) -> Result<Output> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is not set; cannot locate agent configs"))?;
-    let report = stax_audit::run_d1(&catalog, &stax_audit::ScanContext { home });
+    let mut report = stax_audit::run_d1(&catalog, &stax_audit::ScanContext { home });
 
-    let at_risk = report
-        .findings
-        .iter()
-        .any(|f| matches!(f.posture, stax_audit::Posture::AtRisk));
+    // D3 rides the transcripts the store already ingested, so it covers every
+    // provider at once — including agents with no config signature.
+    if !args.configs_only {
+        let window = args
+            .window
+            .unwrap_or(crate::audit_transcripts::DEFAULT_WINDOW);
+        let scan = crate::audit_transcripts::collect(window);
+        match scan.unavailable {
+            Some(reason) => report.transcript_note = Some(reason),
+            None => {
+                let rules = stax_audit::transcript_rules()?;
+                report
+                    .findings
+                    .extend(stax_audit::run_d3(&rules, &scan.invocations));
+                report.transcript_note = Some(format!(
+                    "{} sessions scanned ({} tool calls, newest {window} messages)",
+                    scan.sessions,
+                    scan.invocations.len()
+                ));
+            }
+        }
+    }
+
+    let at_risk = report.findings.iter().any(|f| {
+        matches!(
+            f.posture,
+            stax_audit::Posture::AtRisk | stax_audit::Posture::Occurred
+        )
+    });
 
     let body = if args.json {
         let mut json = serde_json::to_string_pretty(&report)?;

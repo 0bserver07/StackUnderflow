@@ -2,5 +2,42 @@
   "agent": "copilot",
   "version": 1,
   "detect_dirs": ["~/.copilot", "~/.config/github-copilot"],
-  "pending": "telemetry config surface not yet verified against current Copilot CLI — audits as unknown, not safe"
+  "checks": [
+    {
+      "id": "copilot.remote_export",
+      "file": "~/.copilot/settings.json",
+      "format": "json",
+      "key": "remoteExport",
+      "uploading_when": [true],
+      "safe_when": [false],
+      "at_risk_when_unset": true,
+      "title": "Copilot CLI syncs your prompts, its responses, and which files it changed to your GitHub account",
+      "veto": "set \"remoteExport\": false in ~/.copilot/settings.json (already-synced sessions must be deleted on github.com)",
+      "severity": "high"
+    },
+    {
+      "id": "copilot.remote",
+      "file": "~/.copilot/settings.json",
+      "format": "json",
+      "key": "remote",
+      "uploading_when": ["on"],
+      "safe_when": ["off"],
+      "at_risk_when_unset": true,
+      "title": "Copilot CLI session data leaves the machine (remote control surface enabled)",
+      "veto": "set \"remote\": \"off\" in ~/.copilot/settings.json to keep session data local",
+      "severity": "medium"
+    },
+    {
+      "id": "copilot.legacy_analytics",
+      "file": "~/.config/gh-copilot/config.yml",
+      "format": "toml-lite",
+      "key": "optional_analytics",
+      "uploading_when": [true, "true"],
+      "safe_when": [false, "false"],
+      "at_risk_when_unset": false,
+      "title": "The deprecated gh-copilot extension left analytics enabled in a config that survives uninstall",
+      "veto": "set optional_analytics: false in ~/.config/gh-copilot/config.yml, or delete the file",
+      "severity": "low"
+    }
+  ]
 }

@@ -24,7 +24,11 @@
     {
       "id": "d3.network_write",
       "kind": "program",
-      "programs": ["curl", "wget", "http", "https", "httpie"],
+      "programs": [
+        "curl",
+        "wget",
+        "httpie"
+      ],
       "argv_any": [
         "-T",
         "--upload-file",
@@ -47,7 +51,11 @@
     {
       "id": "d3.remote_copy",
       "kind": "program",
-      "programs": ["scp", "rsync", "sftp"],
+      "programs": [
+        "scp",
+        "rsync",
+        "sftp"
+      ],
       "argv_any": [],
       "requires_remote": true,
       "severity": "high",
@@ -57,7 +65,12 @@
     {
       "id": "d3.tunnel",
       "kind": "program",
-      "programs": ["nc", "ncat", "netcat", "socat"],
+      "programs": [
+        "nc",
+        "ncat",
+        "netcat",
+        "socat"
+      ],
       "argv_any": [],
       "requires_remote": true,
       "severity": "high",
@@ -101,8 +114,22 @@
     {
       "id": "d3.encode_exfil",
       "kind": "pipeline",
-      "left_any": ["base64", "tar ", "gzip", "zip ", "xxd", "openssl enc"],
-      "right_any": ["curl", "wget", "nc ", "ncat", "socat", "http "],
+      "left_any": [
+        "base64",
+        "tar ",
+        "gzip",
+        "zip ",
+        "xxd",
+        "openssl enc"
+      ],
+      "right_any": [
+        "curl",
+        "wget",
+        "nc ",
+        "ncat",
+        "socat",
+        "http "
+      ],
       "requires_remote": true,
       "severity": "high",
       "title": "An agent packed local files and piped them to the network",

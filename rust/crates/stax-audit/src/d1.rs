@@ -29,6 +29,10 @@ pub struct AgentCoverage {
 pub struct AuditReport {
     pub findings: Vec<EgressFinding>,
     pub coverage: Vec<AgentCoverage>,
+    /// What the transcript pass (D3) did or could not do — printed verbatim,
+    /// because "no store yet" is coverage information, not a clean result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_note: Option<String>,
 }
 
 pub fn run_d1(catalog: &[AgentSignature], ctx: &ScanContext) -> AuditReport {
@@ -58,10 +62,7 @@ pub fn run_d1(catalog: &[AgentSignature], ctx: &ScanContext) -> AuditReport {
                 signature_id: format!("{}.pending", sig.agent),
                 severity: Severity::Info,
                 posture: Posture::Unknown,
-                title: format!(
-                    "{} detected, no verified signature yet — posture unknown, not safe ({reason})",
-                    sig.agent
-                ),
+                title: format!("{} detected — {reason} (unknown, not safe)", sig.agent),
                 evidence: None,
                 remediation: None,
                 session_id: None,
@@ -175,7 +176,11 @@ pub fn run_d1(catalog: &[AgentSignature], ctx: &ScanContext) -> AuditReport {
         coverage.push(cov);
     }
 
-    AuditReport { findings, coverage }
+    AuditReport {
+        findings,
+        coverage,
+        transcript_note: None,
+    }
 }
 
 fn finding(

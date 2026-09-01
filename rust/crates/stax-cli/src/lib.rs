@@ -73,6 +73,7 @@ mod import_history;
 mod observe;
 mod remote;
 // ── track1-reposition — appended at the tail, per the lib.rs law ─────────────
+mod audit_transcripts;
 mod doctor_install;
 
 use std::process::ExitCode;

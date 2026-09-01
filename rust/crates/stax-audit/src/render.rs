@@ -8,12 +8,25 @@ use crate::{AuditReport, Posture, Severity};
 pub fn render_table(report: &AuditReport, width: usize) -> String {
     let width = width.clamp(60, 400);
     let detected: Vec<_> = report.coverage.iter().filter(|c| c.detected).collect();
-    let agents_at_risk = detected.iter().filter(|c| c.at_risk > 0).count();
+    // An agent counts as at-risk if EITHER detector implicates it — a config
+    // veto that is present does not excuse an upload the transcript recorded.
+    let flagged: std::collections::BTreeSet<&str> = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.posture, Posture::AtRisk | Posture::Occurred))
+        .map(|f| f.provider.as_str())
+        .collect();
+    let denominator = detected
+        .iter()
+        .map(|c| c.agent.as_str())
+        .chain(flagged.iter().copied())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let agents_at_risk = flagged.len();
 
     let mut out = String::new();
     out.push_str(&format!(
-        "EGRESS AUDIT — {agents_at_risk} of your {} coding agents can upload your data\n\n",
-        detected.len()
+        "EGRESS AUDIT — {agents_at_risk} of your {denominator} coding agents can upload your data\n\n"
     ));
 
     let mut rows: Vec<&crate::EgressFinding> = report.findings.iter().collect();
@@ -62,6 +75,10 @@ pub fn render_table(report: &AuditReport, width: usize) -> String {
                 clip(&veto, veto_w),
             ));
         }
+    }
+
+    if let Some(note) = &report.transcript_note {
+        out.push_str(&format!("\n  transcripts: {note}\n"));
     }
 
     let unknown: usize = detected.iter().map(|c| c.unknown).sum();

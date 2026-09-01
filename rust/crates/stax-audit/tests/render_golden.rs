@@ -59,6 +59,7 @@ fn fixed_report() -> AuditReport {
                 None,
             ),
         ],
+        transcript_note: None,
         coverage: vec![
             cov("grok", true, 1, 1, 0),
             cov("gemini", true, 1, 0, 0),
@@ -72,6 +73,7 @@ fn fixed_report() -> AuditReport {
 fn empty_report() -> AuditReport {
     AuditReport {
         findings: vec![],
+        transcript_note: None,
         coverage: vec![AgentCoverage {
             agent: "claude".into(),
             detected: true,
@@ -122,6 +124,6 @@ fn header_counts_at_risk_agents_not_findings() {
     let table = render_table(&fixed_report(), 120);
     assert!(
         table.starts_with("EGRESS AUDIT — 2 of your 4 coding agents"),
-        "grok+gemini are at risk, codex is unknown, claude is clean, cursor undetected:\n{table}"
+        "grok+gemini are flagged; codex unknown, claude clean, cursor undetected:\n{table}"
     );
 }
