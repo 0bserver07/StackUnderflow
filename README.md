@@ -24,14 +24,35 @@ two weeks, and the obvious opt-out toggle didn't govern it. That incident is why
 configured to send your code or telemetry off-box — with the exact line that stops each one:
 
 ```
-EGRESS AUDIT — 1 of your 3 coding agents can upload your data
+EGRESS AUDIT — 4 of your 6 coding agents can upload your data
 
-  AGENT   FINDING                              SEVERITY  VETO
-  gemini  Gemini CLI usage-statistics collec…  medium    set "usageStatisticsEnabled": false in ~/.…
-  cursor  cursor detected, no verified signa…  info      —
+  AGENT    FINDING                                  SEVERITY  VETO
+  copilot  Copilot CLI syncs your prompts, its re…  high      set "remoteExport": false in ~/.copilot/setting…
+           ↳ ~/.copilot/settings.json: file not present — remoteExport is unset (no local veto)
+  claude   An agent copied files to a remote host…  high      review the session; if the host is yours, allow…
+           ↳ session a23e445d: rsync -az --delete ./dist/ deploy.example.com:/opt/app/
+  codex    Codex CLI sends usage and health analy…  medium    set [analytics] enabled = false in ~/.codex/con…
+           ↳ ~/.codex/config.toml: analytics.enabled is unset in ~/.codex/config.toml (no local veto)
+  copilot  Copilot CLI session data leaves the ma…  medium    set "remote": "off" in ~/.copilot/settings.json…
+           ↳ ~/.copilot/settings.json: file not present — remote is unset (no local veto)
+  gemini   Gemini CLI usage-statistics collection…  medium    set "privacy": {"usageStatisticsEnabled": false…
+           ↳ ~/.gemini/settings.json: privacy.usageStatisticsEnabled is unset in ~/.gemini/settings.json (no …
+  claude   Claude Code sends usage metrics to Ant…  low       set "DISABLE_TELEMETRY": "1" in the env block o…
+           ↳ ~/.claude/settings.json: env.DISABLE_TELEMETRY is unset in ~/.claude/settings.json (no local vet…
+  cursor   cursor detected — Privacy Mode is acco…  info      —
 
-  2 findings · unknown ≠ safe (1 unknown, 0 artifacts not read) · vetoes are suggestions — staxtrace never edits your configs
+  transcripts: 327 sessions scanned (20000 tool calls, newest 20000 messages)
+
+  7 findings · unknown ≠ safe (1 unknown, 1 artifacts not read) · vetoes are suggestions — staxtrace never edits your configs
 ```
+
+Every row shows its basis on the line beneath it — the file that is missing, the key
+that is set, the session and the command. Transcript rows come from the sessions
+staxtrace already ingested, for every agent at once; when the host is yours,
+`stax audit --allow-host deploy.example.com` (or an `audit_allow_hosts` list in
+config.json) retires the row. Localhost, private networks and your tailnet never need
+listing. The headline counts agents with medium-or-higher findings; low rows — usage
+metrics that carry no code — still print with their veto.
 
 <!-- launch assets: replace the block above with docs/assets/audit.png + GIF from the Mac run -->
 

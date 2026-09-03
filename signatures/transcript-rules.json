@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "allow_hosts": [
     "localhost",
     "127.0.0.1",
@@ -47,7 +47,8 @@
       "requires_remote": true,
       "severity": "high",
       "title": "An agent uploaded local content over HTTP",
-      "veto": "review the session, then rotate anything the payload contained"
+      "veto": "review the session, then rotate anything the payload contained",
+      "requires_file_payload": true
     },
     {
       "id": "d3.network_write_http",
@@ -70,7 +71,8 @@
       "requires_remote": true,
       "severity": "high",
       "title": "An agent sent a request body over HTTP (httpie)",
-      "veto": "review the session, then rotate anything the payload contained"
+      "veto": "review the session, then rotate anything the payload contained",
+      "requires_file_payload": true
     },
     {
       "id": "d3.remote_copy",
@@ -99,7 +101,8 @@
       "requires_remote": true,
       "severity": "high",
       "title": "An agent opened a raw socket to a remote host",
-      "veto": "review the session; raw sockets bypass every HTTP log you have"
+      "veto": "review the session; raw sockets bypass every HTTP log you have",
+      "requires_payload_source": true
     },
     {
       "id": "d3.git_push_new_remote",
@@ -159,20 +162,28 @@
       "id": "d3.encode_exfil",
       "kind": "pipeline",
       "left_any": [
-        "base64",
-        "tar ",
+        "tar",
         "gzip",
-        "zip ",
+        "bzip2",
+        "xz",
+        "zstd",
+        "zip",
+        "7z",
+        "base64",
         "xxd",
-        "openssl enc"
+        "openssl"
       ],
       "right_any": [
         "curl",
         "wget",
-        "nc ",
+        "nc",
         "ncat",
+        "netcat",
         "socat",
-        "http "
+        "http",
+        "https",
+        "xh",
+        "ssh"
       ],
       "requires_remote": true,
       "severity": "high",
