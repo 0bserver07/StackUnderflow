@@ -1,6 +1,11 @@
 //! B3 — the findings table. The output IS the feature: designed to be
 //! screenshotted and posted. Hand-rolled (no table dependency), plain text —
 //! the CLI layers color on top only when stdout is a terminal.
+//!
+//! Every finding prints its evidence on a second line, because a row that
+//! reads "critical" with no basis is a row nobody can check: two CRITICAL
+//! grok rows from an empty `~/.grok` are honest only when the line under
+//! them says the config file does not exist.
 
 use crate::{AuditReport, Posture, Severity};
 
@@ -10,10 +15,14 @@ pub fn render_table(report: &AuditReport, width: usize) -> String {
     let detected: Vec<_> = report.coverage.iter().filter(|c| c.detected).collect();
     // An agent counts as at-risk if EITHER detector implicates it — a config
     // veto that is present does not excuse an upload the transcript recorded.
+    // Low-severity rows (usage metrics that carry no code) still print, but
+    // they do not put an agent in the headline: "can upload your data" has to
+    // mean something a reader would call their data.
     let flagged: std::collections::BTreeSet<&str> = report
         .findings
         .iter()
         .filter(|f| matches!(f.posture, Posture::AtRisk | Posture::Occurred))
+        .filter(|f| f.severity >= Severity::Medium)
         .map(|f| f.provider.as_str())
         .collect();
     let denominator = detected
@@ -56,6 +65,7 @@ pub fn render_table(report: &AuditReport, width: usize) -> String {
         let avail = width.saturating_sub(fixed).max(24);
         let finding_w = (avail * 45 / 100).max(18);
         let veto_w = avail - finding_w;
+        let evidence_indent = 2 + agent_w + 2;
 
         out.push_str(&format!(
             "  {:agent_w$}  {:finding_w$}  {:sev_w$}  {}\n",
@@ -74,6 +84,14 @@ pub fn render_table(report: &AuditReport, width: usize) -> String {
                 severity_label(f.severity),
                 clip(&veto, veto_w),
             ));
+            if let Some(ev) = &f.evidence {
+                let line = format!("↳ {}: {}", ev.path, ev.snippet);
+                out.push_str(&format!(
+                    "{:evidence_indent$}{}\n",
+                    "",
+                    clip(&line, width.saturating_sub(evidence_indent))
+                ));
+            }
         }
     }
 

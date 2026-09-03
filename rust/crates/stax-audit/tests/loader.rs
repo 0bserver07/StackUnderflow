@@ -91,3 +91,49 @@ fn embedded_catalog_loads_and_every_agent_validates() {
         );
     }
 }
+
+#[test]
+fn a_signature_may_only_read_under_the_scan_home() {
+    // `resolve()` once did `home.join(file)`, and `home.join("/etc/passwd")`
+    // is `/etc/passwd`: any third-party signature pack could make
+    // `stax audit --json` read and echo arbitrary files. The loader refuses
+    // the shape outright now, and `resolve` drops the components anyway.
+    for hostile in [
+        "/etc/passwd",
+        "~/../../etc/passwd",
+        "~//etc/passwd",
+        "etc/passwd",
+        "~/",
+        "~",
+    ] {
+        let bad = TESTAGENT.replace(
+            r#""file": "~/.testagent/settings.json","#,
+            &format!(r#""file": "{hostile}","#),
+        );
+        let err = catalog_from_str(&bad).unwrap_err().to_string();
+        assert!(err.contains("~/"), "{hostile}: {err}");
+    }
+    let bad_dir = TESTAGENT.replace(
+        r#""detect_dirs": ["~/.testagent"],"#,
+        r#""detect_dirs": ["/"],"#,
+    );
+    let err = catalog_from_str(&bad_dir).unwrap_err().to_string();
+    assert!(err.contains("detect_dirs"), "{err}");
+}
+
+#[test]
+fn the_legacy_format_spelling_still_loads() {
+    let legacy = TESTAGENT.replace(r#""format": "json""#, r#""format": "toml-lite""#);
+    let sig = catalog_from_str(&legacy).expect("toml-lite is an alias for toml");
+    assert_eq!(sig.checks[0].format, stax_audit::Format::Toml);
+}
+
+#[test]
+fn an_alternate_veto_needs_a_way_to_be_satisfied() {
+    let bad = TESTAGENT.replace(
+        r#""uploading_when": [true],"#,
+        r#""uploading_when": [true], "alt_vetoes": [{"key": "env.X"}],"#,
+    );
+    let err = catalog_from_str(&bad).unwrap_err().to_string();
+    assert!(err.contains("alternate veto"), "{err}");
+}
